@@ -28,7 +28,9 @@ pub fn advance_accumulator(
     if market_vault_balance <= last_market_vault_balance || total_hi_sola == 0 {
         return fees_per_hi_sola;
     }
-    let new_fees = (market_vault_balance - last_market_vault_balance) as u128;
+    let new_fees = (market_vault_balance
+        .checked_sub(last_market_vault_balance)
+        .unwrap_or(0)) as u128;
     fees_per_hi_sola
         .saturating_add(new_fees.saturating_mul(PRECISION) / total_hi_sola as u128)
 }
