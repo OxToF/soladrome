@@ -43,6 +43,47 @@ export const commonAccounts = {
   rent:                   SYSVAR_RENT_PUBKEY,
 };
 
+// ── AMM pool PDAs ─────────────────────────────────────────────────────────────
+
+/** Sort two mints lexicographically — mirrors the on-chain sort_mints(). */
+export function sortMints(a: PublicKey, b: PublicKey): [PublicKey, PublicKey] {
+  const ab = Buffer.compare(a.toBuffer(), b.toBuffer());
+  return ab <= 0 ? [a, b] : [b, a];
+}
+
+/** PDA for an AmmPool given any two mints (sorts internally). */
+export function poolPda(mintA: PublicKey, mintB: PublicKey): PublicKey {
+  const [ma, mb] = sortMints(mintA, mintB);
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("amm_pool"), ma.toBuffer(), mb.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
+/** LP mint PDA for a given pool address. */
+export function lpMintPda(pool: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("lp_mint"), pool.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
+/** Token-A vault PDA for a given pool address. */
+export function vaultAPda(pool: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("vault_a"), pool.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
+/** Token-B vault PDA for a given pool address. */
+export function vaultBPda(pool: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("vault_b"), pool.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
 export const DECIMALS = 6;
 export const ONE = new BN(1_000_000);
 export function toUi(raw: BN | number | bigint): number {

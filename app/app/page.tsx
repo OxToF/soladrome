@@ -18,13 +18,17 @@ import { Gauge }      from "@/components/Gauge";
 import { ClaimFees }  from "@/components/ClaimFees";
 import { Liquidity }  from "@/components/Liquidity";
 import { Stats }      from "@/components/Stats";
+import { AmmSwap }    from "@/components/AmmSwap";
+import { Pools }      from "@/components/Pools";
 
 // USDC mint is read on-chain from protocolState.usdcMint via SoladromeContext
 
-type Page = "trade" | "stake" | "borrow" | "vote" | "bribe" | "claim" | "liquidity";
+type Page = "trade" | "swap" | "pools" | "stake" | "borrow" | "vote" | "bribe" | "claim" | "liquidity";
 
 const NAV: { id: Page; label: string }[] = [
   { id: "trade",     label: "Trade"     },
+  { id: "swap",      label: "Swap"      },
+  { id: "pools",     label: "Pools"     },
   { id: "stake",     label: "Stake"     },
   { id: "borrow",    label: "Borrow"    },
   { id: "liquidity", label: "Liquidity" },
@@ -152,8 +156,10 @@ export default function Home() {
           </div>
 
           {/* Panels */}
-          <div className={page === "liquidity" ? "w-full" : "max-w-xl mx-auto"}>
+          <div className={page === "liquidity" || page === "pools" ? "w-full" : "max-w-xl mx-auto"}>
             {page === "trade"     && <BuySell />}
+            {page === "swap"      && <AmmSwap />}
+            {page === "pools"     && <Pools />}
             {page === "stake"     && <Stake />}
             {page === "borrow"    && <Borrow />}
             {page === "vote"      && <Vote />}

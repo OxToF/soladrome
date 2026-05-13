@@ -30,4 +30,11 @@ pub enum SoladromeError {
     EpochNotEnded,
     #[msg("Vote amount exceeds available hiSOLA balance for this epoch")]
     VoteOverflow,
+    // ── AMM ───────────────────────────────────────────────────────────────────
+    #[msg("Insufficient liquidity in pool")]
+    InsufficientLiquidity,
+    #[msg("Invalid pool tokens: same mint or unsorted mints")]
+    InvalidPoolTokens,
+    #[msg("Zero liquidity: deposit amounts must be non-zero")]
+    ZeroLiquidity,
 }
