@@ -1,0 +1,7 @@
+{
+  "buildCommand": "cd app && yarn install && yarn build",
+  "outputDirectory": "app/.next",
+  "installCommand": "cd app && yarn install",
+  "framework": "nextjs",
+  "rewrites": [{ "source": "/(.*)", "destination": "/" }]
+}
