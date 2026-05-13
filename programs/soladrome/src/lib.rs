@@ -28,6 +28,10 @@ pub const INIT_VIRTUAL_SOLA: u64 = 100_000_000; // 100 SOLA (6 dec)  – floor =
 // Founder allocation — 12% of reference 100 M-token supply, 7% auto-staked.
 pub const FOUNDER_TOTAL: u64 = 12_000_000_000_000; // 12 000 000 SOLA (6 dec)
 pub const FOUNDER_STAKE: u64 =  7_000_000_000_000; //  7 000 000 SOLA → hiSOLA
+//  5 000 000 SOLA liquid
+
+// ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
+pub const FOUNDER_WALLET: &str = "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3";
 
 #[program]
 pub mod soladrome {
@@ -1100,11 +1104,18 @@ pub struct MintFounderAllocation<'info> {
     #[account(address = protocol_state.market_vault)]
     pub market_vault: Box<Account<'info, TokenAccount>>,
 
+    /// Founder wallet — hardcoded address, cannot be substituted.
+    #[account(
+        mut,
+        address = FOUNDER_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized,
+    )]
+    pub founder: SystemAccount<'info>,
+
     #[account(
         init_if_needed,
         payer = authority,
         associated_token::mint = sola_mint,
-        associated_token::authority = authority,
+        associated_token::authority = founder,
     )]
     pub founder_sola: Box<Account<'info, TokenAccount>>,
 
@@ -1112,7 +1123,7 @@ pub struct MintFounderAllocation<'info> {
         init_if_needed,
         payer = authority,
         associated_token::mint = hi_sola_mint,
-        associated_token::authority = authority,
+        associated_token::authority = founder,
     )]
     pub founder_hi_sola: Box<Account<'info, TokenAccount>>,
 
@@ -1120,7 +1131,7 @@ pub struct MintFounderAllocation<'info> {
         init_if_needed,
         payer = authority,
         space = UserPosition::LEN,
-        seeds = [POSITION_SEED, authority.key().as_ref()],
+        seeds = [POSITION_SEED, founder.key().as_ref()],
         bump,
     )]
     pub founder_position: Account<'info, UserPosition>,
