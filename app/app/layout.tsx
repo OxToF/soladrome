@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025 Christophe Hertecant
 import type { Metadata } from "next";
 import { Providers } from "./providers";
 import "./globals.css";

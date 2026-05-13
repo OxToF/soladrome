@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025 Christophe Hertecant
 "use client";
 import { useState } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
