@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (C) 2025 Christophe Hertecant
+
 use crate::errors::SoladromeError;
 use crate::state::PRECISION;
 use anchor_lang::prelude::*;

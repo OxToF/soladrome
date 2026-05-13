@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025 Christophe Hertecant
 "use client";
 import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
