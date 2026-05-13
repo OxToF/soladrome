@@ -16,17 +16,10 @@ import {
   PROGRAM_ID,
 } from "@/lib/program";
 
-// ── Token registry (extend as pools are created on devnet) ───────────────────
-const KNOWN_TOKENS: { symbol: string; mintEnv: string }[] = [
-  { symbol: "SOLA", mintEnv: "NEXT_PUBLIC_SOLA_MINT" },
-  { symbol: "USDC", mintEnv: "NEXT_PUBLIC_USDC_MINT" },
-];
+import { getTokenList, symbolByMint } from "@/lib/tokens";
 
-function mintByIndex(i: number): string {
-  return process.env[KNOWN_TOKENS[i].mintEnv] ?? "";
-}
-function symbolByMint(mint: string): string {
-  return KNOWN_TOKENS.find((t) => process.env[t.mintEnv] === mint)?.symbol ?? mint.slice(0, 6) + "…";
+function mintByIndex(tokens: ReturnType<typeof getTokenList>, i: number): string {
+  return tokens[i]?.mint ?? "";
 }
 
 // Dead pubkey for MINIMUM_LIQUIDITY lock (system program = all zeros)
@@ -47,6 +40,7 @@ interface PoolInfo {
 export function Pools() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
+  const tokens = getTokenList();
 
   const [tab, setTab] = useState<Tab>("pools");
   const [pools, setPools]  = useState<PoolInfo[]>([]);
@@ -102,8 +96,8 @@ export function Pools() {
     setLoading(true); setStatus("");
     try {
       const program  = getProgram(provider());
-      const ma       = mintByIndex(newMintA);
-      const mb       = mintByIndex(newMintB);
+      const ma       = mintByIndex(tokens, newMintA);
+      const mb       = mintByIndex(tokens, newMintB);
       if (!ma || !mb || ma === mb) throw new Error("Invalid token pair");
 
       const [mintAPk, mintBPk] = sortMints(new PublicKey(ma), new PublicKey(mb));
@@ -350,7 +344,7 @@ export function Pools() {
               <label className="text-xs text-gray-400 mb-1 block">Token A</label>
               <select className="input w-full" value={newMintA}
                 onChange={(e) => setNewMintA(+e.target.value)}>
-                {KNOWN_TOKENS.map((t, i) => (
+                {tokens.map((t, i) => (
                   <option key={i} value={i} disabled={i === newMintB}>{t.symbol}</option>
                 ))}
               </select>
@@ -359,7 +353,7 @@ export function Pools() {
               <label className="text-xs text-gray-400 mb-1 block">Token B</label>
               <select className="input w-full" value={newMintB}
                 onChange={(e) => setNewMintB(+e.target.value)}>
-                {KNOWN_TOKENS.map((t, i) => (
+                {tokens.map((t, i) => (
                   <option key={i} value={i} disabled={i === newMintA}>{t.symbol}</option>
                 ))}
               </select>

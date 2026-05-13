@@ -6,16 +6,10 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import {
-  getProgram, poolPda, lpMintPda, vaultAPda, vaultBPda,
+  getProgram, poolPda, vaultAPda, vaultBPda,
   sortMints, userAta, statePda, marketVault, commonAccounts, fromUi, toUi,
 } from "@/lib/program";
-
-// ── Known tokens ──────────────────────────────────────────────────────────────
-// Populated with mints that exist on devnet alongside the protocol
-const KNOWN_TOKENS: { symbol: string; mintEnv: string; decimals: number }[] = [
-  { symbol: "SOLA",  mintEnv: "NEXT_PUBLIC_SOLA_MINT",  decimals: 6 },
-  { symbol: "USDC",  mintEnv: "NEXT_PUBLIC_USDC_MINT",  decimals: 6 },
-];
+import { getTokenList, TokenInfo } from "@/lib/tokens";
 
 const SLIPPAGE_OPTIONS = [0.1, 0.5, 1.0] as const;
 
@@ -28,8 +22,9 @@ export function AmmSwap() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
 
-  const [tokenIn,  setTokenIn]  = useState(0); // index in KNOWN_TOKENS
-  const [tokenOut, setTokenOut] = useState(1);
+  const tokens = getTokenList();
+  const [idxIn,  setIdxIn]  = useState(1); // SOLA by default
+  const [idxOut, setIdxOut] = useState(2); // USDC by default
   const [amountIn, setAmountIn] = useState("");
   const [slippage, setSlippage] = useState<0.1 | 0.5 | 1.0>(0.5);
   const [estimatedOut, setEstimatedOut] = useState<number | null>(null);
@@ -37,83 +32,75 @@ export function AmmSwap() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  const mintIn  = process.env[KNOWN_TOKENS[tokenIn].mintEnv]  ?? "";
-  const mintOut = process.env[KNOWN_TOKENS[tokenOut].mintEnv] ?? "";
+  const tokIn:  TokenInfo | undefined = tokens[idxIn];
+  const tokOut: TokenInfo | undefined = tokens[idxOut];
 
   // Fetch pool reserves when pair changes
   const fetchPool = useCallback(async () => {
-    if (!mintIn || !mintOut || mintIn === mintOut) return;
+    if (!tokIn || !tokOut || tokIn.mint === tokOut.mint) { setPool(null); return; }
     try {
-      const mintInPk  = new PublicKey(mintIn);
-      const mintOutPk = new PublicKey(mintOut);
+      const mintInPk  = new PublicKey(tokIn.mint);
+      const mintOutPk = new PublicKey(tokOut.mint);
       const poolAddr  = poolPda(mintInPk, mintOutPk);
       const info      = await connection.getAccountInfo(poolAddr);
       if (!info) { setPool(null); return; }
 
-      // Deserialise pool via anchor
       const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
       const program  = getProgram(provider);
       const poolAcc  = await (program.account as any).ammPool.fetch(poolAddr);
 
       const [sortedA] = sortMints(mintInPk, mintOutPk);
       const aToB = mintInPk.equals(sortedA);
+      const ra   = toUi(poolAcc.reserveA as BN);
+      const rb   = toUi(poolAcc.reserveB as BN);
       setPool({
-        reserveA: toUi(poolAcc.reserveA as BN),
-        reserveB: toUi(poolAcc.reserveB as BN),
+        reserveA: aToB ? ra : rb,
+        reserveB: aToB ? rb : ra,
         feeRate:  poolAcc.feeRate as number,
       });
-      const _ = aToB; // used below in estimate
     } catch {
       setPool(null);
     }
-  }, [connection, mintIn, mintOut, wallet]);
+  }, [connection, tokIn?.mint, tokOut?.mint, wallet]);
 
   useEffect(() => { fetchPool(); }, [fetchPool]);
 
   // Estimate output
   useEffect(() => {
     if (!pool || !amountIn || isNaN(+amountIn)) { setEstimatedOut(null); return; }
-    const mintInPk  = new PublicKey(mintIn);
-    const [sortedA] = sortMints(mintInPk, new PublicKey(mintOut));
-    const aToB = mintInPk.equals(sortedA);
-
-    const ainRaw  = +amountIn;
+    const ainRaw = +amountIn;
     const feeRate = pool.feeRate / 10_000;
     const ainNet  = ainRaw * (1 - feeRate);
-    const [resIn, resOut] = aToB
-      ? [pool.reserveA, pool.reserveB]
-      : [pool.reserveB, pool.reserveA];
-
-    setEstimatedOut(xy_k_out(resIn, resOut, ainNet));
-  }, [pool, amountIn, mintIn, mintOut]);
+    setEstimatedOut(xy_k_out(pool.reserveA, pool.reserveB, ainNet));
+  }, [pool, amountIn]);
 
   async function swap() {
-    if (!wallet || !amountIn || !estimatedOut || !mintIn || !mintOut) return;
+    if (!wallet || !amountIn || !estimatedOut || !tokIn || !tokOut) return;
     setLoading(true); setStatus("");
     try {
       const provider  = new AnchorProvider(connection, wallet, {});
       const program   = getProgram(provider);
-      const mintInPk  = new PublicKey(mintIn);
-      const mintOutPk = new PublicKey(mintOut);
+      const mintInPk  = new PublicKey(tokIn.mint);
+      const mintOutPk = new PublicKey(tokOut.mint);
       const [sortedA] = sortMints(mintInPk, mintOutPk);
       const aToB      = mintInPk.equals(sortedA);
       const poolAddr  = poolPda(mintInPk, mintOutPk);
 
-      const amountInBn  = fromUi(+amountIn);
-      const minOutBn    = fromUi(estimatedOut * (1 - slippage / 100));
+      const amountInBn = fromUi(+amountIn);
+      const minOutBn   = fromUi(estimatedOut * (1 - slippage / 100));
 
       const tx = await program.methods
         .ammSwap(amountInBn, minOutBn, aToB)
         .accounts({
-          user:           wallet.publicKey,
-          pool:           poolAddr,
-          tokenAVault:    vaultAPda(poolAddr),
-          tokenBVault:    vaultBPda(poolAddr),
-          userTokenIn:    userAta(mintInPk, wallet.publicKey),
-          userTokenOut:   userAta(mintOutPk, wallet.publicKey),
+          user:          wallet.publicKey,
+          pool:          poolAddr,
+          tokenAVault:   vaultAPda(poolAddr),
+          tokenBVault:   vaultBPda(poolAddr),
+          userTokenIn:   userAta(mintInPk, wallet.publicKey),
+          userTokenOut:  userAta(mintOutPk, wallet.publicKey),
           marketVault,
-          protocolState:  statePda,
-          tokenProgram:   commonAccounts.tokenProgram,
+          protocolState: statePda,
+          tokenProgram:  commonAccounts.tokenProgram,
         } as any)
         .rpc();
 
@@ -127,14 +114,22 @@ export function AmmSwap() {
   }
 
   function flip() {
-    setTokenIn(tokenOut);
-    setTokenOut(tokenIn);
+    setIdxIn(idxOut);
+    setIdxOut(idxIn);
     setAmountIn("");
     setEstimatedOut(null);
   }
 
-  const noPool    = !pool && mintIn && mintOut && mintIn !== mintOut;
-  const canSwap   = !!wallet && !!amountIn && !!estimatedOut && !!pool && !loading;
+  const noPool  = !pool && tokIn && tokOut && tokIn.mint !== tokOut.mint;
+  const canSwap = !!wallet && !!amountIn && +amountIn > 0 && !!estimatedOut && !!pool && !loading;
+
+  if (tokens.length < 2) {
+    return (
+      <div className="card glow text-gray-400 text-sm text-center py-8">
+        Token addresses not configured. Set NEXT_PUBLIC_SOLA_MINT and NEXT_PUBLIC_USDC_MINT.
+      </div>
+    );
+  }
 
   return (
     <div className="card glow">
@@ -144,18 +139,19 @@ export function AmmSwap() {
       <label className="text-xs text-gray-400 mb-1 block">You pay</label>
       <div className="flex gap-2 mb-3">
         <select
-          className="input w-36 shrink-0"
-          value={tokenIn}
-          onChange={(e) => { setTokenIn(+e.target.value); setAmountIn(""); }}
+          className="input w-32 shrink-0"
+          value={idxIn}
+          onChange={(e) => { setIdxIn(+e.target.value); setAmountIn(""); setEstimatedOut(null); }}
         >
-          {KNOWN_TOKENS.map((t, i) => (
-            <option key={i} value={i} disabled={i === tokenOut}>{t.symbol}</option>
+          {tokens.map((t, i) => (
+            <option key={i} value={i} disabled={i === idxOut}>{t.symbol}</option>
           ))}
         </select>
         <input
-          className="input flex-1"
+          className="input flex-1 min-w-0"
           type="number"
           min="0"
+          step="any"
           placeholder="0.00"
           value={amountIn}
           onChange={(e) => setAmountIn(e.target.value)}
@@ -167,7 +163,7 @@ export function AmmSwap() {
         <button
           onClick={flip}
           className="w-8 h-8 rounded-full border border-brand-border text-gray-400
-                     hover:border-brand-green hover:text-brand-green transition-colors text-lg"
+                     hover:border-brand-green hover:text-brand-green transition-colors text-lg leading-none"
         >
           ⇅
         </button>
@@ -177,29 +173,29 @@ export function AmmSwap() {
       <label className="text-xs text-gray-400 mb-1 block">You receive (est.)</label>
       <div className="flex gap-2 mb-4">
         <select
-          className="input w-36 shrink-0"
-          value={tokenOut}
-          onChange={(e) => { setTokenOut(+e.target.value); setAmountIn(""); }}
+          className="input w-32 shrink-0"
+          value={idxOut}
+          onChange={(e) => { setIdxOut(+e.target.value); setAmountIn(""); setEstimatedOut(null); }}
         >
-          {KNOWN_TOKENS.map((t, i) => (
-            <option key={i} value={i} disabled={i === tokenIn}>{t.symbol}</option>
+          {tokens.map((t, i) => (
+            <option key={i} value={i} disabled={i === idxIn}>{t.symbol}</option>
           ))}
         </select>
-        <div className="input flex-1 text-brand-green font-mono">
+        <div className="input flex-1 min-w-0 text-brand-green font-mono">
           {estimatedOut !== null ? estimatedOut.toFixed(6) : "—"}
         </div>
       </div>
 
-      {/* Pool info / warning */}
+      {/* Pool info */}
       {noPool && (
         <p className="text-xs text-yellow-500 mb-3">
-          No pool found for this pair. Create one first.
+          No pool found for {tokIn?.symbol}/{tokOut?.symbol}. Create one in the Pools tab.
         </p>
       )}
       {pool && (
         <p className="text-xs text-gray-500 mb-3">
-          Reserves: {pool.reserveA.toFixed(2)} / {pool.reserveB.toFixed(2)} ·
-          Fee: {(pool.feeRate / 100).toFixed(2)}%
+          Pool reserves: {pool.reserveA.toFixed(4)} {tokIn?.symbol} / {pool.reserveB.toFixed(4)} {tokOut?.symbol}
+          {" · "}Fee: {(pool.feeRate / 100).toFixed(2)}%
         </p>
       )}
 
@@ -221,11 +217,7 @@ export function AmmSwap() {
         ))}
       </div>
 
-      <button
-        className="btn-primary w-full"
-        onClick={swap}
-        disabled={!canSwap}
-      >
+      <button className="btn-primary w-full" onClick={swap} disabled={!canSwap}>
         {loading ? "Processing…" : "Swap"}
       </button>
 
