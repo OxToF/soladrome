@@ -8,11 +8,14 @@ skip-lint = false
 [programs.localnet]
 soladrome = "4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd"
 
+[programs.devnet]
+soladrome = "4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd"
+
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
