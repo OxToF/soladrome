@@ -31,7 +31,7 @@ const NAV: { id: Page; label: string }[] = [
   { id: "claim",     label: "Claim"     },
 ];
 
-const DOCS_URL = "https://soladrome-lzn5.vercel.app/";
+const DOCS_URL = "https://soladrome.finance";
 
 export default function Home() {
   const wallet = useAnchorWallet();

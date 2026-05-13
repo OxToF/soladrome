@@ -10,7 +10,7 @@
 **Stage:** Working prototype on localnet — ready for devnet  
 **Requested Amount:** $25,000 USD  
 **GitHub:** https://github.com/[your-handle]/soladrome *(to be made public)*  
-**Live Demo:** https://soladrome-lzn5.vercel.app/  
+**Live Demo:** https://soladrome.finance  
 **Contact:** [your@email.com]
 
 ---
@@ -186,7 +186,7 @@ Soladrome is the **first native Solana implementation** of this model.
 
 - ✅ Working prototype: 14 instructions, 7 account types, 11 passing tests
 - ✅ End-to-end tested on localnet (buy → stake → borrow → claim fees → bribe → vote)
-- ✅ Frontend live at https://soladrome-lzn5.vercel.app/
+- ✅ Frontend live at https://soladrome.finance
 - ✅ Protocol fees distributed permissionlessly (2.42 USDC in localnet test)
 - ✅ Inspired by Beradrome ($600k+ TVL on Berachain mainnet)
 - 🔄 Seeking first community members and testnet users
@@ -220,7 +220,7 @@ Grant recipients will receive immediate access to the full codebase.
 
 ## 12. Relevant Links
 
-- **Live frontend:** https://soladrome-lzn5.vercel.app/
+- **Live frontend:** https://soladrome.finance
 - **GitHub (private, shared on request):** github.com/[handle]/soladrome
 - **Solana Explorer (devnet):** *(post-deployment)*
 - **Twitter:** *(to be created)*
