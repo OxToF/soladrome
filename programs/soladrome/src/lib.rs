@@ -10,12 +10,19 @@ use anchor_spl::{
 mod errors;
 mod math;
 mod state;
+mod amm_math;
+mod amm_state;
+mod amm;
 
 use errors::SoladromeError;
 use state::{
     BribeVault, GaugeState, ProtocolState, UserBribeClaim, UserEpochVotes,
     UserPosition, UserVoteReceipt, PRECISION, current_epoch,
 };
+pub use amm::*;
+
+/// Canonical dead address for MINIMUM_LIQUIDITY lock (System Program address).
+pub const LP_DEAD_PUBKEY: Pubkey = anchor_lang::system_program::ID;
 
 declare_id!("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
 
@@ -656,6 +663,24 @@ pub mod soladrome {
         // Stamp the claim PDA (existence = guard against replay)
         ctx.accounts.user_bribe_claim.bump = ctx.bumps.user_bribe_claim;
         Ok(())
+    }
+
+    // ── AMM multi-pool instructions ───────────────────────────────────────────
+
+    pub fn create_pool(ctx: Context<CreatePool>, fee_rate: u16, protocol_fee_bps: u16) -> Result<()> {
+        amm::create_pool(ctx, fee_rate, protocol_fee_bps)
+    }
+
+    pub fn add_liquidity(ctx: Context<AddLiquidity>, amount_a_desired: u64, amount_b_desired: u64, min_lp: u64) -> Result<()> {
+        amm::add_liquidity(ctx, amount_a_desired, amount_b_desired, min_lp)
+    }
+
+    pub fn remove_liquidity(ctx: Context<RemoveLiquidity>, lp_amount: u64, min_a: u64, min_b: u64) -> Result<()> {
+        amm::remove_liquidity(ctx, lp_amount, min_a, min_b)
+    }
+
+    pub fn amm_swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> Result<()> {
+        amm::swap(ctx, amount_in, min_out, a_to_b)
     }
 
     // Mint oSOLA to a recipient as LP reward. Authority-only.
