@@ -58,8 +58,8 @@ export default function Home() {
               <span className="text-white">SOLA</span>
               <span className="text-brand-green">DROME</span>
             </span>
-            <span className="text-[10px] text-gray-500 border border-gray-700 rounded px-1.5 py-0.5 uppercase tracking-widest">
-              Localnet
+            <span className="text-[10px] text-brand-green border border-brand-green/40 rounded px-1.5 py-0.5 uppercase tracking-widest">
+              Devnet ✓
             </span>
           </div>
 
