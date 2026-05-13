@@ -10,6 +10,7 @@ import {
   sortMints, userAta, statePda, marketVault, commonAccounts, fromUi, toUi,
 } from "@/lib/program";
 import { getTokenList, TokenInfo } from "@/lib/tokens";
+import { useSoladrome } from "@/lib/SoladromeContext";
 
 const SLIPPAGE_OPTIONS = [0.1, 0.5, 1.0] as const;
 
@@ -22,7 +23,8 @@ export function AmmSwap() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
 
-  const tokens = getTokenList();
+  const { usdcMint } = useSoladrome();
+  const tokens = getTokenList(usdcMint);
   const [idxIn,  setIdxIn]  = useState(1); // SOLA by default
   const [idxOut, setIdxOut] = useState(2); // USDC by default
   const [amountIn, setAmountIn] = useState("");
@@ -126,7 +128,7 @@ export function AmmSwap() {
   if (tokens.length < 2) {
     return (
       <div className="card glow text-gray-400 text-sm text-center py-8">
-        Token addresses not configured. Set NEXT_PUBLIC_SOLA_MINT and NEXT_PUBLIC_USDC_MINT.
+        Loading token information…
       </div>
     );
   }

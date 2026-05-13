@@ -17,6 +17,7 @@ import {
 } from "@/lib/program";
 
 import { getTokenList, symbolByMint } from "@/lib/tokens";
+import { useSoladrome } from "@/lib/SoladromeContext";
 
 function mintByIndex(tokens: ReturnType<typeof getTokenList>, i: number): string {
   return tokens[i]?.mint ?? "";
@@ -40,7 +41,8 @@ interface PoolInfo {
 export function Pools() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
-  const tokens = getTokenList();
+  const { usdcMint } = useSoladrome();
+  const tokens = getTokenList(usdcMint);
 
   const [tab, setTab] = useState<Tab>("pools");
   const [pools, setPools]  = useState<PoolInfo[]>([]);
@@ -241,7 +243,7 @@ export function Pools() {
                 <div key={p.address} className="card hover:border-brand-green/40 transition-colors">
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-bold text-white">
-                      {symbolByMint(p.mintA)} / {symbolByMint(p.mintB)}
+                      {symbolByMint(p.mintA, usdcMint)} / {symbolByMint(p.mintB, usdcMint)}
                     </span>
                     <span className="text-xs text-gray-400">Fee: {(p.feeRate / 100).toFixed(2)}%</span>
                   </div>
@@ -280,18 +282,18 @@ export function Pools() {
           <div className="flex items-center gap-2 mb-4">
             <button onClick={() => setTab("pools")} className="text-gray-400 hover:text-white text-sm">← Back</button>
             <h2 className="text-lg font-bold text-white">
-              Add Liquidity — {symbolByMint(selected.mintA)}/{symbolByMint(selected.mintB)}
+              Add Liquidity — {symbolByMint(selected.mintA, usdcMint)}/{symbolByMint(selected.mintB, usdcMint)}
             </h2>
           </div>
 
           <label className="text-xs text-gray-400 mb-1 block">
-            {symbolByMint(selected.mintA)} amount
+            {symbolByMint(selected.mintA, usdcMint)} amount
           </label>
           <input className="input mb-3" type="number" min="0" placeholder="0.00"
             value={addA} onChange={(e) => setAddA(e.target.value)} />
 
           <label className="text-xs text-gray-400 mb-1 block">
-            {symbolByMint(selected.mintB)} amount
+            {symbolByMint(selected.mintB, usdcMint)} amount
           </label>
           <input className="input mb-3" type="number" min="0" placeholder="0.00"
             value={addB} onChange={(e) => setAddB(e.target.value)} />
@@ -314,7 +316,7 @@ export function Pools() {
           <div className="flex items-center gap-2 mb-4">
             <button onClick={() => setTab("pools")} className="text-gray-400 hover:text-white text-sm">← Back</button>
             <h2 className="text-lg font-bold text-white">
-              Remove Liquidity — {symbolByMint(selected.mintA)}/{symbolByMint(selected.mintB)}
+              Remove Liquidity — {symbolByMint(selected.mintA, usdcMint)}/{symbolByMint(selected.mintB, usdcMint)}
             </h2>
           </div>
 
