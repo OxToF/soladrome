@@ -37,7 +37,7 @@ const NAV: { id: Page; label: string }[] = [
   { id: "claim",     label: "Claim"     },
 ];
 
-const DOCS_URL = "https://soladrome.finance";
+const DOCS_URL = "/about.html";
 
 export default function Home() {
   const wallet = useAnchorWallet();
