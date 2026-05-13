@@ -7,9 +7,9 @@
 
 **Project Name:** Soladrome  
 **Category:** DeFi / Infrastructure  
-**Stage:** Working prototype on localnet — ready for devnet  
-**Requested Amount:** $25,000 USD  
-**GitHub:** https://github.com/[your-handle]/soladrome *(to be made public)*  
+**Stage:** Live on Solana devnet — ready for audit and mainnet  
+**Requested Amount:** $35,000 USD  
+**GitHub:** https://github.com/OxToF/soladrome  
 **Live Demo:** https://soladrome.finance  
 **Contact:** [your@email.com]
 
@@ -129,13 +129,14 @@ Soladrome is the **first native Solana implementation** of this model.
 | Item | Amount | Justification |
 |------|--------|---------------|
 | **Security audit** (partial) | $18,000 | OtterSec / Neodyme — non-negotiable before mainnet |
+| **Developer compensation** (3 months) | $10,000 | Solo founder — full-stack + Rust/Anchor dev, minimum viable runway to reach mainnet |
 | **Devnet deployment + RPC** | $2,000 | Helius dedicated node for 6 months |
 | **Bug bounty program** | $3,000 | Immunefi listing, community review |
 | **Legal review** (DeFi compliance) | $2,000 | Token classification, ToS |
-| **TOTAL** | **$25,000** | |
+| **TOTAL** | **$35,000** | |
 
-> The protocol generates its own USDC floor vault from day 1 through the bonding curve.  
-> **Zero grant funds go to team compensation or marketing.**
+> The protocol generates its own USDC revenue from day 1 through the bonding curve.  
+> Developer compensation represents minimum viable runway for a solo founder to reach mainnet safely — no marketing spend, no team overhead.
 
 ---
 
