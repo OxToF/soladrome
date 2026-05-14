@@ -151,6 +151,15 @@ export function AmmSwap() {
     setEstimatedOut(null);
   }
 
+  const priceImpact = (() => {
+    if (!pool || !amountIn || !estimatedOut || +amountIn <= 0) return null;
+    const spotPrice = pool.reserveA / pool.reserveB; // token_in per token_out at current ratio
+    const execPrice = +amountIn / estimatedOut;
+    return ((execPrice - spotPrice) / spotPrice) * 100;
+  })();
+
+  const minReceived = estimatedOut !== null ? estimatedOut * (1 - slippage / 100) : null;
+
   const noPool  = !pool && tokIn && tokOut && tokIn.mint !== tokOut.mint;
   const canSwap = !!wallet && !!amountIn && +amountIn > 0 && !!estimatedOut && !!pool && !loading;
 
@@ -265,11 +274,32 @@ export function AmmSwap() {
           No pool found for {tokIn?.symbol}/{tokOut?.symbol}. Create one in the Pools tab.
         </p>
       )}
-      {pool && (
-        <p className="text-xs text-gray-500 mb-3">
-          Reserves: {pool.reserveA.toFixed(4)} {tokIn?.symbol} / {pool.reserveB.toFixed(4)} {tokOut?.symbol}
-          {" · "}Fee: {(pool.feeRate / 100).toFixed(2)}%
-        </p>
+
+      {/* ── Price info ────────────────────────────────────── */}
+      {pool && estimatedOut !== null && +amountIn > 0 && (
+        <div className="rounded-xl border border-brand-border p-3 mb-3 space-y-1.5 text-xs">
+          <div className="flex justify-between text-gray-400">
+            <span>Minimum reçu</span>
+            <span className="font-mono text-white">
+              {minReceived?.toFixed(6)} {tokOut?.symbol}
+            </span>
+          </div>
+          <div className="flex justify-between text-gray-400">
+            <span>Price impact</span>
+            <span className={`font-mono font-bold ${
+              priceImpact === null ? "text-gray-400"
+              : priceImpact < 1   ? "text-brand-green"
+              : priceImpact < 3   ? "text-yellow-400"
+              : "text-red-400"
+            }`}>
+              {priceImpact !== null ? `${priceImpact.toFixed(2)}%` : "—"}
+            </span>
+          </div>
+          <div className="flex justify-between text-gray-400">
+            <span>Fee du pool</span>
+            <span className="font-mono">{(pool.feeRate / 100).toFixed(2)}%</span>
+          </div>
+        </div>
       )}
 
       {/* ── Slippage ─────────────────────────────────────── */}
