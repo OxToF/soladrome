@@ -23,7 +23,8 @@ import { useSoladrome } from "@/lib/SoladromeContext";
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
 const PCT = [25, 50, 75, 100] as const;
 
-type Tab = "pools" | "add" | "remove" | "create";
+type View = "list" | "manage" | "create";
+type ManageTab = "add" | "remove";
 
 interface PoolInfo {
   address:  string;
@@ -33,12 +34,52 @@ interface PoolInfo {
   reserveB: number;
   feeRate:  number;
   totalLp:  number;
-  tvlUsdc:  number | null; // null if no USDC side
+  tvlUsdc:  number | null;
 }
+
+// ── Token avatar helpers ───────────────────────────────────────────────────
+
+const TOKEN_COLORS: Record<string, string> = {
+  SOLA:   "#4ade80",
+  hiSOLA: "#86efac",
+  oSOLA:  "#bbf7d0",
+  USDC:   "#2775ca",
+  SOL:    "#9945ff",
+  wSOL:   "#9945ff",
+};
+
+function tokenColor(sym: string): string {
+  if (TOKEN_COLORS[sym]) return TOKEN_COLORS[sym];
+  const h = [...sym].reduce((a, c) => a + c.charCodeAt(0) * 37, 0);
+  return ["#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4", "#f97316"][h % 5];
+}
+
+function PairBadge({ symA, symB }: { symA: string; symB: string }) {
+  return (
+    <div className="flex items-center shrink-0">
+      <span
+        className="w-9 h-9 rounded-full border-2 border-[#0f1117] flex items-center justify-center text-[10px] font-black text-black z-10 relative"
+        style={{ background: tokenColor(symA) }}
+      >
+        {symA.slice(0, 2).toUpperCase()}
+      </span>
+      <span
+        className="w-9 h-9 rounded-full border-2 border-[#0f1117] flex items-center justify-center text-[10px] font-black text-black -ml-3"
+        style={{ background: tokenColor(symB) }}
+      >
+        {symB.slice(0, 2).toUpperCase()}
+      </span>
+    </div>
+  );
+}
+
+// ── Numeric input guard ────────────────────────────────────────────────────
 
 function numInput(v: string, set: (s: string) => void) {
   if (v === "" || /^\d*\.?\d*$/.test(v)) set(v);
 }
+
+// ── Main component ─────────────────────────────────────────────────────────
 
 export function Pools() {
   const { connection } = useConnection();
@@ -46,63 +87,62 @@ export function Pools() {
   const { usdcMint } = useSoladrome();
   const tokens = getTokenList(usdcMint);
 
-  const [tab,      setTab]      = useState<Tab>("pools");
-  const [pools,    setPools]    = useState<PoolInfo[]>([]);
-  const [selected, setSelected] = useState<PoolInfo | null>(null);
-  const [loading,  setLoading]  = useState(false);
-  const [status,   setStatus]   = useState("");
+  const [view,      setView]      = useState<View>("list");
+  const [manageTab, setManageTab] = useState<ManageTab>("add");
+  const [pools,     setPools]     = useState<PoolInfo[]>([]);
+  const [selected,  setSelected]  = useState<PoolInfo | null>(null);
+  const [loading,   setLoading]   = useState(false);
+  const [status,    setStatus]    = useState("");
   const [userLpBals, setUserLpBals] = useState<Record<string, number>>({});
 
-  // ── Add liquidity state ───────────────────────────────────────────────────
+  // Add liquidity
   const [addA, setAddA] = useState("");
   const [addB, setAddB] = useState("");
   const [balA, setBalA] = useState<number | null>(null);
   const [balB, setBalB] = useState<number | null>(null);
 
-  // ── Remove liquidity state ────────────────────────────────────────────────
-  const [lpAmt,  setLpAmt]  = useState("");
-  const [lpBal,  setLpBal]  = useState<number | null>(null);
-  const [retA,   setRetA]   = useState<number | null>(null);
-  const [retB,   setRetB]   = useState<number | null>(null);
+  // Remove liquidity
+  const [lpAmt, setLpAmt] = useState("");
+  const [lpBal, setLpBal] = useState<number | null>(null);
+  const [retA,  setRetA]  = useState<number | null>(null);
+  const [retB,  setRetB]  = useState<number | null>(null);
 
-  // ── Create pool state ─────────────────────────────────────────────────────
+  // Create pool
   const [newMintA, setNewMintA] = useState(0);
   const [newMintB, setNewMintB] = useState(1);
   const [newFee,   setNewFee]   = useState("30");
   const [newProto, setNewProto] = useState("2000");
 
-  // ── Fetch all pools ───────────────────────────────────────────────────────
+  // ── Data fetching ─────────────────────────────────────────────────────────
+
   const fetchPools = useCallback(async () => {
     try {
       const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
       const program  = getProgram(provider);
       const all      = await (program.account as any).ammPool.all();
-      const usdcStr = usdcMint?.toString() ?? "";
+      const usdcStr  = usdcMint?.toString() ?? "";
       setPools(all.map((p: any) => {
-        const mA  = p.account.tokenAMint.toString();
-        const mB  = p.account.tokenBMint.toString();
+        const mA   = p.account.tokenAMint.toString();
+        const mB   = p.account.tokenBMint.toString();
         const decA = decimalsForMint(mA, usdcMint);
         const decB = decimalsForMint(mB, usdcMint);
-        const ra  = toUiDecimals(p.account.reserveA as BN, decA);
-        const rb  = toUiDecimals(p.account.reserveB as BN, decB);
+        const ra   = toUiDecimals(p.account.reserveA as BN, decA);
+        const rb   = toUiDecimals(p.account.reserveB as BN, decB);
         const tvlUsdc = mA === usdcStr ? ra * 2 : mB === usdcStr ? rb * 2 : null;
         return {
           address:  p.publicKey.toString(),
-          mintA:    mA,
-          mintB:    mB,
-          reserveA: ra,
-          reserveB: rb,
+          mintA: mA, mintB: mB,
+          reserveA: ra, reserveB: rb,
           feeRate:  p.account.feeRate as number,
           totalLp:  toUiDecimals(p.account.totalLp as BN, 6),
           tvlUsdc,
         };
       }));
-    } catch { /* no pools yet */ }
-  }, [connection, wallet]);
+    } catch { }
+  }, [connection, wallet, usdcMint]);
 
   useEffect(() => { fetchPools(); }, [fetchPools]);
 
-  // ── Fetch user LP balances for all pools ─────────────────────────────────
   useEffect(() => {
     if (!wallet || pools.length === 0) return;
     const bals: Record<string, number> = {};
@@ -116,49 +156,42 @@ export function Pools() {
     })).then(() => setUserLpBals({ ...bals }));
   }, [pools, wallet, connection]);
 
-  // ── Fetch balances when entering add/remove tab ───────────────────────────
   useEffect(() => {
     if (!wallet || !selected) return;
     const mintAPk = new PublicKey(selected.mintA);
     const mintBPk = new PublicKey(selected.mintB);
     const lpMint  = lpMintPda(new PublicKey(selected.address));
 
-    const fetchBal = async (mint: PublicKey): Promise<number> => {
+    const bal = async (mint: PublicKey) => {
       try {
-        if (mint.toString() === WSOL_MINT) {
-          const lamports = await connection.getBalance(wallet.publicKey);
-          return lamports / 1e9;
-        }
-        const ata = userAta(mint, wallet.publicKey);
-        const res = await connection.getTokenAccountBalance(ata);
-        return res.value.uiAmount ?? 0;
+        if (mint.toString() === WSOL_MINT)
+          return (await connection.getBalance(wallet.publicKey)) / 1e9;
+        return (await connection.getTokenAccountBalance(userAta(mint, wallet.publicKey))).value.uiAmount ?? 0;
       } catch { return 0; }
     };
 
-    if (tab === "add") {
-      fetchBal(mintAPk).then(setBalA);
-      fetchBal(mintBPk).then(setBalB);
+    if (manageTab === "add") {
+      bal(mintAPk).then(setBalA);
+      bal(mintBPk).then(setBalB);
     }
-    if (tab === "remove") {
-      fetchBal(lpMint).then(setLpBal);
+    if (manageTab === "remove") {
+      bal(lpMint).then(setLpBal);
     }
-  }, [tab, selected, wallet, connection]);
+  }, [manageTab, selected, wallet, connection]);
 
-  // ── Auto-compute proportional B when A changes ────────────────────────────
+  // ── Ratio logic ───────────────────────────────────────────────────────────
+
   const poolHasLiquidity = !!selected && selected.reserveA > 0 && selected.reserveB > 0;
 
   function onChangeA(v: string) {
     numInput(v, setAddA);
     if (!poolHasLiquidity || !selected) return;
     const a = parseFloat(v);
-    if (!isNaN(a) && a > 0) {
+    if (!isNaN(a) && a > 0)
       setAddB((a * selected.reserveB / selected.reserveA).toFixed(6).replace(/\.?0+$/, ""));
-    } else {
-      setAddB("");
-    }
+    else setAddB("");
   }
 
-  // Only used for first deposit (empty pool) — user sets both sides freely
   function onChangeB(v: string) {
     if (poolHasLiquidity) return;
     numInput(v, setAddB);
@@ -169,7 +202,6 @@ export function Pools() {
     onChangeA(((balA * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
   }
 
-  // ── Estimate return when LP amount changes ────────────────────────────────
   function onChangeLp(v: string) {
     numInput(v, setLpAmt);
     if (!selected || selected.totalLp <= 0) { setRetA(null); setRetB(null); return; }
@@ -177,9 +209,7 @@ export function Pools() {
     if (!isNaN(lp) && lp > 0) {
       setRetA(lp * selected.reserveA / selected.totalLp);
       setRetB(lp * selected.reserveB / selected.totalLp);
-    } else {
-      setRetA(null); setRetB(null);
-    }
+    } else { setRetA(null); setRetB(null); }
   }
 
   function applyPctLp(pct: number) {
@@ -187,22 +217,23 @@ export function Pools() {
     onChangeLp(((lpBal * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
   }
 
-  // ── provider helper ───────────────────────────────────────────────────────
+  // ── Provider helper ───────────────────────────────────────────────────────
+
   function prov() { return new AnchorProvider(connection, wallet!, {}); }
 
-  // ── Create pool ───────────────────────────────────────────────────────────
+  // ── Transactions ──────────────────────────────────────────────────────────
+
   async function createPool() {
     if (!wallet) return;
     setLoading(true); setStatus("");
     try {
-      const program     = getProgram(prov());
-      const ma          = tokens[newMintA]?.mint;
-      const mb          = tokens[newMintB]?.mint;
+      const program = getProgram(prov());
+      const ma = tokens[newMintA]?.mint;
+      const mb = tokens[newMintB]?.mint;
       if (!ma || !mb || ma === mb) throw new Error("Invalid token pair");
       const [mintAPk, mintBPk] = sortMints(new PublicKey(ma), new PublicKey(mb));
       const poolAddr = poolPda(mintAPk, mintBPk);
       const lpMint   = lpMintPda(poolAddr);
-
       const tx = await program.methods
         .createPool(+newFee, +newProto)
         .accounts({
@@ -218,14 +249,12 @@ export function Pools() {
           rent:          commonAccounts.rent,
         } as any)
         .rpc();
-
-      setStatus(`✅ Pool créée — tx: ${tx.slice(0, 16)}…`);
-      fetchPools(); setTab("pools");
+      setStatus(`✅ Pool créée — ${tx.slice(0, 16)}…`);
+      fetchPools(); setView("list");
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
   }
 
-  // ── Add liquidity ─────────────────────────────────────────────────────────
   async function addLiquidity() {
     if (!wallet || !selected || !addA || !addB) return;
     setLoading(true); setStatus("");
@@ -237,11 +266,10 @@ export function Pools() {
       const lpMint    = lpMintPda(poolAddr);
       const userLp    = getAssociatedTokenAddressSync(lpMint, wallet.publicKey);
       const deadLpAta = getAssociatedTokenAddressSync(lpMint, LP_DEAD, true);
-
-      const isWsolA = selected.mintA === WSOL_MINT_STR;
-      const isWsolB = selected.mintB === WSOL_MINT_STR;
-      const decA    = decimalsForMint(selected.mintA, usdcMint);
-      const decB    = decimalsForMint(selected.mintB, usdcMint);
+      const isWsolA   = selected.mintA === WSOL_MINT_STR;
+      const isWsolB   = selected.mintB === WSOL_MINT_STR;
+      const decA      = decimalsForMint(selected.mintA, usdcMint);
+      const decB      = decimalsForMint(selected.mintB, usdcMint);
 
       const preIxs: any[]  = [];
       const postIxs: any[] = [];
@@ -255,15 +283,12 @@ export function Pools() {
         postIxs.push(buildUnwrapInstruction(wallet.publicKey));
       }
 
-      // LP ATA for user (may not exist yet)
       const userLpIx = await ensureAtaIx(connection, wallet.publicKey, lpMint, wallet.publicKey);
       if (userLpIx) preIxs.push(userLpIx);
 
-      // Dead LP ATA (first deposit burns MINIMUM_LIQUIDITY there)
       const deadInfo = await connection.getAccountInfo(deadLpAta);
-      if (!deadInfo) {
+      if (!deadInfo)
         preIxs.push(createAssociatedTokenAccountInstruction(wallet.publicKey, deadLpAta, LP_DEAD, lpMint));
-      }
 
       const addIx = await program.methods
         .addLiquidity(fromUiDecimals(+addA, decA), fromUiDecimals(+addB, decB), new BN(0))
@@ -285,14 +310,13 @@ export function Pools() {
         .instruction();
 
       const sig = await sendTx(connection, wallet, [...preIxs, addIx, ...postIxs]);
-      setStatus(`✅ Liquidité ajoutée — tx: ${sig.slice(0, 16)}…`);
+      setStatus(`✅ Liquidité ajoutée — ${sig.slice(0, 16)}…`);
       setAddA(""); setAddB("");
       fetchPools();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
   }
 
-  // ── Remove liquidity ──────────────────────────────────────────────────────
   async function removeLiquidity() {
     if (!wallet || !selected || !lpAmt) return;
     setLoading(true); setStatus("");
@@ -302,23 +326,14 @@ export function Pools() {
       const mintAPk  = new PublicKey(selected.mintA);
       const mintBPk  = new PublicKey(selected.mintB);
       const lpMint   = lpMintPda(poolAddr);
+      const isWsolA  = selected.mintA === WSOL_MINT_STR;
+      const isWsolB  = selected.mintB === WSOL_MINT_STR;
 
-      const isWsolA = selected.mintA === WSOL_MINT_STR;
-      const isWsolB = selected.mintB === WSOL_MINT_STR;
-
+      const preIxs:  any[] = [];
       const postIxs: any[] = [];
       if (isWsolA || isWsolB) postIxs.push(buildUnwrapInstruction(wallet.publicKey));
-
-      // Ensure token ATAs exist before receiving withdrawn tokens
-      const preIxs: any[] = [];
-      if (!isWsolA) {
-        const ataIx = await ensureAtaIx(connection, wallet.publicKey, mintAPk, wallet.publicKey);
-        if (ataIx) preIxs.push(ataIx);
-      }
-      if (!isWsolB) {
-        const ataIx = await ensureAtaIx(connection, wallet.publicKey, mintBPk, wallet.publicKey);
-        if (ataIx) preIxs.push(ataIx);
-      }
+      if (!isWsolA) { const ix = await ensureAtaIx(connection, wallet.publicKey, mintAPk, wallet.publicKey); if (ix) preIxs.push(ix); }
+      if (!isWsolB) { const ix = await ensureAtaIx(connection, wallet.publicKey, mintBPk, wallet.publicKey); if (ix) preIxs.push(ix); }
 
       const removeIx = await program.methods
         .removeLiquidity(fromUiDecimals(+lpAmt, 6), new BN(1), new BN(1))
@@ -337,314 +352,463 @@ export function Pools() {
         .instruction();
 
       const sig = await sendTx(connection, wallet, [...preIxs, removeIx, ...postIxs]);
-      setStatus(`✅ Liquidité retirée — tx: ${sig.slice(0, 16)}…`);
+      setStatus(`✅ Liquidité retirée — ${sig.slice(0, 16)}…`);
       setLpAmt(""); setRetA(null); setRetB(null);
       fetchPools();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
   }
 
-  // ── UI helpers ────────────────────────────────────────────────────────────
+  // ── Navigation helpers ────────────────────────────────────────────────────
+
   const symA = selected ? symbolByMint(selected.mintA, usdcMint) : "";
   const symB = selected ? symbolByMint(selected.mintB, usdcMint) : "";
+  const myPools = wallet ? pools.filter(p => (userLpBals[p.address] ?? 0) > 0) : [];
 
-  function goTo(p: PoolInfo, t: Tab) {
-    setSelected(p); setTab(t); setStatus("");
+  function openManage(p: PoolInfo, tab: ManageTab) {
+    setSelected(p); setView("manage"); setManageTab(tab); setStatus("");
     setAddA(""); setAddB(""); setLpAmt(""); setRetA(null); setRetB(null);
   }
 
-  return (
-    <div className="space-y-4">
+  function backToList() { setView("list"); setStatus(""); }
 
-      {/* ── Tab bar ───────────────────────────────────────────────── */}
-      <div className="flex gap-4 border-b border-brand-border mb-2">
-        {(["pools", "create"] as const).map((t) => (
-          <button key={t}
-            onClick={() => { setTab(t); setStatus(""); }}
-            className={`pb-2 text-sm font-semibold uppercase tracking-wide transition-colors ${
-              tab === t ? "tab-active" : "text-gray-500 hover:text-gray-300"
-            }`}
-          >
-            {t === "pools" ? "Pools" : "Créer un pool"}
+  // ── Manage view ───────────────────────────────────────────────────────────
+
+  if (view === "manage" && selected) {
+    const userLp = userLpBals[selected.address] ?? 0;
+    const share  = selected.totalLp > 0 ? (userLp / selected.totalLp) * 100 : 0;
+
+    return (
+      <div className="space-y-4">
+        {/* Back + title */}
+        <div className="flex items-center gap-3">
+          <button onClick={backToList}
+            className="w-8 h-8 rounded-full border border-brand-border text-gray-400 hover:text-white hover:border-brand-green transition-colors flex items-center justify-center text-lg leading-none">
+            ←
           </button>
-        ))}
+          <div className="flex items-center gap-3">
+            <PairBadge symA={symA} symB={symB} />
+            <div>
+              <p className="font-black text-white text-lg">{symA}/{symB}</p>
+              <p className="text-xs text-gray-500">{(selected.feeRate / 100).toFixed(2)}% fee · Basic</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Pool stats strip */}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-xl bg-brand-dark border border-brand-border p-3 text-center">
+            <p className="text-xs text-gray-500 mb-1">TVL</p>
+            <p className="font-bold text-brand-green text-sm">
+              {selected.tvlUsdc !== null
+                ? `$${selected.tvlUsdc.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                : "—"}
+            </p>
+          </div>
+          <div className="rounded-xl bg-brand-dark border border-brand-border p-3 text-center">
+            <p className="text-xs text-gray-500 mb-1">{symA} Reserve</p>
+            <p className="font-mono text-white text-sm">
+              {selected.reserveA.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+            </p>
+          </div>
+          <div className="rounded-xl bg-brand-dark border border-brand-border p-3 text-center">
+            <p className="text-xs text-gray-500 mb-1">{symB} Reserve</p>
+            <p className="font-mono text-white text-sm">
+              {selected.reserveB.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+            </p>
+          </div>
+        </div>
+
+        {/* My position banner */}
+        {wallet && userLp > 0 && (
+          <div className="rounded-xl border border-brand-green/30 bg-brand-green/5 px-4 py-3 flex justify-between items-center">
+            <span className="text-sm text-brand-green/80 font-semibold">Ma position</span>
+            <span className="text-sm font-bold text-brand-green font-mono">
+              {userLp.toLocaleString(undefined, { maximumFractionDigits: 4 })} LP
+              <span className="text-xs text-brand-green/60 ml-2">({share.toFixed(3)}%)</span>
+            </span>
+          </div>
+        )}
+
+        {/* Tabs */}
+        <div className="flex rounded-xl border border-brand-border overflow-hidden">
+          {(["add", "remove"] as ManageTab[]).map(t => (
+            <button key={t} onClick={() => { setManageTab(t); setStatus(""); }}
+              className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${
+                manageTab === t
+                  ? "bg-brand-green text-black"
+                  : "text-gray-400 hover:text-white"
+              }`}>
+              {t === "add" ? "Deposit" : "Withdraw"}
+            </button>
+          ))}
+        </div>
+
+        {/* Add tab */}
+        {manageTab === "add" && (
+          <div className="card space-y-3">
+            {/* Token A */}
+            <div className="rounded-xl bg-brand-dark border border-brand-border p-4">
+              <div className="flex justify-between mb-2">
+                <span className="text-xs font-semibold text-gray-400">{symA}</span>
+                {balA !== null && (
+                  <span className="text-xs text-gray-500">
+                    Bal:{" "}
+                    <button className="text-gray-300 hover:text-brand-green font-mono transition-colors"
+                      onClick={() => applyPctA(100)}>
+                      {balA.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                    </button>
+                  </span>
+                )}
+              </div>
+              <input
+                className="w-full bg-transparent text-right text-3xl font-black text-white placeholder-gray-700 focus:outline-none"
+                type="text" inputMode="decimal" placeholder="0"
+                value={addA} onChange={e => onChangeA(e.target.value)}
+              />
+              <div className="flex gap-2 mt-3">
+                {PCT.map(p => (
+                  <button key={p} onClick={() => applyPctA(p)} disabled={!balA}
+                    className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-500
+                               hover:border-brand-green hover:text-brand-green transition-colors
+                               disabled:opacity-30 disabled:cursor-not-allowed">
+                    {p === 100 ? "Max" : `${p}%`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-center text-gray-600 text-lg select-none">+</div>
+
+            {/* Token B */}
+            <div className={`rounded-xl border p-4 ${
+              poolHasLiquidity ? "bg-brand-dark/50 border-brand-border/40" : "bg-brand-dark border-brand-border"
+            }`}>
+              <div className="flex justify-between mb-2">
+                <span className="text-xs font-semibold text-gray-400">
+                  {symB}
+                  {poolHasLiquidity && <span className="ml-2 text-gray-600 font-normal">(auto)</span>}
+                </span>
+                {balB !== null && (
+                  <span className="text-xs text-gray-500 font-mono">
+                    Bal: {balB.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                  </span>
+                )}
+              </div>
+              {poolHasLiquidity ? (
+                <div className="text-right text-3xl font-black text-gray-500 font-mono py-0.5 select-none">
+                  {addB || "0"}
+                </div>
+              ) : (
+                <input
+                  className="w-full bg-transparent text-right text-3xl font-black text-white placeholder-gray-700 focus:outline-none"
+                  type="text" inputMode="decimal" placeholder="0"
+                  value={addB} onChange={e => onChangeB(e.target.value)}
+                />
+              )}
+              <p className="text-xs mt-2 text-right">
+                {poolHasLiquidity
+                  ? <span className="text-gray-600">1 {symA} = {(selected.reserveB / selected.reserveA).toFixed(6)} {symB}</span>
+                  : <span className="text-yellow-500/70">Premier dépôt — vous fixez le prix initial</span>
+                }
+              </p>
+            </div>
+
+            <button className="btn-primary w-full py-3 text-base font-bold"
+              onClick={addLiquidity} disabled={loading || !addA || !addB || !wallet}>
+              {loading ? "Processing…" : "Deposit"}
+            </button>
+            {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
+          </div>
+        )}
+
+        {/* Remove tab */}
+        {manageTab === "remove" && (
+          <div className="card space-y-3">
+            <div className="rounded-xl bg-brand-dark border border-brand-border p-4">
+              <div className="flex justify-between mb-2">
+                <span className="text-xs font-semibold text-gray-400">LP tokens</span>
+                {lpBal !== null && (
+                  <span className="text-xs text-gray-500">
+                    Bal:{" "}
+                    <button className="text-gray-300 hover:text-brand-green font-mono transition-colors"
+                      onClick={() => applyPctLp(100)}>
+                      {lpBal.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                    </button>
+                  </span>
+                )}
+              </div>
+              <input
+                className="w-full bg-transparent text-right text-3xl font-black text-white placeholder-gray-700 focus:outline-none"
+                type="text" inputMode="decimal" placeholder="0"
+                value={lpAmt} onChange={e => onChangeLp(e.target.value)}
+              />
+              <div className="flex gap-2 mt-3">
+                {PCT.map(p => (
+                  <button key={p} onClick={() => applyPctLp(p)} disabled={!lpBal}
+                    className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-500
+                               hover:border-brand-green hover:text-brand-green transition-colors
+                               disabled:opacity-30 disabled:cursor-not-allowed">
+                    {p === 100 ? "Max" : `${p}%`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {retA !== null && retB !== null && (
+              <div className="rounded-xl border border-brand-border p-4 space-y-3">
+                <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide">Vous recevrez</p>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black text-black"
+                      style={{ background: tokenColor(symA) }}>
+                      {symA.slice(0, 2)}
+                    </span>
+                    <span className="text-white font-semibold">{symA}</span>
+                  </div>
+                  <span className="font-mono text-brand-green font-bold">
+                    {retA.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black text-black"
+                      style={{ background: tokenColor(symB) }}>
+                      {symB.slice(0, 2)}
+                    </span>
+                    <span className="text-white font-semibold">{symB}</span>
+                  </div>
+                  <span className="font-mono text-brand-green font-bold">
+                    {retB.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <button className="btn-primary w-full py-3 text-base font-bold"
+              onClick={removeLiquidity} disabled={loading || !lpAmt || !wallet}>
+              {loading ? "Processing…" : "Withdraw"}
+            </button>
+            {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Create pool view ──────────────────────────────────────────────────────
+
+  if (view === "create") {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <button onClick={backToList}
+            className="w-8 h-8 rounded-full border border-brand-border text-gray-400 hover:text-white hover:border-brand-green transition-colors flex items-center justify-center text-lg leading-none">
+            ←
+          </button>
+          <h2 className="text-lg font-black text-white">Créer un pool</h2>
+        </div>
+
+        <div className="card space-y-5">
+          <div>
+            <p className="text-xs text-gray-500 uppercase tracking-widest mb-3 font-semibold">Paire de tokens</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Token A</label>
+                <select className="input w-full" value={newMintA}
+                  onChange={e => setNewMintA(+e.target.value)}>
+                  {tokens.map((t, i) => (
+                    <option key={i} value={i} disabled={i === newMintB} className="bg-gray-900">{t.symbol}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Token B</label>
+                <select className="input w-full" value={newMintB}
+                  onChange={e => setNewMintB(+e.target.value)}>
+                  {tokens.map((t, i) => (
+                    <option key={i} value={i} disabled={i === newMintA} className="bg-gray-900">{t.symbol}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="h-px bg-brand-border" />
+
+          <div>
+            <p className="text-xs text-gray-500 uppercase tracking-widest mb-3 font-semibold">Frais</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Swap fee (bps)</label>
+                <input className="input w-full" type="text" inputMode="decimal"
+                  value={newFee} onChange={e => numInput(e.target.value, setNewFee)} />
+                <span className="text-xs text-gray-600 mt-0.5 block">{(+newFee / 100).toFixed(2)}% par swap</span>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Part protocole (bps)</label>
+                <input className="input w-full" type="text" inputMode="decimal"
+                  value={newProto} onChange={e => numInput(e.target.value, setNewProto)} />
+                <span className="text-xs text-gray-600 mt-0.5 block">{(+newProto / 100).toFixed(0)}% des fees → stakers</span>
+              </div>
+            </div>
+          </div>
+
+          <button className="btn-primary w-full py-3 text-base font-bold"
+            onClick={createPool} disabled={loading || !wallet || newMintA === newMintB}>
+            {loading ? "Processing…" : "Créer le pool"}
+          </button>
+          {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Pool list view ────────────────────────────────────────────────────────
+
+  return (
+    <div className="space-y-6">
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-black text-white">Pools</h1>
+          <p className="text-xs text-gray-500 mt-0.5">Apportez de la liquidité et gagnez des fees</p>
+        </div>
+        <button className="btn-secondary text-sm" onClick={() => { setView("create"); setStatus(""); }}>
+          + Créer un pool
+        </button>
       </div>
 
-      {/* ── Pool list ──────────────────────────────────────────────── */}
-      {tab === "pools" && (
-        <>
-          {pools.length === 0 ? (
-            <div className="card text-gray-400 text-sm text-center py-8">
-              Aucun pool AMM. Crée-en un.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {pools.map((p) => {
-                const sA      = symbolByMint(p.mintA, usdcMint);
-                const sB      = symbolByMint(p.mintB, usdcMint);
-                const userLp  = userLpBals[p.address] ?? 0;
-                const share   = p.totalLp > 0 ? (userLp / p.totalLp) * 100 : 0;
-                return (
-                  <div key={p.address} className="card hover:border-brand-green/40 transition-colors">
+      {/* My Positions */}
+      {wallet && myPools.length > 0 && (
+        <section>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-3">Mes positions</p>
+          <div className="rounded-2xl border border-brand-green/20 bg-brand-green/[0.03] divide-y divide-brand-green/10 overflow-hidden">
+            {myPools.map(p => {
+              const sA      = symbolByMint(p.mintA, usdcMint);
+              const sB      = symbolByMint(p.mintB, usdcMint);
+              const userLp  = userLpBals[p.address] ?? 0;
+              const share   = p.totalLp > 0 ? (userLp / p.totalLp) * 100 : 0;
+              const estA    = p.totalLp > 0 ? (userLp * p.reserveA / p.totalLp) : 0;
+              const estB    = p.totalLp > 0 ? (userLp * p.reserveB / p.totalLp) : 0;
+              return (
+                <div key={p.address} className="flex items-center gap-4 px-4 py-3.5 hover:bg-brand-green/[0.05] transition-colors">
+                  <PairBadge symA={sA} symB={sB} />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-white">{sA}/{sB}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {share.toFixed(3)}% pool share
+                    </p>
+                  </div>
+                  <div className="text-right hidden sm:block">
+                    <p className="text-xs text-gray-500 mb-0.5">Votre position</p>
+                    <p className="text-xs font-mono text-white">
+                      {estA.toLocaleString(undefined, { maximumFractionDigits: 4 })} {sA}
+                      {" "}<span className="text-gray-600">+</span>{" "}
+                      {estB.toLocaleString(undefined, { maximumFractionDigits: 4 })} {sB}
+                    </p>
+                  </div>
+                  {p.tvlUsdc !== null && (
+                    <div className="text-right hidden md:block w-20">
+                      <p className="text-xs text-gray-500 mb-0.5">TVL</p>
+                      <p className="text-sm font-bold text-brand-green">
+                        ${p.tvlUsdc.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </p>
+                    </div>
+                  )}
+                  <div className="flex gap-2 shrink-0">
+                    <button className="btn-primary text-xs px-3 py-1.5"
+                      onClick={() => openManage(p, "add")}>+ Add</button>
+                    <button className="btn-secondary text-xs px-3 py-1.5"
+                      onClick={() => openManage(p, "remove")}>− Remove</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
-                    {/* Header */}
-                    <div className="flex items-center justify-between mb-3">
-                      <div>
-                        <span className="font-bold text-white text-xl">{sA} / {sB}</span>
-                        <span className="ml-2 text-xs text-gray-500 border border-brand-border rounded px-1.5 py-0.5">
-                          {(p.feeRate / 100).toFixed(2)}% fee
-                        </span>
+      {/* All Pools */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Tous les pools</p>
+          <button className="text-xs text-gray-600 hover:text-gray-300 transition-colors" onClick={fetchPools}>
+            ↻ Actualiser
+          </button>
+        </div>
+
+        {pools.length === 0 ? (
+          <div className="card text-center py-12">
+            <p className="text-4xl mb-3">💧</p>
+            <p className="text-gray-400 text-sm mb-1">Aucun pool AMM pour l'instant.</p>
+            <p className="text-gray-600 text-xs mb-4">Sois le premier à créer de la liquidité.</p>
+            <button className="btn-primary text-sm"
+              onClick={() => { setView("create"); setStatus(""); }}>
+              Créer le premier pool
+            </button>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-brand-border overflow-hidden">
+            {/* Table header */}
+            <div className="hidden sm:grid grid-cols-[1fr_80px_80px_auto] gap-4 px-5 py-2.5 bg-brand-dark/80 border-b border-brand-border text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              <span>Pool</span>
+              <span className="text-center">Type</span>
+              <span className="text-right">TVL</span>
+              <span />
+            </div>
+
+            {/* Rows */}
+            <div className="divide-y divide-brand-border">
+              {pools.map(p => {
+                const sA = symbolByMint(p.mintA, usdcMint);
+                const sB = symbolByMint(p.mintB, usdcMint);
+                return (
+                  <div key={p.address}
+                    className="flex sm:grid sm:grid-cols-[1fr_80px_80px_auto] gap-4 items-center px-5 py-4 hover:bg-brand-dark/50 transition-colors">
+
+                    {/* Pair */}
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <PairBadge symA={sA} symB={sB} />
+                      <div className="min-w-0">
+                        <p className="font-bold text-white">{sA}/{sB}</p>
+                        <p className="text-xs text-gray-500">{(p.feeRate / 100).toFixed(2)}% fee</p>
                       </div>
-                      {p.tvlUsdc !== null && (
-                        <div className="text-right">
-                          <p className="text-xs text-gray-500">TVL</p>
-                          <p className="font-bold text-brand-green">
-                            ${p.tvlUsdc.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                          </p>
-                        </div>
+                    </div>
+
+                    {/* Type */}
+                    <div className="hidden sm:flex justify-center">
+                      <span className="text-[10px] border border-brand-border/60 text-gray-500 rounded-full px-2.5 py-0.5 tracking-wide uppercase">
+                        Basic
+                      </span>
+                    </div>
+
+                    {/* TVL */}
+                    <div className="hidden sm:block text-right">
+                      {p.tvlUsdc !== null ? (
+                        <p className="font-bold text-brand-green">
+                          ${p.tvlUsdc.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </p>
+                      ) : (
+                        <p className="text-gray-600">—</p>
                       )}
                     </div>
 
-                    {/* Reserves */}
-                    <div className="grid grid-cols-2 gap-2 mb-3">
-                      <div className="rounded-lg bg-brand-dark p-2.5 text-center">
-                        <p className="text-xs text-gray-500 mb-0.5">{sA}</p>
-                        <p className="font-mono text-sm font-bold text-white">
-                          {p.reserveA.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-brand-dark p-2.5 text-center">
-                        <p className="text-xs text-gray-500 mb-0.5">{sB}</p>
-                        <p className="font-mono text-sm font-bold text-white">
-                          {p.reserveB.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* User position */}
-                    {wallet && userLp > 0 && (
-                      <div className="rounded-lg border border-brand-green/30 bg-brand-green/5 px-3 py-2 mb-3 flex justify-between items-center">
-                        <span className="text-xs text-brand-green/80">Ma position</span>
-                        <span className="text-sm font-bold text-brand-green font-mono">
-                          {userLp.toLocaleString(undefined, { maximumFractionDigits: 2 })} LP
-                          <span className="text-xs text-brand-green/60 ml-1">({share.toFixed(2)}%)</span>
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Actions */}
-                    <div className="flex gap-2">
-                      <button className="btn-primary text-xs px-3 py-2 flex-1"
-                        onClick={() => goTo(p, "add")}>+ Add Liquidity</button>
-                      <button className="btn-secondary text-xs px-3 py-2 flex-1"
-                        onClick={() => goTo(p, "remove")}>− Remove</button>
+                    {/* Action */}
+                    <div className="shrink-0">
+                      <button className="btn-primary text-xs px-4 py-2"
+                        onClick={() => openManage(p, "add")}>
+                        Manage
+                      </button>
                     </div>
                   </div>
                 );
               })}
             </div>
-          )}
-          <button className="text-xs text-brand-green hover:underline" onClick={fetchPools}>
-            ↻ Refresh
-          </button>
-        </>
-      )}
-
-      {/* ── Add liquidity ──────────────────────────────────────────── */}
-      {tab === "add" && selected && (
-        <div className="card glow space-y-4">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setTab("pools")} className="text-gray-400 hover:text-white text-sm">← Back</button>
-            <h2 className="text-lg font-bold text-white">Add Liquidity — {symA}/{symB}</h2>
           </div>
-
-          {/* Token A */}
-          <div className="rounded-xl bg-brand-dark border border-brand-border p-4">
-            <div className="flex justify-between mb-2">
-              <span className="text-xs text-gray-400">{symA}</span>
-              {balA !== null && (
-                <span className="text-xs text-gray-500">
-                  Balance:{" "}
-                  <button className="text-gray-300 hover:text-brand-green font-mono"
-                    onClick={() => applyPctA(100)}>
-                    {balA.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                  </button>
-                </span>
-              )}
-            </div>
-            <input
-              className="w-full bg-transparent text-right text-2xl font-bold text-white placeholder-gray-600 focus:outline-none"
-              type="text" inputMode="decimal" placeholder="0"
-              value={addA} onChange={(e) => onChangeA(e.target.value)}
-            />
-            <div className="flex gap-2 mt-3">
-              {PCT.map((p) => (
-                <button key={p} onClick={() => applyPctA(p)} disabled={!balA}
-                  className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-400
-                             hover:border-brand-green hover:text-brand-green transition-colors
-                             disabled:opacity-30 disabled:cursor-not-allowed">
-                  {p === 100 ? "Max" : `${p}%`}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Token B — read-only when pool has liquidity (ratio is fixed) */}
-          <div className={`rounded-xl border p-4 ${
-            poolHasLiquidity
-              ? "bg-brand-dark/60 border-brand-border/50"
-              : "bg-brand-dark border-brand-border"
-          }`}>
-            <div className="flex justify-between mb-2">
-              <span className="text-xs text-gray-400">
-                {symB}
-                {poolHasLiquidity && (
-                  <span className="ml-2 text-gray-600">(calculé automatiquement)</span>
-                )}
-              </span>
-              {balB !== null && (
-                <span className="text-xs text-gray-500 font-mono">
-                  Balance: {balB.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                </span>
-              )}
-            </div>
-            {poolHasLiquidity ? (
-              <div className="text-right text-2xl font-bold text-gray-400 font-mono py-0.5">
-                {addB || "0"}
-              </div>
-            ) : (
-              <input
-                className="w-full bg-transparent text-right text-2xl font-bold text-white placeholder-gray-600 focus:outline-none"
-                type="text" inputMode="decimal" placeholder="0"
-                value={addB} onChange={(e) => onChangeB(e.target.value)}
-              />
-            )}
-            <p className="text-xs mt-2 text-right">
-              {poolHasLiquidity
-                ? <span className="text-gray-600">Ratio : 1 {symA} = {(selected.reserveB / selected.reserveA).toFixed(4)} {symB}</span>
-                : <span className="text-yellow-500/70">Premier dépôt — vous définissez le prix initial</span>
-              }
-            </p>
-          </div>
-
-          <button className="btn-primary w-full" onClick={addLiquidity}
-            disabled={loading || !addA || !addB}>
-            {loading ? "Processing…" : "Add Liquidity"}
-          </button>
-          {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
-        </div>
-      )}
-
-      {/* ── Remove liquidity ───────────────────────────────────────── */}
-      {tab === "remove" && selected && (
-        <div className="card glow space-y-4">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setTab("pools")} className="text-gray-400 hover:text-white text-sm">← Back</button>
-            <h2 className="text-lg font-bold text-white">Remove Liquidity — {symA}/{symB}</h2>
-          </div>
-
-          {/* LP input */}
-          <div className="rounded-xl bg-brand-dark border border-brand-border p-4">
-            <div className="flex justify-between mb-2">
-              <span className="text-xs text-gray-400">LP tokens à brûler</span>
-              {lpBal !== null && (
-                <span className="text-xs text-gray-500">
-                  Balance:{" "}
-                  <button className="text-gray-300 hover:text-brand-green font-mono"
-                    onClick={() => applyPctLp(100)}>
-                    {lpBal.toLocaleString(undefined, { maximumFractionDigits: 6 })}
-                  </button>
-                </span>
-              )}
-            </div>
-            <input
-              className="w-full bg-transparent text-right text-2xl font-bold text-white placeholder-gray-600 focus:outline-none"
-              type="text" inputMode="decimal" placeholder="0"
-              value={lpAmt} onChange={(e) => onChangeLp(e.target.value)}
-            />
-            <div className="flex gap-2 mt-3">
-              {PCT.map((p) => (
-                <button key={p} onClick={() => applyPctLp(p)} disabled={!lpBal}
-                  className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-400
-                             hover:border-brand-green hover:text-brand-green transition-colors
-                             disabled:opacity-30 disabled:cursor-not-allowed">
-                  {p === 100 ? "Max" : `${p}%`}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Estimated return */}
-          {retA !== null && retB !== null && (
-            <div className="rounded-xl border border-brand-border p-4 space-y-2">
-              <p className="text-xs text-gray-400 mb-1">Vous recevrez (estimé)</p>
-              <div className="flex justify-between">
-                <span className="text-sm text-white font-bold">{symA}</span>
-                <span className="font-mono text-brand-green">{retA.toFixed(6)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-sm text-white font-bold">{symB}</span>
-                <span className="font-mono text-brand-green">{retB.toFixed(6)}</span>
-              </div>
-            </div>
-          )}
-
-          <button className="btn-primary w-full" onClick={removeLiquidity}
-            disabled={loading || !lpAmt}>
-            {loading ? "Processing…" : "Remove Liquidity"}
-          </button>
-          {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
-        </div>
-      )}
-
-      {/* ── Create pool ────────────────────────────────────────────── */}
-      {tab === "create" && (
-        <div className="card glow space-y-4">
-          <h2 className="text-lg font-bold text-white">Créer un pool AMM</h2>
-
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="text-xs text-gray-400 mb-1 block">Token A</label>
-              <select className="input w-full" value={newMintA}
-                onChange={(e) => setNewMintA(+e.target.value)}>
-                {tokens.map((t, i) => (
-                  <option key={i} value={i} disabled={i === newMintB} className="bg-gray-900">{t.symbol}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex-1">
-              <label className="text-xs text-gray-400 mb-1 block">Token B</label>
-              <select className="input w-full" value={newMintB}
-                onChange={(e) => setNewMintB(+e.target.value)}>
-                {tokens.map((t, i) => (
-                  <option key={i} value={i} disabled={i === newMintA} className="bg-gray-900">{t.symbol}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="text-xs text-gray-400 mb-1 block">Swap fee</label>
-              <input className="input w-full" type="text" inputMode="decimal"
-                value={newFee} onChange={(e) => numInput(e.target.value, setNewFee)} />
-              <span className="text-xs text-gray-500">{(+newFee / 100).toFixed(2)}%</span>
-            </div>
-            <div className="flex-1">
-              <label className="text-xs text-gray-400 mb-1 block">Protocol share (% de la fee)</label>
-              <input className="input w-full" type="text" inputMode="decimal"
-                value={newProto} onChange={(e) => numInput(e.target.value, setNewProto)} />
-              <span className="text-xs text-gray-500">{(+newProto / 100).toFixed(0)}%</span>
-            </div>
-          </div>
-
-          <button className="btn-primary w-full" onClick={createPool}
-            disabled={loading || !wallet || newMintA === newMintB}>
-            {loading ? "Processing…" : "Créer le pool"}
-          </button>
-          {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
-        </div>
-      )}
+        )}
+      </section>
     </div>
   );
 }
