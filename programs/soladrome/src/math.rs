@@ -16,8 +16,11 @@ pub fn sola_out(virtual_usdc: u64, virtual_sola: u64, k: u128, usdc_in: u64) -> 
     let new_vs = k.checked_div(new_vu).ok_or(SoladromeError::Overflow)?;
     let out = (virtual_sola as u128)
         .checked_sub(new_vs)
-        .ok_or(SoladromeError::Overflow)? as u64;
-    Ok(out)
+        .ok_or(SoladromeError::Overflow)?;
+    if out > u64::MAX as u128 {
+        return Err(error!(SoladromeError::Overflow));
+    }
+    Ok(out as u64)
 }
 
 /// Advance the global fee accumulator with any new fees in market_vault.
