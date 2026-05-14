@@ -7,14 +7,17 @@ import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
+  getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
 import { SystemProgram } from "@solana/web3.js";
 import {
   getProgram, poolPda, lpMintPda, vaultAPda, vaultBPda,
-  sortMints, userAta, commonAccounts, fromUi, toUi,
+  sortMints, userAta, commonAccounts,
+  fromUiDecimals, toUiDecimals,
+  buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
+  WSOL_MINT_STR,
 } from "@/lib/program";
-import { getTokenList, symbolByMint, WSOL_MINT } from "@/lib/tokens";
+import { getTokenList, symbolByMint, WSOL_MINT, decimalsForMint } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
@@ -72,15 +75,19 @@ export function Pools() {
       const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
       const program  = getProgram(provider);
       const all      = await (program.account as any).ammPool.all();
-      setPools(all.map((p: any) => ({
-        address:  p.publicKey.toString(),
-        mintA:    p.account.tokenAMint.toString(),
-        mintB:    p.account.tokenBMint.toString(),
-        reserveA: toUi(p.account.reserveA as BN),
-        reserveB: toUi(p.account.reserveB as BN),
-        feeRate:  p.account.feeRate as number,
-        totalLp:  toUi(p.account.totalLp as BN),
-      })));
+      setPools(all.map((p: any) => {
+        const mA = p.account.tokenAMint.toString();
+        const mB = p.account.tokenBMint.toString();
+        return {
+          address:  p.publicKey.toString(),
+          mintA:    mA,
+          mintB:    mB,
+          reserveA: toUiDecimals(p.account.reserveA as BN, decimalsForMint(mA, usdcMint)),
+          reserveB: toUiDecimals(p.account.reserveB as BN, decimalsForMint(mB, usdcMint)),
+          feeRate:  p.account.feeRate as number,
+          totalLp:  toUiDecimals(p.account.totalLp as BN, 6),
+        };
+      }));
     } catch { /* no pools yet */ }
   }, [connection, wallet]);
 
@@ -203,16 +210,43 @@ export function Pools() {
     if (!wallet || !selected || !addA || !addB) return;
     setLoading(true); setStatus("");
     try {
-      const program  = getProgram(prov());
-      const poolAddr = new PublicKey(selected.address);
-      const mintAPk  = new PublicKey(selected.mintA);
-      const mintBPk  = new PublicKey(selected.mintB);
-      const lpMint   = lpMintPda(poolAddr);
-      const userLp   = getAssociatedTokenAddressSync(lpMint, wallet.publicKey);
+      const program   = getProgram(prov());
+      const poolAddr  = new PublicKey(selected.address);
+      const mintAPk   = new PublicKey(selected.mintA);
+      const mintBPk   = new PublicKey(selected.mintB);
+      const lpMint    = lpMintPda(poolAddr);
+      const userLp    = getAssociatedTokenAddressSync(lpMint, wallet.publicKey);
       const deadLpAta = getAssociatedTokenAddressSync(lpMint, LP_DEAD, true);
 
-      const tx = await program.methods
-        .addLiquidity(fromUi(+addA), fromUi(+addB), new BN(0))
+      const isWsolA = selected.mintA === WSOL_MINT_STR;
+      const isWsolB = selected.mintB === WSOL_MINT_STR;
+      const decA    = decimalsForMint(selected.mintA, usdcMint);
+      const decB    = decimalsForMint(selected.mintB, usdcMint);
+
+      const preIxs: any[]  = [];
+      const postIxs: any[] = [];
+
+      if (isWsolA) {
+        preIxs.push(...await buildWrapInstructions(connection, wallet.publicKey, Math.floor(+addA * 1e9)));
+        postIxs.push(buildUnwrapInstruction(wallet.publicKey));
+      }
+      if (isWsolB) {
+        preIxs.push(...await buildWrapInstructions(connection, wallet.publicKey, Math.floor(+addB * 1e9)));
+        postIxs.push(buildUnwrapInstruction(wallet.publicKey));
+      }
+
+      // LP ATA for user (may not exist yet)
+      const userLpIx = await ensureAtaIx(connection, wallet.publicKey, lpMint, wallet.publicKey);
+      if (userLpIx) preIxs.push(userLpIx);
+
+      // Dead LP ATA (first deposit burns MINIMUM_LIQUIDITY there)
+      const deadInfo = await connection.getAccountInfo(deadLpAta);
+      if (!deadInfo) {
+        preIxs.push(createAssociatedTokenAccountInstruction(wallet.publicKey, deadLpAta, LP_DEAD, lpMint));
+      }
+
+      const addIx = await program.methods
+        .addLiquidity(fromUiDecimals(+addA, decA), fromUiDecimals(+addB, decB), new BN(0))
         .accounts({
           user:                   wallet.publicKey,
           pool:                   poolAddr,
@@ -228,9 +262,10 @@ export function Pools() {
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram:          SystemProgram.programId,
         } as any)
-        .rpc();
+        .instruction();
 
-      setStatus(`✅ Liquidité ajoutée — tx: ${tx.slice(0, 16)}…`);
+      const sig = await sendTx(connection, wallet, [...preIxs, addIx, ...postIxs]);
+      setStatus(`✅ Liquidité ajoutée — tx: ${sig.slice(0, 16)}…`);
       setAddA(""); setAddB("");
       fetchPools();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
@@ -248,8 +283,25 @@ export function Pools() {
       const mintBPk  = new PublicKey(selected.mintB);
       const lpMint   = lpMintPda(poolAddr);
 
-      const tx = await program.methods
-        .removeLiquidity(fromUi(+lpAmt), new BN(1), new BN(1))
+      const isWsolA = selected.mintA === WSOL_MINT_STR;
+      const isWsolB = selected.mintB === WSOL_MINT_STR;
+
+      const postIxs: any[] = [];
+      if (isWsolA || isWsolB) postIxs.push(buildUnwrapInstruction(wallet.publicKey));
+
+      // Ensure token ATAs exist before receiving withdrawn tokens
+      const preIxs: any[] = [];
+      if (!isWsolA) {
+        const ataIx = await ensureAtaIx(connection, wallet.publicKey, mintAPk, wallet.publicKey);
+        if (ataIx) preIxs.push(ataIx);
+      }
+      if (!isWsolB) {
+        const ataIx = await ensureAtaIx(connection, wallet.publicKey, mintBPk, wallet.publicKey);
+        if (ataIx) preIxs.push(ataIx);
+      }
+
+      const removeIx = await program.methods
+        .removeLiquidity(fromUiDecimals(+lpAmt, 6), new BN(1), new BN(1))
         .accounts({
           user:          wallet.publicKey,
           pool:          poolAddr,
@@ -262,9 +314,10 @@ export function Pools() {
           tokenProgram:  TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         } as any)
-        .rpc();
+        .instruction();
 
-      setStatus(`✅ Liquidité retirée — tx: ${tx.slice(0, 16)}…`);
+      const sig = await sendTx(connection, wallet, [...preIxs, removeIx, ...postIxs]);
+      setStatus(`✅ Liquidité retirée — tx: ${sig.slice(0, 16)}…`);
       setLpAmt(""); setRetA(null); setRetB(null);
       fetchPools();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }

@@ -24,8 +24,8 @@ export const WSOL_MINT = "So11111111111111111111111111111111111111112";
 export function getTokenList(usdcMint: PublicKey | null): TokenInfo[] {
   const list: TokenInfo[] = [
     {
-      symbol:   "wSOL",
-      name:     "Wrapped SOL",
+      symbol:   "SOL",
+      name:     "Solana",
       mint:     WSOL_MINT,
       decimals: 9,
     },
@@ -52,4 +52,8 @@ export function getTokenList(usdcMint: PublicKey | null): TokenInfo[] {
 export function symbolByMint(mint: string, usdcMint: PublicKey | null): string {
   return getTokenList(usdcMint).find((t) => t.mint === mint)?.symbol
     ?? mint.slice(0, 4) + "…";
+}
+
+export function decimalsForMint(mint: string, usdcMint: PublicKey | null): number {
+  return getTokenList(usdcMint).find((t) => t.mint === mint)?.decimals ?? 6;
 }
