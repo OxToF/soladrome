@@ -145,9 +145,9 @@ export function Liquidity() {
           <p className="text-xs text-gray-500">Achète SOLA pour renforcer le floor vault, stake pour gagner les fees.</p>
         </div>
         <div className="flex gap-3 shrink-0">
-          <a href="#" onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "trade" }))}
+          <a href="#" onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "swap" }))}
             className="btn-secondary text-sm">
-            Acheter SOLA
+            Swap
           </a>
           <a href="#" onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "stake" }))}
             className="btn-primary text-sm">
