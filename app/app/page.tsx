@@ -10,7 +10,6 @@ const WalletMultiButton = dynamic(
   () => import("@solana/wallet-adapter-react-ui").then((m) => m.WalletMultiButton),
   { ssr: false }
 );
-import { BuySell }    from "@/components/BuySell";
 import { Stake }      from "@/components/Stake";
 import { Borrow }     from "@/components/Borrow";
 import { Vote }       from "@/components/Vote";
@@ -23,10 +22,9 @@ import { Pools }      from "@/components/Pools";
 
 // USDC mint is read on-chain from protocolState.usdcMint via SoladromeContext
 
-type Page = "trade" | "swap" | "pools" | "stake" | "borrow" | "vote" | "bribe" | "claim" | "liquidity";
+type Page = "swap" | "pools" | "stake" | "borrow" | "vote" | "bribe" | "claim" | "liquidity";
 
 const NAV: { id: Page; label: string }[] = [
-  { id: "trade",     label: "Trade"     },
   { id: "swap",      label: "Swap"      },
   { id: "pools",     label: "Pools"     },
   { id: "stake",     label: "Stake"     },
@@ -41,7 +39,7 @@ const DOCS_URL = "/about.html";
 
 export default function Home() {
   const wallet = useAnchorWallet();
-  const [page, setPage] = useState<Page>("trade");
+  const [page, setPage] = useState<Page>("swap");
 
   // Allow Liquidity CTA buttons to navigate via custom event
   useEffect(() => {
@@ -157,7 +155,6 @@ export default function Home() {
 
           {/* Panels */}
           <div className={page === "liquidity" || page === "pools" ? "w-full" : "max-w-xl mx-auto"}>
-            {page === "trade"     && <BuySell />}
             {page === "swap"      && <AmmSwap />}
             {page === "pools"     && <Pools />}
             {page === "stake"     && <Stake />}
