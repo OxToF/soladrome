@@ -122,9 +122,11 @@ export function Pools() {
   }, [tab, selected, wallet, connection]);
 
   // ── Auto-compute proportional B when A changes ────────────────────────────
+  const poolHasLiquidity = !!selected && selected.reserveA > 0 && selected.reserveB > 0;
+
   function onChangeA(v: string) {
     numInput(v, setAddA);
-    if (!selected || selected.reserveA <= 0 || selected.reserveB <= 0) return;
+    if (!poolHasLiquidity || !selected) return;
     const a = parseFloat(v);
     if (!isNaN(a) && a > 0) {
       setAddB((a * selected.reserveB / selected.reserveA).toFixed(6).replace(/\.?0+$/, ""));
@@ -133,15 +135,10 @@ export function Pools() {
     }
   }
 
+  // Only used for first deposit (empty pool) — user sets both sides freely
   function onChangeB(v: string) {
+    if (poolHasLiquidity) return;
     numInput(v, setAddB);
-    if (!selected || selected.reserveA <= 0 || selected.reserveB <= 0) return;
-    const b = parseFloat(v);
-    if (!isNaN(b) && b > 0) {
-      setAddA((b * selected.reserveA / selected.reserveB).toFixed(6).replace(/\.?0+$/, ""));
-    } else {
-      setAddA("");
-    }
   }
 
   function applyPctA(pct: number) {
@@ -441,26 +438,42 @@ export function Pools() {
             </div>
           </div>
 
-          {/* Token B */}
-          <div className="rounded-xl bg-brand-dark border border-brand-border p-4">
+          {/* Token B — read-only when pool has liquidity (ratio is fixed) */}
+          <div className={`rounded-xl border p-4 ${
+            poolHasLiquidity
+              ? "bg-brand-dark/60 border-brand-border/50"
+              : "bg-brand-dark border-brand-border"
+          }`}>
             <div className="flex justify-between mb-2">
-              <span className="text-xs text-gray-400">{symB}</span>
+              <span className="text-xs text-gray-400">
+                {symB}
+                {poolHasLiquidity && (
+                  <span className="ml-2 text-gray-600">(calculé automatiquement)</span>
+                )}
+              </span>
               {balB !== null && (
                 <span className="text-xs text-gray-500 font-mono">
                   Balance: {balB.toLocaleString(undefined, { maximumFractionDigits: 4 })}
                 </span>
               )}
             </div>
-            <input
-              className="w-full bg-transparent text-right text-2xl font-bold text-white placeholder-gray-600 focus:outline-none"
-              type="text" inputMode="decimal" placeholder="0"
-              value={addB} onChange={(e) => onChangeB(e.target.value)}
-            />
-            {selected.reserveA > 0 && (
-              <p className="text-xs text-gray-500 mt-2 text-right">
-                Ratio actuel : 1 {symA} = {(selected.reserveB / selected.reserveA).toFixed(4)} {symB}
-              </p>
+            {poolHasLiquidity ? (
+              <div className="text-right text-2xl font-bold text-gray-400 font-mono py-0.5">
+                {addB || "0"}
+              </div>
+            ) : (
+              <input
+                className="w-full bg-transparent text-right text-2xl font-bold text-white placeholder-gray-600 focus:outline-none"
+                type="text" inputMode="decimal" placeholder="0"
+                value={addB} onChange={(e) => onChangeB(e.target.value)}
+              />
             )}
+            <p className="text-xs mt-2 text-right">
+              {poolHasLiquidity
+                ? <span className="text-gray-600">Ratio : 1 {symA} = {(selected.reserveB / selected.reserveA).toFixed(4)} {symB}</span>
+                : <span className="text-yellow-500/70">Premier dépôt — vous définissez le prix initial</span>
+              }
+            </p>
           </div>
 
           <button className="btn-primary w-full" onClick={addLiquidity}
