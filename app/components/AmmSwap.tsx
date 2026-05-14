@@ -13,6 +13,7 @@ import { getTokenList, TokenInfo } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 const SLIPPAGE_OPTIONS = [0.1, 0.5, 1.0] as const;
+const PCT_SHORTCUTS = [25, 50, 75, 100] as const;
 
 function xy_k_out(reserveIn: number, reserveOut: number, amountInNet: number): number {
   if (reserveIn <= 0 || reserveOut <= 0 || amountInNet <= 0) return 0;
@@ -25,17 +26,32 @@ export function AmmSwap() {
 
   const { usdcMint } = useSoladrome();
   const tokens = getTokenList(usdcMint);
-  const [idxIn,  setIdxIn]  = useState(1); // SOLA by default
-  const [idxOut, setIdxOut] = useState(2); // USDC by default
+  const [idxIn,  setIdxIn]  = useState(1);
+  const [idxOut, setIdxOut] = useState(2);
   const [amountIn, setAmountIn] = useState("");
   const [slippage, setSlippage] = useState<0.1 | 0.5 | 1.0>(0.5);
   const [estimatedOut, setEstimatedOut] = useState<number | null>(null);
   const [pool, setPool] = useState<{ reserveA: number; reserveB: number; feeRate: number } | null>(null);
+  const [balanceIn, setBalanceIn] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
   const tokIn:  TokenInfo | undefined = tokens[idxIn];
   const tokOut: TokenInfo | undefined = tokens[idxOut];
+
+  // Fetch wallet balance for the input token
+  const fetchBalance = useCallback(async () => {
+    if (!wallet || !tokIn) { setBalanceIn(null); return; }
+    try {
+      const ata = userAta(new PublicKey(tokIn.mint), wallet.publicKey);
+      const info = await connection.getTokenAccountBalance(ata);
+      setBalanceIn(Number(info.value.uiAmount ?? 0));
+    } catch {
+      setBalanceIn(0);
+    }
+  }, [connection, wallet, tokIn?.mint]);
+
+  useEffect(() => { fetchBalance(); }, [fetchBalance]);
 
   // Fetch pool reserves when pair changes
   const fetchPool = useCallback(async () => {
@@ -76,6 +92,17 @@ export function AmmSwap() {
     setEstimatedOut(xy_k_out(pool.reserveA, pool.reserveB, ainNet));
   }, [pool, amountIn]);
 
+  function applyPct(pct: number) {
+    if (balanceIn === null || balanceIn <= 0) return;
+    const val = (balanceIn * pct) / 100;
+    setAmountIn(val.toFixed(6).replace(/\.?0+$/, ""));
+  }
+
+  function handleAmountChange(v: string) {
+    // Allow only valid numeric input
+    if (v === "" || /^\d*\.?\d*$/.test(v)) setAmountIn(v);
+  }
+
   async function swap() {
     if (!wallet || !amountIn || !estimatedOut || !tokIn || !tokOut) return;
     setLoading(true); setStatus("");
@@ -107,7 +134,9 @@ export function AmmSwap() {
         .rpc();
 
       setStatus(`✅ Swap done — tx: ${tx.slice(0, 16)}…`);
+      setAmountIn("");
       fetchPool();
+      fetchBalance();
     } catch (e: any) {
       setStatus(`❌ ${e?.message ?? e}`);
     } finally {
@@ -135,33 +164,69 @@ export function AmmSwap() {
 
   return (
     <div className="card glow">
-      <h2 className="text-lg font-bold mb-4 text-white">AMM Swap</h2>
+      <h2 className="text-lg font-bold mb-5 text-white">AMM Swap</h2>
 
-      {/* Token In */}
-      <label className="text-xs text-gray-400 mb-1 block">You pay</label>
-      <div className="flex gap-2 mb-3">
-        <select
-          className="input w-32 shrink-0"
-          value={idxIn}
-          onChange={(e) => { setIdxIn(+e.target.value); setAmountIn(""); setEstimatedOut(null); }}
-        >
-          {tokens.map((t, i) => (
-            <option key={i} value={i} disabled={i === idxOut}>{t.symbol}</option>
+      {/* ── Token In ─────────────────────────────────────── */}
+      <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-2">
+        {/* Header: label + balance */}
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs text-gray-400">You pay</span>
+          {balanceIn !== null && (
+            <span className="text-xs text-gray-500">
+              Balance:{" "}
+              <button
+                className="text-gray-300 hover:text-brand-green transition-colors font-mono"
+                onClick={() => applyPct(100)}
+              >
+                {balanceIn.toLocaleString(undefined, { maximumFractionDigits: 4 })} {tokIn?.symbol}
+              </button>
+            </span>
+          )}
+        </div>
+
+        {/* Token selector + amount input */}
+        <div className="flex items-center gap-3">
+          <select
+            className="bg-transparent border border-brand-border rounded-lg px-3 py-2 text-sm text-white
+                       focus:outline-none focus:border-brand-green shrink-0 cursor-pointer"
+            value={idxIn}
+            onChange={(e) => { setIdxIn(+e.target.value); setAmountIn(""); setEstimatedOut(null); }}
+          >
+            {tokens.map((t, i) => (
+              <option key={i} value={i} disabled={i === idxOut} className="bg-gray-900">{t.symbol}</option>
+            ))}
+          </select>
+
+          <input
+            className="flex-1 min-w-0 bg-transparent text-right text-2xl font-bold text-white
+                       placeholder-gray-600 focus:outline-none"
+            type="text"
+            inputMode="decimal"
+            placeholder="0"
+            value={amountIn}
+            onChange={(e) => handleAmountChange(e.target.value)}
+          />
+        </div>
+
+        {/* Percentage shortcuts */}
+        <div className="flex gap-2 mt-3">
+          {PCT_SHORTCUTS.map((pct) => (
+            <button
+              key={pct}
+              onClick={() => applyPct(pct)}
+              disabled={!balanceIn}
+              className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-400
+                         hover:border-brand-green hover:text-brand-green transition-colors
+                         disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              {pct === 100 ? "Max" : `${pct}%`}
+            </button>
           ))}
-        </select>
-        <input
-          className="input flex-1 min-w-0"
-          type="number"
-          min="0"
-          step="any"
-          placeholder="0.00"
-          value={amountIn}
-          onChange={(e) => setAmountIn(e.target.value)}
-        />
+        </div>
       </div>
 
-      {/* Flip */}
-      <div className="flex justify-center mb-3">
+      {/* ── Flip button ───────────────────────────────────── */}
+      <div className="flex justify-center my-1">
         <button
           onClick={flip}
           className="w-8 h-8 rounded-full border border-brand-border text-gray-400
@@ -171,24 +236,30 @@ export function AmmSwap() {
         </button>
       </div>
 
-      {/* Token Out */}
-      <label className="text-xs text-gray-400 mb-1 block">You receive (est.)</label>
-      <div className="flex gap-2 mb-4">
-        <select
-          className="input w-32 shrink-0"
-          value={idxOut}
-          onChange={(e) => { setIdxOut(+e.target.value); setAmountIn(""); setEstimatedOut(null); }}
-        >
-          {tokens.map((t, i) => (
-            <option key={i} value={i} disabled={i === idxIn}>{t.symbol}</option>
-          ))}
-        </select>
-        <div className="input flex-1 min-w-0 text-brand-green font-mono">
-          {estimatedOut !== null ? estimatedOut.toFixed(6) : "—"}
+      {/* ── Token Out ────────────────────────────────────── */}
+      <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs text-gray-400">You receive (est.)</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <select
+            className="bg-transparent border border-brand-border rounded-lg px-3 py-2 text-sm text-white
+                       focus:outline-none focus:border-brand-green shrink-0 cursor-pointer"
+            value={idxOut}
+            onChange={(e) => { setIdxOut(+e.target.value); setAmountIn(""); setEstimatedOut(null); }}
+          >
+            {tokens.map((t, i) => (
+              <option key={i} value={i} disabled={i === idxIn} className="bg-gray-900">{t.symbol}</option>
+            ))}
+          </select>
+
+          <div className="flex-1 text-right text-2xl font-bold text-brand-green font-mono">
+            {estimatedOut !== null ? estimatedOut.toFixed(6) : "0"}
+          </div>
         </div>
       </div>
 
-      {/* Pool info */}
+      {/* ── Pool / error info ─────────────────────────────── */}
       {noPool && (
         <p className="text-xs text-yellow-500 mb-3">
           No pool found for {tokIn?.symbol}/{tokOut?.symbol}. Create one in the Pools tab.
@@ -196,12 +267,12 @@ export function AmmSwap() {
       )}
       {pool && (
         <p className="text-xs text-gray-500 mb-3">
-          Pool reserves: {pool.reserveA.toFixed(4)} {tokIn?.symbol} / {pool.reserveB.toFixed(4)} {tokOut?.symbol}
+          Reserves: {pool.reserveA.toFixed(4)} {tokIn?.symbol} / {pool.reserveB.toFixed(4)} {tokOut?.symbol}
           {" · "}Fee: {(pool.feeRate / 100).toFixed(2)}%
         </p>
       )}
 
-      {/* Slippage */}
+      {/* ── Slippage ─────────────────────────────────────── */}
       <div className="flex items-center gap-2 mb-4">
         <span className="text-xs text-gray-400">Slippage:</span>
         {SLIPPAGE_OPTIONS.map((s) => (
