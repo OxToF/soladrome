@@ -3,17 +3,20 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useConnection, useAnchorWallet } from "@solana/wallet-adapter-react";
-import { AnchorProvider } from "@coral-xyz/anchor";
+import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { getProgram, statePda, floorVault, marketVault, solaVaultAddr, toUi } from "@/lib/program";
+import { getProgram, statePda, floorVault, marketVault, solaVaultAddr, toUi, toUiDecimals } from "@/lib/program";
+import { decimalsForMint } from "@/lib/tokens";
 
 interface LiqStats {
-  floorUsdc:   number;  // backing floor vault
-  marketUsdc:  number;  // fee vault (market premium)
-  solaLocked:  number;  // SOLA locked in staking vault
-  virtualUsdc: number;  // bonding curve virtual reserve
+  floorUsdc:   number;
+  marketUsdc:  number;
+  solaLocked:  number;
+  virtualUsdc: number;
   virtualSola: number;
   totalSola:   number;
+  ammTvl:      number;  // sum of AMM pool reserves valued in USDC
+  ammPools:    number;  // number of active AMM pools
 }
 
 export function Liquidity() {
@@ -36,7 +39,22 @@ export function Liquidity() {
       connection.getTokenAccountBalance(floorVault),
       connection.getTokenAccountBalance(marketVault),
       connection.getTokenAccountBalance(solaVaultAddr),
-    ]).then(([state, floor, market, solaVault]) => {
+      (program.account as any).ammPool.all(),
+    ]).then(([state, floor, market, solaVault, pools]) => {
+      const usdcStr = state.usdcMint?.toString() ?? "";
+      let ammTvl = 0;
+      for (const p of pools) {
+        const mintA = p.account.tokenAMint.toString();
+        const mintB = p.account.tokenBMint.toString();
+        const decA  = decimalsForMint(mintA, state.usdcMint ?? null);
+        const decB  = decimalsForMint(mintB, state.usdcMint ?? null);
+        const ra    = toUiDecimals(p.account.reserveA as BN, decA);
+        const rb    = toUiDecimals(p.account.reserveB as BN, decB);
+        // Value USDC-paired pools: TVL = 2 × USDC side
+        if (mintA === usdcStr) ammTvl += ra * 2;
+        else if (mintB === usdcStr) ammTvl += rb * 2;
+        // For non-USDC pairs, use pool implied price if SOL/USDC ratio available
+      }
       setS({
         floorUsdc:   (floor.value.uiAmount  ?? 0),
         marketUsdc:  (market.value.uiAmount ?? 0),
@@ -44,11 +62,14 @@ export function Liquidity() {
         virtualUsdc: toUi(state.virtualUsdc),
         virtualSola: toUi(state.virtualSola),
         totalSola:   toUi(state.totalSola),
+        ammTvl,
+        ammPools:    pools.length,
       });
     }).catch(() => {});
   }, [wallet, connection]);
 
-  const tvl = s ? s.floorUsdc + s.marketUsdc : 0;
+  const bondingTvl = s ? s.floorUsdc + s.marketUsdc : 0;
+  const tvl        = s ? bondingTvl + s.ammTvl : 0;
   const curvePrice = s && s.virtualSola > 0 ? s.virtualUsdc / s.virtualSola : 1;
 
   return (
@@ -60,7 +81,10 @@ export function Liquidity() {
         <p className="text-5xl font-black text-brand-green">
           {s ? `$${tvl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
         </p>
-        <p className="text-xs text-gray-500 mt-2">Floor vault + Market vault</p>
+        <div className="flex justify-center gap-6 mt-3 text-xs text-gray-500">
+          <span>Bonding curve: <span className="text-gray-300">${bondingTvl.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span></span>
+          <span>AMM pools ({s?.ammPools ?? 0}): <span className="text-gray-300">${(s?.ammTvl ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span></span>
+        </div>
       </div>
 
       {/* Vault breakdown */}
