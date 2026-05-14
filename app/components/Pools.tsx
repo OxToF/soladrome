@@ -33,6 +33,7 @@ interface PoolInfo {
   reserveB: number;
   feeRate:  number;
   totalLp:  number;
+  tvlUsdc:  number | null; // null if no USDC side
 }
 
 function numInput(v: string, set: (s: string) => void) {
@@ -50,6 +51,7 @@ export function Pools() {
   const [selected, setSelected] = useState<PoolInfo | null>(null);
   const [loading,  setLoading]  = useState(false);
   const [status,   setStatus]   = useState("");
+  const [userLpBals, setUserLpBals] = useState<Record<string, number>>({});
 
   // ── Add liquidity state ───────────────────────────────────────────────────
   const [addA, setAddA] = useState("");
@@ -75,23 +77,44 @@ export function Pools() {
       const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
       const program  = getProgram(provider);
       const all      = await (program.account as any).ammPool.all();
+      const usdcStr = usdcMint?.toString() ?? "";
       setPools(all.map((p: any) => {
-        const mA = p.account.tokenAMint.toString();
-        const mB = p.account.tokenBMint.toString();
+        const mA  = p.account.tokenAMint.toString();
+        const mB  = p.account.tokenBMint.toString();
+        const decA = decimalsForMint(mA, usdcMint);
+        const decB = decimalsForMint(mB, usdcMint);
+        const ra  = toUiDecimals(p.account.reserveA as BN, decA);
+        const rb  = toUiDecimals(p.account.reserveB as BN, decB);
+        const tvlUsdc = mA === usdcStr ? ra * 2 : mB === usdcStr ? rb * 2 : null;
         return {
           address:  p.publicKey.toString(),
           mintA:    mA,
           mintB:    mB,
-          reserveA: toUiDecimals(p.account.reserveA as BN, decimalsForMint(mA, usdcMint)),
-          reserveB: toUiDecimals(p.account.reserveB as BN, decimalsForMint(mB, usdcMint)),
+          reserveA: ra,
+          reserveB: rb,
           feeRate:  p.account.feeRate as number,
           totalLp:  toUiDecimals(p.account.totalLp as BN, 6),
+          tvlUsdc,
         };
       }));
     } catch { /* no pools yet */ }
   }, [connection, wallet]);
 
   useEffect(() => { fetchPools(); }, [fetchPools]);
+
+  // ── Fetch user LP balances for all pools ─────────────────────────────────
+  useEffect(() => {
+    if (!wallet || pools.length === 0) return;
+    const bals: Record<string, number> = {};
+    Promise.all(pools.map(async (p) => {
+      try {
+        const lpMint = lpMintPda(new PublicKey(p.address));
+        const lpAta  = userAta(lpMint, wallet.publicKey);
+        const res    = await connection.getTokenAccountBalance(lpAta);
+        bals[p.address] = res.value.uiAmount ?? 0;
+      } catch { bals[p.address] = 0; }
+    })).then(() => setUserLpBals({ ...bals }));
+  }, [pools, wallet, connection]);
 
   // ── Fetch balances when entering add/remove tab ───────────────────────────
   useEffect(() => {
@@ -357,35 +380,63 @@ export function Pools() {
           ) : (
             <div className="space-y-3">
               {pools.map((p) => {
-                const sA = symbolByMint(p.mintA, usdcMint);
-                const sB = symbolByMint(p.mintB, usdcMint);
-                const tvl = p.reserveA + p.reserveB;
+                const sA      = symbolByMint(p.mintA, usdcMint);
+                const sB      = symbolByMint(p.mintB, usdcMint);
+                const userLp  = userLpBals[p.address] ?? 0;
+                const share   = p.totalLp > 0 ? (userLp / p.totalLp) * 100 : 0;
                 return (
                   <div key={p.address} className="card hover:border-brand-green/40 transition-colors">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-bold text-white text-lg">{sA} / {sB}</span>
-                      <span className="text-xs text-gray-400 border border-brand-border rounded px-2 py-0.5">
-                        Fee {(p.feeRate / 100).toFixed(2)}%
-                      </span>
+
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <span className="font-bold text-white text-xl">{sA} / {sB}</span>
+                        <span className="ml-2 text-xs text-gray-500 border border-brand-border rounded px-1.5 py-0.5">
+                          {(p.feeRate / 100).toFixed(2)}% fee
+                        </span>
+                      </div>
+                      {p.tvlUsdc !== null && (
+                        <div className="text-right">
+                          <p className="text-xs text-gray-500">TVL</p>
+                          <p className="font-bold text-brand-green">
+                            ${p.tvlUsdc.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </p>
+                        </div>
+                      )}
                     </div>
-                    <div className="grid grid-cols-3 gap-2 text-center mb-3">
-                      <div className="rounded-lg bg-brand-dark p-2">
-                        <p className="text-xs text-gray-500 mb-0.5">{sA} reserve</p>
-                        <p className="font-mono text-sm text-white">{p.reserveA.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+
+                    {/* Reserves */}
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <div className="rounded-lg bg-brand-dark p-2.5 text-center">
+                        <p className="text-xs text-gray-500 mb-0.5">{sA}</p>
+                        <p className="font-mono text-sm font-bold text-white">
+                          {p.reserveA.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                        </p>
                       </div>
-                      <div className="rounded-lg bg-brand-dark p-2">
-                        <p className="text-xs text-gray-500 mb-0.5">{sB} reserve</p>
-                        <p className="font-mono text-sm text-white">{p.reserveB.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
-                      </div>
-                      <div className="rounded-lg bg-brand-dark p-2">
-                        <p className="text-xs text-gray-500 mb-0.5">LP supply</p>
-                        <p className="font-mono text-sm text-white">{p.totalLp.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                      <div className="rounded-lg bg-brand-dark p-2.5 text-center">
+                        <p className="text-xs text-gray-500 mb-0.5">{sB}</p>
+                        <p className="font-mono text-sm font-bold text-white">
+                          {p.reserveB.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                        </p>
                       </div>
                     </div>
+
+                    {/* User position */}
+                    {wallet && userLp > 0 && (
+                      <div className="rounded-lg border border-brand-green/30 bg-brand-green/5 px-3 py-2 mb-3 flex justify-between items-center">
+                        <span className="text-xs text-brand-green/80">Ma position</span>
+                        <span className="text-sm font-bold text-brand-green font-mono">
+                          {userLp.toLocaleString(undefined, { maximumFractionDigits: 2 })} LP
+                          <span className="text-xs text-brand-green/60 ml-1">({share.toFixed(2)}%)</span>
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Actions */}
                     <div className="flex gap-2">
-                      <button className="btn-primary text-xs px-3 py-1.5 flex-1"
+                      <button className="btn-primary text-xs px-3 py-2 flex-1"
                         onClick={() => goTo(p, "add")}>+ Add Liquidity</button>
-                      <button className="btn-secondary text-xs px-3 py-1.5 flex-1"
+                      <button className="btn-secondary text-xs px-3 py-2 flex-1"
                         onClick={() => goTo(p, "remove")}>− Remove</button>
                     </div>
                   </div>
