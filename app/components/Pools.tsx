@@ -14,7 +14,7 @@ import {
   getProgram, poolPda, lpMintPda, vaultAPda, vaultBPda,
   sortMints, userAta, commonAccounts, fromUi, toUi,
 } from "@/lib/program";
-import { getTokenList, symbolByMint } from "@/lib/tokens";
+import { getTokenList, symbolByMint, WSOL_MINT } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
@@ -95,6 +95,10 @@ export function Pools() {
 
     const fetchBal = async (mint: PublicKey): Promise<number> => {
       try {
+        if (mint.toString() === WSOL_MINT) {
+          const lamports = await connection.getBalance(wallet.publicKey);
+          return lamports / 1e9;
+        }
         const ata = userAta(mint, wallet.publicKey);
         const res = await connection.getTokenAccountBalance(ata);
         return res.value.uiAmount ?? 0;

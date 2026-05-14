@@ -8,6 +8,406 @@
   },
   "instructions": [
     {
+      "name": "add_liquidity",
+      "discriminator": [
+        181,
+        157,
+        89,
+        67,
+        143,
+        182,
+        52,
+        72
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint",
+          "writable": true
+        },
+        {
+          "name": "token_a_vault",
+          "writable": true
+        },
+        {
+          "name": "token_b_vault",
+          "writable": true
+        },
+        {
+          "name": "user_token_a",
+          "writable": true
+        },
+        {
+          "name": "user_token_b",
+          "writable": true
+        },
+        {
+          "name": "user_lp",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lp_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "lp_dead_ata",
+          "docs": [
+            "Dead address ATA to receive MINIMUM_LIQUIDITY on first deposit."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "lp_dead"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lp_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "lp_dead",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_a_desired",
+          "type": "u64"
+        },
+        {
+          "name": "amount_b_desired",
+          "type": "u64"
+        },
+        {
+          "name": "min_lp",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "amm_swap",
+      "discriminator": [
+        129,
+        102,
+        244,
+        12,
+        83,
+        130,
+        166,
+        173
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_a_vault",
+          "writable": true
+        },
+        {
+          "name": "token_b_vault",
+          "writable": true
+        },
+        {
+          "name": "user_token_in",
+          "docs": [
+            "User's input token ATA (token_a if a_to_b, token_b otherwise)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_token_out",
+          "docs": [
+            "User's output token ATA."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Protocol market vault — receives the protocol fee portion (in input token)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_in",
+          "type": "u64"
+        },
+        {
+          "name": "min_out",
+          "type": "u64"
+        },
+        {
+          "name": "a_to_b",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "borrow_usdc",
       "discriminator": [
         31,
@@ -265,6 +665,11 @@
     },
     {
       "name": "claim_bribe",
+      "docs": [
+        "Claim pro-rata bribe after the voting epoch has ended.",
+        "claimable = total_bribed × user_votes / total_votes  (safe u128 muldiv)",
+        "Creating UserBribeClaim PDA is the idempotency guard (init = fails if exists)."
+      ],
       "discriminator": [
         215,
         71,
@@ -361,6 +766,9 @@
         },
         {
           "name": "user_reward_ata",
+          "docs": [
+            "Destination — created if the user doesn't already hold this token."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -504,6 +912,9 @@
         },
         {
           "name": "user_bribe_claim",
+          "docs": [
+            "Created by this instruction — its existence is the double-claim guard."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -605,7 +1016,10 @@
           "name": "hi_sola_mint"
         },
         {
-          "name": "user_hi_sola"
+          "name": "user_hi_sola",
+          "docs": [
+            "User's hiSOLA balance determines their fee share."
+          ]
         },
         {
           "name": "market_vault",
@@ -648,7 +1062,160 @@
       "args": []
     },
     {
+      "name": "create_pool",
+      "discriminator": [
+        233,
+        146,
+        209,
+        142,
+        207,
+        104,
+        64,
+        188
+      ],
+      "accounts": [
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_a_mint"
+        },
+        {
+          "name": "token_b_mint"
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_a_mint"
+              },
+              {
+                "kind": "account",
+                "path": "token_b_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_a_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_b_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  98
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "fee_rate",
+          "type": "u16"
+        },
+        {
+          "name": "protocol_fee_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "deposit_bribe",
+      "docs": [
+        "Permissionless: any protocol deposits bribe tokens to attract hiSOLA votes.",
+        "epoch must equal the current epoch — bribes target the live voting window."
+      ],
       "discriminator": [
         159,
         44,
@@ -677,6 +1244,9 @@
         },
         {
           "name": "bribe_vault",
+          "docs": [
+            "Bribe metadata account. init_if_needed = multiple depositors additive."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -713,6 +1283,9 @@
         },
         {
           "name": "bribe_token_vault",
+          "docs": [
+            "Token account holding the deposited bribe tokens. Owned by bribe_vault PDA."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -1342,7 +1915,17 @@
           "writable": true
         },
         {
-          "name": "market_vault"
+          "name": "market_vault",
+          "docs": [
+            "Market vault — read-only snapshot for accumulator advance before issuing hiSOLA."
+          ]
+        },
+        {
+          "name": "founder",
+          "docs": [
+            "Founder wallet — hardcoded address, cannot be substituted."
+          ],
+          "writable": true
         },
         {
           "name": "founder_sola",
@@ -1351,7 +1934,7 @@
             "seeds": [
               {
                 "kind": "account",
-                "path": "authority"
+                "path": "founder"
               },
               {
                 "kind": "const",
@@ -1441,7 +2024,7 @@
             "seeds": [
               {
                 "kind": "account",
-                "path": "authority"
+                "path": "founder"
               },
               {
                 "kind": "const",
@@ -1544,7 +2127,7 @@
               },
               {
                 "kind": "account",
-                "path": "authority"
+                "path": "founder"
               }
             ]
           }
@@ -1567,6 +2150,109 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "remove_liquidity",
+      "discriminator": [
+        80,
+        85,
+        209,
+        72,
+        24,
+        206,
+        177,
+        108
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint",
+          "writable": true
+        },
+        {
+          "name": "token_a_vault",
+          "writable": true
+        },
+        {
+          "name": "token_b_vault",
+          "writable": true
+        },
+        {
+          "name": "user_lp",
+          "writable": true
+        },
+        {
+          "name": "user_token_a",
+          "docs": [
+            "User's token-A ATA (must already exist; created during add_liquidity)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_token_b",
+          "docs": [
+            "User's token-B ATA (must already exist; created during add_liquidity)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "lp_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_a",
+          "type": "u64"
+        },
+        {
+          "name": "min_b",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "repay_usdc",
@@ -1853,7 +2539,10 @@
           "writable": true
         },
         {
-          "name": "market_vault"
+          "name": "market_vault",
+          "docs": [
+            "Market vault needed to snapshot the accumulator on stake entry."
+          ]
         },
         {
           "name": "user_position",
@@ -2089,6 +2778,11 @@
     },
     {
       "name": "vote_gauge",
+      "docs": [
+        "hiSOLA holder directs vote-weight at a pool gauge for the current epoch.",
+        "Total allocated across all pools ≤ caller's hiSOLA balance.",
+        "One UserVoteReceipt per (user, pool, epoch) — double-vote for same pool is blocked."
+      ],
       "discriminator": [
         181,
         240,
@@ -2129,10 +2823,16 @@
           "name": "hi_sola_mint"
         },
         {
-          "name": "user_hi_sola"
+          "name": "user_hi_sola",
+          "docs": [
+            "Caller's hiSOLA balance determines max vote power."
+          ]
         },
         {
           "name": "gauge_state",
+          "docs": [
+            "Aggregate votes for this pool this epoch."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2159,6 +2859,9 @@
         },
         {
           "name": "user_vote_receipt",
+          "docs": [
+            "One receipt per (user, pool, epoch). init = fails on second vote for same pool."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2188,6 +2891,9 @@
         },
         {
           "name": "user_epoch_votes",
+          "docs": [
+            "Cumulative allocation tracker — prevents over-voting across pools."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2236,6 +2942,19 @@
     }
   ],
   "accounts": [
+    {
+      "name": "AmmPool",
+      "discriminator": [
+        54,
+        82,
+        185,
+        138,
+        179,
+        191,
+        211,
+        169
+      ]
+    },
     {
       "name": "BribeVault",
       "discriminator": [
@@ -2388,11 +3107,83 @@
       "code": 6011,
       "name": "VoteOverflow",
       "msg": "Vote amount exceeds available hiSOLA balance for this epoch"
+    },
+    {
+      "code": 6012,
+      "name": "InsufficientLiquidity",
+      "msg": "Insufficient liquidity in pool"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidPoolTokens",
+      "msg": "Invalid pool tokens: same mint or unsorted mints"
+    },
+    {
+      "code": 6014,
+      "name": "ZeroLiquidity",
+      "msg": "Zero liquidity: deposit amounts must be non-zero"
     }
   ],
   "types": [
     {
+      "name": "AmmPool",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_a_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_b_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_a_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_b_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "lp_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_rate",
+            "type": "u16"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "total_lp",
+            "type": "u64"
+          },
+          {
+            "name": "reserve_a",
+            "type": "u64"
+          },
+          {
+            "name": "reserve_b",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "BribeVault",
+      "docs": [
+        "Bribe pot for one (pool_id, reward_mint, epoch) triplet.",
+        "Permissionless — any protocol can deposit. Multiple deposits per epoch are additive.",
+        "PDA: [b\"bribe_vault\", pool_id, reward_mint, epoch_le8]"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -2421,6 +3212,10 @@
     },
     {
       "name": "GaugeState",
+      "docs": [
+        "Aggregate hiSOLA vote-weight directed at a pool for one epoch.",
+        "PDA: [b\"gauge\", pool_id, epoch_le8]"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -2518,6 +3313,9 @@
           },
           {
             "name": "founder_allocated",
+            "docs": [
+              "Prevents mint_founder_allocation from being called more than once."
+            ],
             "type": "bool"
           }
         ]
@@ -2525,6 +3323,10 @@
     },
     {
       "name": "UserBribeClaim",
+      "docs": [
+        "Created during claim_bribe — its existence proves the claim was made.",
+        "PDA: [b\"bribe_claim\", user, pool_id, reward_mint, epoch_le8]"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -2537,6 +3339,11 @@
     },
     {
       "name": "UserEpochVotes",
+      "docs": [
+        "Tracks total vote-weight already allocated by one user in an epoch (across all pools).",
+        "Prevents voting more than the user's hiSOLA balance.",
+        "PDA: [b\"uev\", user, epoch_le8]"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -2581,6 +3388,11 @@
     },
     {
       "name": "UserVoteReceipt",
+      "docs": [
+        "Records one user's vote for a specific (pool, epoch) pair.",
+        "Created with `init` — immutable once written, prevents double-voting for same pool.",
+        "PDA: [b\"vote\", user, pool_id, epoch_le8]"
+      ],
       "type": {
         "kind": "struct",
         "fields": [

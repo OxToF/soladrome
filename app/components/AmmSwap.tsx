@@ -9,7 +9,7 @@ import {
   getProgram, poolPda, vaultAPda, vaultBPda,
   sortMints, userAta, statePda, marketVault, commonAccounts, fromUi, toUi,
 } from "@/lib/program";
-import { getTokenList, TokenInfo } from "@/lib/tokens";
+import { getTokenList, TokenInfo, WSOL_MINT } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 const SLIPPAGE_OPTIONS = [0.1, 0.5, 1.0] as const;
@@ -39,13 +39,18 @@ export function AmmSwap() {
   const tokIn:  TokenInfo | undefined = tokens[idxIn];
   const tokOut: TokenInfo | undefined = tokens[idxOut];
 
-  // Fetch wallet balance for the input token
+  // Fetch wallet balance — native SOL for wSOL, ATA otherwise
   const fetchBalance = useCallback(async () => {
     if (!wallet || !tokIn) { setBalanceIn(null); return; }
     try {
-      const ata = userAta(new PublicKey(tokIn.mint), wallet.publicKey);
-      const info = await connection.getTokenAccountBalance(ata);
-      setBalanceIn(Number(info.value.uiAmount ?? 0));
+      if (tokIn.mint === WSOL_MINT) {
+        const lamports = await connection.getBalance(wallet.publicKey);
+        setBalanceIn(lamports / 1e9);
+      } else {
+        const ata  = userAta(new PublicKey(tokIn.mint), wallet.publicKey);
+        const info = await connection.getTokenAccountBalance(ata);
+        setBalanceIn(Number(info.value.uiAmount ?? 0));
+      }
     } catch {
       setBalanceIn(0);
     }
