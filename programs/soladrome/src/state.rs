@@ -9,6 +9,14 @@ pub const PRECISION: u128 = 1_000_000_000_000; // 1e12
 // ── Epoch helpers ─────────────────────────────────────────────────────────────
 pub const EPOCH_DURATION: u64 = 7 * 24 * 60 * 60; // 604 800 s = 7 days
 
+// ── Ve-layer constants ────────────────────────────────────────────────────────
+/// Minimum lock duration: 1 epoch (7 days).
+pub const MIN_LOCK_DURATION: u64 = EPOCH_DURATION;
+/// Maximum lock duration: 104 epochs (~2 years).
+pub const MAX_LOCK_DURATION: u64 = 104 * EPOCH_DURATION; // 62 899 200 s
+/// Voting power multiplier at maximum lock (4× raw hiSOLA).
+pub const MAX_VE_MULTIPLIER: u64 = 4;
+
 pub fn current_epoch(unix_ts: i64) -> u64 {
     (unix_ts.max(0) as u64) / EPOCH_DURATION
 }
@@ -110,3 +118,102 @@ pub struct UserBribeClaim {
     pub bump: u8,
 }
 impl UserBribeClaim { pub const LEN: usize = 32; }
+
+// ── Ve-layer ──────────────────────────────────────────────────────────────────
+
+/// Per-user lock state for ve-weighted governance.
+///
+/// Locking hiSOLA transfers tokens to ve_lock_vault and removes them from the
+/// fee accumulator denominator. Locked hiSOLA earns ve voting power instead.
+/// PDA: [b"velock", user]
+#[account]
+pub struct VeLockPosition {
+    pub owner:         Pubkey,
+    pub amount_locked: u64,  // hiSOLA held in ve_lock_vault
+    pub lock_end_ts:   i64,  // Unix timestamp when lock expires
+    pub bump:          u8,
+}
+impl VeLockPosition { pub const LEN: usize = 96; }
+
+// ── LP Emission checkpointing ─────────────────────────────────────────────────
+
+/// Total hiSOLA vote-weight cast across ALL pools in one epoch.
+/// Used as denominator when splitting LP_EMISSION_PER_EPOCH across pools.
+/// PDA: [b"epoch_votes", epoch_le8]
+#[account]
+pub struct GlobalEpochVotes {
+    pub epoch:       u64,
+    pub total_votes: u64,
+    pub bump:        u8,
+}
+impl GlobalEpochVotes { pub const LEN: usize = 32; }
+
+/// Continuous time-weighted LP balance for one (user, pool) pair.
+/// Accumulates: weighted_balance += lp_balance × elapsed_secs each checkpoint.
+/// Reset to 0 at the start of each new epoch.
+/// PDA: [b"lp_ckpt", pool, user]
+#[account]
+pub struct LpUserCheckpoint {
+    pub user:             Pubkey,
+    pub pool:             Pubkey,
+    pub weighted_balance: u128,  // sum(lp_balance × elapsed_secs) for last_epoch
+    pub last_update_ts:   i64,
+    pub last_epoch:       u64,
+    pub bump:             u8,
+}
+impl LpUserCheckpoint { pub const LEN: usize = 32+32+16+8+8+1+7; }
+
+/// Time-weighted total LP supply for one pool in one epoch.
+/// Finalized by emit_pool_rewards after epoch ends; records oSOLA allocation.
+/// PDA: [b"lp_pool_epoch", pool, epoch_le8]
+#[account]
+pub struct LpPoolEpochAccum {
+    pub pool:                  Pubkey,
+    pub epoch:                 u64,
+    pub total_weighted_supply: u128,
+    pub last_update_ts:        i64,
+    pub last_lp_supply:        u64,
+    pub osola_allocated:       u64,
+    pub finalized:             bool,
+    pub bump:                  u8,
+}
+impl LpPoolEpochAccum { pub const LEN: usize = 32+8+16+8+8+8+1+1+18; }
+
+/// Proof-of-claim for LP emissions — created by claim_lp_emissions, blocks replay.
+/// PDA: [b"lp_claim", user, pool, epoch_le8]
+#[account]
+pub struct LpEpochClaim {
+    pub bump: u8,
+}
+impl LpEpochClaim { pub const LEN: usize = 32; }
+
+// ── Continuous LP reward tracking (Masterchef-style) ─────────────────────────
+
+/// Per-user oSOLA reward state for one (user, pool) pair.
+/// Created on first add_liquidity, claim_lp_rewards, or remove_liquidity.
+/// PDA: [b"lp_user", pool, user]
+#[account]
+#[derive(Default)]
+pub struct LpUserInfo {
+    pub reward_debt: u128,  // pool.osola_reward_per_lp snapshot at last interaction
+    pub bump:        u8,
+}
+impl LpUserInfo {
+    pub const LEN: usize = 16 + 1 + 15; // = 32 with padding
+}
+
+// ── Protocol-Owned Liquidity ──────────────────────────────────────────────────
+
+/// Singleton PDA controlling protocol-owned liquidity.
+/// PDA: [b"pol"]
+#[account]
+pub struct PolState {
+    /// Suggested % of market_vault fees to divert (informational, enforced off-chain).
+    pub pol_split_bps:    u16,
+    /// AmmPool PDA that receives POL liquidity deposits.
+    pub target_pool:      Pubkey,
+    /// Lifetime USDC routed through collect_to_pol.
+    pub usdc_accumulated: u64,
+    pub bump:             u8,
+}
+impl PolState { pub const LEN: usize = 96; }

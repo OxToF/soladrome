@@ -2,7 +2,7 @@
 // Copyright (C) 2025 Christophe Hertecant
 
 use crate::errors::SoladromeError;
-use crate::state::PRECISION;
+use crate::state::{MAX_LOCK_DURATION, MAX_VE_MULTIPLIER, PRECISION};
 use anchor_lang::prelude::*;
 
 /// SOLA out when buying with `usdc_in`.
@@ -45,4 +45,19 @@ pub fn advance_accumulator(
 pub fn pending_fees(fees_per_hi_sola: u128, fees_debt: u128, hi_sola_balance: u64) -> u64 {
     let delta = fees_per_hi_sola.saturating_sub(fees_debt);
     ((delta * hi_sola_balance as u128) / PRECISION) as u64
+}
+
+/// Ve voting power for a lock position at `current_ts`.
+/// Decays linearly from `amount_locked × MAX_VE_MULTIPLIER` at full lock to 0 at expiry.
+/// Returns 0 if the lock is expired or empty.
+pub fn ve_power(amount_locked: u64, lock_end_ts: i64, current_ts: i64) -> u64 {
+    if amount_locked == 0 || current_ts >= lock_end_ts {
+        return 0;
+    }
+    let remaining = (lock_end_ts - current_ts) as u64;
+    // power = amount * remaining * MAX_MULTIPLIER / MAX_DURATION  (saturating u128 muldiv)
+    ((amount_locked as u128)
+        .saturating_mul(remaining as u128)
+        .saturating_mul(MAX_VE_MULTIPLIER as u128)
+        / MAX_LOCK_DURATION as u128) as u64
 }

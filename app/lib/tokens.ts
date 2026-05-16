@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Christophe Hertecant
 import { PublicKey } from "@solana/web3.js";
-import { PROGRAM_ID, solaM } from "./program";
+import { PROGRAM_ID, solaM, oSolaM } from "./program";
 
 export interface TokenInfo {
   symbol:   string;
@@ -33,6 +33,12 @@ export function getTokenList(usdcMint: PublicKey | null): TokenInfo[] {
       symbol:   "SOLA",
       name:     "Soladrome SOLA",
       mint:     solaM.toString(),
+      decimals: 6,
+    },
+    {
+      symbol:   "oSOLA",
+      name:     "Option SOLA",
+      mint:     oSolaM.toString(),
       decimals: 6,
     },
   ];

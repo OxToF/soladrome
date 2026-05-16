@@ -37,4 +37,12 @@ pub enum SoladromeError {
     InvalidPoolTokens,
     #[msg("Zero liquidity: deposit amounts must be non-zero")]
     ZeroLiquidity,
+    // ── Ve-layer ──────────────────────────────────────────────────────────────
+    #[msg("Lock has not expired yet")]
+    LockNotExpired,
+    // ── LP emissions ──────────────────────────────────────────────────────────
+    #[msg("Pool epoch rewards not finalized — call emit_pool_rewards first")]
+    EpochNotFinalized,
+    #[msg("No votes recorded for this pool/epoch — cannot distribute emissions")]
+    NoVotes,
 }
