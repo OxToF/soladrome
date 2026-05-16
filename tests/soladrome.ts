@@ -540,4 +540,369 @@ describe("soladrome", () => {
       console.log("✅ slippage guard fires correctly");
     }
   });
+
+  // ── Ve-layer ──────────────────────────────────────────────────────────────
+
+  // ── 12. Lock hiSOLA ───────────────────────────────────────────────────────
+  it("locks hiSOLA for ve governance power", async () => {
+    const userHiSolaAta = anchor.utils.token.associatedAddress({
+      mint: hiSolaM, owner: wallet.publicKey,
+    });
+
+    const [veLockPda]   = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("velock"), wallet.publicKey.toBuffer()],
+      program.programId
+    );
+    const [veLockVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("ve_vault"), wallet.publicKey.toBuffer()],
+      program.programId
+    );
+
+    const hiSolaBefore  = await getTokenBalance(connection, userHiSolaAta);
+    const stateBefore   = await program.account.protocolState.fetch(statePda);
+
+    // Lock 1 hiSOLA for 4 weeks
+    const FOUR_WEEKS = new BN(4 * 7 * 24 * 60 * 60);
+    await program.methods
+      .lockHiSola(ONE, FOUR_WEEKS)
+      .accounts({
+        user:          wallet.publicKey,
+        protocolState: statePda,
+        hiSolaMint:    hiSolaM,
+        userHiSola:    userHiSolaAta,
+        lockPosition:  veLockPda,
+        veLockVault:   veLockVault,
+        marketVault:   marketV,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        rent:          anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    const hiSolaAfter  = await getTokenBalance(connection, userHiSolaAta);
+    const vaultBalance = await getTokenBalance(connection, veLockVault);
+    const lockPos      = await program.account.veLockPosition.fetch(veLockPda);
+    const stateAfter   = await program.account.protocolState.fetch(statePda);
+
+    assert.equal(
+      Number(hiSolaBefore - hiSolaAfter),
+      Number(ONE.toString()),
+      "1 hiSOLA left user ATA"
+    );
+    assert.equal(Number(vaultBalance), Number(ONE.toString()), "1 hiSOLA in ve_lock_vault");
+    assert.equal(lockPos.amountLocked.toNumber(), Number(ONE.toString()), "lock records amount");
+    assert.isTrue(lockPos.lockEndTs.toNumber() > 0, "lock_end_ts set");
+    // Locked hiSOLA removed from fee pool
+    assert.equal(
+      stateAfter.totalHiSola.toNumber(),
+      stateBefore.totalHiSola.toNumber() - Number(ONE.toString()),
+      "total_hi_sola decreased (locked hiSOLA opted out of fees)"
+    );
+
+    console.log(
+      `✅ lock_hi_sola — 1 hiSOLA locked for 4 weeks, ve_power ≈ ${
+        Math.round(Number(ONE.toString()) * 4 * 4 / 104)
+      } units`
+    );
+  });
+
+  // ── 13. Vote with ve power ────────────────────────────────────────────────
+  it("vote_gauge uses ve-weighted power beyond raw hiSOLA balance", async () => {
+    const userHiSolaAta = anchor.utils.token.associatedAddress({
+      mint: hiSolaM, owner: wallet.publicKey,
+    });
+    const [veLockPda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("velock"), wallet.publicKey.toBuffer()],
+      program.programId
+    );
+
+    // Get current on-chain epoch
+    const slot      = await connection.getSlot();
+    const blockTime = await connection.getBlockTime(slot);
+    const EPOCH_DUR = 7 * 24 * 60 * 60;
+    const epoch     = Math.floor(blockTime / EPOCH_DUR);
+    const epochLE   = Buffer.alloc(8);
+    epochLE.writeBigUInt64LE(BigInt(epoch));
+
+    // Use a fresh pool_id label for this test
+    const poolId = anchor.web3.Keypair.generate().publicKey;
+
+    const [gaugeState] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauge"), poolId.toBuffer(), epochLE],
+      program.programId
+    );
+    const [voteReceipt] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("vote"), wallet.publicKey.toBuffer(), poolId.toBuffer(), epochLE],
+      program.programId
+    );
+    const [epochVotes] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("uev"), wallet.publicKey.toBuffer(), epochLE],
+      program.programId
+    );
+
+    // User has 1 hiSOLA in ATA (1 was locked). Raw cap = 1_000_000.
+    // ve_power ≈ 153_333 (1e6 × 4 × 4weeks / 104weeks).
+    // Total power ≈ 1_153_333 → vote for 1_100_000 (impossible without ve).
+    const voteAmount = new BN(1_100_000);
+
+    await program.methods
+      .voteGauge(new BN(epoch), voteAmount)
+      .accounts({
+        user:          wallet.publicKey,
+        poolId:        poolId,
+        protocolState: statePda,
+        hiSolaMint:    hiSolaM,
+        userHiSola:    userHiSolaAta,
+        lockPosition:  veLockPda,
+        gaugeState:    gaugeState,
+        userVoteReceipt: voteReceipt,
+        userEpochVotes: epochVotes,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        rent:          anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    const gauge = await program.account.gaugeState.fetch(gaugeState);
+    assert.equal(
+      gauge.totalVotes.toNumber(),
+      voteAmount.toNumber(),
+      "gauge records ve-boosted votes"
+    );
+
+    console.log(
+      `✅ vote_gauge_ve — voted ${voteAmount.toNumber() / 1e6} units (raw cap = 1, ve boost ≈ 0.15)`
+    );
+  });
+
+  // ── POL Engine ────────────────────────────────────────────────────────────
+
+  // ── 14. Create AMM pool for SOLA/USDC ────────────────────────────────────
+  it("creates an AMM pool for SOLA/USDC", async () => {
+    // Sort mints lexicographically (required by the AMM)
+    const aBytes = solaM.toBytes();
+    const bBytes = usdcMint.toBytes();
+    let solaIsA = false;
+    for (let i = 0; i < 32; i++) {
+      if (aBytes[i] < bBytes[i]) { solaIsA = true;  break; }
+      if (aBytes[i] > bBytes[i]) { solaIsA = false; break; }
+    }
+    const [tokenAMint, tokenBMint] = solaIsA ? [solaM, usdcMint] : [usdcMint, solaM];
+
+    const [poolPda]    = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("amm_pool"), tokenAMint.toBuffer(), tokenBMint.toBuffer()],
+      program.programId
+    );
+    const [lpMintPda]  = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("lp_mint"),  poolPda.toBuffer()], program.programId
+    );
+    const [vaultA]     = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("vault_a"),  poolPda.toBuffer()], program.programId
+    );
+    const [vaultB]     = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("vault_b"),  poolPda.toBuffer()], program.programId
+    );
+
+    const FEE_RATE     = 30;   // 0.30 %
+    const PROTO_SHARE  = 2000; // 20 % of fee → market_vault
+
+    await program.methods
+      .createPool(FEE_RATE, PROTO_SHARE)
+      .accounts({
+        creator:      wallet.publicKey,
+        tokenAMint,
+        tokenBMint,
+        pool:         poolPda,
+        lpMint:       lpMintPda,
+        tokenAVault:  vaultA,
+        tokenBVault:  vaultB,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        rent:         anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    const pool = await program.account.ammPool.fetch(poolPda);
+    assert.equal(pool.feeRate, FEE_RATE,    "fee rate stored");
+    assert.equal(pool.totalLp.toNumber(), 0, "pool starts empty");
+    console.log(`✅ create_pool — SOLA/USDC pool at ${poolPda.toBase58().slice(0, 8)}…`);
+  });
+
+  // ── 15. Initialize POL ────────────────────────────────────────────────────
+  it("initializes POL and collect fees into pol_usdc_vault", async () => {
+    // Recompute sorted pool PDA (same logic as test 14)
+    const aBytes = solaM.toBytes();
+    const bBytes = usdcMint.toBytes();
+    let solaIsA = false;
+    for (let i = 0; i < 32; i++) {
+      if (aBytes[i] < bBytes[i]) { solaIsA = true;  break; }
+      if (aBytes[i] > bBytes[i]) { solaIsA = false; break; }
+    }
+    const [tA, tB] = solaIsA ? [solaM, usdcMint] : [usdcMint, solaM];
+    const [poolPda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("amm_pool"), tA.toBuffer(), tB.toBuffer()],
+      program.programId
+    );
+
+    const [polStatePda]  = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("pol")], program.programId
+    );
+    const [polUsdcVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("pol_usdc_vault")], program.programId
+    );
+    const [polSolaAta]   = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("pol_sola_ata")], program.programId
+    );
+
+    // Initialize POL with 10 % split suggestion and SOLA/USDC pool as target
+    await program.methods
+      .initializePol(1000, poolPda)
+      .accounts({
+        authority:     wallet.publicKey,
+        protocolState: statePda,
+        polState:      polStatePda,
+        polUsdcVault,
+        polSolaAta,
+        usdcMint,
+        solaMint:      solaM,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        rent:          anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    const pol = await program.account.polState.fetch(polStatePda);
+    assert.equal(pol.polSplitBps, 1000, "split bps stored");
+    assert.equal(pol.targetPool.toBase58(), poolPda.toBase58(), "target pool set");
+
+    // ── collect_to_pol: redirect 0.1 USDC from market_vault ──────────────
+    const marketBefore    = await getTokenBalance(connection, marketV);
+    const polVaultBefore  = await getTokenBalance(connection, polUsdcVault);
+    const COLLECT_AMOUNT  = new BN(100_000); // 0.1 USDC
+
+    await program.methods
+      .collectToPol(COLLECT_AMOUNT)
+      .accounts({
+        authority:     wallet.publicKey,
+        protocolState: statePda,
+        polState:      polStatePda,
+        marketVault:   marketV,
+        polUsdcVault,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+      } as any)
+      .rpc();
+
+    const marketAfter   = await getTokenBalance(connection, marketV);
+    const polVaultAfter = await getTokenBalance(connection, polUsdcVault);
+    const polState      = await program.account.polState.fetch(polStatePda);
+
+    assert.isTrue(polVaultAfter > polVaultBefore, "pol_usdc_vault funded");
+    assert.isTrue(marketAfter < marketBefore,     "market_vault reduced");
+    assert.equal(
+      polState.usdcAccumulated.toNumber(),
+      COLLECT_AMOUNT.toNumber(),
+      "lifetime accumulator updated"
+    );
+
+    console.log(
+      `✅ initialize_pol + collect_to_pol — ${
+        Number(polVaultAfter) / 1e6
+      } USDC in pol_usdc_vault`
+    );
+  });
+
+  // ── 16. deploy_pol: buy SOLA via bonding curve ───────────────────────────
+  it("deploy_pol buys SOLA from pol_usdc_vault via bonding curve", async () => {
+    // Recompute sorted pool PDA
+    const aBytes = solaM.toBytes();
+    const bBytes = usdcMint.toBytes();
+    let solaIsA = false;
+    for (let i = 0; i < 32; i++) {
+      if (aBytes[i] < bBytes[i]) { solaIsA = true;  break; }
+      if (aBytes[i] > bBytes[i]) { solaIsA = false; break; }
+    }
+    const [tA, tB] = solaIsA ? [solaM, usdcMint] : [usdcMint, solaM];
+    const [poolPda]      = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("amm_pool"), tA.toBuffer(), tB.toBuffer()], program.programId
+    );
+    const [lpMintPda]    = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("lp_mint"),  poolPda.toBuffer()], program.programId
+    );
+    const [vaultA]       = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("vault_a"),  poolPda.toBuffer()], program.programId
+    );
+    const [vaultB]       = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("vault_b"),  poolPda.toBuffer()], program.programId
+    );
+    const [polStatePda]  = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("pol")], program.programId
+    );
+    const [polUsdcVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("pol_usdc_vault")], program.programId
+    );
+    const [polSolaAta]   = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("pol_sola_ata")], program.programId
+    );
+    const [polLpVault]   = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("pol_lp_vault")], program.programId
+    );
+
+    const lpDeadKey   = anchor.web3.SystemProgram.programId;
+    const lpDeadAta   = anchor.utils.token.associatedAddress({
+      mint: lpMintPda, owner: lpDeadKey,
+    });
+
+    const solaBefore = await getTokenBalance(connection, polSolaAta);
+    const usdcBefore = await getTokenBalance(connection, polUsdcVault);
+
+    // Phase 1 only: spend 50_000 USDC units to buy SOLA; skip LP (sola_for_lp=0)
+    const USDC_FOR_SOLA = new BN(50_000);
+    await program.methods
+      .deployPol(
+        USDC_FOR_SOLA, // usdc_for_sola
+        new BN(1),     // min_sola_out (accept any)
+        new BN(0),     // sola_for_lp  (skip Phase 2)
+        new BN(0),     // usdc_for_lp
+        new BN(0),     // min_lp
+      )
+      .accounts({
+        authority:      wallet.publicKey,
+        protocolState:  statePda,
+        polState:       polStatePda,
+        polUsdcVault,
+        polSolaAta,
+        polLpVault,
+        solaMint:       solaM,
+        floorVault:     floorV,
+        marketVault:    marketV,
+        pool:           poolPda,
+        lpMint:         lpMintPda,
+        poolTokenAVault: vaultA,
+        poolTokenBVault: vaultB,
+        lpDeadAta,
+        lpDead:         lpDeadKey,
+        tokenProgram:   TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram:  anchor.web3.SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    const solaAfter = await getTokenBalance(connection, polSolaAta);
+    const usdcAfter = await getTokenBalance(connection, polUsdcVault);
+
+    assert.isTrue(solaAfter > solaBefore, "pol_sola_ata received SOLA");
+    assert.isTrue(
+      usdcAfter < usdcBefore - BigInt(USDC_FOR_SOLA.toString()) + 1n,
+      "pol_usdc_vault decreased by at least usdc_for_sola"
+    );
+
+    // floor_vault should have grown (1 USDC per SOLA minted)
+    const floorBalance = await getTokenBalance(connection, floorV);
+    assert.isTrue(floorBalance > 0n, "floor vault funded by POL buy");
+
+    console.log(
+      `✅ deploy_pol — bought ${Number(solaAfter - solaBefore) / 1e6} SOLA via POL` +
+      ` | ${Number(usdcAfter) / 1e6} USDC remaining in pol vault`
+    );
+  });
 });

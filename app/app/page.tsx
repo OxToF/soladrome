@@ -10,42 +10,41 @@ const WalletMultiButton = dynamic(
   () => import("@solana/wallet-adapter-react-ui").then((m) => m.WalletMultiButton),
   { ssr: false }
 );
-import { Stake }      from "@/components/Stake";
-import { Borrow }     from "@/components/Borrow";
-import { Vote }       from "@/components/Vote";
-import { Gauge }      from "@/components/Gauge";
-import { ClaimFees }  from "@/components/ClaimFees";
-import { Liquidity }  from "@/components/Liquidity";
-import { Stats }      from "@/components/Stats";
-import { AmmSwap }    from "@/components/AmmSwap";
-import { Pools }      from "@/components/Pools";
+import { Vote }        from "@/components/Vote";
+import { Gauge }       from "@/components/Gauge";
+import { ClaimFees }   from "@/components/ClaimFees";
+import { Stats }       from "@/components/Stats";
+import { Pools }       from "@/components/Pools";
+import { ActionPanel } from "@/components/ActionPanel";
+import { Portfolio }   from "@/components/Portfolio";
 
-// USDC mint is read on-chain from protocolState.usdcMint via SoladromeContext
-
-type Page = "swap" | "pools" | "stake" | "borrow" | "vote" | "bribe" | "claim" | "liquidity";
+type Page = "home" | "pools" | "vote" | "bribe" | "claim";
 
 const NAV: { id: Page; label: string }[] = [
-  { id: "swap",      label: "Swap"      },
-  { id: "pools",     label: "Pools"     },
-  { id: "stake",     label: "Stake"     },
-  { id: "borrow",    label: "Borrow"    },
-  { id: "liquidity", label: "Liquidity" },
-  { id: "vote",      label: "Vote"      },
-  { id: "bribe",     label: "Bribe"     },
-  { id: "claim",     label: "Claim"     },
+  { id: "home",  label: "Home"  },
+  { id: "pools", label: "Pools" },
+  { id: "vote",  label: "Vote"  },
+  { id: "bribe", label: "Bribe" },
+  { id: "claim", label: "Claim" },
 ];
+
+// Legacy page ids that used to be standalone tabs — redirect them to home
+const HOME_ALIASES = new Set(["swap", "stake", "borrow", "osola", "liquidity"]);
 
 const DOCS_URL = "/about.html";
 
 export default function Home() {
   const wallet = useAnchorWallet();
-  const [page, setPage] = useState<Page>("swap");
+  const [page, setPage] = useState<Page>("home");
 
-  // Allow Liquidity CTA buttons to navigate via custom event
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<string>).detail as Page;
-      if (NAV.some((n) => n.id === detail)) setPage(detail);
+      const detail = (e as CustomEvent<string>).detail;
+      if (HOME_ALIASES.has(detail)) {
+        setPage("home");
+      } else if (NAV.some((n) => n.id === detail)) {
+        setPage(detail as Page);
+      }
     };
     window.addEventListener("nav", handler);
     return () => window.removeEventListener("nav", handler);
@@ -82,7 +81,6 @@ export default function Home() {
                 {label}
               </button>
             ))}
-            {/* Docs — external link */}
             <a
               href={DOCS_URL}
               target="_blank"
@@ -153,17 +151,19 @@ export default function Home() {
             </a>
           </div>
 
-          {/* Panels */}
-          <div className={page === "liquidity" || page === "pools" ? "w-full" : "max-w-xl mx-auto"}>
-            {page === "swap"      && <AmmSwap />}
-            {page === "pools"     && <Pools />}
-            {page === "stake"     && <Stake />}
-            {page === "borrow"    && <Borrow />}
-            {page === "vote"      && <Vote />}
-            {page === "bribe"     && <Gauge />}
-            {page === "claim"     && <ClaimFees />}
-            {page === "liquidity" && <Liquidity />}
-          </div>
+          {/* ── Home — Beradrome-style layout ─────────────────── */}
+          {page === "home" && (
+            <div className="grid grid-cols-1 lg:grid-cols-[2fr_3fr] gap-6 items-start">
+              <Portfolio />
+              <ActionPanel />
+            </div>
+          )}
+
+          {/* ── Dedicated pages ───────────────────────────────── */}
+          {page === "pools" && <Pools />}
+          {page === "vote"  && <div className="max-w-xl mx-auto"><Vote /></div>}
+          {page === "bribe" && <div className="max-w-xl mx-auto"><Gauge /></div>}
+          {page === "claim" && <div className="max-w-xl mx-auto"><ClaimFees /></div>}
         </main>
       )}
 
