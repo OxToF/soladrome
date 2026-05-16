@@ -21,6 +21,27 @@ export function BuySell() {
   const [amount, setAmount] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
+  const [faucetLoading, setFaucetLoading] = useState(false);
+
+  async function claimFaucet() {
+    if (!wallet) return;
+    setFaucetLoading(true);
+    setStatus("");
+    try {
+      const res = await fetch("/api/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: wallet.publicKey.toBase58() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setStatus(`✅ Got ${data.amount} test USDC!`);
+    } catch (e: any) {
+      setStatus(`❌ Faucet: ${e?.message ?? e}`);
+    } finally {
+      setFaucetLoading(false);
+    }
+  }
 
   async function submit() {
     if (!wallet || !amount || !usdcMint) return;
@@ -125,6 +146,18 @@ export function BuySell() {
       {status && (
         <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>
       )}
+
+      {/* Devnet faucet */}
+      <div className="mt-4 pt-4 border-t border-brand-border">
+        <p className="text-xs text-gray-500 mb-2">Need test USDC?</p>
+        <button
+          className="btn-secondary w-full text-xs"
+          onClick={claimFaucet}
+          disabled={faucetLoading || !wallet}
+        >
+          {faucetLoading ? "Sending…" : "Get 500 Test USDC"}
+        </button>
+      </div>
     </div>
   );
 }

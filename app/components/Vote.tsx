@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Christophe Hertecant
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { getProgram, statePda, hiSolaM } from "@/lib/program";
+import { getProgram, statePda, hiSolaM, userAta, PROGRAM_ID as PROG_ID } from "@/lib/program";
 
 // ── Epoch helpers ─────────────────────────────────────────────────────────────
 const EPOCH_S = 7 * 24 * 60 * 60;
@@ -21,29 +20,15 @@ function timeLeft(d: Date) {
 
 // ── PDA helpers ───────────────────────────────────────────────────────────────
 const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
-function epochBuf(epoch: number) {
-  const b = Buffer.alloc(8);
-  b.writeUInt32LE(epoch >>> 0, 0);
-  b.writeUInt32LE(Math.floor(epoch / 2 ** 32), 4);
-  return b;
-}
-function gaugePda(pool: PublicKey, epoch: number) {
+function lockPositionPda(user: PublicKey) {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("gauge"), pool.toBuffer(), epochBuf(epoch)], PROGRAM_ID
-  )[0];
-}
-function votePda(user: PublicKey, pool: PublicKey, epoch: number) {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("vote"), user.toBuffer(), pool.toBuffer(), epochBuf(epoch)], PROGRAM_ID
-  )[0];
-}
-function uevPda(user: PublicKey, epoch: number) {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("uev"), user.toBuffer(), epochBuf(epoch)], PROGRAM_ID
+    [Buffer.from("velock"), user.toBuffer()], PROG_ID
   )[0];
 }
 
 // ── Popular pools (labels only — devnet/localnet use any pubkey) ──────────────
+const PCT = [25, 50, 75, 100] as const;
+
 const SUGGESTED = [
   { label: "SOL/USDC · Raydium",  addr: "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS3AFKBxQaP" },
   { label: "SOL/USDC · Orca",     addr: "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ" },
@@ -56,10 +41,27 @@ export function Vote() {
   const epoch = currentEpoch();
   const end   = epochEnd(epoch);
 
-  const [poolId, setPoolId] = useState("");
-  const [votes,  setVotes]  = useState("");
-  const [loading, setLoading] = useState(false);
-  const [status,  setStatus]  = useState("");
+  const [poolId,   setPoolId]  = useState("");
+  const [votes,    setVotes]   = useState("");
+  const [balance,  setBalance] = useState<number | null>(null);
+  const [loading,  setLoading] = useState(false);
+  const [status,   setStatus]  = useState("");
+
+  const fetchBalance = useCallback(async () => {
+    if (!wallet) { setBalance(null); return; }
+    try {
+      const ata  = userAta(hiSolaM, wallet.publicKey);
+      const info = await connection.getTokenAccountBalance(ata);
+      setBalance(Number(info.value.uiAmount ?? 0));
+    } catch { setBalance(0); }
+  }, [connection, wallet]);
+
+  useEffect(() => { fetchBalance(); }, [fetchBalance]);
+
+  function applyPct(pct: number) {
+    if (!balance || balance <= 0) return;
+    setVotes(((balance * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
+  }
 
   function tryPool(): PublicKey | null {
     try { return new PublicKey(poolId); } catch { return null; }
@@ -78,31 +80,48 @@ export function Vote() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
 
-      const rawVotes     = new BN(Math.floor(amt * 1_000_000));
-      const userHiSola   = (await import("@solana/spl-token"))
+      const rawVotes   = new BN(Math.floor(amt * 1_000_000));
+      const userHiSola = (await import("@solana/spl-token"))
         .getAssociatedTokenAddressSync(hiSolaM, wallet.publicKey);
-      const gaugeState   = gaugePda(pool, epoch);
-      const userVoteReceipt = votePda(wallet.publicKey, pool, epoch);
-      const userEpochVotes  = uevPda(wallet.publicKey, epoch);
+      const lockPosition = lockPositionPda(wallet.publicKey);
+
+      // Encode epoch as u64 little-endian (8 bytes) — matches Rust's epoch.to_le_bytes()
+      const epochBuf = Buffer.alloc(8);
+      epochBuf.writeBigUInt64LE(BigInt(epoch));
+
+      const [gaugeState] = PublicKey.findProgramAddressSync(
+        [Buffer.from("gauge"), pool.toBuffer(), epochBuf], PROG_ID
+      );
+      const [userVoteReceipt] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vote"), wallet.publicKey.toBuffer(), pool.toBuffer(), epochBuf], PROG_ID
+      );
+      const [userEpochVotes] = PublicKey.findProgramAddressSync(
+        [Buffer.from("uev"), wallet.publicKey.toBuffer(), epochBuf], PROG_ID
+      );
+      const [globalEpochVotes] = PublicKey.findProgramAddressSync(
+        [Buffer.from("epoch_votes"), epochBuf], PROG_ID
+      );
 
       const tx = await program.methods
         .voteGauge(new BN(epoch), rawVotes)
         .accounts({
-          user: wallet.publicKey,
-          poolId: pool,
-          protocolState: statePda,
-          hiSolaMint: hiSolaM,
+          user:             wallet.publicKey,
+          poolId:           pool,
+          protocolState:    statePda,
+          hiSolaMint:       hiSolaM,
           userHiSola,
+          lockPosition,
           gaugeState,
           userVoteReceipt,
           userEpochVotes,
-          tokenProgram:  TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
+          globalEpochVotes,
+          systemProgram:   SystemProgram.programId,
+          rent:            SYSVAR_RENT_PUBKEY,
         } as any)
         .rpc();
       setStatus(`✅ Vote enregistré — tx: ${tx.slice(0, 16)}…`);
       setVotes("");
+      fetchBalance();
     } catch (e: any) {
       setStatus(`❌ ${e?.message ?? e}`);
     } finally { setLoading(false); }
@@ -164,14 +183,44 @@ export function Vote() {
           onChange={(e) => setPoolId(e.target.value)}
         />
 
-        <label className="text-xs text-gray-400 mb-1 block">hiSOLA à allouer</label>
-        <input
-          className="input mb-4"
-          type="number" min="0" step="0.000001"
-          placeholder="0.000000"
-          value={votes}
-          onChange={(e) => setVotes(e.target.value)}
-        />
+        <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-gray-400">hiSOLA à allouer</span>
+            {balance !== null && (
+              <span className="text-xs text-gray-500">
+                Balance:{" "}
+                <button
+                  className="text-gray-300 hover:text-brand-green transition-colors font-mono"
+                  onClick={() => applyPct(100)}
+                >
+                  {balance.toLocaleString(undefined, { maximumFractionDigits: 4 })} hiSOLA
+                </button>
+              </span>
+            )}
+          </div>
+          <input
+            className="w-full bg-transparent text-right text-2xl font-bold text-white placeholder-gray-600 focus:outline-none mb-3"
+            type="text"
+            inputMode="decimal"
+            placeholder="0"
+            value={votes}
+            onChange={(e) => setVotes(e.target.value)}
+          />
+          <div className="flex gap-2">
+            {PCT.map((pct) => (
+              <button
+                key={pct}
+                onClick={() => applyPct(pct)}
+                disabled={!balance}
+                className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-400
+                           hover:border-brand-green hover:text-brand-green transition-colors
+                           disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                {pct === 100 ? "Max" : `${pct}%`}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <button
           className="btn-primary w-full"
