@@ -169,7 +169,7 @@
         {
           "name": "lp_dead_ata",
           "docs": [
-            "Dead address ATA to receive MINIMUM_LIQUIDITY on first deposit."
+            "Dead address ATA — permanently locked MINIMUM_LIQUIDITY on first deposit."
           ],
           "writable": true,
           "pda": {
@@ -262,6 +262,161 @@
         {
           "name": "lp_dead",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "lp_user_info",
+          "docs": [
+            "Per-user continuous oSOLA reward state for this pool."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — needed to sign the oSOLA mint CPI."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "o_sola_mint",
+          "docs": [
+            "oSOLA mint — auto-harvested rewards are minted here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_o_sola",
+          "docs": [
+            "User's oSOLA ATA — receives auto-harvested rewards."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "o_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
         },
         {
           "name": "token_program",
@@ -659,6 +814,142 @@
         },
         {
           "name": "min_sola_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "checkpoint_lp",
+      "docs": [
+        "Record a time-weighted LP balance snapshot for the caller in a given pool+epoch.",
+        "Must be called before the epoch ends; updates both the user and pool accumulators."
+      ],
+      "discriminator": [
+        3,
+        46,
+        34,
+        113,
+        116,
+        46,
+        123,
+        219
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint"
+        },
+        {
+          "name": "user_lp"
+        },
+        {
+          "name": "lp_user_checkpoint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  99,
+                  107,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_epoch_accum",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "epoch",
           "type": "u64"
         }
       ]
@@ -1062,6 +1353,605 @@
       "args": []
     },
     {
+      "name": "claim_lp_emissions",
+      "docs": [
+        "Mint a user's pro-rata oSOLA share from LP emissions for a given pool+epoch.",
+        "Requires: epoch finalized, user checkpointed during epoch, not yet claimed."
+      ],
+      "discriminator": [
+        211,
+        134,
+        16,
+        226,
+        171,
+        120,
+        119,
+        230
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "o_sola_mint",
+          "writable": true
+        },
+        {
+          "name": "user_o_sola",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "o_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "pool_epoch_accum",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_user_checkpoint",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  99,
+                  107,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_epoch_claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "_epoch",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "claim_lp_rewards",
+      "docs": [
+        "Claim accumulated oSOLA LP rewards without changing liquidity."
+      ],
+      "discriminator": [
+        130,
+        185,
+        69,
+        158,
+        54,
+        47,
+        70,
+        79
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint"
+        },
+        {
+          "name": "user_lp",
+          "docs": [
+            "User's LP balance — determines the reward share."
+          ]
+        },
+        {
+          "name": "lp_user_info",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "o_sola_mint",
+          "writable": true
+        },
+        {
+          "name": "user_o_sola",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "o_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "collect_to_pol",
+      "docs": [
+        "Redirect a portion of market_vault fees to pol_usdc_vault. Authority-only."
+      ],
+      "discriminator": [
+        107,
+        247,
+        240,
+        206,
+        210,
+        212,
+        167,
+        109
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "writable": true
+        },
+        {
+          "name": "pol_usdc_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  95,
+                  117,
+                  115,
+                  100,
+                  99,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "create_pool",
       "discriminator": [
         233,
@@ -1207,6 +2097,331 @@
         {
           "name": "protocol_fee_bps",
           "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "deploy_pol",
+      "docs": [
+        "Buy SOLA via bonding curve and/or add LP to the target pool. Authority-only."
+      ],
+      "discriminator": [
+        110,
+        232,
+        26,
+        24,
+        49,
+        72,
+        56,
+        103
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pol_state",
+          "docs": [
+            "PolState — not mutated here; used only as a PDA signer."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pol_usdc_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  95,
+                  117,
+                  115,
+                  100,
+                  99,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pol_sola_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  95,
+                  115,
+                  111,
+                  108,
+                  97,
+                  95,
+                  97,
+                  116,
+                  97
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pol_lp_vault",
+          "docs": [
+            "Created on first deploy_pol call; LP tokens are held here permanently."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  95,
+                  108,
+                  112,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "sola_mint",
+          "writable": true
+        },
+        {
+          "name": "floor_vault",
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "writable": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint",
+          "writable": true
+        },
+        {
+          "name": "pool_token_a_vault",
+          "writable": true
+        },
+        {
+          "name": "pool_token_b_vault",
+          "writable": true
+        },
+        {
+          "name": "lp_dead_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "lp_dead"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lp_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "lp_dead",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usdc_for_sola",
+          "type": "u64"
+        },
+        {
+          "name": "min_sola_out",
+          "type": "u64"
+        },
+        {
+          "name": "sola_for_lp",
+          "type": "u64"
+        },
+        {
+          "name": "usdc_for_lp",
+          "type": "u64"
+        },
+        {
+          "name": "min_lp",
+          "type": "u64"
         }
       ]
     },
@@ -1496,6 +2711,166 @@
       "args": [
         {
           "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "emit_pool_rewards",
+      "docs": [
+        "Finalize the LP emission allocation for one pool after its epoch has ended.",
+        "Permissionless — anyone can call. Records how much oSOLA this pool's LPs may claim."
+      ],
+      "discriminator": [
+        175,
+        4,
+        186,
+        137,
+        139,
+        70,
+        160,
+        112
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint"
+        },
+        {
+          "name": "gauge_state",
+          "docs": [
+            "Gauge for this pool — requires voters used the AMM pool address as pool_id."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  117,
+                  103,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "global_epoch_votes",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  118,
+                  111,
+                  116,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_epoch_accum",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "epoch",
           "type": "u64"
         }
       ]
@@ -1864,6 +3239,285 @@
       "args": []
     },
     {
+      "name": "initialize_pol",
+      "docs": [
+        "One-time setup: create PolState and its token vaults. Authority-only."
+      ],
+      "discriminator": [
+        153,
+        249,
+        139,
+        4,
+        23,
+        76,
+        102,
+        244
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pol_usdc_vault",
+          "docs": [
+            "USDC accumulator vault — receives collect_to_pol transfers."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  95,
+                  117,
+                  115,
+                  100,
+                  99,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pol_sola_ata",
+          "docs": [
+            "Staging account for SOLA bought before LP deployment."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  95,
+                  115,
+                  111,
+                  108,
+                  97,
+                  95,
+                  97,
+                  116,
+                  97
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "sola_mint"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "pol_split_bps",
+          "type": "u16"
+        },
+        {
+          "name": "target_pool",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "lock_hi_sola",
+      "docs": [
+        "Lock hiSOLA for ve-weighted governance power.",
+        "Subsequent calls extend the lock or add tokens (never shorten)."
+      ],
+      "discriminator": [
+        149,
+        150,
+        137,
+        146,
+        182,
+        91,
+        45,
+        31
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "hi_sola_mint"
+        },
+        {
+          "name": "user_hi_sola",
+          "docs": [
+            "Caller's hiSOLA ATA — source of tokens to lock."
+          ],
+          "writable": true
+        },
+        {
+          "name": "lock_position",
+          "docs": [
+            "Lock metadata PDA. Created on first lock, updated on subsequent ones."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "ve_lock_vault",
+          "docs": [
+            "Token account holding locked hiSOLA. Owned by the lock_position PDA."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read-only market vault snapshot for accumulator advance."
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "lock_duration_secs",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "mint_founder_allocation",
       "discriminator": [
         254,
@@ -2219,20 +3873,179 @@
         {
           "name": "user_token_a",
           "docs": [
-            "User's token-A ATA (must already exist; created during add_liquidity)."
+            "User's token-A ATA (must already exist)."
           ],
           "writable": true
         },
         {
           "name": "user_token_b",
           "docs": [
-            "User's token-B ATA (must already exist; created during add_liquidity)."
+            "User's token-B ATA (must already exist)."
           ],
           "writable": true
         },
         {
+          "name": "lp_user_info",
+          "docs": [
+            "Per-user continuous oSOLA reward state for this pool."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — needed to sign the oSOLA mint CPI."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "o_sola_mint",
+          "docs": [
+            "oSOLA mint — auto-harvested rewards are minted here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_o_sola",
+          "docs": [
+            "User's oSOLA ATA — receives auto-harvested rewards."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "o_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         },
         {
           "name": "system_program",
@@ -2590,6 +4403,213 @@
       ]
     },
     {
+      "name": "unlock_hi_sola",
+      "docs": [
+        "Return locked hiSOLA after expiry. Restores tokens to the fee pool."
+      ],
+      "discriminator": [
+        123,
+        176,
+        206,
+        169,
+        48,
+        8,
+        182,
+        158
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "hi_sola_mint"
+        },
+        {
+          "name": "user_hi_sola",
+          "docs": [
+            "Destination for unlocked hiSOLA. Created if user burned their ATA previously."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "hi_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "lock_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "ve_lock_vault",
+          "docs": [
+            "Source vault — tokens transferred back to user on unlock."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read-only market vault snapshot for accumulator advance."
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "unstake_hi_sola",
       "discriminator": [
         213,
@@ -2780,7 +4800,7 @@
       "name": "vote_gauge",
       "docs": [
         "hiSOLA holder directs vote-weight at a pool gauge for the current epoch.",
-        "Total allocated across all pools ≤ caller's hiSOLA balance.",
+        "Total allocated across all pools ≤ raw hiSOLA + ve-weighted locked hiSOLA.",
         "One UserVoteReceipt per (user, pool, epoch) — double-vote for same pool is blocked."
       ],
       "discriminator": [
@@ -2825,7 +4845,14 @@
         {
           "name": "user_hi_sola",
           "docs": [
-            "Caller's hiSOLA balance determines max vote power."
+            "Caller's hiSOLA balance determines base vote power."
+          ]
+        },
+        {
+          "name": "lock_position",
+          "docs": [
+            "Pass any account (e.g. SystemProgram) when not using a ve lock.",
+            "If valid and unexpired, adds ve-weighted power to the vote cap."
           ]
         },
         {
@@ -2917,8 +4944,35 @@
           }
         },
         {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "global_epoch_votes",
+          "docs": [
+            "Global vote total for the epoch — denominator for LP emission splits."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  118,
+                  111,
+                  116,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
         },
         {
           "name": "system_program",
@@ -2979,6 +5033,84 @@
         196,
         192,
         15
+      ]
+    },
+    {
+      "name": "GlobalEpochVotes",
+      "discriminator": [
+        113,
+        153,
+        253,
+        176,
+        213,
+        103,
+        146,
+        255
+      ]
+    },
+    {
+      "name": "LpEpochClaim",
+      "discriminator": [
+        217,
+        241,
+        97,
+        65,
+        182,
+        72,
+        23,
+        225
+      ]
+    },
+    {
+      "name": "LpPoolEpochAccum",
+      "discriminator": [
+        241,
+        33,
+        181,
+        132,
+        4,
+        179,
+        119,
+        122
+      ]
+    },
+    {
+      "name": "LpUserCheckpoint",
+      "discriminator": [
+        158,
+        155,
+        89,
+        168,
+        74,
+        94,
+        200,
+        246
+      ]
+    },
+    {
+      "name": "LpUserInfo",
+      "discriminator": [
+        33,
+        214,
+        55,
+        14,
+        251,
+        53,
+        195,
+        221
+      ]
+    },
+    {
+      "name": "PolState",
+      "discriminator": [
+        213,
+        149,
+        83,
+        33,
+        43,
+        155,
+        107,
+        22
       ]
     },
     {
@@ -3044,6 +5176,19 @@
         41,
         200,
         119
+      ]
+    },
+    {
+      "name": "VeLockPosition",
+      "discriminator": [
+        68,
+        156,
+        75,
+        14,
+        177,
+        229,
+        202,
+        226
       ]
     }
   ],
@@ -3122,6 +5267,21 @@
       "code": 6014,
       "name": "ZeroLiquidity",
       "msg": "Zero liquidity: deposit amounts must be non-zero"
+    },
+    {
+      "code": 6015,
+      "name": "LockNotExpired",
+      "msg": "Lock has not expired yet"
+    },
+    {
+      "code": 6016,
+      "name": "EpochNotFinalized",
+      "msg": "Pool epoch rewards not finalized — call emit_pool_rewards first"
+    },
+    {
+      "code": 6017,
+      "name": "NoVotes",
+      "msg": "No votes recorded for this pool/epoch — cannot distribute emissions"
     }
   ],
   "types": [
@@ -3173,6 +5333,14 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "osola_reward_per_lp",
+            "type": "u128"
+          },
+          {
+            "name": "last_reward_ts",
+            "type": "i64"
           }
         ]
       }
@@ -3229,6 +5397,188 @@
           },
           {
             "name": "total_votes",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GlobalEpochVotes",
+      "docs": [
+        "Total hiSOLA vote-weight cast across ALL pools in one epoch.",
+        "Used as denominator when splitting LP_EMISSION_PER_EPOCH across pools.",
+        "PDA: [b\"epoch_votes\", epoch_le8]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "total_votes",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LpEpochClaim",
+      "docs": [
+        "Proof-of-claim for LP emissions — created by claim_lp_emissions, blocks replay.",
+        "PDA: [b\"lp_claim\", user, pool, epoch_le8]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LpPoolEpochAccum",
+      "docs": [
+        "Time-weighted total LP supply for one pool in one epoch.",
+        "Finalized by emit_pool_rewards after epoch ends; records oSOLA allocation.",
+        "PDA: [b\"lp_pool_epoch\", pool, epoch_le8]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "total_weighted_supply",
+            "type": "u128"
+          },
+          {
+            "name": "last_update_ts",
+            "type": "i64"
+          },
+          {
+            "name": "last_lp_supply",
+            "type": "u64"
+          },
+          {
+            "name": "osola_allocated",
+            "type": "u64"
+          },
+          {
+            "name": "finalized",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LpUserCheckpoint",
+      "docs": [
+        "Continuous time-weighted LP balance for one (user, pool) pair.",
+        "Accumulates: weighted_balance += lp_balance × elapsed_secs each checkpoint.",
+        "Reset to 0 at the start of each new epoch.",
+        "PDA: [b\"lp_ckpt\", pool, user]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "weighted_balance",
+            "type": "u128"
+          },
+          {
+            "name": "last_update_ts",
+            "type": "i64"
+          },
+          {
+            "name": "last_epoch",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LpUserInfo",
+      "docs": [
+        "Per-user oSOLA reward state for one (user, pool) pair.",
+        "Created on first add_liquidity, claim_lp_rewards, or remove_liquidity.",
+        "PDA: [b\"lp_user\", pool, user]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "reward_debt",
+            "type": "u128"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PolState",
+      "docs": [
+        "Singleton PDA controlling protocol-owned liquidity.",
+        "PDA: [b\"pol\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pol_split_bps",
+            "docs": [
+              "Suggested % of market_vault fees to divert (informational, enforced off-chain)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "target_pool",
+            "docs": [
+              "AmmPool PDA that receives POL liquidity deposits."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_accumulated",
+            "docs": [
+              "Lifetime USDC routed through collect_to_pol."
+            ],
             "type": "u64"
           },
           {
@@ -3411,6 +5761,37 @@
           {
             "name": "votes",
             "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VeLockPosition",
+      "docs": [
+        "Per-user lock state for ve-weighted governance.",
+        "",
+        "Locking hiSOLA transfers tokens to ve_lock_vault and removes them from the",
+        "fee accumulator denominator. Locked hiSOLA earns ve voting power instead.",
+        "PDA: [b\"velock\", user]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_locked",
+            "type": "u64"
+          },
+          {
+            "name": "lock_end_ts",
+            "type": "i64"
           },
           {
             "name": "bump",

@@ -23,7 +23,7 @@ function xy_k_out(reserveIn: number, reserveOut: number, amountInNet: number): n
   return (reserveOut * amountInNet) / (reserveIn + amountInNet);
 }
 
-export function AmmSwap() {
+export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
   const { usdcMint } = useSoladrome();
@@ -38,6 +38,28 @@ export function AmmSwap() {
   const [balanceIn, setBalanceIn] = useState<number | null>(null);
   const [loading,   setLoading]   = useState(false);
   const [status,    setStatus]    = useState("");
+  const [faucetLoading, setFaucetLoading] = useState(false);
+
+  async function claimFaucet() {
+    if (!wallet) return;
+    setFaucetLoading(true);
+    setStatus("");
+    try {
+      const res = await fetch("/api/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: wallet.publicKey.toBase58() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setStatus(`✅ ${data.amount} test USDC ajoutés à ton wallet !`);
+      fetchBalance();
+    } catch (e: any) {
+      setStatus(`❌ Faucet: ${e?.message ?? e}`);
+    } finally {
+      setFaucetLoading(false);
+    }
+  }
 
   const tokIn:  TokenInfo | undefined = tokens[idxIn];
   const tokOut: TokenInfo | undefined = tokens[idxOut];
@@ -194,12 +216,12 @@ export function AmmSwap() {
   const canSwap = !!wallet && !!amountIn && +amountIn > 0 && !!estimatedOut && !!pool && !loading;
 
   if (tokens.length < 2) {
-    return <div className="card glow text-gray-400 text-sm text-center py-8">Loading…</div>;
+    return <div className={embedded ? "text-gray-400 text-sm text-center py-8" : "card glow text-gray-400 text-sm text-center py-8"}>Loading…</div>;
   }
 
   return (
-    <div className="card glow">
-      <h2 className="text-lg font-bold mb-5 text-white">AMM Swap</h2>
+    <div className={embedded ? "" : "card glow"}>
+      {!embedded && <h2 className="text-lg font-bold mb-5 text-white">AMM Swap</h2>}
 
       {/* ── Token In ────────────────────────────────────────── */}
       <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-2">
@@ -288,6 +310,16 @@ export function AmmSwap() {
         </p>
       )}
 
+      {/* Spot price — always visible when pool exists */}
+      {pool && (
+        <div className="flex justify-between text-xs text-gray-500 mb-2 px-1">
+          <span>Prix</span>
+          <span className="font-mono text-gray-300">
+            1 {tokIn?.symbol} = {(pool.reserveOut / pool.reserveIn).toLocaleString(undefined, { maximumFractionDigits: 6 })} {tokOut?.symbol}
+          </span>
+        </div>
+      )}
+
       {pool && estimatedOut !== null && +amountIn > 0 && (
         <div className="rounded-xl border border-brand-border p-3 mb-3 space-y-1.5 text-xs">
           <div className="flex justify-between text-gray-400">
@@ -331,6 +363,18 @@ export function AmmSwap() {
       </button>
 
       {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+
+      {/* Devnet faucet */}
+      <div className="mt-4 pt-4 border-t border-brand-border flex items-center justify-between">
+        <span className="text-xs text-gray-500">Besoin de USDC de test ?</span>
+        <button
+          className="btn-secondary text-xs px-4 py-2"
+          onClick={claimFaucet}
+          disabled={faucetLoading || !wallet}
+        >
+          {faucetLoading ? "Envoi…" : "Get 500 USDC"}
+        </button>
+      </div>
     </div>
   );
 }

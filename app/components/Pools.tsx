@@ -9,10 +9,10 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
-import { SystemProgram } from "@solana/web3.js";
+import { SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
   getProgram, poolPda, lpMintPda, vaultAPda, vaultBPda,
-  sortMints, userAta, commonAccounts,
+  sortMints, userAta, commonAccounts, statePda, oSolaM, PROGRAM_ID,
   fromUiDecimals, toUiDecimals,
   buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
   WSOL_MINT_STR,
@@ -23,8 +23,13 @@ import { useSoladrome } from "@/lib/SoladromeContext";
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
 const PCT = [25, 50, 75, 100] as const;
 
+// oSOLA reward precision — must match program constant LP_REWARD_PRECISION = 1e12
+const LP_REWARD_PRECISION = BigInt("1000000000000");
+// Emission per second per pool — must match OSOLA_EMISSION_PER_SEC = 100_000
+const OSOLA_EMISSION_PER_SEC = BigInt("100000");
+
 type View = "list" | "manage" | "create";
-type ManageTab = "add" | "remove";
+type ManageTab = "add" | "remove" | "claim";
 
 interface PoolInfo {
   address:  string;
@@ -35,6 +40,9 @@ interface PoolInfo {
   feeRate:  number;
   totalLp:  number;
   tvlUsdc:  number | null;
+  // Continuous reward fields from on-chain AmmPool
+  osolaRewardPerLp: bigint;
+  lastRewardTs:     number;
 }
 
 // ── Token avatar helpers ───────────────────────────────────────────────────
@@ -73,10 +81,45 @@ function PairBadge({ symA, symB }: { symA: string; symB: string }) {
   );
 }
 
-// ── Numeric input guard ────────────────────────────────────────────────────
-
 function numInput(v: string, set: (s: string) => void) {
   if (v === "" || /^\d*\.?\d*$/.test(v)) set(v);
+}
+
+// ── Pending oSOLA calculation (mirrors program logic) ──────────────────────
+
+function computePendingOsola(
+  pool: PoolInfo,
+  userRewardDebt: bigint,
+  userLpRaw: bigint,
+  nowSec: number,
+): number {
+  if (userLpRaw === 0n || pool.totalLp <= 0) return 0;
+
+  // Advance accumulator locally
+  let acc = pool.osolaRewardPerLp;
+  if (pool.lastRewardTs > 0) {
+    const elapsed = BigInt(Math.max(0, nowSec - pool.lastRewardTs));
+    if (elapsed > 0n && BigInt(Math.floor(pool.totalLp * 1e6)) > 0n) {
+      const totalLpRaw = BigInt(Math.floor(pool.totalLp * 1e6));
+      const newRewards = OSOLA_EMISSION_PER_SEC * elapsed;
+      const delta = (newRewards * LP_REWARD_PRECISION) / totalLpRaw;
+      acc = acc + delta;
+    }
+  }
+
+  if (acc <= userRewardDebt) return 0;
+  const delta = acc - userRewardDebt;
+  const pendingRaw = (delta * userLpRaw) / LP_REWARD_PRECISION;
+  return Number(pendingRaw) / 1e6;
+}
+
+// ── LP user info PDA ───────────────────────────────────────────────────────
+
+function lpUserInfoPda(pool: PublicKey, user: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("lp_user"), pool.toBuffer(), user.toBuffer()],
+    PROGRAM_ID,
+  )[0];
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
@@ -93,7 +136,11 @@ export function Pools() {
   const [selected,  setSelected]  = useState<PoolInfo | null>(null);
   const [loading,   setLoading]   = useState(false);
   const [status,    setStatus]    = useState("");
-  const [userLpBals, setUserLpBals] = useState<Record<string, number>>({});
+
+  const [userLpBals,    setUserLpBals]    = useState<Record<string, number>>({});
+  const [userLpRaws,    setUserLpRaws]    = useState<Record<string, bigint>>({});
+  const [userRewardDbt, setUserRewardDbt] = useState<Record<string, bigint>>({});
+  const [pendingOsola,  setPendingOsola]  = useState<Record<string, number>>({});
 
   // Add liquidity
   const [addA, setAddA] = useState("");
@@ -136,25 +183,66 @@ export function Pools() {
           feeRate:  p.account.feeRate as number,
           totalLp:  toUiDecimals(p.account.totalLp as BN, 6),
           tvlUsdc,
-        };
+          osolaRewardPerLp: BigInt((p.account.osolaRewardPerLp ?? new BN(0)).toString()),
+          lastRewardTs:     Number((p.account.lastRewardTs ?? new BN(0)).toString()),
+        } as PoolInfo;
       }));
     } catch { }
   }, [connection, wallet, usdcMint]);
 
   useEffect(() => { fetchPools(); }, [fetchPools]);
 
+  // Fetch user LP balances and reward debts
   useEffect(() => {
     if (!wallet || pools.length === 0) return;
     const bals: Record<string, number> = {};
+    const raws: Record<string, bigint> = {};
+    const debts: Record<string, bigint> = {};
+
+    const provider = new AnchorProvider(connection, wallet, {});
+    const program  = getProgram(provider);
+
     Promise.all(pools.map(async (p) => {
-      try {
-        const lpMint = lpMintPda(new PublicKey(p.address));
-        const lpAta  = userAta(lpMint, wallet.publicKey);
-        const res    = await connection.getTokenAccountBalance(lpAta);
-        bals[p.address] = res.value.uiAmount ?? 0;
-      } catch { bals[p.address] = 0; }
-    })).then(() => setUserLpBals({ ...bals }));
+      const poolPk   = new PublicKey(p.address);
+      const lpMint   = lpMintPda(poolPk);
+      const lpAta    = userAta(lpMint, wallet.publicKey);
+      const userInfo = lpUserInfoPda(poolPk, wallet.publicKey);
+
+      await Promise.allSettled([
+        connection.getTokenAccountBalance(lpAta).then(res => {
+          bals[p.address] = res.value.uiAmount ?? 0;
+          raws[p.address] = BigInt(res.value.amount);
+        }),
+        (program.account as any).lpUserInfo.fetch(userInfo).then((info: any) => {
+          debts[p.address] = BigInt(info.rewardDebt.toString());
+        }),
+      ]);
+    })).then(() => {
+      setUserLpBals({ ...bals });
+      setUserLpRaws({ ...raws });
+      setUserRewardDbt({ ...debts });
+    });
   }, [pools, wallet, connection]);
+
+  // Compute pending oSOLA every 5 seconds (live ticker)
+  useEffect(() => {
+    const compute = () => {
+      if (pools.length === 0) return;
+      const now = Math.floor(Date.now() / 1000);
+      const pending: Record<string, number> = {};
+      for (const p of pools) {
+        const userLpRaw = userLpRaws[p.address] ?? 0n;
+        const debt      = userRewardDbt[p.address] ?? 0n;
+        pending[p.address] = computePendingOsola(p, debt, userLpRaw, now);
+      }
+      setPendingOsola(pending);
+    };
+    compute();
+    const id = setInterval(compute, 5000);
+    return () => clearInterval(id);
+  }, [pools, userLpRaws, userRewardDbt]);
+
+  // ── Balance fetch for manage view ─────────────────────────────────────────
 
   useEffect(() => {
     if (!wallet || !selected) return;
@@ -216,8 +304,6 @@ export function Pools() {
     if (!lpBal) return;
     onChangeLp(((lpBal * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
   }
-
-  // ── Provider helper ───────────────────────────────────────────────────────
 
   function prov() { return new AnchorProvider(connection, wallet!, {}); }
 
@@ -290,6 +376,9 @@ export function Pools() {
       if (!deadInfo)
         preIxs.push(createAssociatedTokenAccountInstruction(wallet.publicKey, deadLpAta, LP_DEAD, lpMint));
 
+      const userInfoPda = lpUserInfoPda(poolAddr, wallet.publicKey);
+      const userOSola   = userAta(oSolaM, wallet.publicKey);
+
       const addIx = await program.methods
         .addLiquidity(fromUiDecimals(+addA, decA), fromUiDecimals(+addB, decB), new BN(0))
         .accounts({
@@ -303,6 +392,11 @@ export function Pools() {
           userLp,
           lpDeadAta:              deadLpAta,
           lpDead:                 LP_DEAD,
+          lpUserInfo:             userInfoPda,
+          protocolState:          statePda,
+          oSolaMint:              oSolaM,
+          userOSola,
+          rent:                   SYSVAR_RENT_PUBKEY,
           tokenProgram:           TOKEN_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram:          SystemProgram.programId,
@@ -335,25 +429,68 @@ export function Pools() {
       if (!isWsolA) { const ix = await ensureAtaIx(connection, wallet.publicKey, mintAPk, wallet.publicKey); if (ix) preIxs.push(ix); }
       if (!isWsolB) { const ix = await ensureAtaIx(connection, wallet.publicKey, mintBPk, wallet.publicKey); if (ix) preIxs.push(ix); }
 
+      const userInfoPda = lpUserInfoPda(poolAddr, wallet.publicKey);
+      const userOSola   = userAta(oSolaM, wallet.publicKey);
+
       const removeIx = await program.methods
         .removeLiquidity(fromUiDecimals(+lpAmt, 6), new BN(1), new BN(1))
         .accounts({
-          user:          wallet.publicKey,
-          pool:          poolAddr,
+          user:                   wallet.publicKey,
+          pool:                   poolAddr,
           lpMint,
-          tokenAVault:   vaultAPda(poolAddr),
-          tokenBVault:   vaultBPda(poolAddr),
-          userLp:        getAssociatedTokenAddressSync(lpMint, wallet.publicKey),
-          userTokenA:    userAta(mintAPk, wallet.publicKey),
-          userTokenB:    userAta(mintBPk, wallet.publicKey),
-          tokenProgram:  TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
+          tokenAVault:            vaultAPda(poolAddr),
+          tokenBVault:            vaultBPda(poolAddr),
+          userLp:                 getAssociatedTokenAddressSync(lpMint, wallet.publicKey),
+          userTokenA:             userAta(mintAPk, wallet.publicKey),
+          userTokenB:             userAta(mintBPk, wallet.publicKey),
+          lpUserInfo:             userInfoPda,
+          protocolState:          statePda,
+          oSolaMint:              oSolaM,
+          userOSola,
+          rent:                   SYSVAR_RENT_PUBKEY,
+          tokenProgram:           TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram:          SystemProgram.programId,
         } as any)
         .instruction();
 
       const sig = await sendTx(connection, wallet, [...preIxs, removeIx, ...postIxs]);
       setStatus(`✅ Liquidité retirée — ${sig.slice(0, 16)}…`);
       setLpAmt(""); setRetA(null); setRetB(null);
+      fetchPools();
+    } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
+    finally { setLoading(false); }
+  }
+
+  async function claimRewards() {
+    if (!wallet || !selected) return;
+    setLoading(true); setStatus("");
+    try {
+      const program     = getProgram(prov());
+      const poolAddr    = new PublicKey(selected.address);
+      const lpMint      = lpMintPda(poolAddr);
+      const userInfoPda = lpUserInfoPda(poolAddr, wallet.publicKey);
+      const userOSola   = userAta(oSolaM, wallet.publicKey);
+      const userLp      = userAta(lpMint, wallet.publicKey);
+
+      const tx = await program.methods
+        .claimLpRewards()
+        .accounts({
+          user:                   wallet.publicKey,
+          pool:                   poolAddr,
+          lpMint,
+          userLp,
+          lpUserInfo:             userInfoPda,
+          protocolState:          statePda,
+          oSolaMint:              oSolaM,
+          userOSola,
+          tokenProgram:           TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram:          SystemProgram.programId,
+          rent:                   SYSVAR_RENT_PUBKEY,
+        } as any)
+        .rpc();
+      setStatus(`✅ oSOLA reçus — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
@@ -375,8 +512,9 @@ export function Pools() {
   // ── Manage view ───────────────────────────────────────────────────────────
 
   if (view === "manage" && selected) {
-    const userLp = userLpBals[selected.address] ?? 0;
-    const share  = selected.totalLp > 0 ? (userLp / selected.totalLp) * 100 : 0;
+    const userLp      = userLpBals[selected.address] ?? 0;
+    const share       = selected.totalLp > 0 ? (userLp / selected.totalLp) * 100 : 0;
+    const pending     = pendingOsola[selected.address] ?? 0;
 
     return (
       <div className="space-y-4">
@@ -432,14 +570,14 @@ export function Pools() {
 
         {/* Tabs */}
         <div className="flex rounded-xl border border-brand-border overflow-hidden">
-          {(["add", "remove"] as ManageTab[]).map(t => (
+          {(["add", "remove", "claim"] as ManageTab[]).map(t => (
             <button key={t} onClick={() => { setManageTab(t); setStatus(""); }}
               className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${
                 manageTab === t
                   ? "bg-brand-green text-black"
                   : "text-gray-400 hover:text-white"
               }`}>
-              {t === "add" ? "Deposit" : "Withdraw"}
+              {t === "add" ? "Deposit" : t === "remove" ? "Withdraw" : "Claim"}
             </button>
           ))}
         </div>
@@ -447,7 +585,6 @@ export function Pools() {
         {/* Add tab */}
         {manageTab === "add" && (
           <div className="card space-y-3">
-            {/* Token A */}
             <div className="rounded-xl bg-brand-dark border border-brand-border p-4">
               <div className="flex justify-between mb-2">
                 <span className="text-xs font-semibold text-gray-400">{symA}</span>
@@ -480,7 +617,6 @@ export function Pools() {
 
             <div className="flex justify-center text-gray-600 text-lg select-none">+</div>
 
-            {/* Token B */}
             <div className={`rounded-xl border p-4 ${
               poolHasLiquidity ? "bg-brand-dark/50 border-brand-border/40" : "bg-brand-dark border-brand-border"
             }`}>
@@ -592,6 +728,50 @@ export function Pools() {
             {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
           </div>
         )}
+
+        {/* Claim tab */}
+        {manageTab === "claim" && (
+          <div className="card space-y-5">
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1">oSOLA Rewards</p>
+              <p className="text-xs text-gray-600">
+                Rewards accrue continuously from the moment you deposit liquidity.
+                No epoch required — claim any time.
+              </p>
+            </div>
+
+            {/* Live pending display */}
+            <div className="rounded-xl bg-brand-dark border border-brand-border p-5 text-center">
+              <p className="text-xs text-gray-500 mb-2">Claimable now</p>
+              <p className={`text-4xl font-black ${pending > 0 ? "text-brand-green" : "text-gray-600"}`}>
+                {pending.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
+              </p>
+              <p className="text-sm text-gray-500 mt-1">oSOLA</p>
+              {userLp > 0 && (
+                <p className="text-xs text-gray-600 mt-3">
+                  Emission: {(100_000 / 1e6).toFixed(1)} oSOLA/s shared across {selected.totalLp.toLocaleString(undefined, { maximumFractionDigits: 2 })} LP tokens
+                </p>
+              )}
+            </div>
+
+            {userLp === 0 && (
+              <p className="text-xs text-center text-gray-500">
+                Deposit liquidity first to start earning oSOLA rewards.
+              </p>
+            )}
+
+            <button
+              className="btn-primary w-full py-3 text-base font-bold"
+              onClick={claimRewards}
+              disabled={loading || !wallet || pending <= 0}
+            >
+              {loading ? "Claiming…" : pending > 0
+                ? `Claim ${pending.toLocaleString(undefined, { maximumFractionDigits: 4 })} oSOLA`
+                : "Nothing to claim yet"}
+            </button>
+            {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
+          </div>
+        )}
       </div>
     );
   }
@@ -673,7 +853,7 @@ export function Pools() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-black text-white">Pools</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Apportez de la liquidité et gagnez des fees</p>
+          <p className="text-xs text-gray-500 mt-0.5">Apportez de la liquidité et gagnez des fees + oSOLA</p>
         </div>
         <button className="btn-secondary text-sm" onClick={() => { setView("create"); setStatus(""); }}>
           + Créer un pool
@@ -686,12 +866,13 @@ export function Pools() {
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-3">Mes positions</p>
           <div className="rounded-2xl border border-brand-green/20 bg-brand-green/[0.03] divide-y divide-brand-green/10 overflow-hidden">
             {myPools.map(p => {
-              const sA      = symbolByMint(p.mintA, usdcMint);
-              const sB      = symbolByMint(p.mintB, usdcMint);
-              const userLp  = userLpBals[p.address] ?? 0;
-              const share   = p.totalLp > 0 ? (userLp / p.totalLp) * 100 : 0;
-              const estA    = p.totalLp > 0 ? (userLp * p.reserveA / p.totalLp) : 0;
-              const estB    = p.totalLp > 0 ? (userLp * p.reserveB / p.totalLp) : 0;
+              const sA     = symbolByMint(p.mintA, usdcMint);
+              const sB     = symbolByMint(p.mintB, usdcMint);
+              const userLp = userLpBals[p.address] ?? 0;
+              const share  = p.totalLp > 0 ? (userLp / p.totalLp) * 100 : 0;
+              const estA   = p.totalLp > 0 ? (userLp * p.reserveA / p.totalLp) : 0;
+              const estB   = p.totalLp > 0 ? (userLp * p.reserveB / p.totalLp) : 0;
+              const earned = pendingOsola[p.address] ?? 0;
               return (
                 <div key={p.address} className="flex items-center gap-4 px-4 py-3.5 hover:bg-brand-green/[0.05] transition-colors">
                   <PairBadge symA={sA} symB={sB} />
@@ -709,19 +890,22 @@ export function Pools() {
                       {estB.toLocaleString(undefined, { maximumFractionDigits: 4 })} {sB}
                     </p>
                   </div>
-                  {p.tvlUsdc !== null && (
-                    <div className="text-right hidden md:block w-20">
-                      <p className="text-xs text-gray-500 mb-0.5">TVL</p>
-                      <p className="text-sm font-bold text-brand-green">
-                        ${p.tvlUsdc.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  {/* Earned oSOLA — live */}
+                  <div className="text-right hidden md:block w-32">
+                    <p className="text-xs text-gray-500 mb-0.5">Earned</p>
+                    {earned > 0 ? (
+                      <p className="text-sm font-bold text-brand-green font-mono">
+                        {earned.toLocaleString(undefined, { maximumFractionDigits: 4 })} oSOLA
                       </p>
-                    </div>
-                  )}
+                    ) : (
+                      <p className="text-xs text-gray-600">Accruing…</p>
+                    )}
+                  </div>
                   <div className="flex gap-2 shrink-0">
                     <button className="btn-primary text-xs px-3 py-1.5"
-                      onClick={() => openManage(p, "add")}>+ Add</button>
+                      onClick={() => openManage(p, "claim")}>Claim</button>
                     <button className="btn-secondary text-xs px-3 py-1.5"
-                      onClick={() => openManage(p, "remove")}>− Remove</button>
+                      onClick={() => openManage(p, "add")}>Manage</button>
                   </div>
                 </div>
               );
@@ -752,10 +936,11 @@ export function Pools() {
         ) : (
           <div className="rounded-2xl border border-brand-border overflow-hidden">
             {/* Table header */}
-            <div className="hidden sm:grid grid-cols-[1fr_80px_80px_auto] gap-4 px-5 py-2.5 bg-brand-dark/80 border-b border-brand-border text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            <div className="hidden sm:grid grid-cols-[1fr_80px_90px_80px_auto] gap-4 px-5 py-2.5 bg-brand-dark/80 border-b border-brand-border text-xs font-semibold text-gray-500 uppercase tracking-wide">
               <span>Pool</span>
               <span className="text-center">Type</span>
               <span className="text-right">TVL</span>
+              <span className="text-right">Fee APR</span>
               <span />
             </div>
 
@@ -766,9 +951,8 @@ export function Pools() {
                 const sB = symbolByMint(p.mintB, usdcMint);
                 return (
                   <div key={p.address}
-                    className="flex sm:grid sm:grid-cols-[1fr_80px_80px_auto] gap-4 items-center px-5 py-4 hover:bg-brand-dark/50 transition-colors">
+                    className="flex sm:grid sm:grid-cols-[1fr_80px_90px_80px_auto] gap-4 items-center px-5 py-4 hover:bg-brand-dark/50 transition-colors">
 
-                    {/* Pair */}
                     <div className="flex items-center gap-3 min-w-0 flex-1">
                       <PairBadge symA={sA} symB={sB} />
                       <div className="min-w-0">
@@ -777,14 +961,12 @@ export function Pools() {
                       </div>
                     </div>
 
-                    {/* Type */}
                     <div className="hidden sm:flex justify-center">
                       <span className="text-[10px] border border-brand-border/60 text-gray-500 rounded-full px-2.5 py-0.5 tracking-wide uppercase">
                         Basic
                       </span>
                     </div>
 
-                    {/* TVL */}
                     <div className="hidden sm:block text-right">
                       {p.tvlUsdc !== null ? (
                         <p className="font-bold text-brand-green">
@@ -795,7 +977,13 @@ export function Pools() {
                       )}
                     </div>
 
-                    {/* Action */}
+                    <div className="hidden sm:block text-right">
+                      <p className="font-bold text-brand-green text-sm">
+                        {(p.feeRate / 100).toFixed(2)}%
+                      </p>
+                      <p className="text-[10px] text-gray-600">fee tier</p>
+                    </div>
+
                     <div className="shrink-0">
                       <button className="btn-primary text-xs px-4 py-2"
                         onClick={() => openManage(p, "add")}>

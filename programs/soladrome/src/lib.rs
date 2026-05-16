@@ -13,13 +13,19 @@ mod state;
 mod amm_math;
 mod amm_state;
 mod amm;
+mod pol;
+mod ve;
 
 use errors::SoladromeError;
+use amm_state::AmmPool;
 use state::{
-    BribeVault, GaugeState, ProtocolState, UserBribeClaim, UserEpochVotes,
-    UserPosition, UserVoteReceipt, PRECISION, current_epoch,
+    BribeVault, GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum,
+    LpUserCheckpoint, LpUserInfo, ProtocolState, UserBribeClaim, UserEpochVotes,
+    UserPosition, UserVoteReceipt, PRECISION, EPOCH_DURATION, current_epoch,
 };
 pub use amm::*;
+pub use pol::*;
+pub use ve::*;
 
 /// Canonical dead address for MINIMUM_LIQUIDITY lock (System Program address).
 pub const LP_DEAD_PUBKEY: Pubkey = anchor_lang::system_program::ID;
@@ -35,13 +41,23 @@ pub const SOLA_VAULT_SEED: &[u8] = b"sola_vault";
 pub const INIT_VIRTUAL_USDC: u64 = 100_000_000; // 100 USDC (6 dec)
 pub const INIT_VIRTUAL_SOLA: u64 = 100_000_000; // 100 SOLA (6 dec)  – floor = 1:1
 
+/// Total oSOLA minted per epoch, split proportionally across voted pools (legacy gauge system).
+pub const LP_EMISSION_PER_EPOCH: u64 = 10_000 * 1_000_000; // 10 000 oSOLA (6 dec)
+
+/// Continuous Masterchef-style oSOLA emission per pool per second (6 decimals).
+/// 100_000 = 0.1 oSOLA/second per pool — high rate for devnet visibility.
+pub const OSOLA_EMISSION_PER_SEC: u64 = 100_000;
+
+/// Precision factor for the oSOLA-per-LP accumulator.
+pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
+
 // Founder allocation — 12% of reference 100 M-token supply, 7% auto-staked.
 pub const FOUNDER_TOTAL: u64 = 12_000_000_000_000; // 12 000 000 SOLA (6 dec)
 pub const FOUNDER_STAKE: u64 =  7_000_000_000_000; //  7 000 000 SOLA → hiSOLA
 //  5 000 000 SOLA liquid
 
 // ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
-pub const FOUNDER_WALLET: &str = "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3";
+pub const FOUNDER_WALLET: &str = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
 #[program]
 pub mod soladrome {
@@ -568,20 +584,27 @@ pub mod soladrome {
     }
 
     /// hiSOLA holder directs vote-weight at a pool gauge for the current epoch.
-    /// Total allocated across all pools ≤ caller's hiSOLA balance.
+    /// Total allocated across all pools ≤ raw hiSOLA + ve-weighted locked hiSOLA.
     /// One UserVoteReceipt per (user, pool, epoch) — double-vote for same pool is blocked.
     pub fn vote_gauge(ctx: Context<VoteGauge>, epoch: u64, votes: u64) -> Result<()> {
         require!(votes > 0, SoladromeError::InvalidAmount);
         let clock = Clock::get()?;
         require!(epoch == current_epoch(clock.unix_timestamp), SoladromeError::WrongEpoch);
 
-        // Enforce: cumulative votes this epoch ≤ hiSOLA balance
-        let hi_sola_balance  = ctx.accounts.user_hi_sola.amount;
+        // Total power = unlocked hiSOLA (1×) + ve-weighted locked hiSOLA (up to 4×).
+        let hi_sola_balance = ctx.accounts.user_hi_sola.amount;
+        let ve_power = ve::try_load_ve_power(
+            &ctx.accounts.lock_position,
+            &ctx.accounts.user.key(),
+            clock.unix_timestamp,
+        );
+        let total_power = hi_sola_balance.saturating_add(ve_power);
+
         let already_allocated = ctx.accounts.user_epoch_votes.allocated;
         let new_total = already_allocated
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
-        require!(new_total <= hi_sola_balance, SoladromeError::VoteOverflow);
+        require!(new_total <= total_power, SoladromeError::VoteOverflow);
 
         // Init UserEpochVotes if first vote this epoch
         if ctx.accounts.user_epoch_votes.epoch == 0 {
@@ -608,6 +631,150 @@ pub mod soladrome {
 
         // Persist allocation counter
         ctx.accounts.user_epoch_votes.allocated = new_total;
+
+        // Update global vote total (denominator for LP emissions)
+        let gev = &mut ctx.accounts.global_epoch_votes;
+        if gev.epoch == 0 {
+            gev.epoch = epoch;
+            gev.bump  = ctx.bumps.global_epoch_votes;
+        }
+        gev.total_votes = gev.total_votes
+            .checked_add(votes)
+            .ok_or(SoladromeError::Overflow)?;
+
+        Ok(())
+    }
+
+    /// Record a time-weighted LP balance snapshot for the caller in a given pool+epoch.
+    /// Must be called before the epoch ends; updates both the user and pool accumulators.
+    pub fn checkpoint_lp(ctx: Context<CheckpointLp>, epoch: u64) -> Result<()> {
+        let clock      = Clock::get()?;
+        let now        = clock.unix_timestamp;
+        let epoch_start = (epoch * EPOCH_DURATION) as i64;
+        let epoch_end   = ((epoch + 1) * EPOCH_DURATION) as i64;
+
+        require!(now >= epoch_start, SoladromeError::WrongEpoch);
+        require!(now <  epoch_end,   SoladromeError::EpochNotEnded);
+
+        let pool_key  = ctx.accounts.pool.key();
+        let lp_supply = ctx.accounts.lp_mint.supply;
+        let user_lp   = ctx.accounts.user_lp.amount;
+
+        // ── Pool accumulator ────────────────────────────────────────────
+        let pa = &mut ctx.accounts.pool_epoch_accum;
+        if pa.epoch == 0 {
+            pa.epoch          = epoch;
+            pa.pool           = pool_key;
+            pa.last_update_ts = epoch_start;
+            pa.last_lp_supply = lp_supply;
+            pa.bump           = ctx.bumps.pool_epoch_accum;
+        }
+        require!(!pa.finalized, SoladromeError::EpochNotFinalized);
+
+        let pa_elapsed = (now - pa.last_update_ts).max(0) as u128;
+        pa.total_weighted_supply = pa.total_weighted_supply
+            .checked_add((pa.last_lp_supply as u128).checked_mul(pa_elapsed).ok_or(SoladromeError::Overflow)?)
+            .ok_or(SoladromeError::Overflow)?;
+        pa.last_update_ts = now;
+        pa.last_lp_supply = lp_supply;
+
+        // ── User checkpoint ─────────────────────────────────────────────
+        let ckpt = &mut ctx.accounts.lp_user_checkpoint;
+        if ckpt.pool == Pubkey::default() {
+            ckpt.user           = ctx.accounts.user.key();
+            ckpt.pool           = pool_key;
+            ckpt.last_epoch     = epoch;
+            ckpt.last_update_ts = epoch_start;
+            ckpt.bump           = ctx.bumps.lp_user_checkpoint;
+        }
+        // Reset for a new epoch
+        if ckpt.last_epoch < epoch {
+            ckpt.weighted_balance = 0;
+            ckpt.last_update_ts   = epoch_start;
+            ckpt.last_epoch       = epoch;
+        }
+
+        let ckpt_elapsed = (now - ckpt.last_update_ts).max(0) as u128;
+        ckpt.weighted_balance = ckpt.weighted_balance
+            .checked_add((user_lp as u128).checked_mul(ckpt_elapsed).ok_or(SoladromeError::Overflow)?)
+            .ok_or(SoladromeError::Overflow)?;
+        ckpt.last_update_ts = now;
+
+        Ok(())
+    }
+
+    /// Finalize the LP emission allocation for one pool after its epoch has ended.
+    /// Permissionless — anyone can call. Records how much oSOLA this pool's LPs may claim.
+    pub fn emit_pool_rewards(ctx: Context<EmitPoolRewards>, epoch: u64) -> Result<()> {
+        let clock     = Clock::get()?;
+        let epoch_end = ((epoch + 1) * EPOCH_DURATION) as i64;
+        require!(clock.unix_timestamp >= epoch_end, SoladromeError::EpochNotEnded);
+
+        let pool_accum = &mut ctx.accounts.pool_epoch_accum;
+        require!(!pool_accum.finalized, SoladromeError::AlreadyAllocated);
+
+        let lp_supply = ctx.accounts.lp_mint.supply;
+
+        // Initialise if nobody checkpointed this epoch
+        if pool_accum.epoch == 0 {
+            pool_accum.epoch          = epoch;
+            pool_accum.pool           = ctx.accounts.pool.key();
+            pool_accum.last_update_ts = (epoch * EPOCH_DURATION) as i64;
+            pool_accum.last_lp_supply = lp_supply;
+            pool_accum.bump           = ctx.bumps.pool_epoch_accum;
+        }
+
+        // Add remaining time from last checkpoint to epoch end
+        let remaining = (epoch_end - pool_accum.last_update_ts).max(0) as u128;
+        pool_accum.total_weighted_supply = pool_accum.total_weighted_supply
+            .checked_add((pool_accum.last_lp_supply as u128).checked_mul(remaining).ok_or(SoladromeError::Overflow)?)
+            .ok_or(SoladromeError::Overflow)?;
+        pool_accum.last_update_ts = epoch_end;
+        pool_accum.last_lp_supply = lp_supply;
+
+        let total_votes = ctx.accounts.global_epoch_votes.total_votes as u128;
+        let pool_votes  = ctx.accounts.gauge_state.total_votes as u128;
+        require!(total_votes > 0, SoladromeError::NoVotes);
+        require!(pool_votes  > 0, SoladromeError::NoVotes);
+
+        pool_accum.osola_allocated = (LP_EMISSION_PER_EPOCH as u128)
+            .checked_mul(pool_votes).ok_or(SoladromeError::Overflow)?
+            .checked_div(total_votes).ok_or(SoladromeError::Overflow)? as u64;
+        pool_accum.finalized = true;
+
+        Ok(())
+    }
+
+    /// Mint a user's pro-rata oSOLA share from LP emissions for a given pool+epoch.
+    /// Requires: epoch finalized, user checkpointed during epoch, not yet claimed.
+    pub fn claim_lp_emissions(ctx: Context<ClaimLpEmissions>, _epoch: u64) -> Result<()> {
+        let pa   = &ctx.accounts.pool_epoch_accum;
+        let ckpt = &ctx.accounts.lp_user_checkpoint;
+
+        require!(pa.total_weighted_supply > 0, SoladromeError::NothingToClaim);
+        require!(ckpt.weighted_balance    > 0, SoladromeError::NothingToClaim);
+
+        let user_osola = (pa.osola_allocated as u128)
+            .checked_mul(ckpt.weighted_balance).ok_or(SoladromeError::Overflow)?
+            .checked_div(pa.total_weighted_supply).ok_or(SoladromeError::Overflow)? as u64;
+        require!(user_osola > 0, SoladromeError::NothingToClaim);
+
+        let bump  = ctx.accounts.protocol_state.bump;
+        let seeds = &[STATE_SEED, &[bump][..]];
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
+                    to:        ctx.accounts.user_o_sola.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            user_osola,
+        )?;
+
+        ctx.accounts.lp_epoch_claim.bump = ctx.bumps.lp_epoch_claim;
         Ok(())
     }
 
@@ -679,6 +846,11 @@ pub mod soladrome {
         amm::remove_liquidity(ctx, lp_amount, min_a, min_b)
     }
 
+    /// Claim accumulated oSOLA LP rewards without changing liquidity.
+    pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
+        amm::claim_lp_rewards(ctx)
+    }
+
     pub fn amm_swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> Result<()> {
         amm::swap(ctx, amount_in, min_out, a_to_b)
     }
@@ -702,6 +874,51 @@ pub mod soladrome {
             amount,
         )?;
         Ok(())
+    }
+
+    // ── Protocol-Owned Liquidity ──────────────────────────────────────────────
+
+    /// One-time setup: create PolState and its token vaults. Authority-only.
+    pub fn initialize_pol(
+        ctx: Context<InitializePol>,
+        pol_split_bps: u16,
+        target_pool: Pubkey,
+    ) -> Result<()> {
+        pol::initialize_pol(ctx, pol_split_bps, target_pool)
+    }
+
+    /// Redirect a portion of market_vault fees to pol_usdc_vault. Authority-only.
+    pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
+        pol::collect_to_pol(ctx, amount)
+    }
+
+    /// Buy SOLA via bonding curve and/or add LP to the target pool. Authority-only.
+    pub fn deploy_pol(
+        ctx: Context<DeployPol>,
+        usdc_for_sola: u64,
+        min_sola_out:  u64,
+        sola_for_lp:   u64,
+        usdc_for_lp:   u64,
+        min_lp:        u64,
+    ) -> Result<()> {
+        pol::deploy_pol(ctx, usdc_for_sola, min_sola_out, sola_for_lp, usdc_for_lp, min_lp)
+    }
+
+    // ── Ve-layer ──────────────────────────────────────────────────────────────
+
+    /// Lock hiSOLA for ve-weighted governance power.
+    /// Subsequent calls extend the lock or add tokens (never shorten).
+    pub fn lock_hi_sola(
+        ctx: Context<LockHiSola>,
+        amount: u64,
+        lock_duration_secs: u64,
+    ) -> Result<()> {
+        ve::lock_hi_sola(ctx, amount, lock_duration_secs)
+    }
+
+    /// Return locked hiSOLA after expiry. Restores tokens to the fee pool.
+    pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
+        ve::unlock_hi_sola(ctx)
     }
 }
 
@@ -1227,9 +1444,14 @@ pub struct VoteGauge<'info> {
     #[account(address = protocol_state.hi_sola_mint)]
     pub hi_sola_mint: Box<Account<'info, Mint>>,
 
-    /// Caller's hiSOLA balance determines max vote power.
-    #[account(token::mint = hi_sola_mint, token::authority = user)]
+    /// Caller's hiSOLA balance determines base vote power.
+    #[account(constraint = user_hi_sola.mint == hi_sola_mint.key() && user_hi_sola.owner == user.key())]
     pub user_hi_sola: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: Optional VeLockPosition [b"velock", user].
+    /// Pass any account (e.g. SystemProgram) when not using a ve lock.
+    /// If valid and unexpired, adds ve-weighted power to the vote cap.
+    pub lock_position: UncheckedAccount<'info>,
 
     /// Aggregate votes for this pool this epoch.
     #[account(
@@ -1261,7 +1483,16 @@ pub struct VoteGauge<'info> {
     )]
     pub user_epoch_votes: Box<Account<'info, UserEpochVotes>>,
 
-    pub token_program: Program<'info, Token>,
+    /// Global vote total for the epoch — denominator for LP emission splits.
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + GlobalEpochVotes::LEN,
+        seeds = [b"epoch_votes", epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub global_epoch_votes: Box<Account<'info, GlobalEpochVotes>>,
+
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
@@ -1322,6 +1553,144 @@ pub struct ClaimBribe<'info> {
         bump,
     )]
     pub user_bribe_claim: Account<'info, UserBribeClaim>,
+
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+// ── LP Emission contexts ──────────────────────────────────────────────────────
+
+#[derive(Accounts)]
+#[instruction(epoch: u64)]
+pub struct CheckpointLp<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        seeds = [b"amm_pool", pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Box<Account<'info, AmmPool>>,
+
+    #[account(constraint = lp_mint.key() == pool.lp_mint)]
+    pub lp_mint: Box<Account<'info, Mint>>,
+
+    #[account(token::mint = lp_mint, token::authority = user)]
+    pub user_lp: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + LpUserCheckpoint::LEN,
+        seeds = [b"lp_ckpt", pool.key().as_ref(), user.key().as_ref()],
+        bump,
+    )]
+    pub lp_user_checkpoint: Box<Account<'info, LpUserCheckpoint>>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + LpPoolEpochAccum::LEN,
+        seeds = [b"lp_pool_epoch", pool.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub pool_epoch_accum: Box<Account<'info, LpPoolEpochAccum>>,
+
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch: u64)]
+pub struct EmitPoolRewards<'info> {
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    #[account(
+        seeds = [b"amm_pool", pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Box<Account<'info, AmmPool>>,
+
+    #[account(constraint = lp_mint.key() == pool.lp_mint)]
+    pub lp_mint: Box<Account<'info, Mint>>,
+
+    /// Gauge for this pool — requires voters used the AMM pool address as pool_id.
+    #[account(
+        seeds = [b"gauge", pool.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump = gauge_state.bump,
+    )]
+    pub gauge_state: Box<Account<'info, GaugeState>>,
+
+    #[account(
+        seeds = [b"epoch_votes", epoch.to_le_bytes().as_ref()],
+        bump = global_epoch_votes.bump,
+    )]
+    pub global_epoch_votes: Box<Account<'info, GlobalEpochVotes>>,
+
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + LpPoolEpochAccum::LEN,
+        seeds = [b"lp_pool_epoch", pool.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub pool_epoch_accum: Box<Account<'info, LpPoolEpochAccum>>,
+
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch: u64)]
+pub struct ClaimLpEmissions<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        seeds = [b"amm_pool", pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Box<Account<'info, AmmPool>>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(mut, address = protocol_state.o_sola_mint)]
+    pub o_sola_mint: Box<Account<'info, Mint>>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        associated_token::mint = o_sola_mint,
+        associated_token::authority = user,
+    )]
+    pub user_o_sola: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        seeds = [b"lp_pool_epoch", pool.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump = pool_epoch_accum.bump,
+        constraint = pool_epoch_accum.finalized @ SoladromeError::EpochNotFinalized,
+    )]
+    pub pool_epoch_accum: Box<Account<'info, LpPoolEpochAccum>>,
+
+    #[account(
+        seeds = [b"lp_ckpt", pool.key().as_ref(), user.key().as_ref()],
+        bump = lp_user_checkpoint.bump,
+        constraint = lp_user_checkpoint.last_epoch == epoch @ SoladromeError::NothingToClaim,
+    )]
+    pub lp_user_checkpoint: Box<Account<'info, LpUserCheckpoint>>,
+
+    #[account(
+        init,
+        payer = user,
+        space = 8 + LpEpochClaim::LEN,
+        seeds = [b"lp_claim", user.key().as_ref(), pool.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub lp_epoch_claim: Box<Account<'info, LpEpochClaim>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
