@@ -6,17 +6,9 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { getProgram, statePda, hiSolaM, userAta, PROGRAM_ID as PROG_ID } from "@/lib/program";
-
-// ── Epoch helpers ─────────────────────────────────────────────────────────────
-const EPOCH_S = 7 * 24 * 60 * 60;
-function currentEpoch() { return Math.floor(Date.now() / 1000 / EPOCH_S); }
-function epochEnd(e: number) { return new Date((e + 1) * EPOCH_S * 1000); }
-function timeLeft(d: Date) {
-  const s = Math.max(0, Math.floor((d.getTime() - Date.now()) / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return `${h}h ${m}m`;
-}
+import { symbolByMint } from "@/lib/tokens";
+import { useSoladrome } from "@/lib/SoladromeContext";
+import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
 
 // ── PDA helpers ───────────────────────────────────────────────────────────────
 const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
@@ -26,18 +18,12 @@ function lockPositionPda(user: PublicKey) {
   )[0];
 }
 
-// ── Popular pools (labels only — devnet/localnet use any pubkey) ──────────────
 const PCT = [25, 50, 75, 100] as const;
-
-const SUGGESTED = [
-  { label: "SOL/USDC · Raydium",  addr: "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS3AFKBxQaP" },
-  { label: "SOL/USDC · Orca",     addr: "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ" },
-  { label: "SOLA/USDC · Serum",   addr: "So11111111111111111111111111111111111111112"   },
-];
 
 export function Vote() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
+  const { usdcMint } = useSoladrome();
   const epoch = currentEpoch();
   const end   = epochEnd(epoch);
 
@@ -46,6 +32,7 @@ export function Vote() {
   const [balance,  setBalance] = useState<number | null>(null);
   const [loading,  setLoading] = useState(false);
   const [status,   setStatus]  = useState("");
+  const [ammPools, setAmmPools] = useState<{ label: string; addr: string }[]>([]);
 
   const fetchBalance = useCallback(async () => {
     if (!wallet) { setBalance(null); return; }
@@ -57,6 +44,19 @@ export function Vote() {
   }, [connection, wallet]);
 
   useEffect(() => { fetchBalance(); }, [fetchBalance]);
+
+  // Fetch real AMM pools from chain
+  useEffect(() => {
+    const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
+    const program  = getProgram(provider);
+    (program.account as any).ammPool.all().then((all: any[]) => {
+      setAmmPools(all.map((p: any) => {
+        const sA = symbolByMint(p.account.tokenAMint.toString(), usdcMint);
+        const sB = symbolByMint(p.account.tokenBMint.toString(), usdcMint);
+        return { label: `${sA}/${sB}`, addr: p.publicKey.toString() };
+      }));
+    }).catch(() => {});
+  }, [connection, wallet, usdcMint]);
 
   function applyPct(pct: number) {
     if (!balance || balance <= 0) return;
@@ -157,23 +157,32 @@ export function Vote() {
           Poids de vote = hiSOLA alloué · Plafond = solde hiSOLA par époque · 1 vote par pool
         </p>
 
-        {/* Suggested pools */}
-        <p className="text-xs text-gray-500 mb-2 uppercase tracking-widest">Pools suggérées</p>
-        <div className="flex flex-wrap gap-2 mb-5">
-          {SUGGESTED.map((s) => (
-            <button
-              key={s.addr}
-              onClick={() => setPoolId(s.addr)}
-              className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-                poolId === s.addr
-                  ? "border-brand-green text-brand-green bg-brand-green/10"
-                  : "border-brand-border text-gray-400 hover:border-gray-500"
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
+        {/* AMM pools from chain */}
+        <p className="text-xs text-gray-500 mb-2 uppercase tracking-widest">
+          Pools disponibles {ammPools.length > 0 ? `(${ammPools.length})` : ""}
+        </p>
+        {ammPools.length > 0 ? (
+          <div className="flex flex-wrap gap-2 mb-5">
+            {ammPools.map((s) => (
+              <button
+                key={s.addr}
+                onClick={() => setPoolId(s.addr)}
+                className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                  poolId === s.addr
+                    ? "border-brand-green text-brand-green bg-brand-green/10"
+                    : "border-brand-border text-gray-400 hover:border-gray-500"
+                }`}
+              >
+                {s.label}
+                <span className="ml-1.5 text-gray-600 font-mono">
+                  {s.addr.slice(0, 4)}…
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-gray-600 mb-5">Chargement des pools…</p>
+        )}
 
         <label className="text-xs text-gray-400 mb-1 block">Adresse de la pool (Pubkey)</label>
         <input

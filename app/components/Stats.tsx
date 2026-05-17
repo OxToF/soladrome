@@ -11,8 +11,9 @@ import { useSoladrome } from "@/lib/SoladromeContext";
 interface ProtocolStats {
   totalSola:       number;
   totalHiSola:     number;
-  solaPrice:       number | null;  // from AMM USDC/SOLA pool
-  osolaPrice:      number | null;  // from AMM oSOLA/USDC pool
+  curvePrice:      number;         // bonding curve: virtualUsdc / virtualSola
+  solaPrice:       number | null;  // AMM USDC/SOLA pool spot price
+  osolaPrice:      number | null;  // AMM oSOLA/USDC pool spot price
   floorPrice:      number;
   accumulatedFees: number;
 }
@@ -28,8 +29,9 @@ export function Stats() {
     const program  = getProgram(provider);
 
     try {
-      // ── Protocol state (supply + fees) ────────────────────────────────────
+      // ── Protocol state (supply + fees + virtual reserves) ────────────────
       const s = await (program.account as any).protocolState.fetch(statePda);
+      const curvePrice = toUi(s.virtualUsdc as BN) / toUi(s.virtualSola as BN);
 
       // ── SOLA price: from AMM USDC/SOLA pool (reflects actual swaps) ───────
       let solaPrice: number | null = null;
@@ -80,6 +82,7 @@ export function Stats() {
       setStats({
         totalSola:       toUi(s.totalSola),
         totalHiSola:     toUi(s.totalHiSola),
+        curvePrice,
         solaPrice,
         osolaPrice,
         floorPrice:      1,
@@ -106,33 +109,70 @@ export function Stats() {
     </div>
   );
 
-  const items = [
-    { label: "SOLA Supply",   value: stats.totalSola.toLocaleString(undefined, { maximumFractionDigits: 0 }) },
-    { label: "hiSOLA Staked", value: stats.totalHiSola.toLocaleString(undefined, { maximumFractionDigits: 0 }) },
-    {
-      label: "SOLA Price",
-      value: stats.solaPrice !== null
-        ? `${stats.solaPrice.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDC`
-        : "No pool",
-    },
-    {
-      label: "oSOLA Price",
-      value: stats.osolaPrice !== null
-        ? `${stats.osolaPrice.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDC`
-        : "No pool",
-    },
-    { label: "Floor Price",   value: "1.0000 USDC" },
-    { label: "Protocol Fees", value: `${stats.accumulatedFees.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC` },
-  ];
+  const fmt4 = (v: number) =>
+    v.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+
+  // Spread: positive = AMM premium over curve (buy on curve), negative = AMM discount (buy on AMM)
+  const spread = stats.solaPrice !== null ? stats.solaPrice - stats.curvePrice : null;
+  const spreadPct = spread !== null && stats.curvePrice > 0
+    ? (spread / stats.curvePrice) * 100
+    : null;
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
-      {items.map((item) => (
-        <div key={item.label} className="card text-center">
-          <p className="text-xs text-gray-500 mb-1">{item.label}</p>
-          <p className="font-bold text-brand-green">{item.value}</p>
-        </div>
-      ))}
+    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+      <div className="card text-center">
+        <p className="text-xs text-gray-500 mb-1">SOLA Supply</p>
+        <p className="font-bold text-brand-green">
+          {stats.totalSola.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+        </p>
+      </div>
+
+      <div className="card text-center">
+        <p className="text-xs text-gray-500 mb-1">hiSOLA Staked</p>
+        <p className="font-bold text-brand-green">
+          {stats.totalHiSola.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+        </p>
+      </div>
+
+      {/* Bonding curve price */}
+      <div className="card text-center">
+        <p className="text-xs text-gray-500 mb-1">Prix courbe</p>
+        <p className="font-bold text-brand-green">{fmt4(stats.curvePrice)} USDC</p>
+        <p className="text-[10px] text-gray-600 mt-0.5">émission primaire</p>
+      </div>
+
+      {/* AMM spot price + spread indicator */}
+      <div className="card text-center">
+        <p className="text-xs text-gray-500 mb-1">Prix AMM</p>
+        <p className="font-bold text-brand-green">
+          {stats.solaPrice !== null ? `${fmt4(stats.solaPrice)} USDC` : "No pool"}
+        </p>
+        {spreadPct !== null && (
+          <p className={`text-[10px] mt-0.5 ${spreadPct > 0 ? "text-yellow-500" : "text-blue-400"}`}>
+            {spreadPct > 0 ? "▲" : "▼"} {Math.abs(spreadPct).toFixed(2)}% vs courbe
+          </p>
+        )}
+      </div>
+
+      <div className="card text-center">
+        <p className="text-xs text-gray-500 mb-1">oSOLA Price</p>
+        <p className="font-bold text-brand-green">
+          {stats.osolaPrice !== null ? `${fmt4(stats.osolaPrice)} USDC` : "No pool"}
+        </p>
+      </div>
+
+      <div className="card text-center">
+        <p className="text-xs text-gray-500 mb-1">Floor Price</p>
+        <p className="font-bold text-brand-green">1.0000 USDC</p>
+        <p className="text-[10px] text-gray-600 mt-0.5">garanti</p>
+      </div>
+
+      <div className="card text-center">
+        <p className="text-xs text-gray-500 mb-1">Protocol Fees</p>
+        <p className="font-bold text-brand-green">
+          {stats.accumulatedFees.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC
+        </p>
+      </div>
     </div>
   );
 }

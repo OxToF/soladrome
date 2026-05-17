@@ -13,12 +13,14 @@ const WalletMultiButton = dynamic(
 import { Vote }        from "@/components/Vote";
 import { Gauge }       from "@/components/Gauge";
 import { ClaimFees }   from "@/components/ClaimFees";
+import { ClaimBribe }  from "@/components/ClaimBribe";
 import { Stats }       from "@/components/Stats";
 import { Pools }       from "@/components/Pools";
 import { ActionPanel } from "@/components/ActionPanel";
 import { Portfolio }   from "@/components/Portfolio";
+import { FlashArb }    from "@/components/FlashArb";
 
-type Page = "home" | "pools" | "vote" | "bribe" | "claim";
+type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb";
 
 const NAV: { id: Page; label: string }[] = [
   { id: "home",  label: "Home"  },
@@ -26,6 +28,7 @@ const NAV: { id: Page; label: string }[] = [
   { id: "vote",  label: "Vote"  },
   { id: "bribe", label: "Bribe" },
   { id: "claim", label: "Claim" },
+  { id: "arb",   label: "⚡ Arb" },
 ];
 
 // Legacy page ids that used to be standalone tabs — redirect them to home
@@ -163,7 +166,13 @@ export default function Home() {
           {page === "pools" && <Pools />}
           {page === "vote"  && <div className="max-w-xl mx-auto"><Vote /></div>}
           {page === "bribe" && <div className="max-w-xl mx-auto"><Gauge /></div>}
-          {page === "claim" && <div className="max-w-xl mx-auto"><ClaimFees /></div>}
+          {page === "arb"   && <div className="max-w-xl mx-auto"><FlashArb /></div>}
+          {page === "claim" && (
+            <div className="max-w-xl mx-auto flex flex-col gap-6">
+              <ClaimFees />
+              <ClaimBribe />
+            </div>
+          )}
         </main>
       )}
 

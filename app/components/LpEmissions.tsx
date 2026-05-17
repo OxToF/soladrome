@@ -11,16 +11,7 @@ import {
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { symbolByMint } from "@/lib/tokens";
-
-const EPOCH_S = 7 * 24 * 60 * 60;
-function currentEpoch() { return Math.floor(Date.now() / 1000 / EPOCH_S); }
-function epochEnd(e: number) { return new Date((e + 1) * EPOCH_S * 1000); }
-function timeLeft(d: Date) {
-  const s = Math.max(0, Math.floor((d.getTime() - Date.now()) / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return `${h}h ${m}m`;
-}
+import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
 function epochBuf(e: number) {
   const b = Buffer.alloc(8);
   b.writeBigUInt64LE(BigInt(e));
