@@ -1,26 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Christophe Hertecant
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
-import { getProgram, statePda, fromUi } from "@/lib/program";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { getProgram, fromUi, toUi } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
-
-// ── Epoch helpers ─────────────────────────────────────────────────────────────
-const EPOCH_S = 7 * 24 * 60 * 60;
-function currentEpoch() { return Math.floor(Date.now() / 1000 / EPOCH_S); }
-function epochLabel(e: number) {
-  const start = new Date(e * EPOCH_S * 1000);
-  const end   = new Date((e + 1) * EPOCH_S * 1000);
-  return `Epoch ${e} · ${start.toLocaleDateString()} – ${end.toLocaleDateString()}`;
-}
+import { currentEpoch, epochLabel } from "@/lib/epoch";
 
 // ── PDA helpers ───────────────────────────────────────────────────────────────
 const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
@@ -42,31 +30,65 @@ function gaugePda(pool: PublicKey, epoch: number) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gauge"), pool.toBuffer(), epochBuf(epoch)], PROGRAM_ID)[0];
 }
-function votePda(user: PublicKey, pool: PublicKey, epoch: number) {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("vote"), user.toBuffer(), pool.toBuffer(), epochBuf(epoch)], PROGRAM_ID)[0];
-}
-function claimPda(user: PublicKey, pool: PublicKey, mint: PublicKey, epoch: number) {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("bribe_claim"), user.toBuffer(), pool.toBuffer(), mint.toBuffer(), epochBuf(epoch)], PROGRAM_ID)[0];
-}
 
-type Tab = "deposit" | "claim";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export function Gauge() {
   const { connection } = useConnection();
   const wallet         = useAnchorWallet();
   const { usdcMint }   = useSoladrome();
-  const epoch          = currentEpoch();
 
-  const [tab,        setTab]        = useState<Tab>("deposit");
   const [poolId,     setPoolId]     = useState("");
   const [rewardMint, setRewardMint] = useState("");
   const [amount,     setAmount]     = useState("");
-  const [claimEpoch, setClaimEpoch] = useState(String(epoch - 1));
   const [loading,    setLoading]    = useState(false);
   const [status,     setStatus]     = useState("");
+  const [pools,      setPools]      = useState<{ address: string; label: string }[]>([]);
+  const [copied,     setCopied]     = useState<string | null>(null);
+  const [mintBalance, setMintBalance] = useState<number | null>(null);
+
+  // ── Known protocol tokens ──────────────────────────────────────────────────
+  const knownTokens = [
+    { symbol: "oSOLA", mint: "2rAqBLBi2Fjdjqf5za7uzpbYgNiVV74XMDKQ5RdMuEJT", color: "#bbf7d0" },
+    { symbol: "SOLA",  mint: "HENFwJCzmBAo2Qybrszr28tqLtEFYkXwN6h87AD5gS9p", color: "#4ade80" },
+    { symbol: "hiSOLA",mint: "nc1errcnXjKN4aZYL7AP89op26EMn5a2VcDT82wrTwW",  color: "#86efac" },
+    ...(usdcMint ? [{ symbol: "USDC", mint: usdcMint.toBase58(), color: "#2775ca" }] : []),
+  ];
+
+  function copyToClipboard(text: string, key: string) {
+    navigator.clipboard.writeText(text);
+    setCopied(key);
+    setTimeout(() => setCopied(null), 1500);
+  }
+
+  // ── Fetch wallet balance for selected reward mint ──────────────────────────
+  useEffect(() => {
+    setMintBalance(null);
+    if (!wallet || !rewardMint) return;
+    let mint: PublicKey;
+    try { mint = new PublicKey(rewardMint); } catch { return; }
+    const ata = getAssociatedTokenAddressSync(mint, wallet.publicKey);
+    connection.getTokenAccountBalance(ata)
+      .then((r) => setMintBalance(toUi(new BN(r.value.amount))))
+      .catch(() => setMintBalance(0));
+  }, [wallet, rewardMint, connection]);
+
+  // ── Fetch existing AMM pools for pool selector ────────────────────────────
+  useState(() => {
+    const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
+    const program  = getProgram(provider);
+    (program.account as any).ammPool.all().then((all: any[]) => {
+      const list = all.map((p: any) => {
+        const mA = p.account.tokenAMint.toString().slice(0, 4) + "…";
+        const mB = p.account.tokenBMint.toString().slice(0, 4) + "…";
+        // Match against known tokens for readable label
+        const symA = knownTokens.find(t => t.mint === p.account.tokenAMint.toString())?.symbol ?? mA;
+        const symB = knownTokens.find(t => t.mint === p.account.tokenBMint.toString())?.symbol ?? mB;
+        return { address: p.publicKey.toString(), label: `${symA}/${symB}` };
+      });
+      setPools(list);
+    }).catch(() => {});
+  });
 
   function parsePool(): PublicKey | null { try { return new PublicKey(poolId); } catch { return null; } }
   function parseMint(): PublicKey | null { try { return new PublicKey(rewardMint); } catch { return null; } }
@@ -80,11 +102,12 @@ export function Gauge() {
     try {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
-      const depositorToken = getAssociatedTokenAddressSync(mint, wallet.publicKey);
-      const bribeVault     = bribeVaultPda(pool, mint, epoch);
-      const bribeTokenVault = bribeTokensPda(pool, mint, epoch);
+      const ep = currentEpoch(); // recalculate just before tx, never stale
+      const depositorToken  = getAssociatedTokenAddressSync(mint, wallet.publicKey);
+      const bribeVault      = bribeVaultPda(pool, mint, ep);
+      const bribeTokenVault = bribeTokensPda(pool, mint, ep);
       const tx = await program.methods
-        .depositBribe(new BN(epoch), fromUi(+amount))
+        .depositBribe(new BN(ep), fromUi(+amount))
         .accounts({
           depositor: wallet.publicKey, poolId: pool, rewardMint: mint,
           depositorToken, bribeVault, bribeTokenVault,
@@ -98,106 +121,126 @@ export function Gauge() {
     finally { setLoading(false); }
   }
 
-  // ── Claim bribe ──────────────────────────────────────────────────────────────
-  async function claimBribe() {
-    if (!wallet) return;
-    const pool = parsePool(); const mint = parseMint();
-    if (!pool || !mint) { setStatus("❌ Adresse pool ou mint invalide"); return; }
-    const ep = parseInt(claimEpoch, 10);
-    if (isNaN(ep) || ep >= epoch) { setStatus("❌ Époque non terminée"); return; }
-    setLoading(true); setStatus("");
-    try {
-      const provider = new AnchorProvider(connection, wallet, {});
-      const program  = getProgram(provider);
-      const bribeVault      = bribeVaultPda(pool, mint, ep);
-      const bribeTokenVault = bribeTokensPda(pool, mint, ep);
-      const userRewardAta   = getAssociatedTokenAddressSync(mint, wallet.publicKey);
-      const gaugeState      = gaugePda(pool, ep);
-      const userVoteReceipt = votePda(wallet.publicKey, pool, ep);
-      const userBribeClaim  = claimPda(wallet.publicKey, pool, mint, ep);
-      const tx = await program.methods
-        .claimBribe(new BN(ep))
-        .accounts({
-          user: wallet.publicKey, poolId: pool, rewardMint: mint,
-          bribeVault, bribeTokenVault, userRewardAta,
-          gaugeState, userVoteReceipt, userBribeClaim,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
-        } as any).rpc();
-      setStatus(`✅ Bribe réclamé — tx: ${tx.slice(0, 16)}…`);
-    } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
-    finally { setLoading(false); }
-  }
-
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-bold text-white">Bribes</h2>
         <span className="text-[10px] text-gray-500 border border-gray-700 rounded px-2 py-0.5 uppercase tracking-widest">
-          {epochLabel(epoch)}
+          {epochLabel(currentEpoch())}
         </span>
       </div>
 
-      <div className="flex gap-6 mb-6 border-b border-brand-border">
-        {([
-          { id: "deposit", label: "Déposer" },
-          { id: "claim",   label: "Réclamer" },
-        ] as { id: Tab; label: string }[]).map(({ id, label }) => (
-          <button key={id} onClick={() => { setTab(id); setStatus(""); }}
-            className={`pb-2 text-sm font-semibold uppercase tracking-wide transition-colors ${
-              tab === id ? "tab-active" : "text-gray-500 hover:text-gray-300"}`}>
-            {label}
-          </button>
-        ))}
+
+      {/* ── Token reference panel ── */}
+      <div className="mb-4">
+        <p className="text-xs text-gray-500 mb-2 uppercase tracking-widest">Tokens du protocole</p>
+        <div className="grid grid-cols-2 gap-2">
+          {knownTokens.map((tok) => (
+            <div key={tok.mint}
+              className="flex items-center justify-between rounded border border-brand-border bg-brand-bg px-2 py-1.5 gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: tok.color }} />
+                <span className="text-xs font-semibold text-gray-200 flex-shrink-0">{tok.symbol}</span>
+                <span className="text-[10px] text-gray-600 font-mono truncate">
+                  {tok.mint.slice(0, 6)}…{tok.mint.slice(-4)}
+                </span>
+              </div>
+              <div className="flex gap-1 flex-shrink-0">
+                <button
+                  onClick={() => copyToClipboard(tok.mint, `copy-${tok.mint}`)}
+                  title="Copier l'adresse"
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-brand-border text-gray-500 hover:text-gray-200 hover:border-gray-500 transition-colors">
+                  {copied === `copy-${tok.mint}` ? "✓" : "⎘"}
+                </button>
+                <button
+                  onClick={() => setRewardMint(tok.mint)}
+                  title="Utiliser comme token de bribe"
+                  className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+                    rewardMint === tok.mint
+                      ? "border-brand-green text-brand-green"
+                      : "border-brand-border text-gray-500 hover:text-gray-200 hover:border-gray-500"
+                  }`}>
+                  {rewardMint === tok.mint ? "✓ sél." : "Sél."}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Pool ID — common */}
-      <label className="text-xs text-gray-400 mb-1 block">Pool / Gauge address</label>
-      <input className="input mb-4" placeholder="Pubkey de la pool cible"
-        value={poolId} onChange={(e) => setPoolId(e.target.value)} />
+      {/* ── Pool selector ── */}
+      <div className="mb-4">
+        <label className="text-xs text-gray-400 mb-1 block">Pool / Gauge</label>
+        {pools.length > 0 ? (
+          <select
+            className="input"
+            value={poolId}
+            onChange={(e) => setPoolId(e.target.value)}>
+            <option value="">— Sélectionner une pool —</option>
+            {pools.map((p) => (
+              <option key={p.address} value={p.address}>{p.label}</option>
+            ))}
+          </select>
+        ) : (
+          <input className="input" placeholder="Pubkey de la pool cible"
+            value={poolId} onChange={(e) => setPoolId(e.target.value)} />
+        )}
+        {poolId && (
+          <div className="flex items-center gap-1 mt-1">
+            <span className="text-[10px] text-gray-600 font-mono truncate flex-1">
+              {poolId.slice(0, 12)}…{poolId.slice(-8)}
+            </span>
+            <button
+              onClick={() => copyToClipboard(poolId, "pool")}
+              className="text-[10px] px-1.5 py-0.5 rounded border border-brand-border text-gray-500 hover:text-gray-200 transition-colors">
+              {copied === "pool" ? "✓" : "⎘"}
+            </button>
+          </div>
+        )}
+      </div>
 
-      <label className="text-xs text-gray-400 mb-1 block">Token de bribe (mint)</label>
-      <input className="input mb-4"
-        placeholder={usdcMint ? `Ex : ${usdcMint.toBase58().slice(0,8)}… (USDC, JUP…)` : "Mint address"}
-        value={rewardMint} onChange={(e) => setRewardMint(e.target.value)} />
+      {/* ── Reward mint (manual fallback) ── */}
+      <div className="mb-4">
+        <label className="text-xs text-gray-400 mb-1 block">Token de bribe (mint)</label>
+        <input className="input"
+          placeholder="Sélectionnez ci-dessus ou collez une adresse"
+          value={rewardMint} onChange={(e) => setRewardMint(e.target.value)} />
+      </div>
 
       {/* ── Deposit ── */}
-      {tab === "deposit" && (
-        <>
-          <p className="text-xs text-gray-500 mb-4">
-            Incitez les holders hiSOLA à voter pour votre pool. Les dépôts sont additifs.
-          </p>
-          <label className="text-xs text-gray-400 mb-1 block">Montant</label>
-          <input className="input mb-4" type="number" min="0" placeholder="0.00"
-            value={amount} onChange={(e) => setAmount(e.target.value)} />
-          <button className="btn-primary w-full" onClick={depositBribe}
-            disabled={loading || !wallet || !amount || !poolId || !rewardMint}>
-            {loading ? "Dépôt…" : "Déposer la bribe"}
+      <p className="text-xs text-gray-500 mb-4">
+        Incitez les holders hiSOLA à voter pour votre pool. Les dépôts sont additifs.
+      </p>
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-xs text-gray-400">Montant</label>
+        {wallet && rewardMint && (
+          <span className="text-xs text-gray-500">
+            Solde :{" "}
+            <button
+              className="text-brand-green hover:underline font-mono"
+              onClick={() => mintBalance !== null && setAmount(String(mintBalance))}>
+              {mintBalance !== null
+                ? mintBalance.toLocaleString(undefined, { maximumFractionDigits: 6 })
+                : "…"}
+            </button>
+          </span>
+        )}
+      </div>
+      <div className="flex gap-2 mb-4">
+        <input className="input flex-1" type="number" min="0" placeholder="0.00"
+          value={amount} onChange={(e) => setAmount(e.target.value)} />
+        {mintBalance !== null && mintBalance > 0 && (
+          <button
+            className="text-xs px-3 rounded border border-brand-border text-gray-400 hover:text-brand-green hover:border-brand-green transition-colors"
+            onClick={() => setAmount(String(mintBalance))}>
+            Max
           </button>
-        </>
-      )}
-
-      {/* ── Claim ── */}
-      {tab === "claim" && (
-        <>
-          <label className="text-xs text-gray-400 mb-1 block">
-            Numéro d'époque (courante : {epoch})
-          </label>
-          <input className="input mb-4" type="number" min="0"
-            value={claimEpoch} onChange={(e) => setClaimEpoch(e.target.value)} />
-          <p className="text-xs text-gray-500 mb-4">
-            {claimEpoch && !isNaN(+claimEpoch)
-              ? epochLabel(parseInt(claimEpoch, 10))
-              : "Entrez un numéro d'époque passée"}
-          </p>
-          <button className="btn-primary w-full" onClick={claimBribe}
-            disabled={loading || !wallet || !poolId || !rewardMint || !claimEpoch}>
-            {loading ? "Claim…" : "Réclamer les bribes"}
-          </button>
-        </>
-      )}
+        )}
+      </div>
+      <button className="btn-primary w-full" onClick={depositBribe}
+        disabled={loading || !wallet || !amount || !poolId || !rewardMint}>
+        {loading ? "Dépôt…" : "Déposer la bribe"}
+      </button>
 
       {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
     </div>

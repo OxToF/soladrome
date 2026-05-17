@@ -45,4 +45,9 @@ pub enum SoladromeError {
     EpochNotFinalized,
     #[msg("No votes recorded for this pool/epoch — cannot distribute emissions")]
     NoVotes,
+    // ── Flash arbitrage ───────────────────────────────────────────────────────
+    #[msg("AMM price too low — arbitrage not profitable after floor replenishment")]
+    NotProfitable,
+    #[msg("Pool must be a SOLA/USDC pair for flash arbitrage")]
+    InvalidArbPool,
 }

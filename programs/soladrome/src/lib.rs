@@ -920,6 +920,157 @@ pub mod soladrome {
     pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
         ve::unlock_hi_sola(ctx)
     }
+
+    /// Flash-arbitrage: burn oSOLA → mint SOLA → sell on AMM → split profit.
+    /// Caller pays zero USDC upfront. Profitable only when SOLA_AMM > 1 USDC (floor).
+    /// Profit split: CALLER_ARB_SHARE_BPS (10 %) to caller, rest to market_vault → hiSOLA stakers.
+    pub fn flash_arbitrage(
+        ctx: Context<FlashArbitrage>,
+        amount_osola: u64,
+        min_profit_usdc: u64,
+    ) -> Result<()> {
+        require!(amount_osola > 0, SoladromeError::InvalidAmount);
+
+        let state_bump = ctx.accounts.protocol_state.bump;
+        let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
+
+        // ── 1. Burn caller's oSOLA ────────────────────────────────────────────
+        token::burn(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Burn {
+                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
+                    from:      ctx.accounts.caller_o_sola.to_account_info(),
+                    authority: ctx.accounts.caller.to_account_info(),
+                },
+            ),
+            amount_osola,
+        )?;
+
+        // ── 2. Mint SOLA to caller (floor will be replenished from AMM proceeds) ──
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint:      ctx.accounts.sola_mint.to_account_info(),
+                    to:        ctx.accounts.caller_sola.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[state_seeds],
+            ),
+            amount_osola,
+        )?;
+        ctx.accounts.protocol_state.total_sola = ctx.accounts.protocol_state.total_sola
+            .checked_add(amount_osola).ok_or(SoladromeError::Overflow)?;
+
+        // ── 3. AMM swap: sell SOLA → USDC ────────────────────────────────────
+        let pool      = &ctx.accounts.pool;
+        let pool_bump = pool.bump;
+        let mint_a    = pool.token_a_mint;
+        let mint_b    = pool.token_b_mint;
+        let sola_is_a = mint_a == ctx.accounts.protocol_state.sola_mint;
+
+        let fee_rate   = pool.fee_rate as u128;
+        let fee_total  = amount_osola as u128 * fee_rate / 10_000;
+        let amount_net = (amount_osola as u128 - fee_total) as u64;
+
+        let (reserve_in, reserve_out) = if sola_is_a {
+            (pool.reserve_a, pool.reserve_b)
+        } else {
+            (pool.reserve_b, pool.reserve_a)
+        };
+
+        let usdc_out = amm_math::swap_out(reserve_in, reserve_out, amount_net)?;
+
+        let pool_seeds: &[&[u8]] = &[AMM_POOL_SEED, mint_a.as_ref(), mint_b.as_ref(), &[pool_bump]];
+
+        let (vault_sola, vault_usdc) = if sola_is_a {
+            (ctx.accounts.token_a_vault.to_account_info(), ctx.accounts.token_b_vault.to_account_info())
+        } else {
+            (ctx.accounts.token_b_vault.to_account_info(), ctx.accounts.token_a_vault.to_account_info())
+        };
+
+        // SOLA: caller → pool vault
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from:      ctx.accounts.caller_sola.to_account_info(),
+                    to:        vault_sola,
+                    authority: ctx.accounts.caller.to_account_info(),
+                },
+            ),
+            amount_osola,
+        )?;
+
+        // USDC: pool vault → caller_usdc (temp holding for split below)
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from:      vault_usdc,
+                    to:        ctx.accounts.caller_usdc.to_account_info(),
+                    authority: ctx.accounts.pool.to_account_info(),
+                },
+                &[pool_seeds],
+            ),
+            usdc_out,
+        )?;
+
+        // Update pool reserves
+        let pool = &mut ctx.accounts.pool;
+        if sola_is_a {
+            pool.reserve_a = pool.reserve_a.checked_add(amount_net).ok_or(SoladromeError::Overflow)?;
+            pool.reserve_b = pool.reserve_b.checked_sub(usdc_out).ok_or(SoladromeError::Overflow)?;
+        } else {
+            pool.reserve_b = pool.reserve_b.checked_add(amount_net).ok_or(SoladromeError::Overflow)?;
+            pool.reserve_a = pool.reserve_a.checked_sub(usdc_out).ok_or(SoladromeError::Overflow)?;
+        }
+
+        // ── 4. Profitability check ────────────────────────────────────────────
+        // Floor needs `amount_osola` USDC to back the freshly minted SOLA.
+        require!(usdc_out > amount_osola, SoladromeError::NotProfitable);
+        let gross_profit = usdc_out.checked_sub(amount_osola).ok_or(SoladromeError::Overflow)?;
+        require!(gross_profit >= min_profit_usdc, SoladromeError::SlippageExceeded);
+
+        // ── 5. Split proceeds ─────────────────────────────────────────────────
+        let caller_reward = (gross_profit as u128)
+            .checked_mul(state::CALLER_ARB_SHARE_BPS as u128).unwrap()
+            .checked_div(10_000).unwrap() as u64;
+        let protocol_profit = gross_profit.checked_sub(caller_reward).ok_or(SoladromeError::Overflow)?;
+
+        // Floor replenishment: amount_osola USDC from caller_usdc → floor_vault
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from:      ctx.accounts.caller_usdc.to_account_info(),
+                    to:        ctx.accounts.floor_vault.to_account_info(),
+                    authority: ctx.accounts.caller.to_account_info(),
+                },
+            ),
+            amount_osola,
+        )?;
+
+        // Protocol profit → market_vault → hiSOLA stakers
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from:      ctx.accounts.caller_usdc.to_account_info(),
+                    to:        ctx.accounts.market_vault.to_account_info(),
+                    authority: ctx.accounts.caller.to_account_info(),
+                },
+            ),
+            protocol_profit,
+        )?;
+        ctx.accounts.protocol_state.accumulated_fees = ctx.accounts.protocol_state.accumulated_fees
+            .saturating_add(protocol_profit);
+
+        // caller_reward stays in caller_usdc — no extra transfer needed
+        let _ = caller_reward;
+        Ok(())
+    }
 }
 
 // ── Account Contexts ──────────────────────────────────────────────────────────
@@ -1696,4 +1847,75 @@ pub struct ClaimLpEmissions<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+// ── FlashArbitrage ────────────────────────────────────────────────────────────
+#[derive(Accounts)]
+pub struct FlashArbitrage<'info> {
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(mut, address = protocol_state.o_sola_mint)]
+    pub o_sola_mint: Box<Account<'info, Mint>>,
+
+    #[account(mut, address = protocol_state.sola_mint)]
+    pub sola_mint: Box<Account<'info, Mint>>,
+
+    /// Caller's oSOLA — burned atomically.
+    #[account(mut, token::mint = o_sola_mint, token::authority = caller)]
+    pub caller_o_sola: Box<Account<'info, TokenAccount>>,
+
+    /// Caller's SOLA — receives freshly minted SOLA then immediately sells it.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        associated_token::mint = sola_mint,
+        associated_token::authority = caller,
+    )]
+    pub caller_sola: Box<Account<'info, TokenAccount>>,
+
+    /// Caller's USDC — receives AMM proceeds; floor + protocol shares are deducted from here.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = caller,
+    )]
+    pub caller_usdc: Box<Account<'info, TokenAccount>>,
+
+    pub usdc_mint: Box<Account<'info, Mint>>,
+
+    /// AMM pool — must pair SOLA with USDC.
+    #[account(
+        mut,
+        seeds = [AMM_POOL_SEED, pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
+        bump = pool.bump,
+        constraint = (
+            (pool.token_a_mint == protocol_state.sola_mint && pool.token_b_mint == protocol_state.usdc_mint) ||
+            (pool.token_b_mint == protocol_state.sola_mint && pool.token_a_mint == protocol_state.usdc_mint)
+        ) @ SoladromeError::InvalidArbPool,
+    )]
+    pub pool: Box<Account<'info, AmmPool>>,
+
+    #[account(mut, address = pool.token_a_vault)]
+    pub token_a_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(mut, address = pool.token_b_vault)]
+    pub token_b_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Floor vault — receives `amount_osola` USDC to back the freshly minted SOLA.
+    #[account(mut, address = protocol_state.floor_vault)]
+    pub floor_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Market vault — receives 90 % of gross profit → hiSOLA stakers via claim_fees.
+    #[account(mut, address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    pub token_program:            Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program:           Program<'info, System>,
+    pub rent:                     Sysvar<'info, Rent>,
 }

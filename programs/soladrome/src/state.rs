@@ -7,15 +7,19 @@ use anchor_lang::prelude::*;
 pub const PRECISION: u128 = 1_000_000_000_000; // 1e12
 
 // ── Epoch helpers ─────────────────────────────────────────────────────────────
-pub const EPOCH_DURATION: u64 = 7 * 24 * 60 * 60; // 604 800 s = 7 days
+pub const EPOCH_DURATION: u64 = 3_600; // TEST: 1h devnet — reset to 7 * 24 * 60 * 60 for mainnet
 
 // ── Ve-layer constants ────────────────────────────────────────────────────────
-/// Minimum lock duration: 1 epoch (7 days).
+/// Minimum lock duration: 1 epoch.
 pub const MIN_LOCK_DURATION: u64 = EPOCH_DURATION;
-/// Maximum lock duration: 104 epochs (~2 years).
-pub const MAX_LOCK_DURATION: u64 = 104 * EPOCH_DURATION; // 62 899 200 s
+/// Maximum lock duration: 104 epochs.
+pub const MAX_LOCK_DURATION: u64 = 104 * EPOCH_DURATION;
 /// Voting power multiplier at maximum lock (4× raw hiSOLA).
 pub const MAX_VE_MULTIPLIER: u64 = 4;
+
+// ── Flash arbitrage profit split ──────────────────────────────────────────────
+/// Caller keeps 10 % of gross profit; remaining 90 % routes to market_vault → hiSOLA stakers.
+pub const CALLER_ARB_SHARE_BPS: u64 = 1_000;
 
 pub fn current_epoch(unix_ts: i64) -> u64 {
     (unix_ts.max(0) as u64) / EPOCH_DURATION
