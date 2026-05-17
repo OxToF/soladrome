@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
-import { getProgram, statePda, toUi, poolPda, solaM, oSolaM, sortMints } from "@/lib/program";
+import { getProgram, statePda, toUi, poolPda, solaM } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 interface ProtocolStats {
@@ -13,7 +13,7 @@ interface ProtocolStats {
   totalHiSola:     number;
   curvePrice:      number;         // bonding curve: virtualUsdc / virtualSola
   solaPrice:       number | null;  // AMM USDC/SOLA pool spot price
-  osolaPrice:      number | null;  // AMM oSOLA/USDC pool spot price
+  osolaIntrinsic:  number | null;  // max(0, solaPrice - 1) — exercise value
   floorPrice:      number;
   accumulatedFees: number;
 }
@@ -49,42 +49,16 @@ export function Stats() {
         } catch { solaPrice = null; }
       }
 
-      // ── oSOLA price: from AMM oSOLA/USDC pool ─────────────────────────────
-      let osolaPrice: number | null = null;
-      if (usdcMint) {
-        try {
-          const poolAddr = poolPda(oSolaM, usdcMint);
-          const pool     = await (program.account as any).ammPool.fetch(poolAddr);
-          const mintA    = pool.tokenAMint.toString();
-          const ra       = toUi(pool.reserveA as BN);
-          const rb       = toUi(pool.reserveB as BN);
-          osolaPrice = mintA === oSolaM.toString()
-            ? (rb / ra)
-            : (ra / rb);
-        } catch {
-          // Try oSOLA/SOLA pool and convert via SOLA price
-          if (solaPrice !== null) {
-            try {
-              const poolAddr = poolPda(oSolaM, solaM);
-              const pool     = await (program.account as any).ammPool.fetch(poolAddr);
-              const mintA    = pool.tokenAMint.toString();
-              const ra       = toUi(pool.reserveA as BN);
-              const rb       = toUi(pool.reserveB as BN);
-              const osolaPriceInSola = mintA === oSolaM.toString()
-                ? (rb / ra)
-                : (ra / rb);
-              osolaPrice = osolaPriceInSola * solaPrice;
-            } catch { osolaPrice = null; }
-          }
-        }
-      }
+      // ── oSOLA intrinsic value: max(0, solaPrice - floor) ─────────────────
+      // Exercise cost is always 1 USDC per oSOLA; profit = SOLA price - 1 USDC
+      const osolaIntrinsic = solaPrice !== null ? Math.max(0, solaPrice - 1) : null;
 
       setStats({
         totalSola:       toUi(s.totalSola),
         totalHiSola:     toUi(s.totalHiSola),
         curvePrice,
         solaPrice,
-        osolaPrice,
+        osolaIntrinsic,
         floorPrice:      1,
         accumulatedFees: toUi(s.accumulatedFees),
       });
@@ -155,10 +129,11 @@ export function Stats() {
       </div>
 
       <div className="card text-center">
-        <p className="text-xs text-gray-500 mb-1">oSOLA Price</p>
+        <p className="text-xs text-gray-500 mb-1">oSOLA Valeur</p>
         <p className="font-bold text-brand-green">
-          {stats.osolaPrice !== null ? `${fmt4(stats.osolaPrice)} USDC` : "No pool"}
+          {stats.osolaIntrinsic !== null ? `${fmt4(stats.osolaIntrinsic)} USDC` : "—"}
         </p>
+        <p className="text-[10px] text-gray-600 mt-0.5">1 oSOLA + 1 USDC → 1 SOLA</p>
       </div>
 
       <div className="card text-center">

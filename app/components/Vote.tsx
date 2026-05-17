@@ -27,12 +27,13 @@ export function Vote() {
   const epoch = currentEpoch();
   const end   = epochEnd(epoch);
 
-  const [poolId,   setPoolId]  = useState("");
-  const [votes,    setVotes]   = useState("");
-  const [balance,  setBalance] = useState<number | null>(null);
-  const [loading,  setLoading] = useState(false);
-  const [status,   setStatus]  = useState("");
-  const [ammPools, setAmmPools] = useState<{ label: string; addr: string }[]>([]);
+  const [poolId,     setPoolId]     = useState("");
+  const [votes,      setVotes]      = useState("");
+  const [balance,    setBalance]    = useState<number | null>(null);
+  const [loading,    setLoading]    = useState(false);
+  const [status,     setStatus]     = useState("");
+  const [ammPools,   setAmmPools]   = useState<{ label: string; addr: string }[]>([]);
+  const [votedPools, setVotedPools] = useState<Set<string>>(new Set());
 
   const fetchBalance = useCallback(async () => {
     if (!wallet) { setBalance(null); return; }
@@ -58,6 +59,26 @@ export function Vote() {
     }).catch(() => {});
   }, [connection, wallet, usdcMint]);
 
+  // Check which pools the wallet already voted for this epoch
+  const checkVotedPools = useCallback(async () => {
+    if (!wallet || ammPools.length === 0) return;
+    const ep = currentEpoch();
+    const eb = Buffer.alloc(8);
+    eb.writeBigUInt64LE(BigInt(ep));
+    const voted = new Set<string>();
+    await Promise.all(ammPools.map(async (p) => {
+      const pool = new PublicKey(p.addr);
+      const [receiptPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vote"), wallet.publicKey.toBuffer(), pool.toBuffer(), eb], PROG_ID
+      );
+      const info = await connection.getAccountInfo(receiptPda);
+      if (info) voted.add(p.addr);
+    }));
+    setVotedPools(voted);
+  }, [wallet, ammPools, connection]);
+
+  useEffect(() => { checkVotedPools(); }, [checkVotedPools]);
+
   function applyPct(pct: number) {
     if (!balance || balance <= 0) return;
     setVotes(((balance * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
@@ -80,14 +101,14 @@ export function Vote() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
 
+      const ep = currentEpoch(); // recalculate just before tx
       const rawVotes   = new BN(Math.floor(amt * 1_000_000));
       const userHiSola = (await import("@solana/spl-token"))
         .getAssociatedTokenAddressSync(hiSolaM, wallet.publicKey);
       const lockPosition = lockPositionPda(wallet.publicKey);
 
-      // Encode epoch as u64 little-endian (8 bytes) — matches Rust's epoch.to_le_bytes()
       const epochBuf = Buffer.alloc(8);
-      epochBuf.writeBigUInt64LE(BigInt(epoch));
+      epochBuf.writeBigUInt64LE(BigInt(ep));
 
       const [gaugeState] = PublicKey.findProgramAddressSync(
         [Buffer.from("gauge"), pool.toBuffer(), epochBuf], PROG_ID
@@ -103,7 +124,7 @@ export function Vote() {
       );
 
       const tx = await program.methods
-        .voteGauge(new BN(epoch), rawVotes)
+        .voteGauge(new BN(ep), rawVotes)
         .accounts({
           user:             wallet.publicKey,
           poolId:           pool,
@@ -121,9 +142,16 @@ export function Vote() {
         .rpc();
       setStatus(`✅ Vote enregistré — tx: ${tx.slice(0, 16)}…`);
       setVotes("");
+      setVotedPools(prev => new Set([...prev, poolId]));
       fetchBalance();
     } catch (e: any) {
-      setStatus(`❌ ${e?.message ?? e}`);
+      const msg = e?.message ?? String(e);
+      if (msg.includes("already in use") || msg.includes("0x0")) {
+        setStatus("✅ Vote déjà enregistré pour ce pool cette époque.");
+        setVotedPools(prev => new Set([...prev, poolId]));
+      } else {
+        setStatus(`❌ ${msg}`);
+      }
     } finally { setLoading(false); }
   }
 
@@ -163,22 +191,28 @@ export function Vote() {
         </p>
         {ammPools.length > 0 ? (
           <div className="flex flex-wrap gap-2 mb-5">
-            {ammPools.map((s) => (
-              <button
-                key={s.addr}
-                onClick={() => setPoolId(s.addr)}
-                className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-                  poolId === s.addr
-                    ? "border-brand-green text-brand-green bg-brand-green/10"
-                    : "border-brand-border text-gray-400 hover:border-gray-500"
-                }`}
-              >
-                {s.label}
-                <span className="ml-1.5 text-gray-600 font-mono">
-                  {s.addr.slice(0, 4)}…
-                </span>
-              </button>
-            ))}
+            {ammPools.map((s) => {
+              const voted = votedPools.has(s.addr);
+              return (
+                <button
+                  key={s.addr}
+                  onClick={() => setPoolId(s.addr)}
+                  className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                    poolId === s.addr
+                      ? "border-brand-green text-brand-green bg-brand-green/10"
+                      : voted
+                      ? "border-brand-green/40 text-brand-green/60"
+                      : "border-brand-border text-gray-400 hover:border-gray-500"
+                  }`}
+                >
+                  {voted && <span className="mr-1">✓</span>}
+                  {s.label}
+                  <span className="ml-1.5 text-gray-600 font-mono">
+                    {s.addr.slice(0, 4)}…
+                  </span>
+                </button>
+              );
+            })}
           </div>
         ) : (
           <p className="text-xs text-gray-600 mb-5">Chargement des pools…</p>
@@ -231,13 +265,19 @@ export function Vote() {
           </div>
         </div>
 
-        <button
-          className="btn-primary w-full"
-          onClick={vote}
-          disabled={loading || !wallet || !votes || !poolId}
-        >
-          {loading ? "Vote en cours…" : "Voter pour cette pool"}
-        </button>
+        {votedPools.has(poolId) ? (
+          <div className="w-full text-center py-2 text-sm text-brand-green border border-brand-green/30 rounded-xl">
+            ✓ Vote déjà enregistré pour ce pool cette époque
+          </div>
+        ) : (
+          <button
+            className="btn-primary w-full"
+            onClick={vote}
+            disabled={loading || !wallet || !votes || !poolId}
+          >
+            {loading ? "Vote en cours…" : "Voter pour cette pool"}
+          </button>
+        )}
 
         {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
       </div>
