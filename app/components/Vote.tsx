@@ -91,7 +91,7 @@ export function Vote() {
   async function vote() {
     if (!wallet || !votes || !poolId) return;
     const pool = tryPool();
-    if (!pool) { setStatus("❌ Adresse de pool invalide"); return; }
+    if (!pool) { setStatus("❌ Invalid pool address"); return; }
 
     const amt = parseFloat(votes);
     if (isNaN(amt) || amt <= 0) { setStatus("❌ Montant invalide"); return; }
@@ -140,14 +140,14 @@ export function Vote() {
           rent:            SYSVAR_RENT_PUBKEY,
         } as any)
         .rpc();
-      setStatus(`✅ Vote enregistré — tx: ${tx.slice(0, 16)}…`);
+      setStatus(`✅ Vote recorded — tx: ${tx.slice(0, 16)}…`);
       setVotes("");
       setVotedPools(prev => new Set([...prev, poolId]));
       fetchBalance();
     } catch (e: any) {
       const msg = e?.message ?? String(e);
       if (msg.includes("already in use") || msg.includes("0x0")) {
-        setStatus("✅ Vote déjà enregistré pour ce pool cette époque.");
+        setStatus("✅ Vote already recorded for this pool this epoch.");
         setVotedPools(prev => new Set([...prev, poolId]));
       } else if (msg.includes("VoteOverflow") || msg.includes("6011")) {
         setStatus("❌ You already voted for this epoch — no voting power left.");
@@ -162,34 +162,34 @@ export function Vote() {
       {/* Epoch banner */}
       <div className="card flex items-center justify-between">
         <div>
-          <p className="text-xs text-gray-500 mb-1 uppercase tracking-widest">Époque courante</p>
+          <p className="text-xs text-gray-500 mb-1 uppercase tracking-widest">Current epoch</p>
           <p className="text-2xl font-black text-white">#{epoch}</p>
         </div>
         <div className="text-right">
-          <p className="text-xs text-gray-500 mb-1 uppercase tracking-widest">Se termine dans</p>
+          <p className="text-xs text-gray-500 mb-1 uppercase tracking-widest">Ends in</p>
           <p className="text-2xl font-black text-brand-green">{timeLeft(end)}</p>
           <p className="text-xs text-gray-500">{end.toLocaleDateString()}</p>
         </div>
         <div className="text-right hidden md:block">
-          <p className="text-xs text-gray-500 mb-2">Mécanisme</p>
+          <p className="text-xs text-gray-500 mb-2">Mechanism</p>
           <p className="text-xs text-gray-400 max-w-xs">
-            Vos hiSOLA votent pour les pools. <br />
-            Les bribers rémunèrent les votants de <br />
-            la pool qu'ils soutiennent.
+            Your hiSOLA votes on pools. <br />
+            Bribers reward voters of <br />
+            the pools they support.
           </p>
         </div>
       </div>
 
       {/* Vote form */}
       <div className="card">
-        <h2 className="text-lg font-bold text-white mb-1">Voter pour une pool</h2>
+        <h2 className="text-lg font-bold text-white mb-1">Vote for a pool</h2>
         <p className="text-xs text-gray-500 mb-6">
-          Poids de vote = hiSOLA alloué · Plafond = solde hiSOLA par époque · 1 vote par pool
+          Vote weight = allocated hiSOLA · Cap = hiSOLA balance per epoch · 1 vote per pool
         </p>
 
         {/* AMM pools from chain */}
         <p className="text-xs text-gray-500 mb-2 uppercase tracking-widest">
-          Pools disponibles {ammPools.length > 0 ? `(${ammPools.length})` : ""}
+          Available pools {ammPools.length > 0 ? `(${ammPools.length})` : ""}
         </p>
         {ammPools.length > 0 ? (
           <div className="flex flex-wrap gap-2 mb-5">
@@ -217,20 +217,20 @@ export function Vote() {
             })}
           </div>
         ) : (
-          <p className="text-xs text-gray-600 mb-5">Chargement des pools…</p>
+          <p className="text-xs text-gray-600 mb-5">Loading pools…</p>
         )}
 
-        <label className="text-xs text-gray-400 mb-1 block">Adresse de la pool (Pubkey)</label>
+        <label className="text-xs text-gray-400 mb-1 block">Pool address (Pubkey)</label>
         <input
           className="input mb-4"
-          placeholder="Colle l'adresse ou sélectionne ci-dessus"
+          placeholder="Paste the address or select above"
           value={poolId}
           onChange={(e) => setPoolId(e.target.value)}
         />
 
         <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-gray-400">hiSOLA à allouer</span>
+            <span className="text-xs text-gray-400">hiSOLA to allocate</span>
             {balance !== null && (
               <span className="text-xs text-gray-500">
                 Balance:{" "}
@@ -269,7 +269,7 @@ export function Vote() {
 
         {votedPools.has(poolId) ? (
           <div className="w-full text-center py-2 text-sm text-brand-green border border-brand-green/30 rounded-xl">
-            ✓ Vote déjà enregistré pour ce pool cette époque
+            ✓ Already voted for this pool this epoch
           </div>
         ) : (
           <button
@@ -277,7 +277,7 @@ export function Vote() {
             onClick={vote}
             disabled={loading || !wallet || !votes || !poolId}
           >
-            {loading ? "Vote en cours…" : "Voter pour cette pool"}
+            {loading ? "Voting…" : "Vote for this pool"}
           </button>
         )}
 

@@ -125,7 +125,7 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
           </span>
           {available !== null && tab === "borrow" && (
             <span className="text-xs text-gray-500">
-              Dispo:{" "}
+              Available:{" "}
               <button
                 className="text-gray-300 hover:text-brand-green transition-colors font-mono"
                 onClick={() => applyPct(100)}
@@ -163,7 +163,7 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
 
       <p className="text-xs text-gray-500 mb-4">
         {tab === "borrow"
-          ? `Max = hiSOLA − déjà emprunté (${borrowed > 0 ? borrowed.toLocaleString(undefined, { maximumFractionDigits: 2 }) + " USDC en cours" : "rien emprunté"}) · Pas de liquidation`
+          ? `Max = hiSOLA − already borrowed (${borrowed > 0 ? borrowed.toLocaleString(undefined, { maximumFractionDigits: 2 }) + " USDC outstanding" : "nothing borrowed"}) · No liquidation`
           : "Repay to unlock your hiSOLA collateral"}
       </p>
 

@@ -203,7 +203,7 @@ export function LpEmissions() {
           rent:             (await import("@solana/web3.js")).SYSVAR_RENT_PUBKEY,
         } as any)
         .rpc();
-      setPoolStatus(poolAddr, `✅ Rewards émis — tx: ${tx.slice(0, 16)}…`);
+      setPoolStatus(poolAddr, `✅ Rewards emitted — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
     } catch (e: any) {
       setPoolStatus(poolAddr, `❌ ${e?.message ?? e}`);
@@ -215,7 +215,7 @@ export function LpEmissions() {
   async function claim(poolAddr: string) {
     if (!wallet) return;
     setLoading(true);
-    setPoolStatus(poolAddr, "Claim en cours…");
+    setPoolStatus(poolAddr, "Claiming…");
     try {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
@@ -234,7 +234,7 @@ export function LpEmissions() {
           ...commonAccounts,
         } as any)
         .rpc();
-      setPoolStatus(poolAddr, `✅ oSOLA reçu — tx: ${tx.slice(0, 16)}…`);
+      setPoolStatus(poolAddr, `✅ oSOLA received — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
     } catch (e: any) {
       setPoolStatus(poolAddr, `❌ ${e?.message ?? e}`);
@@ -250,7 +250,7 @@ export function LpEmissions() {
       {/* Epoch banner */}
       <div className="card flex items-center justify-between">
         <div>
-          <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Epoch courante</p>
+          <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Current epoch</p>
           <p className="text-2xl font-black text-white">#{epoch}</p>
         </div>
         <div className="text-right">
@@ -262,9 +262,9 @@ export function LpEmissions() {
         </div>
         <div className="text-right hidden md:block max-w-xs">
           <p className="text-xs text-gray-400 leading-relaxed">
-            10 000 oSOLA/epoch distribués aux LPs <br />
-            selon leur poids temps-pondéré de LP tokens. <br />
-            <strong className="text-white">Checkpoint avant la fin de l'epoch.</strong>
+            10 000 oSOLA/epoch distributed to LPs <br />
+            weighted by time-weighted LP token share. <br />
+            <strong className="text-white">Checkpoint before the epoch ends.</strong>
           </p>
         </div>
       </div>
@@ -272,20 +272,20 @@ export function LpEmissions() {
       {/* Alert */}
       {urgentCheckpoint && (
         <div className="rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-yellow-300">
-          ⚠️ Tu as des LP tokens sans checkpoint actif. Checkpointe avant la fin de l'epoch pour gagner des oSOLA.
+          ⚠️ You have LP tokens without an active checkpoint. Checkpoint before the epoch ends to earn oSOLA.
         </div>
       )}
 
       {/* Pool list */}
       {pools.length === 0 ? (
         <div className="card text-center py-10">
-          <p className="text-gray-500">Aucun pool avec LP tokens détecté.</p>
-          <p className="text-xs text-gray-600 mt-2">Ajoute de la liquidité dans Pools pour participer aux émissions.</p>
+          <p className="text-gray-500">No pool with LP tokens detected.</p>
+          <p className="text-xs text-gray-600 mt-2">Add liquidity in Pools to participate in emissions.</p>
           <button
             className="btn-secondary text-sm mt-4"
             onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "pools" }))}
           >
-            Aller dans Pools →
+            Go to Pools →
           </button>
         </div>
       ) : (
@@ -299,12 +299,12 @@ export function LpEmissions() {
               <div className="flex items-center gap-2">
                 {row.checkpointed && (
                   <span className="text-xs text-brand-green border border-brand-green/30 rounded px-2 py-0.5">
-                    ✓ Checkpointé
+                    ✓ Checkpointed
                   </span>
                 )}
                 {row.finalized && (
                   <span className="text-xs text-blue-400 border border-blue-400/30 rounded px-2 py-0.5">
-                    Finalisé
+                    Finalized
                   </span>
                 )}
               </div>
@@ -318,13 +318,13 @@ export function LpEmissions() {
                 </p>
               </div>
               <div>
-                <p className="text-xs text-gray-500 mb-1">Pool alloué</p>
+                <p className="text-xs text-gray-500 mb-1">Pool allocated</p>
                 <p className="font-bold text-brand-green">
                   {row.finalized ? `${row.allocatedOsola.toLocaleString(undefined, { maximumFractionDigits: 2 })} oSOLA` : "—"}
                 </p>
               </div>
               <div>
-                <p className="text-xs text-gray-500 mb-1">Ta part estimée</p>
+                <p className="text-xs text-gray-500 mb-1">Your estimated share</p>
                 <p className="font-bold text-brand-green">
                   {row.estimatedOsola !== null
                     ? `${row.estimatedOsola.toLocaleString(undefined, { maximumFractionDigits: 4 })} oSOLA`
@@ -357,9 +357,9 @@ export function LpEmissions() {
                   className="btn-secondary flex-1 text-sm"
                   disabled={loading}
                   onClick={() => emit(row.poolAddress)}
-                  title="Finalise les rewards pour l'epoch précédente"
+                  title="Finalize rewards for the previous epoch"
                 >
-                  Émettre rewards (epoch {epoch - 1})
+                  Emit rewards (epoch {epoch - 1})
                 </button>
               )}
             </div>

@@ -90,7 +90,7 @@ export function Portfolio() {
             </span>
           </p>
           <p className="text-xs text-gray-500">
-            Crédit dispo{" "}
+            Available credit{" "}
             <span className="text-gray-300">
               {data
                 ? `${Math.max(0, data.hiSolaBalance - data.debt).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC`

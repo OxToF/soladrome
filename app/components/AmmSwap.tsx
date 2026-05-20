@@ -52,7 +52,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setStatus(`✅ ${data.amount} test USDC ajoutés à ton wallet !`);
+      setStatus(`✅ ${data.amount} test USDC added to your wallet!`);
       fetchBalance();
     } catch (e: any) {
       setStatus(`❌ Faucet: ${e?.message ?? e}`);
@@ -283,7 +283,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-400">You receive (est.)</span>
           {tokOut?.mint === WSOL_MINT && (
-            <span className="text-xs text-brand-green/70">→ unwrapped to SOL natif</span>
+            <span className="text-xs text-brand-green/70">→ unwrapped to native SOL</span>
           )}
         </div>
         <div className="flex items-center gap-3">
@@ -313,7 +313,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       {/* Spot price — always visible when pool exists */}
       {pool && (
         <div className="flex justify-between text-xs text-gray-500 mb-2 px-1">
-          <span>Prix</span>
+          <span>Price</span>
           <span className="font-mono text-gray-300">
             1 {tokIn?.symbol} = {(pool.reserveOut / pool.reserveIn).toLocaleString(undefined, { maximumFractionDigits: 6 })} {tokOut?.symbol}
           </span>
@@ -323,7 +323,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       {pool && estimatedOut !== null && +amountIn > 0 && (
         <div className="rounded-xl border border-brand-border p-3 mb-3 space-y-1.5 text-xs">
           <div className="flex justify-between text-gray-400">
-            <span>Minimum reçu</span>
+            <span>Minimum received</span>
             <span className="font-mono text-white">{minReceived?.toFixed(6)} {tokOut?.symbol}</span>
           </div>
           <div className="flex justify-between text-gray-400">
@@ -338,7 +338,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
             </span>
           </div>
           <div className="flex justify-between text-gray-400">
-            <span>Fee du pool</span>
+            <span>Pool fee</span>
             <span className="font-mono">{(pool.feeRate / 100).toFixed(2)}%</span>
           </div>
         </div>
@@ -366,13 +366,13 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
 
       {/* Devnet faucet */}
       <div className="mt-4 pt-4 border-t border-brand-border flex items-center justify-between">
-        <span className="text-xs text-gray-500">Besoin de USDC de test ?</span>
+        <span className="text-xs text-gray-500">Need test USDC?</span>
         <button
           className="btn-secondary text-xs px-4 py-2"
           onClick={claimFaucet}
           disabled={faucetLoading || !wallet}
         >
-          {faucetLoading ? "Envoi…" : "Get 500 USDC"}
+          {faucetLoading ? "Sending…" : "Get 500 USDC"}
         </button>
       </div>
     </div>

@@ -211,16 +211,16 @@ export function ClaimBribe() {
           rent: SYSVAR_RENT_PUBKEY,
         } as any).rpc();
 
-      setStatus(`✅ Bribe réclamé — tx: ${tx.slice(0, 16)}…`);
+      setStatus(`✅ Bribe claimed — tx: ${tx.slice(0, 16)}…`);
       const key = `${pool.toBase58()}:${selectedMint.toBase58()}:${ep}`;
       setClaimed(prev => new Set([...prev, key]));
       setSelectedMint(null);
     } catch (e: any) {
       const msg = e?.message ?? String(e);
       if (msg.includes("3012") || msg.includes("AccountNotInitialized")) {
-        setStatus("❌ Aucune bribe déposée pour ce pool / token / époque.");
+        setStatus("❌ No bribe deposited for this pool / token / epoch.");
       } else if (msg.includes("already in use") || msg.includes("0x0")) {
-        setStatus("✅ Déjà réclamé pour cette combinaison.");
+        setStatus("✅ Already claimed for this combination.");
       } else {
         setStatus(`❌ ${msg}`);
       }
@@ -244,25 +244,25 @@ export function ClaimBribe() {
         )}
       </div>
       <p className="text-sm text-gray-400 mb-5">
-        Bribes gagnés pour vos votes hiSOLA des époques passées.
+        Bribes earned for your hiSOLA votes in past epochs.
       </p>
 
       {!wallet && (
-        <p className="text-xs text-gray-500 text-center py-6">Connectez votre wallet pour voir vos votes.</p>
+        <p className="text-xs text-gray-500 text-center py-6">Connect your wallet to see your votes.</p>
       )}
 
       {/* ── Vote receipt list ── */}
       {wallet && !loadingEntries && voteEntries.length === 0 && (
-        <p className="text-xs text-gray-500 text-center py-6">Aucun vote passé trouvé.</p>
+        <p className="text-xs text-gray-500 text-center py-6">No past votes found.</p>
       )}
 
       {loadingEntries && (
-        <p className="text-xs text-gray-500 text-center py-6">Chargement des votes…</p>
+        <p className="text-xs text-gray-500 text-center py-6">Loading votes…</p>
       )}
 
       {voteEntries.length > 0 && (
         <div className="mb-5">
-          <p className="text-xs text-gray-500 mb-2 uppercase tracking-widest">Vos votes passés</p>
+          <p className="text-xs text-gray-500 mb-2 uppercase tracking-widest">Your past votes</p>
           <div className="flex flex-col gap-1.5">
             {voteEntries.map((entry, i) => {
               const isSelected = selected?.pool.equals(entry.pool) && selected?.epoch === entry.epoch;
@@ -290,15 +290,15 @@ export function ClaimBribe() {
       {selected && (
         <div className="mb-5">
           <p className="text-xs text-gray-500 mb-2 uppercase tracking-widest">
-            Bribes disponibles — {selected.poolLabel}
+            Available bribes — {selected.poolLabel}
           </p>
 
           {loadingTokens && (
-            <p className="text-xs text-gray-500">Recherche des bribes…</p>
+            <p className="text-xs text-gray-500">Searching for bribes…</p>
           )}
 
           {!loadingTokens && availableTokens.length === 0 && (
-            <p className="text-xs text-gray-500">Aucune bribe déposée pour ce pool / époque.</p>
+            <p className="text-xs text-gray-500">No bribe deposited for this pool / epoch.</p>
           )}
 
           {!loadingTokens && availableTokens.length > 0 && (
@@ -324,7 +324,7 @@ export function ClaimBribe() {
                       <span className="text-xs text-gray-400">
                         {tok.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} total
                       </span>
-                      {done && <span className="ml-2 text-[11px] text-brand-green">✓ réclamé</span>}
+                      {done && <span className="ml-2 text-[11px] text-brand-green">✓ claimed</span>}
                     </div>
                   </button>
                 );
@@ -337,7 +337,7 @@ export function ClaimBribe() {
       {/* ── Claim button ── */}
       {selected && selectedMint && !alreadyClaimed && (
         <button className="btn-primary w-full" onClick={claimBribe} disabled={loading}>
-          {loading ? "Claim…" : "Réclamer les bribes"}
+          {loading ? "Claiming…" : "Claim bribes"}
         </button>
       )}
 
