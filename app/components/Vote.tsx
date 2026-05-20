@@ -149,6 +149,8 @@ export function Vote() {
       if (msg.includes("already in use") || msg.includes("0x0")) {
         setStatus("✅ Vote déjà enregistré pour ce pool cette époque.");
         setVotedPools(prev => new Set([...prev, poolId]));
+      } else if (msg.includes("VoteOverflow") || msg.includes("6011")) {
+        setStatus("❌ You already voted for this epoch — no voting power left.");
       } else {
         setStatus(`❌ ${msg}`);
       }
