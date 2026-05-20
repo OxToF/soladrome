@@ -167,8 +167,10 @@ export function Pools() {
       const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
       const program  = getProgram(provider);
       const all      = await (program.account as any).ammPool.all();
-      const usdcStr  = usdcMint?.toString() ?? "";
-      setPools(all.map((p: any) => {
+      const usdcStr = usdcMint?.toString() ?? "";
+
+      // First pass: build pool infos
+      const infos: PoolInfo[] = all.map((p: any) => {
         const mA   = p.account.tokenAMint.toString();
         const mB   = p.account.tokenBMint.toString();
         const decA = decimalsForMint(mA, usdcMint);
@@ -186,7 +188,24 @@ export function Pools() {
           osolaRewardPerLp: BigInt((p.account.osolaRewardPerLp ?? new BN(0)).toString()),
           lastRewardTs:     Number((p.account.lastRewardTs ?? new BN(0)).toString()),
         } as PoolInfo;
-      }));
+      });
+
+      // Second pass: build price map from USDC pools, then fill tvlUsdc for non-USDC pools
+      const priceMap: Record<string, number> = { [usdcStr]: 1.0 };
+      for (const p of infos) {
+        if (p.mintA === usdcStr && p.reserveB > 0) priceMap[p.mintB] = p.reserveA / p.reserveB;
+        else if (p.mintB === usdcStr && p.reserveA > 0) priceMap[p.mintA] = p.reserveB / p.reserveA;
+      }
+      for (const p of infos) {
+        if (p.tvlUsdc === null) {
+          const pA = priceMap[p.mintA];
+          const pB = priceMap[p.mintB];
+          if (pA !== undefined && pB !== undefined)
+            p.tvlUsdc = p.reserveA * pA + p.reserveB * pB;
+        }
+      }
+
+      setPools(infos);
     } catch { }
   }, [connection, wallet, usdcMint]);
 
@@ -335,7 +354,7 @@ export function Pools() {
           rent:          commonAccounts.rent,
         } as any)
         .rpc();
-      setStatus(`✅ Pool créée — ${tx.slice(0, 16)}…`);
+      setStatus(`✅ Pool created — ${tx.slice(0, 16)}…`);
       fetchPools(); setView("list");
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
@@ -404,7 +423,7 @@ export function Pools() {
         .instruction();
 
       const sig = await sendTx(connection, wallet, [...preIxs, addIx, ...postIxs]);
-      setStatus(`✅ Liquidité ajoutée — ${sig.slice(0, 16)}…`);
+      setStatus(`✅ Liquidity added — ${sig.slice(0, 16)}…`);
       setAddA(""); setAddB("");
       fetchPools();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
@@ -455,7 +474,7 @@ export function Pools() {
         .instruction();
 
       const sig = await sendTx(connection, wallet, [...preIxs, removeIx, ...postIxs]);
-      setStatus(`✅ Liquidité retirée — ${sig.slice(0, 16)}…`);
+      setStatus(`✅ Liquidity removed — ${sig.slice(0, 16)}…`);
       setLpAmt(""); setRetA(null); setRetB(null);
       fetchPools();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
@@ -490,7 +509,7 @@ export function Pools() {
           rent:                   SYSVAR_RENT_PUBKEY,
         } as any)
         .rpc();
-      setStatus(`✅ oSOLA reçus — tx: ${tx.slice(0, 16)}…`);
+      setStatus(`✅ oSOLA received — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
@@ -512,9 +531,10 @@ export function Pools() {
   // ── Manage view ───────────────────────────────────────────────────────────
 
   if (view === "manage" && selected) {
-    const userLp      = userLpBals[selected.address] ?? 0;
-    const share       = selected.totalLp > 0 ? (userLp / selected.totalLp) * 100 : 0;
-    const pending     = pendingOsola[selected.address] ?? 0;
+    const userLp        = userLpBals[selected.address] ?? 0;
+    const share         = selected.totalLp > 0 ? (userLp / selected.totalLp) * 100 : 0;
+    const pending       = pendingOsola[selected.address] ?? 0;
+    const lpValueUsdc   = selected.tvlUsdc !== null && selected.totalLp > 0 ? (userLp / selected.totalLp) * selected.tvlUsdc : null;
 
     return (
       <div className="space-y-4">
@@ -560,7 +580,14 @@ export function Pools() {
         {/* My position banner */}
         {wallet && userLp > 0 && (
           <div className="rounded-xl border border-brand-green/30 bg-brand-green/5 px-4 py-3 flex justify-between items-center">
-            <span className="text-sm text-brand-green/80 font-semibold">Ma position</span>
+            <div>
+              <span className="text-sm text-brand-green/80 font-semibold">My position</span>
+              {lpValueUsdc !== null && (
+                <p className="text-xs text-brand-green font-mono mt-0.5">
+                  ≈ ${lpValueUsdc.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+              )}
+            </div>
             <span className="text-sm font-bold text-brand-green font-mono">
               {userLp.toLocaleString(undefined, { maximumFractionDigits: 4 })} LP
               <span className="text-xs text-brand-green/60 ml-2">({share.toFixed(3)}%)</span>
@@ -645,7 +672,7 @@ export function Pools() {
               <p className="text-xs mt-2 text-right">
                 {poolHasLiquidity
                   ? <span className="text-gray-600">1 {symA} = {(selected.reserveB / selected.reserveA).toFixed(6)} {symB}</span>
-                  : <span className="text-yellow-500/70">Premier dépôt — vous fixez le prix initial</span>
+                  : <span className="text-yellow-500/70">First deposit — you set the initial price</span>
                 }
               </p>
             </div>
@@ -693,7 +720,7 @@ export function Pools() {
 
             {retA !== null && retB !== null && (
               <div className="rounded-xl border border-brand-border p-4 space-y-3">
-                <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide">Vous recevrez</p>
+                <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide">You will receive</p>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black text-black"
@@ -786,12 +813,12 @@ export function Pools() {
             className="w-8 h-8 rounded-full border border-brand-border text-gray-400 hover:text-white hover:border-brand-green transition-colors flex items-center justify-center text-lg leading-none">
             ←
           </button>
-          <h2 className="text-lg font-black text-white">Créer un pool</h2>
+          <h2 className="text-lg font-black text-white">Create a pool</h2>
         </div>
 
         <div className="card space-y-5">
           <div>
-            <p className="text-xs text-gray-500 uppercase tracking-widest mb-3 font-semibold">Paire de tokens</p>
+            <p className="text-xs text-gray-500 uppercase tracking-widest mb-3 font-semibold">Token pair</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-gray-400 mb-1 block">Token A</label>
@@ -817,26 +844,26 @@ export function Pools() {
           <div className="h-px bg-brand-border" />
 
           <div>
-            <p className="text-xs text-gray-500 uppercase tracking-widest mb-3 font-semibold">Frais</p>
+            <p className="text-xs text-gray-500 uppercase tracking-widest mb-3 font-semibold">Fees</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-gray-400 mb-1 block">Swap fee (bps)</label>
                 <input className="input w-full" type="text" inputMode="decimal"
                   value={newFee} onChange={e => numInput(e.target.value, setNewFee)} />
-                <span className="text-xs text-gray-600 mt-0.5 block">{(+newFee / 100).toFixed(2)}% par swap</span>
+                <span className="text-xs text-gray-600 mt-0.5 block">{(+newFee / 100).toFixed(2)}% per swap</span>
               </div>
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">Part protocole (bps)</label>
+                <label className="text-xs text-gray-400 mb-1 block">Protocol share (bps)</label>
                 <input className="input w-full" type="text" inputMode="decimal"
                   value={newProto} onChange={e => numInput(e.target.value, setNewProto)} />
-                <span className="text-xs text-gray-600 mt-0.5 block">{(+newProto / 100).toFixed(0)}% des fees → stakers</span>
+                <span className="text-xs text-gray-600 mt-0.5 block">{(+newProto / 100).toFixed(0)}% of fees → stakers</span>
               </div>
             </div>
           </div>
 
           <button className="btn-primary w-full py-3 text-base font-bold"
             onClick={createPool} disabled={loading || !wallet || newMintA === newMintB}>
-            {loading ? "Processing…" : "Créer le pool"}
+            {loading ? "Processing…" : "Create pool"}
           </button>
           {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
         </div>
@@ -853,26 +880,27 @@ export function Pools() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-black text-white">Pools</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Apportez de la liquidité et gagnez des fees + oSOLA</p>
+          <p className="text-xs text-gray-500 mt-0.5">Provide liquidity and earn fees + oSOLA</p>
         </div>
         <button className="btn-secondary text-sm" onClick={() => { setView("create"); setStatus(""); }}>
-          + Créer un pool
+          + Create pool
         </button>
       </div>
 
       {/* My Positions */}
       {wallet && myPools.length > 0 && (
         <section>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-3">Mes positions</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-3">My positions</p>
           <div className="rounded-2xl border border-brand-green/20 bg-brand-green/[0.03] divide-y divide-brand-green/10 overflow-hidden">
             {myPools.map(p => {
               const sA     = symbolByMint(p.mintA, usdcMint);
               const sB     = symbolByMint(p.mintB, usdcMint);
               const userLp = userLpBals[p.address] ?? 0;
               const share  = p.totalLp > 0 ? (userLp / p.totalLp) * 100 : 0;
-              const estA   = p.totalLp > 0 ? (userLp * p.reserveA / p.totalLp) : 0;
-              const estB   = p.totalLp > 0 ? (userLp * p.reserveB / p.totalLp) : 0;
-              const earned = pendingOsola[p.address] ?? 0;
+              const estA        = p.totalLp > 0 ? (userLp * p.reserveA / p.totalLp) : 0;
+              const estB        = p.totalLp > 0 ? (userLp * p.reserveB / p.totalLp) : 0;
+              const lpValueUsdc = p.tvlUsdc !== null && p.totalLp > 0 ? (userLp / p.totalLp) * p.tvlUsdc : null;
+              const earned      = pendingOsola[p.address] ?? 0;
               return (
                 <div key={p.address} className="flex items-center gap-4 px-4 py-3.5 hover:bg-brand-green/[0.05] transition-colors">
                   <PairBadge symA={sA} symB={sB} />
@@ -883,12 +911,17 @@ export function Pools() {
                     </p>
                   </div>
                   <div className="text-right hidden sm:block">
-                    <p className="text-xs text-gray-500 mb-0.5">Votre position</p>
+                    <p className="text-xs text-gray-500 mb-0.5">Your position</p>
                     <p className="text-xs font-mono text-white">
                       {estA.toLocaleString(undefined, { maximumFractionDigits: 4 })} {sA}
                       {" "}<span className="text-gray-600">+</span>{" "}
                       {estB.toLocaleString(undefined, { maximumFractionDigits: 4 })} {sB}
                     </p>
+                    {lpValueUsdc !== null && (
+                      <p className="text-xs text-brand-green/70 font-mono mt-0.5">
+                        ≈ ${lpValueUsdc.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </p>
+                    )}
                   </div>
                   {/* Earned oSOLA — live */}
                   <div className="text-right hidden md:block w-32">
@@ -917,20 +950,20 @@ export function Pools() {
       {/* All Pools */}
       <section>
         <div className="flex items-center justify-between mb-3">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Tous les pools</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">All pools</p>
           <button className="text-xs text-gray-600 hover:text-gray-300 transition-colors" onClick={fetchPools}>
-            ↻ Actualiser
+            ↻ Refresh
           </button>
         </div>
 
         {pools.length === 0 ? (
           <div className="card text-center py-12">
             <p className="text-4xl mb-3">💧</p>
-            <p className="text-gray-400 text-sm mb-1">Aucun pool AMM pour l'instant.</p>
-            <p className="text-gray-600 text-xs mb-4">Sois le premier à créer de la liquidité.</p>
+            <p className="text-gray-400 text-sm mb-1">No AMM pool yet.</p>
+            <p className="text-gray-600 text-xs mb-4">Be the first to create liquidity.</p>
             <button className="btn-primary text-sm"
               onClick={() => { setView("create"); setStatus(""); }}>
-              Créer le premier pool
+              Create the first pool
             </button>
           </div>
         ) : (

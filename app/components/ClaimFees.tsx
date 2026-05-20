@@ -110,7 +110,7 @@ export function ClaimFees() {
           <p className="font-semibold text-brand-green">Market Vault (Treasury)</p>
         </div>
         <div className="text-right">
-          <p className="text-xs text-gray-500">Disponible</p>
+          <p className="text-xs text-gray-500">Available</p>
           <p className={`text-lg font-black ${claimable && claimable > 0 ? "text-brand-green" : "text-gray-500"}`}>
             {claimable === null ? "…" : `${claimable.toLocaleString(undefined, { maximumFractionDigits: 4 })} USDC`}
           </p>
@@ -119,7 +119,7 @@ export function ClaimFees() {
 
       {claimable !== null && claimable === 0 && (
         <p className="text-xs text-gray-500 text-center mb-4">
-          Aucun fee à réclamer pour l'instant — les fees s'accumulent après votre dernier stake/claim.
+          No fees to claim yet — fees accrue after your last stake/claim.
         </p>
       )}
 

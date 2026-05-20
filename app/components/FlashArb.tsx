@@ -142,7 +142,7 @@ export function FlashArb() {
         } as any)
         .rpc();
 
-      setStatus(`✅ Flash arb exécuté — +${callerShare.toFixed(4)} USDC — tx: ${tx.slice(0, 16)}…`);
+      setStatus(`✅ Flash arb executed — +${callerShare.toFixed(4)} USDC — tx: ${tx.slice(0, 16)}…`);
       setAmount("");
       fetchState();
     } catch (e: any) {
@@ -161,7 +161,7 @@ export function FlashArb() {
         <div>
           <h2 className="text-lg font-bold text-white">Flash Arbitrage</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Burn oSOLA → mint SOLA → sell AMM → split profit. Zéro USDC avancé.
+            Burn oSOLA → mint SOLA → sell on AMM → split profit. Zero USDC upfront.
           </p>
         </div>
         <div className="text-right text-xs text-gray-500 border border-brand-border rounded px-2 py-1">
@@ -174,7 +174,7 @@ export function FlashArb() {
       {/* Live market state */}
       <div className="grid grid-cols-3 gap-3">
         <div className="rounded-xl bg-brand-dark border border-brand-border p-3 text-center">
-          <p className="text-xs text-gray-500 mb-1">Prix SOLA AMM</p>
+          <p className="text-xs text-gray-500 mb-1">SOLA AMM price</p>
           <p className="font-bold text-brand-green">
             {arb ? `${arb.solaAmmPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })} USDC` : "—"}
           </p>
@@ -194,7 +194,7 @@ export function FlashArb() {
       {/* Amount input */}
       <div className="rounded-xl bg-brand-dark border border-brand-border p-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold text-gray-400">oSOLA à arbitrager</span>
+          <span className="text-xs font-semibold text-gray-400">oSOLA to arbitrage</span>
           {arb && arb.osolaBalance > 0 && (
             <button
               className="text-xs text-brand-green hover:underline font-mono"
@@ -227,7 +227,7 @@ export function FlashArb() {
       {amt > 0 && (
         <div className="rounded-xl border border-brand-border p-4 space-y-2 text-sm">
           <div className="flex justify-between text-gray-500">
-            <span>SOLA reçus (AMM)</span>
+            <span>SOLA received (AMM)</span>
             <span className="font-mono text-white">{usdcOut.toFixed(4)} USDC</span>
           </div>
           <div className="flex justify-between text-gray-500">
@@ -236,11 +236,11 @@ export function FlashArb() {
           </div>
           <div className="h-px bg-brand-border" />
           <div className="flex justify-between font-semibold">
-            <span className="text-gray-400">Profit brut</span>
+            <span className="text-gray-400">Gross profit</span>
             <span className={`font-mono ${profitColor}`}>{grossProfit.toFixed(4)} USDC</span>
           </div>
           <div className="flex justify-between text-xs">
-            <span className="text-brand-green">Votre part (10%)</span>
+            <span className="text-brand-green">Your share (10%)</span>
             <span className="font-mono text-brand-green">+{callerShare.toFixed(4)} USDC</span>
           </div>
           <div className="flex justify-between text-xs">
@@ -249,7 +249,7 @@ export function FlashArb() {
           </div>
           {!isProfitable && amt > 0 && (
             <p className="text-xs text-red-400 text-center pt-1">
-              ⚠ Prix AMM trop bas — pas profitable après floor replenishment
+              ⚠ AMM price too low — not profitable after floor replenishment
             </p>
           )}
         </div>
@@ -259,17 +259,17 @@ export function FlashArb() {
         className="btn-primary w-full py-3 text-base font-bold"
         onClick={executeFlashArb}
         disabled={loading || !wallet || !isProfitable}>
-        {loading ? "Exécution…"
-          : !wallet ? "Connectez votre wallet"
-          : !isProfitable && amt > 0 ? "Pas profitable"
-          : amt > 0 ? `Exécuter — gagner ${callerShare.toFixed(4)} USDC`
-          : "Entrez un montant"}
+        {loading ? "Executing…"
+          : !wallet ? "Connect your wallet"
+          : !isProfitable && amt > 0 ? "Not profitable"
+          : amt > 0 ? `Execute — earn ${callerShare.toFixed(4)} USDC`
+          : "Enter an amount"}
       </button>
 
       {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
 
       <p className="text-xs text-gray-600 text-center">
-        Atomique · Pas de capital USDC requis · Conforme au smart contract · Double protection slippage
+        Atomic · No USDC capital required · On-chain enforced · Double slippage protection
       </p>
     </div>
   );

@@ -11,7 +11,7 @@ type ActionTab = "swap" | "options" | "earn" | "lend";
 
 const TABS: { id: ActionTab; label: string; hint: string }[] = [
   { id: "swap",    label: "Swap",    hint: "AMM multi-pools" },
-  { id: "options", label: "Options", hint: "Exercer oSOLA"   },
+  { id: "options", label: "Options", hint: "Exercise oSOLA"  },
   { id: "earn",    label: "Earn",    hint: "Stake → hiSOLA"  },
   { id: "lend",    label: "Lend",    hint: "Borrow USDC"     },
 ];

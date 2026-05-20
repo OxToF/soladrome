@@ -149,7 +149,7 @@ export default function Home() {
               rel="noreferrer"
               className="btn-secondary"
             >
-              Lire la Docs
+              Read the Docs
             </a>
             <a
               href={DISCORD_URL}

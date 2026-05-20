@@ -84,7 +84,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
   async function exercise() {
     if (!wallet || !usdcMint || !amount) return;
     const amt = parseFloat(amount);
-    if (isNaN(amt) || amt <= 0) { setStatus("❌ Montant invalide"); return; }
+    if (isNaN(amt) || amt <= 0) { setStatus("❌ Invalid amount"); return; }
 
     setLoading(true); setStatus("");
     try {
@@ -116,7 +116,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
         } as any)
         .rpc();
 
-      setStatus(`✅ ${amt} oSOLA exercés → SOLA — tx: ${tx.slice(0, 16)}…`);
+      setStatus(`✅ ${amt} oSOLA exercised → SOLA — tx: ${tx.slice(0, 16)}…`);
       setAmount("");
       fetchAll();
     } catch (e: any) {
@@ -141,7 +141,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
           </p>
         </div>
         <div className="rounded-lg bg-brand-dark border border-brand-border p-3 text-center">
-          <p className="text-xs text-gray-500 mb-0.5">Valeur intrinsèque</p>
+          <p className="text-xs text-gray-500 mb-0.5">Intrinsic value</p>
           <p className={`font-bold text-sm ${intrinsicValue && intrinsicValue > 0 ? "text-brand-green" : "text-gray-400"}`}>
             {intrinsicValue !== null ? `$${intrinsicValue.toFixed(4)}` : "—"}
           </p>
@@ -149,13 +149,13 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
       </div>
 
       <p className="text-xs text-gray-500 mb-4">
-        Payer 1 USDC par oSOLA → brûle l'oSOLA → reçoit 1 SOLA au prix floor.
-        Profit si prix marché &gt; $1.00.
+        Pay 1 USDC per oSOLA → burns oSOLA → receive 1 SOLA at floor price.
+        Profit if market price &gt; $1.00.
       </p>
 
       <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-gray-400">oSOLA à exercer</span>
+          <span className="text-xs text-gray-400">oSOLA to exercise</span>
           {oSolaBal !== null && (
             <span className="text-xs text-gray-500">
               Balance:{" "}
@@ -186,30 +186,30 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
       {usdcCost > 0 && (
         <div className="rounded-xl bg-brand-dark border border-brand-border p-3 mb-4 text-xs space-y-1">
           <div className="flex justify-between text-gray-400">
-            <span>Coût USDC</span>
+            <span>USDC cost</span>
             <span className="text-white font-mono">{usdcCost.toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC</span>
           </div>
           <div className="flex justify-between text-gray-400">
-            <span>SOLA reçus</span>
+            <span>SOLA received</span>
             <span className="text-white font-mono">{usdcCost.toLocaleString(undefined, { maximumFractionDigits: 6 })} SOLA</span>
           </div>
           {intrinsicValue !== null && (
             <div className="flex justify-between border-t border-brand-border pt-1 mt-1">
-              <span className="text-gray-400">Profit estimé</span>
+              <span className="text-gray-400">Estimated profit</span>
               <span className={`font-mono font-bold ${intrinsicValue * usdcCost > 0 ? "text-brand-green" : "text-gray-500"}`}>
                 ${(intrinsicValue * usdcCost).toFixed(4)}
               </span>
             </div>
           )}
           {usdcBal !== null && usdcCost > usdcBal && (
-            <p className="text-red-400 pt-1">Solde USDC insuffisant ({usdcBal.toFixed(2)} disponible)</p>
+            <p className="text-red-400 pt-1">Insufficient USDC balance ({usdcBal.toFixed(2)} available)</p>
           )}
         </div>
       )}
 
       <button className="btn-primary w-full" onClick={exercise}
         disabled={loading || !wallet || !amount || !canExercise}>
-        {loading ? "Exercice en cours…" : "Exercer oSOLA → SOLA"}
+        {loading ? "Exercising…" : "Exercise oSOLA → SOLA"}
       </button>
       {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
     </div>
@@ -229,34 +229,34 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
         <div className="card text-center">
           <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Prix Floor</p>
           <p className="text-xl font-bold text-white">$1.00</p>
-          <p className="text-xs text-gray-500">Coût d'exercice / oSOLA</p>
+          <p className="text-xs text-gray-500">Exercise cost / oSOLA</p>
         </div>
         <div className="card text-center">
-          <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Prix Marché SOLA</p>
+          <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">SOLA Market Price</p>
           <p className="text-xl font-bold text-brand-green">
             {mktPrice !== null ? `$${mktPrice.toFixed(4)}` : "—"}
           </p>
         </div>
         <div className="card text-center">
-          <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Valeur Intrinsèque</p>
+          <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Intrinsic Value</p>
           <p className={`text-xl font-bold ${intrinsicValue && intrinsicValue > 0 ? "text-brand-green" : "text-gray-400"}`}>
             {intrinsicValue !== null ? `$${intrinsicValue.toFixed(4)}` : "—"}
           </p>
-          <p className="text-xs text-gray-500">par oSOLA exercé</p>
+          <p className="text-xs text-gray-500">per oSOLA exercised</p>
         </div>
       </div>
 
       {/* Exercise form */}
       <div className="card">
-        <h2 className="text-lg font-bold text-white mb-1">Exercer des oSOLA</h2>
+        <h2 className="text-lg font-bold text-white mb-1">Exercise oSOLA</h2>
         <p className="text-xs text-gray-500 mb-6">
-          Payer 1 USDC par oSOLA → brûle l'oSOLA → reçoit 1 SOLA au prix floor.
-          Profit si prix marché &gt; $1.00.
+          Pay 1 USDC per oSOLA → burns oSOLA → receive 1 SOLA at floor price.
+          Profit if market price &gt; $1.00.
         </p>
 
         <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-gray-400">oSOLA à exercer</span>
+            <span className="text-xs text-gray-400">oSOLA to exercise</span>
             {oSolaBal !== null && (
               <span className="text-xs text-gray-500">
                 Balance:{" "}
@@ -297,23 +297,23 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
         {usdcCost > 0 && (
           <div className="rounded-xl bg-brand-dark border border-brand-border p-3 mb-4 text-xs space-y-1">
             <div className="flex justify-between text-gray-400">
-              <span>Coût USDC</span>
+              <span>USDC cost</span>
               <span className="text-white font-mono">{usdcCost.toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC</span>
             </div>
             <div className="flex justify-between text-gray-400">
-              <span>SOLA reçus</span>
+              <span>SOLA received</span>
               <span className="text-white font-mono">{usdcCost.toLocaleString(undefined, { maximumFractionDigits: 6 })} SOLA</span>
             </div>
             {intrinsicValue !== null && (
               <div className="flex justify-between border-t border-brand-border pt-1 mt-1">
-                <span className="text-gray-400">Profit estimé</span>
+                <span className="text-gray-400">Estimated profit</span>
                 <span className={`font-mono font-bold ${intrinsicValue * usdcCost > 0 ? "text-brand-green" : "text-gray-500"}`}>
                   ${(intrinsicValue * usdcCost).toFixed(4)}
                 </span>
               </div>
             )}
             {usdcBal !== null && usdcCost > usdcBal && (
-              <p className="text-red-400 pt-1">Solde USDC insuffisant ({usdcBal.toFixed(2)} USDC disponible)</p>
+              <p className="text-red-400 pt-1">Insufficient USDC balance ({usdcBal.toFixed(2)} USDC available)</p>
             )}
           </div>
         )}
@@ -323,7 +323,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
           onClick={exercise}
           disabled={loading || !wallet || !amount || !canExercise}
         >
-          {loading ? "Exercice en cours…" : "Exercer oSOLA → SOLA"}
+          {loading ? "Exercising…" : "Exercise oSOLA → SOLA"}
         </button>
 
         {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
@@ -335,21 +335,21 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
           <div>
             <h2 className="text-base font-bold text-white">Pool oSOLA / USDC</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              Les arbitrageurs exercent quand le prix pool &gt; $1.00
+              Arbitrageurs exercise when pool price &gt; $1.00
             </p>
           </div>
           {poolExists === true && (
-            <span className="text-xs text-brand-green border border-brand-green/30 rounded px-2 py-0.5">Actif</span>
+            <span className="text-xs text-brand-green border border-brand-green/30 rounded px-2 py-0.5">Active</span>
           )}
           {poolExists === false && (
-            <span className="text-xs text-gray-500 border border-brand-border rounded px-2 py-0.5">Inexistant</span>
+            <span className="text-xs text-gray-500 border border-brand-border rounded px-2 py-0.5">No pool</span>
           )}
         </div>
 
         {poolExists === true && poolPrice !== null && (
           <div className="grid grid-cols-3 gap-4 text-center mb-4">
             <div>
-              <p className="text-xs text-gray-500 mb-1">Prix pool</p>
+              <p className="text-xs text-gray-500 mb-1">Pool price</p>
               <p className="font-bold text-brand-green">${poolPrice.toFixed(4)}</p>
             </div>
             <div>
@@ -361,7 +361,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
             <div>
               <p className="text-xs text-gray-500 mb-1">Arbitrage</p>
               <p className={`font-bold text-xs ${poolPrice > 1 ? "text-brand-green" : "text-gray-500"}`}>
-                {poolPrice > 1 ? "✓ Exercice rentable" : "Prix ≤ floor"}
+                {poolPrice > 1 ? "✓ Profitable" : "Price ≤ floor"}
               </p>
             </div>
           </div>
@@ -369,7 +369,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
 
         {poolExists === false && (
           <p className="text-xs text-gray-400 mb-4">
-            Personne n'a encore créé ce pool. Sois le premier LPer et capture les frais d'arbitrage.
+            No one has created this pool yet. Be the first LPer and capture arbitrage fees.
           </p>
         )}
 
@@ -377,7 +377,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
           className="btn-secondary w-full text-sm"
           onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: poolExists ? "pools" : "pools" }))}
         >
-          {poolExists ? "Gérer la liquidité →" : "Créer le pool oSOLA/USDC →"}
+          {poolExists ? "Manage liquidity →" : "Create oSOLA/USDC pool →"}
         </button>
       </div>
 

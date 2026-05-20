@@ -96,7 +96,7 @@ export function Liquidity() {
             {s ? `${s.floorUsdc.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC` : "—"}
           </p>
           <p className="text-xs text-gray-500 mt-2">
-            Garantit 1 USDC / SOLA à tout moment
+            Guarantees 1 USDC / SOLA at all times
           </p>
         </div>
 
@@ -107,7 +107,7 @@ export function Liquidity() {
             {s ? `${s.marketUsdc.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC` : "—"}
           </p>
           <p className="text-xs text-gray-500 mt-2">
-            Prime de prix accumulée — partagée avec les stakers
+            Accumulated price premium — shared with stakers
           </p>
         </div>
 
@@ -118,14 +118,14 @@ export function Liquidity() {
             {s ? `${s.solaLocked.toLocaleString(undefined, { maximumFractionDigits: 0 })} SOLA` : "—"}
           </p>
           <p className="text-xs text-gray-500 mt-2">
-            SOLA verrouillé par les stakers (hiSOLA)
+            SOLA locked by stakers (hiSOLA)
           </p>
         </div>
       </div>
 
       {/* Bonding curve */}
       <div className="card">
-        <h2 className="text-base font-bold text-white mb-4">Bonding Curve — Réserves Virtuelles</h2>
+        <h2 className="text-base font-bold text-white mb-4">Bonding Curve — Virtual Reserves</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
           <div>
             <p className="text-xs text-gray-500 mb-1">Virtual USDC</p>
@@ -140,7 +140,7 @@ export function Liquidity() {
             </p>
           </div>
           <div>
-            <p className="text-xs text-gray-500 mb-1">Prix Marché</p>
+            <p className="text-xs text-gray-500 mb-1">Market Price</p>
             <p className="font-bold text-brand-green">
               {s ? `${curvePrice.toFixed(4)} USDC` : "—"}
             </p>
@@ -154,19 +154,19 @@ export function Liquidity() {
         </div>
 
         <div className="mt-6 p-4 rounded-xl bg-brand-dark border border-brand-border text-xs text-gray-400 leading-relaxed">
-          <p className="font-semibold text-gray-300 mb-1">Modèle de liquidité Soladrome</p>
-          La liquidité est <span className="text-brand-green">protocol-owned</span> — pas de LP externe.
-          Chaque achat de SOLA dépose&nbsp;1 USDC dans le <em>floor vault</em> (garantie de rachat)
-          et le surplus dans le <em>market vault</em> (revenus des stakers).
-          La courbe de liaison x·y=k assure une profondeur de liquidité permanente sans risque d'impermanent loss.
+          <p className="font-semibold text-gray-300 mb-1">Soladrome liquidity model</p>
+          Liquidity is <span className="text-brand-green">protocol-owned</span> — no external LP.
+          Each SOLA purchase deposits&nbsp;1 USDC into the <em>floor vault</em> (redemption guarantee)
+          and the surplus into the <em>market vault</em> (staker revenue).
+          The x·y=k bonding curve ensures permanent liquidity depth with no impermanent loss risk.
         </div>
       </div>
 
       {/* CTA */}
       <div className="card flex items-center justify-between">
         <div>
-          <p className="font-semibold text-white mb-1">Participer à la liquidité</p>
-          <p className="text-xs text-gray-500">Achète SOLA pour renforcer le floor vault, stake pour gagner les fees.</p>
+          <p className="font-semibold text-white mb-1">Participate in liquidity</p>
+          <p className="text-xs text-gray-500">Buy SOLA to strengthen the floor vault, stake to earn fees.</p>
         </div>
         <div className="flex gap-3 shrink-0">
           <a href="#" onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "swap" }))}
@@ -175,7 +175,7 @@ export function Liquidity() {
           </a>
           <a href="#" onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "stake" }))}
             className="btn-primary text-sm">
-            Staker
+            Stake
           </a>
         </div>
       </div>

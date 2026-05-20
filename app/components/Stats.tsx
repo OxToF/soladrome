@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
-import { getProgram, statePda, toUi, poolPda, solaM } from "@/lib/program";
+import { getProgram, statePda, toUi, poolPda, solaM, oSolaM } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 interface ProtocolStats {
@@ -14,6 +14,7 @@ interface ProtocolStats {
   curvePrice:      number;         // bonding curve: virtualUsdc / virtualSola
   solaPrice:       number | null;  // AMM USDC/SOLA pool spot price
   osolaIntrinsic:  number | null;  // max(0, solaPrice - 1) — exercise value
+  osolaMktPrice:   number | null;  // AMM oSOLA/USDC spot price
   floorPrice:      number;
   accumulatedFees: number;
 }
@@ -50,8 +51,22 @@ export function Stats() {
       }
 
       // ── oSOLA intrinsic value: max(0, solaPrice - floor) ─────────────────
-      // Exercise cost is always 1 USDC per oSOLA; profit = SOLA price - 1 USDC
       const osolaIntrinsic = solaPrice !== null ? Math.max(0, solaPrice - 1) : null;
+
+      // ── oSOLA market price: from AMM oSOLA/USDC pool ──────────────────────
+      let osolaMktPrice: number | null = null;
+      if (usdcMint) {
+        try {
+          const osolaPoolAddr = poolPda(oSolaM, usdcMint);
+          const osolaPool     = await (program.account as any).ammPool.fetch(osolaPoolAddr);
+          const mintA         = osolaPool.tokenAMint.toString();
+          const ra            = toUi(osolaPool.reserveA as BN);
+          const rb            = toUi(osolaPool.reserveB as BN);
+          osolaMktPrice = mintA === oSolaM.toString()
+            ? (rb / ra)
+            : (ra / rb);
+        } catch { osolaMktPrice = null; }
+      }
 
       setStats({
         totalSola:       toUi(s.totalSola),
@@ -59,6 +74,7 @@ export function Stats() {
         curvePrice,
         solaPrice,
         osolaIntrinsic,
+        osolaMktPrice,
         floorPrice:      1,
         accumulatedFees: toUi(s.accumulatedFees),
       });
@@ -110,36 +126,41 @@ export function Stats() {
 
       {/* Bonding curve price */}
       <div className="card text-center">
-        <p className="text-xs text-gray-500 mb-1">Prix courbe</p>
+        <p className="text-xs text-gray-500 mb-1">Curve price</p>
         <p className="font-bold text-brand-green">{fmt4(stats.curvePrice)} USDC</p>
-        <p className="text-[10px] text-gray-600 mt-0.5">émission primaire</p>
+        <p className="text-[10px] text-gray-600 mt-0.5">primary issuance</p>
       </div>
 
       {/* AMM spot price + spread indicator */}
       <div className="card text-center">
-        <p className="text-xs text-gray-500 mb-1">Prix AMM</p>
+        <p className="text-xs text-gray-500 mb-1">AMM price</p>
         <p className="font-bold text-brand-green">
           {stats.solaPrice !== null ? `${fmt4(stats.solaPrice)} USDC` : "No pool"}
         </p>
         {spreadPct !== null && (
           <p className={`text-[10px] mt-0.5 ${spreadPct > 0 ? "text-yellow-500" : "text-blue-400"}`}>
-            {spreadPct > 0 ? "▲" : "▼"} {Math.abs(spreadPct).toFixed(2)}% vs courbe
+            {spreadPct > 0 ? "▲" : "▼"} {Math.abs(spreadPct).toFixed(2)}% vs curve
           </p>
         )}
       </div>
 
       <div className="card text-center">
-        <p className="text-xs text-gray-500 mb-1">oSOLA Valeur</p>
+        <p className="text-xs text-gray-500 mb-1">oSOLA</p>
         <p className="font-bold text-brand-green">
-          {stats.osolaIntrinsic !== null ? `${fmt4(stats.osolaIntrinsic)} USDC` : "—"}
+          {stats.osolaMktPrice !== null ? `${fmt4(stats.osolaMktPrice)} USDC` : "—"}
         </p>
-        <p className="text-[10px] text-gray-600 mt-0.5">1 oSOLA + 1 USDC → 1 SOLA</p>
+        <p className="text-[10px] text-gray-600 mt-0.5">market price</p>
+        {stats.osolaIntrinsic !== null && (
+          <p className="text-[10px] text-yellow-500 mt-1">
+            exercice: {fmt4(stats.osolaIntrinsic)} USDC
+          </p>
+        )}
       </div>
 
       <div className="card text-center">
         <p className="text-xs text-gray-500 mb-1">Floor Price</p>
         <p className="font-bold text-brand-green">1.0000 USDC</p>
-        <p className="text-[10px] text-gray-600 mt-0.5">garanti</p>
+        <p className="text-[10px] text-gray-600 mt-0.5">guaranteed</p>
       </div>
 
       <div className="card text-center">

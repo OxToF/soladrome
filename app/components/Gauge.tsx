@@ -97,7 +97,7 @@ export function Gauge() {
   async function depositBribe() {
     if (!wallet || !amount) return;
     const pool = parsePool(); const mint = parseMint();
-    if (!pool || !mint) { setStatus("❌ Adresse pool ou mint invalide"); return; }
+    if (!pool || !mint) { setStatus("❌ Invalid pool or mint address"); return; }
     setLoading(true); setStatus("");
     try {
       const provider = new AnchorProvider(connection, wallet, {});
@@ -115,7 +115,7 @@ export function Gauge() {
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
         } as any).rpc();
-      setStatus(`✅ Bribe déposé — tx: ${tx.slice(0, 16)}…`);
+      setStatus(`✅ Bribe deposited — tx: ${tx.slice(0, 16)}…`);
       setAmount("");
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
@@ -133,7 +133,7 @@ export function Gauge() {
 
       {/* ── Token reference panel ── */}
       <div className="mb-4">
-        <p className="text-xs text-gray-500 mb-2 uppercase tracking-widest">Tokens du protocole</p>
+        <p className="text-xs text-gray-500 mb-2 uppercase tracking-widest">Protocol tokens</p>
         <div className="grid grid-cols-2 gap-2">
           {knownTokens.map((tok) => (
             <div key={tok.mint}
@@ -148,19 +148,19 @@ export function Gauge() {
               <div className="flex gap-1 flex-shrink-0">
                 <button
                   onClick={() => copyToClipboard(tok.mint, `copy-${tok.mint}`)}
-                  title="Copier l'adresse"
+                  title="Copy address"
                   className="text-[10px] px-1.5 py-0.5 rounded border border-brand-border text-gray-500 hover:text-gray-200 hover:border-gray-500 transition-colors">
                   {copied === `copy-${tok.mint}` ? "✓" : "⎘"}
                 </button>
                 <button
                   onClick={() => setRewardMint(tok.mint)}
-                  title="Utiliser comme token de bribe"
+                  title="Use as bribe token"
                   className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
                     rewardMint === tok.mint
                       ? "border-brand-green text-brand-green"
                       : "border-brand-border text-gray-500 hover:text-gray-200 hover:border-gray-500"
                   }`}>
-                  {rewardMint === tok.mint ? "✓ sél." : "Sél."}
+                  {rewardMint === tok.mint ? "✓ Sel." : "Sel."}
                 </button>
               </div>
             </div>
@@ -176,13 +176,13 @@ export function Gauge() {
             className="input"
             value={poolId}
             onChange={(e) => setPoolId(e.target.value)}>
-            <option value="">— Sélectionner une pool —</option>
+            <option value="">— Select a pool —</option>
             {pools.map((p) => (
               <option key={p.address} value={p.address}>{p.label}</option>
             ))}
           </select>
         ) : (
-          <input className="input" placeholder="Pubkey de la pool cible"
+          <input className="input" placeholder="Target pool address"
             value={poolId} onChange={(e) => setPoolId(e.target.value)} />
         )}
         {poolId && (
@@ -201,21 +201,21 @@ export function Gauge() {
 
       {/* ── Reward mint (manual fallback) ── */}
       <div className="mb-4">
-        <label className="text-xs text-gray-400 mb-1 block">Token de bribe (mint)</label>
+        <label className="text-xs text-gray-400 mb-1 block">Bribe token (mint)</label>
         <input className="input"
-          placeholder="Sélectionnez ci-dessus ou collez une adresse"
+          placeholder="Select above or paste an address"
           value={rewardMint} onChange={(e) => setRewardMint(e.target.value)} />
       </div>
 
       {/* ── Deposit ── */}
       <p className="text-xs text-gray-500 mb-4">
-        Incitez les holders hiSOLA à voter pour votre pool. Les dépôts sont additifs.
+        Incentivize hiSOLA holders to vote for your pool. Deposits are additive.
       </p>
       <div className="flex items-center justify-between mb-1">
-        <label className="text-xs text-gray-400">Montant</label>
+        <label className="text-xs text-gray-400">Amount</label>
         {wallet && rewardMint && (
           <span className="text-xs text-gray-500">
-            Solde :{" "}
+            Balance:{" "}
             <button
               className="text-brand-green hover:underline font-mono"
               onClick={() => mintBalance !== null && setAmount(String(mintBalance))}>
@@ -239,7 +239,7 @@ export function Gauge() {
       </div>
       <button className="btn-primary w-full" onClick={depositBribe}
         disabled={loading || !wallet || !amount || !poolId || !rewardMint}>
-        {loading ? "Dépôt…" : "Déposer la bribe"}
+        {loading ? "Depositing…" : "Deposit bribe"}
       </button>
 
       {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
