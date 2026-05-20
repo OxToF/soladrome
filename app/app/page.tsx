@@ -36,6 +36,7 @@ const HOME_ALIASES = new Set(["swap", "stake", "borrow", "osola", "liquidity"]);
 
 const DOCS_URL = "/about.html";
 const DISCORD_URL = "https://discord.com/channels/1506249630218715218/1506249803451994132";
+const X_URL = "https://x.com/soladrome";
 const EMAIL = "info@soladrome.finance";
 
 export default function Home() {
@@ -110,6 +111,18 @@ export default function Home() {
               </svg>
               Discord
             </a>
+            <a
+              href={X_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors flex items-center gap-1.5"
+              title="Soladrome on X"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.737-8.835L2.25 2.25h6.919l4.259 5.632 5.816-5.632zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+              X
+            </a>
           </nav>
 
           <WalletMultiButton className="!bg-brand-green !text-black !rounded-xl !font-bold !text-sm shrink-0" />
@@ -149,6 +162,17 @@ export default function Home() {
               </svg>
               Discord
             </a>
+            <a
+              href={X_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="btn-secondary flex items-center gap-2 justify-center"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.737-8.835L2.25 2.25h6.919l4.259 5.632 5.816-5.632zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+              X
+            </a>
           </div>
         </div>
       )}
@@ -180,6 +204,10 @@ export default function Home() {
             <a href={DISCORD_URL} target="_blank" rel="noreferrer"
               className="shrink-0 px-3 py-2 rounded-lg text-sm font-medium text-gray-400 border border-brand-border hover:text-[#5865F2]">
               Discord
+            </a>
+            <a href={X_URL} target="_blank" rel="noreferrer"
+              className="shrink-0 px-3 py-2 rounded-lg text-sm font-medium text-gray-400 border border-brand-border hover:text-white">
+              X
             </a>
           </div>
 
@@ -213,6 +241,9 @@ export default function Home() {
         {" · "}
         <a href={DISCORD_URL} target="_blank" rel="noreferrer"
           className="hover:text-[#5865F2] transition-colors">Discord</a>
+        {" · "}
+        <a href={X_URL} target="_blank" rel="noreferrer"
+          className="hover:text-white transition-colors">X</a>
         {" · "}
         <a href={`mailto:${EMAIL}`} className="hover:text-brand-green transition-colors">{EMAIL}</a>
       </footer>
