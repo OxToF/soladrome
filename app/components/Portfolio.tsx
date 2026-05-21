@@ -59,7 +59,13 @@ export function Portfolio() {
     setData({ solaBalance, hiSolaBalance, oSolaBalance, debt, marketPrice });
   }, [connection, wallet, usdcMint]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 8_000);
+    const onRefresh = () => load();
+    window.addEventListener("soladrome:refresh", onRefresh);
+    return () => { clearInterval(id); window.removeEventListener("soladrome:refresh", onRefresh); };
+  }, [load]);
 
   const totalValue = data
     ? (data.solaBalance + data.hiSolaBalance) * data.marketPrice
