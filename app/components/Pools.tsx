@@ -134,8 +134,10 @@ export function Pools() {
   const [manageTab, setManageTab] = useState<ManageTab>("add");
   const [pools,     setPools]     = useState<PoolInfo[]>([]);
   const [selected,  setSelected]  = useState<PoolInfo | null>(null);
-  const [loading,   setLoading]   = useState(false);
-  const [status,    setStatus]    = useState("");
+  const [loading,       setLoading]       = useState(false);
+  const [status,        setStatus]        = useState("");
+  const [claimAllBusy,  setClaimAllBusy]  = useState(false);
+  const [claimAllMsg,   setClaimAllMsg]   = useState("");
 
   const [userLpBals,    setUserLpBals]    = useState<Record<string, number>>({});
   const [userLpRaws,    setUserLpRaws]    = useState<Record<string, bigint>>({});
@@ -526,6 +528,57 @@ export function Pools() {
     finally { setLoading(false); }
   }
 
+  // ── Claim all LP rewards ──────────────────────────────────────────────────
+
+  async function claimAll() {
+    if (!wallet) return;
+    const eligible = (wallet ? pools.filter(p => (userLpBals[p.address] ?? 0) > 0) : []);
+    if (eligible.length === 0) return;
+    setClaimAllBusy(true); setClaimAllMsg("");
+    try {
+      const program    = getProgram(prov());
+      const userOSola  = userAta(oSolaM, wallet.publicKey);
+
+      const preIxs: any[] = [];
+      const oSolaAtaIx = await ensureAtaIx(connection, wallet.publicKey, oSolaM, wallet.publicKey);
+      if (oSolaAtaIx) preIxs.push(oSolaAtaIx);
+
+      const claimIxs: any[] = await Promise.all(eligible.map(async (p) => {
+        const poolAddr    = new PublicKey(p.address);
+        const lpMint      = lpMintPda(poolAddr);
+        const userInfoPda = lpUserInfoPda(poolAddr, wallet.publicKey);
+        const userLp      = userAta(lpMint, wallet.publicKey);
+        return program.methods
+          .claimLpRewards()
+          .accounts({
+            user:                   wallet.publicKey,
+            pool:                   poolAddr,
+            lpMint,
+            userLp,
+            lpUserInfo:             userInfoPda,
+            protocolState:          statePda,
+            oSolaMint:              oSolaM,
+            userOSola,
+            tokenProgram:           TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram:          SystemProgram.programId,
+            rent:                   SYSVAR_RENT_PUBKEY,
+          } as any)
+          .instruction();
+      }));
+
+      const sig   = await sendTx(connection, wallet, [...preIxs, ...claimIxs]);
+      const total = eligible.reduce((s, p) => s + (pendingOsola[p.address] ?? 0), 0);
+      setClaimAllMsg(`✅ Claimed ~${total.toFixed(4)} oSOLA from ${eligible.length} pool(s) — tx: ${sig.slice(0, 16)}…`);
+      fetchPools();
+      window.dispatchEvent(new CustomEvent("soladrome:refresh"));
+    } catch (e: any) {
+      setClaimAllMsg(`❌ ${e?.message ?? e}`);
+    } finally {
+      setClaimAllBusy(false);
+    }
+  }
+
   // ── Navigation helpers ────────────────────────────────────────────────────
 
   const symA = selected ? symbolByMint(selected.mintA, usdcMint) : "";
@@ -901,7 +954,38 @@ export function Pools() {
       {/* My Positions */}
       {wallet && myPools.length > 0 && (
         <section>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-3">My positions</p>
+          {/* Header: title + Claim All */}
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">My positions</p>
+            {(() => {
+              const totalPending = myPools.reduce((s, p) => s + (pendingOsola[p.address] ?? 0), 0);
+              return (
+                <button
+                  onClick={claimAll}
+                  disabled={claimAllBusy || totalPending <= 0}
+                  className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg
+                             border border-brand-green/40 text-brand-green hover:bg-brand-green/10
+                             transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {claimAllBusy ? (
+                    "Claiming…"
+                  ) : totalPending > 0 ? (
+                    <>
+                      <span>Claim All</span>
+                      <span className="font-mono text-brand-green/80">
+                        {totalPending.toLocaleString(undefined, { maximumFractionDigits: 4 })} oSOLA
+                      </span>
+                    </>
+                  ) : (
+                    "Claim All"
+                  )}
+                </button>
+              );
+            })()}
+          </div>
+          {claimAllMsg && (
+            <p className="text-xs text-gray-400 break-all mb-3">{claimAllMsg}</p>
+          )}
           <div className="rounded-2xl border border-brand-green/20 bg-brand-green/[0.03] divide-y divide-brand-green/10 overflow-hidden">
             {myPools.map(p => {
               const sA     = symbolByMint(p.mintA, usdcMint);
