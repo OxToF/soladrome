@@ -106,6 +106,11 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
         {tab === "borrow" ? "Borrow USDC" : "Repay USDC"}
       </h2>
 
+      <div className="flex items-center gap-2 text-xs text-gray-500 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 mb-5">
+        <span className="text-brand-green text-base leading-none">ℹ</span>
+        <span>Borrow <span className="text-white font-semibold">1 USDC</span> for every <span className="text-white font-semibold">1 hiSOLA</span> you hold — no interest, no liquidation.</span>
+      </div>
+
       <div className="flex gap-6 mb-6 border-b border-brand-border">
         {(["borrow", "repay"] as Tab[]).map((t) => (
           <button
