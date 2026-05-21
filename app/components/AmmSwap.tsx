@@ -188,6 +188,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       setAmountIn("");
       fetchPool();
       fetchBalance();
+      window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) {
       setStatus(`❌ ${e?.message ?? e}`);
     } finally {

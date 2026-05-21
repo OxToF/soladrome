@@ -69,6 +69,7 @@ export function BuySell() {
           } as any)
           .rpc();
         setStatus(`✅ Bought SOLA — tx: ${tx.slice(0, 16)}…`);
+        window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
         const tx = await program.methods
           .sellSola(fromUi(+amount))
@@ -83,6 +84,7 @@ export function BuySell() {
           } as any)
           .rpc();
         setStatus(`✅ Sold SOLA — tx: ${tx.slice(0, 16)}…`);
+        window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       }
     } catch (e: any) {
       setStatus(`❌ ${e?.message ?? e}`);

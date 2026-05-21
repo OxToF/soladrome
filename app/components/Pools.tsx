@@ -211,6 +211,13 @@ export function Pools() {
 
   useEffect(() => { fetchPools(); }, [fetchPools]);
 
+  // Keep selected pool in sync when pools refresh
+  useEffect(() => {
+    if (!selected) return;
+    const updated = pools.find(p => p.address === selected.address);
+    if (updated) setSelected(updated);
+  }, [pools]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Fetch user LP balances and reward debts
   useEffect(() => {
     if (!wallet || pools.length === 0) return;
@@ -356,6 +363,7 @@ export function Pools() {
         .rpc();
       setStatus(`✅ Pool created — ${tx.slice(0, 16)}…`);
       fetchPools(); setView("list");
+      window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
   }
@@ -426,6 +434,7 @@ export function Pools() {
       setStatus(`✅ Liquidity added — ${sig.slice(0, 16)}…`);
       setAddA(""); setAddB("");
       fetchPools();
+      window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
   }
@@ -477,6 +486,7 @@ export function Pools() {
       setStatus(`✅ Liquidity removed — ${sig.slice(0, 16)}…`);
       setLpAmt(""); setRetA(null); setRetB(null);
       fetchPools();
+      window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
   }
@@ -511,6 +521,7 @@ export function Pools() {
         .rpc();
       setStatus(`✅ oSOLA received — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
+      window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoading(false); }
   }

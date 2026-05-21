@@ -67,6 +67,7 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
           } as any)
           .rpc();
         setStatus(`✅ Staked → hiSOLA — tx: ${tx.slice(0, 16)}…`);
+        window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
         const tx = await program.methods
           .unstakeHiSola(fromUi(+amount))
@@ -83,6 +84,7 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
           } as any)
           .rpc();
         setStatus(`✅ Unstaked → SOLA — tx: ${tx.slice(0, 16)}…`);
+        window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       }
       setAmount("");
       fetchBalance();

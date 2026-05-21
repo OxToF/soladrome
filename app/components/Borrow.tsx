@@ -75,6 +75,7 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
           } as any)
           .rpc();
         setStatus(`✅ Borrowed ${amount} USDC — tx: ${tx.slice(0, 16)}…`);
+        window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
         const tx = await program.methods
           .repayUsdc(fromUi(+amount))
@@ -88,6 +89,7 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
           } as any)
           .rpc();
         setStatus(`✅ Repaid ${amount} USDC — tx: ${tx.slice(0, 16)}…`);
+        window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       }
       setAmount("");
       fetchBalance();
