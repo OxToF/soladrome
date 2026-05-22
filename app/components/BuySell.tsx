@@ -35,7 +35,7 @@ export function BuySell() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setStatus(`✅ Got ${data.amount} test USDC!`);
+      setStatus(`✅ Got ${data.amount} test USDC${data.solAirdropped ? " + 1 devnet SOL" : ""}!`);
     } catch (e: any) {
       setStatus(`❌ Faucet: ${e?.message ?? e}`);
     } finally {
@@ -151,13 +151,14 @@ export function BuySell() {
 
       {/* Devnet faucet */}
       <div className="mt-4 pt-4 border-t border-brand-border">
-        <p className="text-xs text-gray-500 mb-2">Need test USDC?</p>
+        <p className="text-xs text-gray-500 mb-0.5">New wallet? Get devnet SOL + test USDC</p>
+        <p className="text-[10px] text-gray-600 mb-2">SOL needed to pay transaction fees</p>
         <button
           className="btn-secondary w-full text-xs"
           onClick={claimFaucet}
           disabled={faucetLoading || !wallet}
         >
-          {faucetLoading ? "Sending…" : "Get 500 Test USDC"}
+          {faucetLoading ? "Sending…" : "Get SOL + 500 Test USDC"}
         </button>
       </div>
     </div>

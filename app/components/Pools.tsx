@@ -2,7 +2,7 @@
 // Copyright (C) 2025 Christophe Hertecant
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useAnchorWallet, useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import {
@@ -12,8 +12,8 @@ import {
 import { SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
   getProgram, poolPda, lpMintPda, vaultAPda, vaultBPda,
-  sortMints, userAta, commonAccounts, statePda, oSolaM, PROGRAM_ID,
-  fromUiDecimals, toUiDecimals,
+  sortMints, userAta, commonAccounts, statePda, oSolaM, solaM, PROGRAM_ID,
+  fromUiDecimals, toUiDecimals, toUi,
   buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
   WSOL_MINT_STR,
 } from "@/lib/program";
@@ -27,6 +27,13 @@ const PCT = [25, 50, 75, 100] as const;
 const LP_REWARD_PRECISION = BigInt("1000000000000");
 // Emission per second per pool — must match OSOLA_EMISSION_PER_SEC = 100_000
 const OSOLA_EMISSION_PER_SEC = BigInt("100000");
+// oSOLA emitted per year per pool (0.1 oSOLA/sec × 365 × 24 × 3600)
+const OSOLA_PER_YEAR = 0.1 * 365 * 24 * 3600; // 3_153_600
+
+function poolEmissionApr(tvlUsdc: number | null, osolaPrice: number | null): number | null {
+  if (!tvlUsdc || tvlUsdc <= 0 || !osolaPrice || osolaPrice <= 0) return null;
+  return (OSOLA_PER_YEAR * osolaPrice / tvlUsdc) * 100;
+}
 
 type View = "list" | "manage" | "create";
 type ManageTab = "add" | "remove" | "claim";
@@ -127,6 +134,7 @@ function lpUserInfoPda(pool: PublicKey, user: PublicKey): PublicKey {
 export function Pools() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
+  const { sendTransaction } = useWallet();
   const { usdcMint } = useSoladrome();
   const tokens = getTokenList(usdcMint);
 
@@ -134,6 +142,7 @@ export function Pools() {
   const [manageTab, setManageTab] = useState<ManageTab>("add");
   const [pools,     setPools]     = useState<PoolInfo[]>([]);
   const [selected,  setSelected]  = useState<PoolInfo | null>(null);
+  const [osolaPrice, setOsolaPrice] = useState<number | null>(null);
   const [loading,       setLoading]       = useState(false);
   const [status,        setStatus]        = useState("");
   const [claimAllBusy,  setClaimAllBusy]  = useState(false);
@@ -208,6 +217,18 @@ export function Pools() {
       }
 
       setPools(infos);
+
+      // oSOLA spot price from oSOLA/USDC pool (used for emission APR)
+      if (usdcMint) {
+        try {
+          const osolaPoolAddr = poolPda(oSolaM, usdcMint);
+          const op = await (program.account as any).ammPool.fetch(osolaPoolAddr);
+          const mA = op.tokenAMint.toString();
+          const ra = toUi(op.reserveA as BN);
+          const rb = toUi(op.reserveB as BN);
+          setOsolaPrice(mA === oSolaM.toString() ? rb / ra : ra / rb);
+        } catch { setOsolaPrice(null); }
+      }
     } catch { }
   }, [connection, wallet, usdcMint]);
 
@@ -432,7 +453,7 @@ export function Pools() {
         } as any)
         .instruction();
 
-      const sig = await sendTx(connection, wallet, [...preIxs, addIx, ...postIxs]);
+      const sig = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, addIx, ...postIxs]);
       setStatus(`✅ Liquidity added — ${sig.slice(0, 16)}…`);
       setAddA(""); setAddB("");
       fetchPools();
@@ -484,7 +505,7 @@ export function Pools() {
         } as any)
         .instruction();
 
-      const sig = await sendTx(connection, wallet, [...preIxs, removeIx, ...postIxs]);
+      const sig = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, removeIx, ...postIxs]);
       setStatus(`✅ Liquidity removed — ${sig.slice(0, 16)}…`);
       setLpAmt(""); setRetA(null); setRetB(null);
       fetchPools();
@@ -567,7 +588,7 @@ export function Pools() {
           .instruction();
       }));
 
-      const sig   = await sendTx(connection, wallet, [...preIxs, ...claimIxs]);
+      const sig   = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, ...claimIxs]);
       const total = eligible.reduce((s, p) => s + (pendingOsola[p.address] ?? 0), 0);
       setClaimAllMsg(`✅ Claimed ~${total.toFixed(4)} oSOLA from ${eligible.length} pool(s) — tx: ${sig.slice(0, 16)}…`);
       fetchPools();
@@ -618,7 +639,7 @@ export function Pools() {
         </div>
 
         {/* Pool stats strip */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="rounded-xl bg-brand-dark border border-brand-border p-3 text-center">
             <p className="text-xs text-gray-500 mb-1">TVL</p>
             <p className="font-bold text-brand-green text-sm">
@@ -626,6 +647,16 @@ export function Pools() {
                 ? `$${selected.tvlUsdc.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
                 : "—"}
             </p>
+          </div>
+          <div className="rounded-xl bg-brand-dark border border-brand-border p-3 text-center">
+            <p className="text-xs text-gray-500 mb-1">oSOLA APR</p>
+            <p className="font-bold text-brand-green text-sm">
+              {(() => {
+                const apr = poolEmissionApr(selected.tvlUsdc, osolaPrice);
+                return apr !== null ? `${apr.toFixed(1)}%` : "—";
+              })()}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">emission rewards</p>
           </div>
           <div className="rounded-xl bg-brand-dark border border-brand-border p-3 text-center">
             <p className="text-xs text-gray-500 mb-1">{symA} Reserve</p>
@@ -1106,10 +1137,17 @@ export function Pools() {
                     </div>
 
                     <div className="hidden sm:block text-right">
-                      <p className="font-bold text-brand-green text-sm">
-                        {(p.feeRate / 100).toFixed(2)}%
-                      </p>
-                      <p className="text-[10px] text-gray-600">fee tier</p>
+                      {(() => {
+                        const apr = poolEmissionApr(p.tvlUsdc, osolaPrice);
+                        return apr !== null ? (
+                          <>
+                            <p className="font-bold text-brand-green text-sm">{apr.toFixed(1)}%</p>
+                            <p className="text-[10px] text-gray-600">oSOLA APR</p>
+                          </>
+                        ) : (
+                          <p className="text-gray-600 text-sm">—</p>
+                        );
+                      })()}
                     </div>
 
                     <div className="shrink-0">

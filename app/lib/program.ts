@@ -150,19 +150,29 @@ export async function ensureAtaIx(
 }
 
 /**
- * Sign, send, and confirm a transaction using the wallet adapter.
+ * Send and confirm a transaction via the wallet adapter's sendTransaction,
+ * which routes through Phantom's transaction preview system.
  */
 export async function sendTx(
   connection: Connection,
-  wallet: { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction> },
+  wallet: { publicKey: PublicKey; sendTransaction: (tx: Transaction, connection: Connection) => Promise<string> },
   ixs: TransactionInstruction[],
 ): Promise<string> {
+  // Guard: catch the "no record of a prior credit" runtime error before it happens.
+  // On devnet a fresh wallet has 0 SOL — without at least one tx-fee worth of lamports
+  // every transaction is rejected by the runtime before any instruction runs.
+  const lamports = await connection.getBalance(wallet.publicKey);
+  if (lamports < 5_000) {
+    throw new Error(
+      "Your wallet has no devnet SOL. Click « Get SOL + USDC » to receive test tokens before trading."
+    );
+  }
+
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
   const tx = new Transaction().add(...ixs);
-  tx.recentBlockhash  = blockhash;
-  tx.feePayer         = wallet.publicKey;
-  const signed = await wallet.signTransaction(tx);
-  const sig    = await connection.sendRawTransaction(signed.serialize());
+  tx.recentBlockhash = blockhash;
+  tx.feePayer        = wallet.publicKey;
+  const sig = await wallet.sendTransaction(tx, connection);
   await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight });
   return sig;
 }

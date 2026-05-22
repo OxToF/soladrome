@@ -2,7 +2,7 @@
 // Copyright (C) 2025 Christophe Hertecant
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useAnchorWallet, useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import {
@@ -26,6 +26,7 @@ function xy_k_out(reserveIn: number, reserveOut: number, amountInNet: number): n
 export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
+  const { sendTransaction } = useWallet();
   const { usdcMint } = useSoladrome();
   const tokens = getTokenList(usdcMint);
 
@@ -52,7 +53,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setStatus(`✅ ${data.amount} test USDC added to your wallet!`);
+      setStatus(`✅ ${data.amount} test USDC${data.solAirdropped ? " + 1 devnet SOL" : ""} added to your wallet!`);
       fetchBalance();
     } catch (e: any) {
       setStatus(`❌ Faucet: ${e?.message ?? e}`);
@@ -182,7 +183,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
         } as any)
         .instruction();
 
-      const sig = await sendTx(connection, wallet, [...preIxs, swapIx, ...postIxs]);
+      const sig = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, swapIx, ...postIxs]);
 
       setStatus(`✅ Swap — tx: ${sig.slice(0, 16)}…`);
       setAmountIn("");
@@ -367,13 +368,16 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
 
       {/* Devnet faucet */}
       <div className="mt-4 pt-4 border-t border-brand-border flex items-center justify-between">
-        <span className="text-xs text-gray-500">Need test USDC?</span>
+        <div>
+          <span className="text-xs text-gray-500">New wallet?</span>
+          <p className="text-[10px] text-gray-600 mt-0.5">Get devnet SOL + 500 test USDC</p>
+        </div>
         <button
           className="btn-secondary text-xs px-4 py-2"
           onClick={claimFaucet}
           disabled={faucetLoading || !wallet}
         >
-          {faucetLoading ? "Sending…" : "Get 500 USDC"}
+          {faucetLoading ? "Sending…" : "Get SOL + USDC"}
         </button>
       </div>
     </div>
