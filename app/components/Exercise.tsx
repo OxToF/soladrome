@@ -2,7 +2,7 @@
 // Copyright (C) 2025 Christophe Hertecant
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useAnchorWallet, useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
 import {
@@ -17,6 +17,7 @@ const PCT = [25, 50, 75, 100] as const;
 export function Exercise({ embedded = false }: { embedded?: boolean }) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
+  const { sendTransaction } = useWallet();
   const { usdcMint } = useSoladrome();
 
   const [oSolaBal, setOSolaBal]   = useState<number | null>(null);
@@ -98,7 +99,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
       // Ensure SOLA ATA exists
       const solaAtaIx = await ensureAtaIx(connection, wallet.publicKey, solaM, wallet.publicKey);
       if (solaAtaIx) {
-        await sendTx(connection, wallet, [solaAtaIx]);
+        await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [solaAtaIx]);
       }
 
       const tx = await program.methods

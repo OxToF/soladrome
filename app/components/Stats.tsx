@@ -5,18 +5,20 @@ import { useEffect, useState, useCallback } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
-import { getProgram, statePda, toUi, poolPda, solaM, oSolaM } from "@/lib/program";
+import { getProgram, statePda, floorVault, marketVault, toUi, poolPda, solaM, oSolaM } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 interface ProtocolStats {
-  totalSola:       number;
-  totalHiSola:     number;
-  curvePrice:      number;         // bonding curve: virtualUsdc / virtualSola
-  solaPrice:       number | null;  // AMM USDC/SOLA pool spot price
-  osolaIntrinsic:  number | null;  // max(0, solaPrice - 1) — exercise value
-  osolaMktPrice:   number | null;  // AMM oSOLA/USDC spot price
-  floorPrice:      number;
-  accumulatedFees: number;
+  totalSola:        number;
+  totalHiSola:      number;
+  curvePrice:       number;
+  solaPrice:        number | null;
+  osolaIntrinsic:   number | null;
+  osolaMktPrice:    number | null;
+  floorPrice:       number;
+  accumulatedFees:  number;
+  tvl:              number;
+  pendingPerHiSola: number;  // USDC claimable per hiSOLA right now
 }
 
 export function Stats() {
@@ -30,8 +32,14 @@ export function Stats() {
     const program  = getProgram(provider);
 
     try {
-      // ── Protocol state (supply + fees + virtual reserves) ────────────────
-      const s = await (program.account as any).protocolState.fetch(statePda);
+      // ── Protocol state + vault balances in parallel ───────────────────────
+      const [s, floorBal, marketBal] = await Promise.all([
+        (program.account as any).protocolState.fetch(statePda),
+        connection.getTokenAccountBalance(floorVault).catch(() => ({ value: { uiAmount: 0 } })),
+        connection.getTokenAccountBalance(marketVault).catch(() => ({ value: { uiAmount: 0 } })),
+      ]);
+      const floorUsdc  = (floorBal.value.uiAmount  ?? 0) as number;
+      const marketUsdc = (marketBal.value.uiAmount ?? 0) as number;
       const curvePrice = toUi(s.virtualUsdc as BN) / toUi(s.virtualSola as BN);
 
       // ── SOLA price: from AMM USDC/SOLA pool (reflects actual swaps) ───────
@@ -68,15 +76,36 @@ export function Stats() {
         } catch { osolaMktPrice = null; }
       }
 
+      // ── TVL + AMM pools ───────────────────────────────────────────────────
+      let ammTvl = 0;
+      try {
+        const usdcStr = s.usdcMint?.toString() ?? "";
+        const ammPools = await (program.account as any).ammPool.all();
+        for (const p of ammPools) {
+          const mA = p.account.tokenAMint.toString();
+          const mB = p.account.tokenBMint.toString();
+          const ra = toUi(p.account.reserveA as BN);
+          const rb = toUi(p.account.reserveB as BN);
+          if (mA === usdcStr) ammTvl += ra * 2;
+          else if (mB === usdcStr) ammTvl += rb * 2;
+        }
+      } catch {}
+
+      const tvl = floorUsdc + marketUsdc + ammTvl;
+      const totalHiSola = toUi(s.totalHiSola);
+      const pendingPerHiSola = totalHiSola > 0 ? marketUsdc / totalHiSola : 0;
+
       setStats({
-        totalSola:       toUi(s.totalSola),
-        totalHiSola:     toUi(s.totalHiSola),
+        totalSola:        toUi(s.totalSola),
+        totalHiSola,
         curvePrice,
         solaPrice,
         osolaIntrinsic,
         osolaMktPrice,
-        floorPrice:      1,
-        accumulatedFees: toUi(s.accumulatedFees),
+        floorPrice:       1,
+        accumulatedFees:  toUi(s.accumulatedFees),
+        tvl,
+        pendingPerHiSola,
       });
     } catch { }
   }, [connection, wallet, usdcMint]);
@@ -89,8 +118,8 @@ export function Stats() {
   }, [fetchStats]);
 
   if (!stats) return (
-    <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
-      {Array.from({ length: 6 }).map((_, i) => (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9 gap-4 mb-8">
+      {Array.from({ length: 9 }).map((_, i) => (
         <div key={i} className="card text-center animate-pulse">
           <div className="h-3 bg-brand-border rounded mb-2 mx-auto w-2/3" />
           <div className="h-5 bg-brand-border rounded mx-auto w-1/2" />
@@ -109,7 +138,27 @@ export function Stats() {
     : null;
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9 gap-4 mb-8">
+
+      {/* TVL — first, most prominent */}
+      <div className="card text-center">
+        <p className="text-xs text-gray-500 mb-1">Protocol TVL</p>
+        <p className="font-bold text-brand-green">
+          ${stats.tvl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+        </p>
+      </div>
+
+      {/* hiSOLA claimable yield */}
+      <div className="card text-center">
+        <p className="text-xs text-gray-500 mb-1">hiSOLA Yield</p>
+        <p className="font-bold text-brand-green">
+          {stats.pendingPerHiSola > 0
+            ? `${stats.pendingPerHiSola.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDC`
+            : "—"}
+        </p>
+        <p className="text-[10px] text-gray-600 mt-0.5">per hiSOLA · claimable</p>
+      </div>
+
       <div className="card text-center">
         <p className="text-xs text-gray-500 mb-1">SOLA Supply</p>
         <p className="font-bold text-brand-green">
