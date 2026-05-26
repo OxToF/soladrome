@@ -59,7 +59,6 @@
     <nav class="sticky top-0 z-50 backdrop-blur-md bg-[#0b0e14]/80 border-b border-white/5">
         <div class="flex justify-between items-center px-6 md:px-12 py-4 max-w-7xl mx-auto">
             <div class="flex items-center space-x-3">
-                <!-- LOGO SOLADROME -->
                 <svg width="42" height="42" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" class="animate-pulse">
                     <circle cx="50" cy="50" r="46" stroke="url(#logo_grad)" stroke-width="4"/>
                     <path d="M30 50C30 38.9543 38.9543 30 50 30C61.0457 30 70 38.9543 70 50C70 61.0457 61.0457 70 50 70" stroke="#14F195" stroke-width="6" stroke-linecap="round"/>
@@ -73,10 +72,15 @@
                 <a href="/" class="text-2xl font-bold tracking-tighter uppercase">Sola<span class="gradient-text">drome</span></a>
             </div>
 
-            <div class="hidden md:flex space-x-10 text-sm font-semibold tracking-wide text-gray-400">
+            <div class="hidden md:flex space-x-8 text-sm font-semibold tracking-wide text-gray-400">
                 <a href="#mechanics" class="hover:text-white transition">Mechanism</a>
                 <a href="#tokenomics" class="hover:text-white transition">Tokenomics</a>
+                <a href="#ecosystem" class="hover:text-white transition">Ecosystem</a>
                 <a href="#roadmap" class="hover:text-white transition">Roadmap</a>
+                <a href="https://t.me/+SW4sVvoypbRkZTQ0" target="_blank" rel="noreferrer" class="hover:text-[#29A8E0] transition flex items-center gap-1.5">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.19 13.4l-2.952-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.95.16z"/></svg>
+                    Telegram
+                </a>
             </div>
 
             <a href="/" class="bg-white text-black px-7 py-2.5 rounded-full font-bold text-sm hover:bg-[#14F195] hover:text-black transition-all duration-300 shadow-lg shadow-white/5">
@@ -99,6 +103,10 @@
         <div class="flex flex-col sm:flex-row justify-center items-center gap-4">
             <a href="/" class="w-full sm:w-auto bg-gradient-to-r from-[#9945FF] to-[#14F195] px-10 py-4 rounded-2xl font-bold text-lg hover:shadow-[0_0_30px_rgba(20,241,149,0.4)] transition-all duration-300">
                 Enter Soladrome
+            </a>
+            <a href="https://t.me/+SW4sVvoypbRkZTQ0" target="_blank" rel="noreferrer" class="w-full sm:w-auto border border-[#29A8E0]/40 bg-[#29A8E0]/10 text-[#29A8E0] px-10 py-4 rounded-2xl font-bold text-lg hover:bg-[#29A8E0]/20 transition flex items-center justify-center gap-2">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.19 13.4l-2.952-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.95.16z"/></svg>
+                Join Telegram
             </a>
             <a href="#mechanics" class="w-full sm:w-auto border border-gray-700 px-10 py-4 rounded-2xl font-bold text-lg hover:bg-white/5 transition">
                 Read More
@@ -188,8 +196,74 @@
         </div>
     </section>
 
+    <!-- Ecosystem Allocation -->
+    <section id="ecosystem" class="px-6 max-w-7xl mx-auto py-24 border-t border-white/5">
+        <div class="text-center mb-16">
+            <div class="inline-block px-4 py-1.5 mb-6 rounded-full border border-[#9945FF]/30 bg-[#9945FF]/10 text-[#9945FF] text-xs font-bold uppercase tracking-widest">
+                On-Chain · Verified · One-Time
+            </div>
+            <h2 class="text-3xl md:text-5xl font-bold mb-4">Ecosystem <span class="gradient-text">Allocation</span></h2>
+            <p class="text-gray-500 max-w-xl mx-auto">2,000,000 $SOLA are reserved on-chain — separate from the founder allocation — to grow the Soladrome community and reward early adopters.</p>
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-8 mb-12">
+            <!-- Airdrop -->
+            <div class="bg-solana p-10 rounded-[2.5rem] border border-[#14F195]/20 hover:border-[#14F195]/50 transition-all duration-300">
+                <div class="flex items-center gap-4 mb-6">
+                    <div class="w-14 h-14 bg-[#14F195]/20 rounded-2xl flex items-center justify-center text-2xl">🪂</div>
+                    <div>
+                        <h3 class="text-2xl font-bold">Airdrop</h3>
+                        <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest">Early Adopters</p>
+                    </div>
+                </div>
+                <p class="text-gray-400 text-sm leading-relaxed mb-6">
+                    Every wallet that connects to Soladrome during the devnet phase is automatically registered. These early users will receive a proportional $SOLA airdrop at mainnet launch as a reward for their trust and participation.
+                </p>
+                <div class="bg-black/30 rounded-2xl p-4 border border-white/5">
+                    <p class="text-xs text-gray-500 uppercase tracking-widest mb-1">Eligibility</p>
+                    <p class="text-sm text-white font-semibold">Connect your wallet on devnet → you're registered</p>
+                </div>
+            </div>
+
+            <!-- Marketing -->
+            <div class="bg-solana p-10 rounded-[2.5rem] border border-[#9945FF]/20 hover:border-[#9945FF]/50 transition-all duration-300">
+                <div class="flex items-center gap-4 mb-6">
+                    <div class="w-14 h-14 bg-[#9945FF]/20 rounded-2xl flex items-center justify-center text-2xl">📣</div>
+                    <div>
+                        <h3 class="text-2xl font-bold">Marketing</h3>
+                        <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest">Community Growth</p>
+                    </div>
+                </div>
+                <p class="text-gray-400 text-sm leading-relaxed mb-6">
+                    A dedicated allocation funds trading contests, content bounties, KOL partnerships, and community events. Every campaign is designed to deepen liquidity and grow the protocol's user base organically.
+                </p>
+                <div class="bg-black/30 rounded-2xl p-4 border border-white/5">
+                    <p class="text-xs text-gray-500 uppercase tracking-widest mb-1">Upcoming</p>
+                    <p class="text-sm text-white font-semibold">Trading contests · Content bounties · AMAs</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Allocation bar -->
+        <div class="bg-black/30 rounded-[2rem] p-8 border border-white/5">
+            <p class="text-xs text-gray-500 uppercase tracking-widest mb-6 text-center">Ecosystem Allocation Breakdown — 2,000,000 $SOLA</p>
+            <div class="flex rounded-full overflow-hidden h-5 mb-4">
+                <div class="bg-gradient-to-r from-[#14F195] to-[#0fba72]" style="width: 50%"></div>
+                <div class="bg-gradient-to-r from-[#9945FF] to-[#7730cc]" style="width: 25%"></div>
+                <div class="bg-gradient-to-r from-yellow-500 to-yellow-600" style="width: 12.5%"></div>
+                <div class="bg-white/20" style="width: 12.5%"></div>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#14F195] shrink-0"></span><span class="text-gray-400">Airdrop <span class="text-white font-bold">50%</span></span></div>
+                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#9945FF] shrink-0"></span><span class="text-gray-400">Marketing <span class="text-white font-bold">25%</span></span></div>
+                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-yellow-500 shrink-0"></span><span class="text-gray-400">Contests <span class="text-white font-bold">12.5%</span></span></div>
+                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-white/30 shrink-0"></span><span class="text-gray-400">Reserve <span class="text-white font-bold">12.5%</span></span></div>
+            </div>
+        </div>
+    </section>
+
     <!-- Roadmap -->
-    <section id="roadmap" class="px-6 max-w-4xl mx-auto py-24 border-t border-white/5">
+    <section id="roadmap" class="bg-white/[0.02] px-6 max-w-4xl mx-auto py-24 border-t border-white/5">
         <div class="text-center mb-16">
             <h2 class="text-3xl md:text-5xl font-bold mb-4"><span class="gradient-text">Roadmap</span></h2>
             <p class="text-gray-500">Building the eternal liquidity engine, step by step.</p>
@@ -200,18 +274,26 @@
                     <span class="text-[#14F195] text-xs font-bold uppercase tracking-widest">Phase 1 — Live</span>
                     <span class="w-2 h-2 bg-[#14F195] rounded-full animate-pulse"></span>
                 </div>
-                <h3 class="text-xl font-bold mb-2">Core Protocol</h3>
-                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k)</p>
+                <h3 class="text-xl font-bold mb-2">Core Protocol + Ecosystem Allocation</h3>
+                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · 2M $SOLA ecosystem allocation deployed on-chain · Wallet collection active (airdrop eligibility)</p>
+            </div>
+            <div class="bg-solana p-8 rounded-2xl border border-[#9945FF]/30">
+                <div class="flex items-center gap-3 mb-2">
+                    <span class="text-[#9945FF] text-xs font-bold uppercase tracking-widest">Phase 2 — In Progress</span>
+                    <span class="w-2 h-2 bg-[#9945FF] rounded-full animate-pulse"></span>
+                </div>
+                <h3 class="text-xl font-bold mb-2">Marketing Campaign + Community Launch</h3>
+                <p class="text-gray-400 text-sm">Trading contests on devnet · Content bounty program · KOL partnerships · Telegram community growth · Twitter/X campaign · AMA series · Airdrop snapshot announcement</p>
             </div>
             <div class="bg-solana p-8 rounded-2xl border border-white/10">
-                <div class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-2">Phase 2 — Coming</div>
-                <h3 class="text-xl font-bold mb-2">Stable AMM + oSOLA</h3>
-                <p class="text-gray-400 text-sm">Stable curves for correlated pairs · oSOLA LP rewards · Deeper POL integration</p>
+                <div class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-2">Phase 3 — Coming</div>
+                <h3 class="text-xl font-bold mb-2">Stable AMM + oSOLA Rewards</h3>
+                <p class="text-gray-400 text-sm">Stable curves for correlated pairs · oSOLA LP rewards · Deeper POL integration · Airdrop distribution to eligible wallets</p>
             </div>
             <div class="bg-solana p-8 rounded-2xl border border-white/10">
-                <div class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-2">Phase 3 — Planned</div>
+                <div class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-2">Phase 4 — Planned</div>
                 <h3 class="text-xl font-bold mb-2">Mainnet &amp; Ecosystem</h3>
-                <p class="text-gray-400 text-sm">Mainnet launch · External protocol integrations · DAO governance · Cross-chain liquidity bridges</p>
+                <p class="text-gray-400 text-sm">Mainnet launch · External protocol integrations · DAO governance · Cross-chain liquidity bridges · Full airdrop distribution</p>
             </div>
         </div>
     </section>
@@ -219,11 +301,18 @@
     <!-- CTA Section -->
     <section class="py-32 px-6 text-center">
         <div class="max-w-4xl mx-auto bg-gradient-to-b from-white/5 to-transparent p-16 rounded-[3rem] border border-white/5">
-            <h2 class="text-4xl md:text-5xl font-bold mb-8">Ready for the <span class="gradient-text">Solana Summer?</span></h2>
-            <p class="text-gray-400 mb-10 text-lg">Join the most advanced liquidity protocol on the fastest blockchain.</p>
-            <a href="/" class="inline-block bg-white text-black px-12 py-5 rounded-2xl font-bold text-xl hover:bg-[#14F195] transition-colors">
-                Join the Drome
-            </a>
+            <h2 class="text-4xl md:text-5xl font-bold mb-6">Get Your <span class="gradient-text">Airdrop</span></h2>
+            <p class="text-gray-400 mb-4 text-lg">Connect your wallet on devnet to register your eligibility.<br>Join the Telegram to stay updated on the marketing campaign.</p>
+            <p class="text-[#14F195] text-sm font-bold mb-10 uppercase tracking-widest">Early users → Airdrop priority</p>
+            <div class="flex flex-col sm:flex-row justify-center gap-4">
+                <a href="/" class="inline-block bg-gradient-to-r from-[#9945FF] to-[#14F195] px-12 py-5 rounded-2xl font-bold text-xl hover:shadow-[0_0_30px_rgba(20,241,149,0.4)] transition-all duration-300">
+                    Connect Wallet
+                </a>
+                <a href="https://t.me/+SW4sVvoypbRkZTQ0" target="_blank" rel="noreferrer" class="inline-flex items-center justify-center gap-3 border border-[#29A8E0]/40 bg-[#29A8E0]/10 text-[#29A8E0] px-12 py-5 rounded-2xl font-bold text-xl hover:bg-[#29A8E0]/20 transition-all duration-300">
+                    <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.19 13.4l-2.952-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.95.16z"/></svg>
+                    Join Telegram
+                </a>
+            </div>
         </div>
     </section>
 
@@ -235,12 +324,13 @@
                     <span class="text-xl font-bold uppercase tracking-tighter">Sola<span class="gradient-text">drome</span></span>
                 </div>
                 <p class="text-gray-500 text-sm">The decentralized liquidity hub for Solana.</p>
+                <p class="text-gray-600 text-xs mt-2">Ecosystem allocation: 2,000,000 $SOLA · On-chain · Verified</p>
             </div>
             <div class="flex space-x-8 text-gray-400 text-sm">
-                <a href="#" class="hover:text-white transition">Twitter</a>
-                <a href="#" class="hover:text-white transition">Discord</a>
-                <a href="#" class="hover:text-white transition">Telegram</a>
-                <a href="#" class="hover:text-white transition">Medium</a>
+                <a href="https://x.com/soladrome" target="_blank" rel="noreferrer" class="hover:text-white transition">Twitter / X</a>
+                <a href="https://discord.com/channels/1506249630218715218/1506249803451994132" target="_blank" rel="noreferrer" class="hover:text-[#5865F2] transition">Discord</a>
+                <a href="https://t.me/+SW4sVvoypbRkZTQ0" target="_blank" rel="noreferrer" class="hover:text-[#29A8E0] transition">Telegram</a>
+                <a href="mailto:info@soladrome.finance" class="hover:text-[#14F195] transition">Contact</a>
             </div>
             <div class="text-gray-600 text-xs">
                 © 2025 Soladrome Protocol. All rights reserved.

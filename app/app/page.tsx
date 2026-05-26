@@ -43,6 +43,16 @@ export default function Home() {
   const wallet = useAnchorWallet();
   const [page, setPage] = useState<Page>("home");
 
+  // Enregistre le wallet dans Supabase à chaque connexion
+  useEffect(() => {
+    if (!wallet?.publicKey) return;
+    fetch("/api/register-wallet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet: wallet.publicKey.toBase58() }),
+    }).catch(() => {}); // silencieux — ne bloque jamais l'UX
+  }, [wallet?.publicKey?.toBase58()]);
+
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail;

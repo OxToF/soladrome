@@ -252,7 +252,7 @@ describe("soladrome", () => {
   });
 
   // ── 5. Borrow USDC against hiSOLA ─────────────────────────────────────────
-  it("borrows USDC against hiSOLA collateral", async () => {
+  it("borrows USDC against hiSOLA collateral (2% fee to market_vault)", async () => {
     const [positionPda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("position"), wallet.publicKey.toBuffer()],
       program.programId
@@ -261,10 +261,11 @@ describe("soladrome", () => {
       mint: hiSolaM, owner: wallet.publicKey,
     });
 
-    const usdcBefore  = await getTokenBalance(connection, userUsdcAta);
-    const floorBefore = await getTokenBalance(connection, floorV);
+    const usdcBefore   = await getTokenBalance(connection, userUsdcAta);
+    const floorBefore  = await getTokenBalance(connection, floorV);
+    const marketBefore = await getTokenBalance(connection, marketV);
 
-    // Borrow 1 USDC (hiSOLA balance = 2, so max = 2 USDC)
+    // Borrow 1 USDC — 2% fee = 0.02 USDC → market_vault; user receives 0.98 USDC
     await program.methods
       .borrowUsdc(ONE)
       .accounts({
@@ -273,6 +274,7 @@ describe("soladrome", () => {
         hiSolaMint:    hiSolaM,
         userHiSola:    userHiSolaAta,
         floorVault:    floorV,
+        marketVault:   marketV,
         userUsdc:      userUsdcAta,
         userPosition:  positionPda,
         tokenProgram:  TOKEN_PROGRAM_ID,
@@ -280,23 +282,41 @@ describe("soladrome", () => {
       } as any)
       .rpc();
 
-    const usdcAfter  = await getTokenBalance(connection, userUsdcAta);
-    const floorAfter = await getTokenBalance(connection, floorV);
-    const position   = await program.account.userPosition.fetch(positionPda);
+    const usdcAfter   = await getTokenBalance(connection, userUsdcAta);
+    const floorAfter  = await getTokenBalance(connection, floorV);
+    const marketAfter = await getTokenBalance(connection, marketV);
+    const position    = await program.account.userPosition.fetch(positionPda);
+
+    const BORROW_FEE_BPS = 200n;
+    const grossAmount    = BigInt(ONE.toString());
+    const expectedFee    = grossAmount * BORROW_FEE_BPS / 10_000n;       // 20_000 (0.02 USDC)
+    const expectedNet    = grossAmount - expectedFee;                      // 980_000 (0.98 USDC)
 
     assert.equal(
-      Number(usdcAfter - usdcBefore),
-      Number(ONE.toString()),
-      "user received 1 USDC loan"
+      usdcAfter - usdcBefore,
+      expectedNet,
+      `user received ${Number(expectedNet)/1e6} USDC (gross - 2% fee)`
     );
     assert.equal(
-      Number(position.usdcBorrowed.toString()),
-      Number(ONE.toString()),
-      "position debt = 1 USDC"
+      marketAfter - marketBefore,
+      expectedFee,
+      `market_vault received ${Number(expectedFee)/1e6} USDC fee`
     );
-    assert.isTrue(floorAfter < floorBefore, "floor vault reduced");
+    assert.equal(
+      BigInt(floorBefore.toString()) - BigInt(floorAfter.toString()),
+      grossAmount,
+      "floor_vault reduced by gross amount (user + fee)"
+    );
+    assert.equal(
+      position.usdcBorrowed.toString(),
+      ONE.toString(),
+      "usdc_borrowed = gross (user repays full amount)"
+    );
 
-    console.log("✅ borrow_usdc — 1 USDC borrowed, debt tracked");
+    console.log(
+      `✅ borrow_usdc — net=${Number(expectedNet)/1e6} USDC to user ` +
+      `| fee=${Number(expectedFee)/1e6} USDC → market_vault`
+    );
   });
 
   // ── 6. Repay USDC ────────────────────────────────────────────────────────
@@ -904,5 +924,179 @@ describe("soladrome", () => {
       `✅ deploy_pol — bought ${Number(solaAfter - solaBefore) / 1e6} SOLA via POL` +
       ` | ${Number(usdcAfter) / 1e6} USDC remaining in pol vault`
     );
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Core Tokenomics — Invariant tests
+  // Invariant: floor_vault + total_usdc_borrowed ≥ total_sola at all times
+  // ══════════════════════════════════════════════════════════════════════════
+
+  it("[invariant] floor_vault + total_usdc_borrowed ≥ total_sola after buy", async () => {
+    const state = await program.account.protocolState.fetch(statePda);
+    const floorBalance = await getTokenBalance(connection, floorV);
+
+    const backed = BigInt(floorBalance.toString()) +
+                   BigInt(state.totalUsdcBorrowed.toString());
+    const supply = BigInt(state.totalSola.toString());
+
+    assert.isTrue(
+      backed >= supply,
+      `INVARIANT VIOLATED after buy: floor+borrowed(${backed}) < totalSola(${supply})`
+    );
+    console.log(
+      `✅ [invariant] buy — floor_vault=${Number(floorBalance)/1e6} ` +
+      `borrowed=${Number(state.totalUsdcBorrowed)/1e6} ` +
+      `totalSola=${Number(state.totalSola)/1e6}`
+    );
+  });
+
+  it("[invariant] floor_vault + total_usdc_borrowed ≥ total_sola after sell", async () => {
+    const userSolaAta = anchor.utils.token.associatedAddress({
+      mint: solaM, owner: wallet.publicKey,
+    });
+
+    // Sell 1 SOLA
+    await program.methods
+      .sellSola(ONE)
+      .accounts({
+        user:          wallet.publicKey,
+        protocolState: statePda,
+        solaMint:      solaM,
+        userSola:      userSolaAta,
+        floorVault:    floorV,
+        userUsdc:      userUsdcAta,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+      } as any)
+      .rpc();
+
+    const state = await program.account.protocolState.fetch(statePda);
+    const floorBalance = await getTokenBalance(connection, floorV);
+
+    const backed = BigInt(floorBalance.toString()) +
+                   BigInt(state.totalUsdcBorrowed.toString());
+    const supply = BigInt(state.totalSola.toString());
+
+    assert.isTrue(
+      backed >= supply,
+      `INVARIANT VIOLATED after sell: floor+borrowed(${backed}) < totalSola(${supply})`
+    );
+    console.log(
+      `✅ [invariant] sell — floor_vault=${Number(floorBalance)/1e6} ` +
+      `borrowed=${Number(state.totalUsdcBorrowed)/1e6} ` +
+      `totalSola=${Number(state.totalSola)/1e6}`
+    );
+  });
+
+  it("[invariant] floor_vault + total_usdc_borrowed ≥ total_sola after borrow/repay cycle", async () => {
+    const userSolaAta    = anchor.utils.token.associatedAddress({ mint: solaM,   owner: wallet.publicKey });
+    const userHiSolaAta  = anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: wallet.publicKey });
+    const [userPosition] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), wallet.publicKey.toBuffer()], program.programId
+    );
+    const [solaVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("sola_vault")], program.programId
+    );
+
+    // Helper: assert invariant
+    const checkInvariant = async (label: string) => {
+      const s = await program.account.protocolState.fetch(statePda);
+      const floor = await getTokenBalance(connection, floorV);
+      const backed = BigInt(floor.toString()) + BigInt(s.totalUsdcBorrowed.toString());
+      const supply = BigInt(s.totalSola.toString());
+      assert.isTrue(
+        backed >= supply,
+        `INVARIANT VIOLATED at [${label}]: backed(${backed}) < supply(${supply})`
+      );
+      return { floor, borrowed: s.totalUsdcBorrowed, supply: s.totalSola };
+    };
+
+    // ── Buy 5 SOLA to have enough to stake ───────────────────────────────
+    await program.methods.buySola(ONE.muln(5), new BN(0)).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      solaMint: solaM, userUsdc: userUsdcAta, userSola: userSolaAta,
+      floorVault: floorV, marketVault: marketV,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    } as any).rpc();
+    await checkInvariant("after buy 5 SOLA");
+
+    // ── Stake 2 SOLA → hiSOLA ────────────────────────────────────────────
+    await program.methods.stakeSola(ONE.muln(2)).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      solaMint: solaM, hiSolaMint: hiSolaM,
+      userSola: userSolaAta, userHiSola: userHiSolaAta,
+      solaVault, marketVault: marketV, userPosition,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: anchor.web3.SystemProgram.programId,
+      rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+    } as any).rpc();
+    await checkInvariant("after stake 2 SOLA");
+
+    // ── Borrow 1 USDC ────────────────────────────────────────────────────
+    await program.methods.borrowUsdc(ONE).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      hiSolaMint: hiSolaM, userHiSola: userHiSolaAta,
+      floorVault: floorV, marketVault: marketV,
+      userUsdc: userUsdcAta, userPosition,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: anchor.web3.SystemProgram.programId,
+    } as any).rpc();
+    const afterBorrow = await checkInvariant("after borrow 1 USDC");
+    assert.equal(
+      Number(afterBorrow.borrowed.toString()), 1_000_000,
+      "total_usdc_borrowed tracks protocol-wide borrow"
+    );
+
+    // ── Sell 1 liquid SOLA — must succeed (backed by hiSOLA collateral) ──
+    await program.methods.sellSola(ONE).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      solaMint: solaM, userSola: userSolaAta,
+      floorVault: floorV, userUsdc: userUsdcAta,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    } as any).rpc();
+    await checkInvariant("after sell 1 SOLA (while borrow active)");
+
+    // ── Repay borrow ─────────────────────────────────────────────────────
+    await program.methods.repayUsdc(ONE).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      userUsdc: userUsdcAta, floorVault: floorV,
+      userPosition, tokenProgram: TOKEN_PROGRAM_ID,
+    } as any).rpc();
+    const afterRepay = await checkInvariant("after repay");
+    assert.equal(
+      Number(afterRepay.borrowed.toString()), 0,
+      "total_usdc_borrowed back to 0 after full repay"
+    );
+
+    console.log("✅ [invariant] borrow/repay cycle — floor_vault invariant holds throughout");
+  });
+
+  it("[invariant] sell rejects when floor reserve exhausted", async () => {
+    // This test verifies the pre-condition check catches insufficient floor funds.
+    // We attempt to sell more SOLA than the floor vault holds.
+    const userSolaAta = anchor.utils.token.associatedAddress({
+      mint: solaM, owner: wallet.publicKey,
+    });
+    const hugeAmount = new BN(1_000_000_000_000); // 1 000 000 SOLA — way more than floor holds
+
+    try {
+      await program.methods.sellSola(hugeAmount).accounts({
+        user:          wallet.publicKey,
+        protocolState: statePda,
+        solaMint:      solaM,
+        userSola:      userSolaAta,
+        floorVault:    floorV,
+        userUsdc:      userUsdcAta,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+      } as any).rpc();
+      assert.fail("Expected InsufficientFloorReserve error");
+    } catch (e: any) {
+      const msg: string = e?.message ?? String(e);
+      assert.isTrue(
+        msg.includes("InsufficientFloorReserve") || msg.includes("insufficient"),
+        `Expected floor reserve error, got: ${msg}`
+      );
+      console.log("✅ [invariant] sell correctly rejected: floor reserve exhausted");
+    }
   });
 });

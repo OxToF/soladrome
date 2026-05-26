@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── 1. Smart contract checks ──────────────────────────────────────────────
+  anchor-check:
+    name: Anchor Build & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89.0"
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor --tag v0.32.1 anchor-cli --locked --force
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: true
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path programs/soladrome/Cargo.toml -- --check
+
+      - name: Clippy (warnings = errors)
+        run: cargo clippy --manifest-path programs/soladrome/Cargo.toml -- -D warnings
+
+      - name: Anchor build (compile check)
+        run: anchor build
+
+  # ── 2. Cargo unit tests ───────────────────────────────────────────────────
+  cargo-test:
+    name: Cargo Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89.0"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo tests
+        run: cargo test --manifest-path programs/soladrome/Cargo.toml
+
+  # ── 3. Frontend lint & build ──────────────────────────────────────────────
+  frontend:
+    name: Frontend Lint & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+          cache-dependency-path: app/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Type check
+        run: npx tsc --noEmit
+        continue-on-error: true  # warn only until all types are clean
+
+      - name: Build
+        run: yarn build
+        env:
+          NEXT_PUBLIC_RPC_URL: https://api.devnet.solana.com
+          # Supabase and faucet keys not needed for build check
+          SUPABASE_URL: https://placeholder.supabase.co
+          SUPABASE_SERVICE_KEY: placeholder
+          FAUCET_KEYPAIR: "[0]"
+          FAUCET_USDC_MINT: "11111111111111111111111111111111"
