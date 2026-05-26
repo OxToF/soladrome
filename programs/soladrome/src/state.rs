@@ -46,6 +46,11 @@ pub struct ProtocolState {
     pub bump: u8,
     /// Prevents mint_founder_allocation from being called more than once.
     pub founder_allocated: bool,
+    /// Prevents mint_ecosystem_allocation from being called more than once.
+    pub ecosystem_allocated: bool,
+    /// Sum of all outstanding USDC borrows across all users.
+    /// Invariant: floor_vault + total_usdc_borrowed >= total_sola at all times.
+    pub total_usdc_borrowed: u64,
 }
 
 impl ProtocolState {

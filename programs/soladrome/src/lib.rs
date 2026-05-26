@@ -52,8 +52,11 @@ pub const OSOLA_EMISSION_PER_SEC: u64 = 100_000;
 pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
 
 // Founder allocation — 12% of reference 100 M-token supply, 7% auto-staked.
-pub const FOUNDER_TOTAL: u64 = 12_000_000_000_000; // 12 000 000 SOLA (6 dec)
-pub const FOUNDER_STAKE: u64 =  7_000_000_000_000; //  7 000 000 SOLA → hiSOLA
+pub const FOUNDER_TOTAL: u64    = 12_000_000_000_000; // 12 000 000 SOLA (6 dec)
+pub const FOUNDER_STAKE: u64    =  7_000_000_000_000; //  7 000 000 SOLA → hiSOLA
+pub const ECOSYSTEM_TOTAL: u64  =  2_000_000_000_000; //  2 000 000 SOLA — marketing + airdrop
+/// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
+pub const BORROW_FEE_BPS: u64   =    200;             //  2 % of borrowed amount
 //  5 000 000 SOLA liquid
 
 // ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
@@ -189,6 +192,25 @@ pub mod soladrome {
             .total_sola
             .checked_sub(sola_amount)
             .ok_or(SoladromeError::Overflow)?;
+
+        // ── Under-collateralisation guard ─────────────────────────────────────
+        // Invariant: floor_vault + total_usdc_borrowed ≥ total_sola
+        //
+        // floor_vault backs liquid SOLA 1:1; outstanding borrows are collateralised
+        // by hiSOLA so they are "logically" still in reserve. Both sides decrease by
+        // sola_amount on sell, so the invariant is preserved iff it held pre-sell.
+        // This explicit post-condition catches any latent protocol inconsistency.
+        let floor_post = ctx.accounts.floor_vault.amount
+            .checked_sub(usdc_out)
+            .ok_or(SoladromeError::Overflow)?;
+        let backed = floor_post
+            .checked_add(ctx.accounts.protocol_state.total_usdc_borrowed)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(
+            backed >= ctx.accounts.protocol_state.total_sola,
+            SoladromeError::InsufficientFloorReserve
+        );
+
         Ok(())
     }
 
@@ -326,21 +348,60 @@ pub mod soladrome {
             SoladromeError::InsufficientFloorReserve
         );
 
+        // ── 2 % origination fee (one-time, like Beradrome) ──────────────────
+        // fee   → market_vault  → distributed to hiSOLA stakers via accumulator
+        // net   → user_usdc
+        // usdc_borrowed tracks the GROSS amount so repay fully restores floor_vault.
+        let fee = usdc_amount
+            .checked_mul(BORROW_FEE_BPS)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)?;
+        let user_receives = usdc_amount
+            .checked_sub(fee)
+            .ok_or(SoladromeError::Overflow)?;
+
         let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+        // Transfer net amount to user
         token::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
                     from: ctx.accounts.floor_vault.to_account_info(),
-                    to: ctx.accounts.user_usdc.to_account_info(),
+                    to:   ctx.accounts.user_usdc.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
             ),
-            usdc_amount,
+            user_receives,
         )?;
 
+        // Transfer fee to market_vault (→ hiSOLA stakers)
+        if fee > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.floor_vault.to_account_info(),
+                        to:   ctx.accounts.market_vault.to_account_info(),
+                        authority: ctx.accounts.protocol_state.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                fee,
+            )?;
+        }
+
+        // usdc_borrowed = gross (user repays full amount → floor_vault fully restored)
         ctx.accounts.user_position.usdc_borrowed = new_borrowed;
+        // Track global borrow total for floor-vault invariant.
+        ctx.accounts.protocol_state.total_usdc_borrowed = ctx
+            .accounts
+            .protocol_state
+            .total_usdc_borrowed
+            .checked_add(usdc_amount)
+            .ok_or(SoladromeError::Overflow)?;
         Ok(())
     }
 
@@ -365,6 +426,12 @@ pub mod soladrome {
             .accounts
             .user_position
             .usdc_borrowed
+            .checked_sub(repay)
+            .ok_or(SoladromeError::Overflow)?;
+        ctx.accounts.protocol_state.total_usdc_borrowed = ctx
+            .accounts
+            .protocol_state
+            .total_usdc_borrowed
             .checked_sub(repay)
             .ok_or(SoladromeError::Overflow)?;
         Ok(())
@@ -544,6 +611,38 @@ pub mod soladrome {
         s.total_sola    = s.total_sola.checked_add(FOUNDER_TOTAL).ok_or(SoladromeError::Overflow)?;
         s.total_hi_sola = s.total_hi_sola.checked_add(FOUNDER_STAKE).ok_or(SoladromeError::Overflow)?;
         s.founder_allocated = true;
+
+        Ok(())
+    }
+
+    // One-time ecosystem allocation: 2 M SOLA liquid → authority wallet for marketing & airdrop.
+    // Entirely separate from the founder allocation; protected by `ecosystem_allocated` flag.
+    pub fn mint_ecosystem_allocation(ctx: Context<MintEcosystemAllocation>) -> Result<()> {
+        require!(
+            !ctx.accounts.protocol_state.ecosystem_allocated,
+            SoladromeError::AlreadyAllocated
+        );
+
+        let bump = ctx.accounts.protocol_state.bump;
+        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+        // Mint ECOSYSTEM_TOTAL SOLA directly to authority's ATA — liquid, no auto-stake.
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint:      ctx.accounts.sola_mint.to_account_info(),
+                    to:        ctx.accounts.authority_sola.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            ECOSYSTEM_TOTAL,
+        )?;
+
+        let s = &mut ctx.accounts.protocol_state;
+        s.total_sola = s.total_sola.checked_add(ECOSYSTEM_TOTAL).ok_or(SoladromeError::Overflow)?;
+        s.ecosystem_allocated = true;
 
         Ok(())
     }
@@ -1311,7 +1410,7 @@ pub struct BorrowUsdc<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
     pub protocol_state: Account<'info, ProtocolState>,
 
     #[account(address = protocol_state.hi_sola_mint)]
@@ -1322,6 +1421,10 @@ pub struct BorrowUsdc<'info> {
 
     #[account(mut, address = protocol_state.floor_vault)]
     pub floor_vault: Account<'info, TokenAccount>,
+
+    /// Receives the 2 % origination fee → distributed to hiSOLA stakers.
+    #[account(mut, address = protocol_state.market_vault)]
+    pub market_vault: Account<'info, TokenAccount>,
 
     #[account(
         mut,
@@ -1346,7 +1449,7 @@ pub struct BorrowUsdc<'info> {
 pub struct RepayUsdc<'info> {
     pub user: Signer<'info>,
 
-    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
     pub protocol_state: Account<'info, ProtocolState>,
 
     #[account(
@@ -1531,6 +1634,34 @@ pub struct MintFounderAllocation<'info> {
         bump,
     )]
     pub founder_position: Account<'info, UserPosition>,
+
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+// ── Ecosystem allocation context ─────────────────────────────────────────────
+
+#[derive(Accounts)]
+pub struct MintEcosystemAllocation<'info> {
+    #[account(mut, address = protocol_state.authority @ SoladromeError::Unauthorized)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(mut, address = protocol_state.sola_mint)]
+    pub sola_mint: Box<Account<'info, Mint>>,
+
+    /// Authority's SOLA ATA — receives the ecosystem allocation.
+    #[account(
+        init_if_needed,
+        payer = authority,
+        associated_token::mint = sola_mint,
+        associated_token::authority = authority,
+    )]
+    pub authority_sola: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
