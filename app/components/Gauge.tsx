@@ -46,6 +46,9 @@ export function Gauge() {
   const [pools,      setPools]      = useState<{ address: string; label: string }[]>([]);
   const [copied,     setCopied]     = useState<string | null>(null);
   const [mintBalance, setMintBalance] = useState<number | null>(null);
+  // Existing bribe vault info for current (pool, mint, epoch)
+  const [existingBribe, setExistingBribe] = useState<number | null>(null);
+  const [gaugeVotesInfo, setGaugeVotesInfo] = useState<number | null>(null);
 
   // ── Known protocol tokens ──────────────────────────────────────────────────
   const knownTokens = [
@@ -60,6 +63,43 @@ export function Gauge() {
     setCopied(key);
     setTimeout(() => setCopied(null), 1500);
   }
+
+  // ── Fetch existing bribe vault + gauge info when pool / mint / epoch changes ──
+  useEffect(() => {
+    setExistingBribe(null);
+    setGaugeVotesInfo(null);
+    if (!poolId || !rewardMint) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const pool = new PublicKey(poolId);
+        const mint = new PublicKey(rewardMint);
+        const ep   = currentEpoch();
+        const eb   = epochBuf(ep);
+
+        // Bribe vault
+        const [bribeVaultPdaKey] = PublicKey.findProgramAddressSync(
+          [Buffer.from("bribe_vault"), pool.toBuffer(), mint.toBuffer(), eb], PROGRAM_ID
+        );
+        const bribeInfo = await connection.getAccountInfo(bribeVaultPdaKey);
+        if (!cancelled && bribeInfo) {
+          const raw = bribeInfo.data.readBigUInt64LE(80);
+          setExistingBribe(Number(raw) / 1e6);
+        }
+
+        // Gauge state
+        const [gaugePda] = PublicKey.findProgramAddressSync(
+          [Buffer.from("gauge"), pool.toBuffer(), eb], PROGRAM_ID
+        );
+        const gaugeInfo = await connection.getAccountInfo(gaugePda);
+        if (!cancelled && gaugeInfo) {
+          const raw = gaugeInfo.data.readBigUInt64LE(48);
+          setGaugeVotesInfo(Number(raw) / 1e6);
+        }
+      } catch { /* not yet initialized */ }
+    })();
+    return () => { cancelled = true; };
+  }, [poolId, rewardMint, connection]);
 
   // ── Fetch wallet balance for selected reward mint ──────────────────────────
   useEffect(() => {
@@ -208,6 +248,31 @@ export function Gauge() {
       </div>
 
       {/* ── Deposit ── */}
+      {/* Live bribe vault + gauge info */}
+      {poolId && rewardMint && (existingBribe !== null || gaugeVotesInfo !== null) && (
+        <div className="rounded-lg bg-brand-dark border border-brand-border px-3 py-2 mb-3 text-xs flex gap-4">
+          {gaugeVotesInfo !== null && (
+            <span className="text-gray-400">
+              🗳 Votes this epoch:{" "}
+              <span className="text-white font-mono">
+                {gaugeVotesInfo.toLocaleString(undefined, { maximumFractionDigits: 2 })} hiSOLA
+              </span>
+            </span>
+          )}
+          {existingBribe !== null ? (
+            <span className="text-gray-400">
+              🎁 Bribe already deposited:{" "}
+              <span className="text-brand-green font-mono font-semibold">
+                {existingBribe.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </span>
+              {" "}— your deposit will be added on top
+            </span>
+          ) : (
+            <span className="text-gray-600 italic">No bribe yet for this epoch · you would be the first</span>
+          )}
+        </div>
+      )}
+
       <p className="text-xs text-gray-500 mb-4">
         Incentivize hiSOLA holders to vote for your pool. Deposits are additive.
       </p>
