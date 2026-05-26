@@ -107,10 +107,28 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
         {tab === "borrow" ? "Borrow USDC" : "Repay USDC"}
       </h2>
 
-      <div className="flex items-center gap-2 text-xs text-gray-500 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 mb-5">
+      <div className="flex items-center gap-2 text-xs text-gray-500 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 mb-3">
         <span className="text-brand-green text-base leading-none">ℹ</span>
         <span>Borrow <span className="text-white font-semibold">1 USDC</span> for every <span className="text-white font-semibold">1 hiSOLA</span> you hold — no interest, no liquidation.</span>
       </div>
+      {tab === "borrow" && (
+        <div className="flex items-center gap-2 text-xs text-gray-500 bg-brand-dark border border-yellow-500/20 rounded-lg px-3 py-2 mb-5">
+          <span className="text-yellow-500 text-base leading-none">💸</span>
+          <span>
+            A one-time <span className="text-yellow-400 font-semibold">2% origination fee</span> is charged at borrow time.
+            Fee goes to the <span className="text-white font-semibold">market vault</span> → distributed to hiSOLA stakers.
+            {amount && parseFloat(amount) > 0 && (
+              <span className="ml-1">
+                You receive{" "}
+                <span className="text-white font-semibold font-mono">
+                  {(parseFloat(amount) * 0.98).toLocaleString(undefined, { maximumFractionDigits: 4 })} USDC
+                </span>
+                {" "}(fee: <span className="text-yellow-400 font-mono">{(parseFloat(amount) * 0.02).toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>).
+              </span>
+            )}
+          </span>
+        </div>
+      )}
 
       <div className="flex gap-6 mb-6 border-b border-brand-border">
         {(["borrow", "repay"] as Tab[]).map((t) => (
