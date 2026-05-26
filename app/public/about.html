@@ -91,8 +91,14 @@
 
     <!-- Hero Section -->
     <section class="relative pt-24 pb-32 px-6 max-w-5xl mx-auto text-center">
-        <div class="inline-block px-4 py-1.5 mb-6 rounded-full border border-[#14F195]/30 bg-[#14F195]/10 text-[#14F195] text-xs font-bold uppercase tracking-widest">
-            Protocol-Owned Liquidity on Solana
+        <div class="flex flex-wrap justify-center gap-3 mb-6">
+            <div class="inline-block px-4 py-1.5 rounded-full border border-[#14F195]/30 bg-[#14F195]/10 text-[#14F195] text-xs font-bold uppercase tracking-widest">
+                Protocol-Owned Liquidity on Solana
+            </div>
+            <div class="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full border border-[#9945FF]/40 bg-[#9945FF]/10 text-[#9945FF] text-xs font-bold uppercase tracking-widest">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                Solana Grants Applicant
+            </div>
         </div>
         <h1 class="text-5xl md:text-8xl font-bold mb-8 leading-tight tracking-tight">
             The Eternal <br><span class="gradient-text">Liquidity Engine</span>
@@ -139,8 +145,8 @@
                 <div class="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center mb-6">
                     <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                 </div>
-                <h3 class="text-2xl font-bold mb-4">No Liquidation</h3>
-                <p class="text-gray-400 leading-relaxed text-sm">Borrow USDC against your hiSOLA at the floor price. Since the price cannot drop below the floor, you are never liquidated.</p>
+                <h3 class="text-2xl font-bold mb-4">No Liquidation Loans</h3>
+                <p class="text-gray-400 leading-relaxed text-sm">Borrow USDC against your hiSOLA at the floor price. Since the price cannot drop below the floor, you are <strong class="text-white">never liquidated</strong>. A one-time <strong class="text-white">2% origination fee</strong> is charged at borrow time and routed directly to the <span class="text-[#9945FF]">market vault</span> — distributed to hiSOLA stakers as protocol revenue.</p>
             </div>
         </div>
     </section>
@@ -173,8 +179,9 @@
                         <p class="text-[#9945FF] font-bold text-xs uppercase tracking-widest mb-6">Governance Token</p>
                         <ul class="text-gray-400 space-y-3 text-sm">
                             <li class="flex items-center"><span class="w-1.5 h-1.5 bg-[#9945FF] rounded-full mr-2"></span> Vote on Emissions</li>
-                            <li class="flex items-center"><span class="w-1.5 h-1.5 bg-[#9945FF] rounded-full mr-2"></span> Earn Protocol Fees</li>
+                            <li class="flex items-center"><span class="w-1.5 h-1.5 bg-[#9945FF] rounded-full mr-2"></span> Earn Protocol Fees (AMM + Borrow)</li>
                             <li class="flex items-center"><span class="w-1.5 h-1.5 bg-[#9945FF] rounded-full mr-2"></span> Zero Liquidation Loans</li>
+                            <li class="flex items-center"><span class="w-1.5 h-1.5 bg-[#9945FF] rounded-full mr-2"></span> 2% Origination Fee → Stakers</li>
                         </ul>
                     </div>
                 </div>
@@ -274,8 +281,14 @@
                     <span class="text-[#14F195] text-xs font-bold uppercase tracking-widest">Phase 1 — Live</span>
                     <span class="w-2 h-2 bg-[#14F195] rounded-full animate-pulse"></span>
                 </div>
-                <h3 class="text-xl font-bold mb-2">Core Protocol + Ecosystem Allocation</h3>
-                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · 2M $SOLA ecosystem allocation deployed on-chain · Wallet collection active (airdrop eligibility)</p>
+                <div class="flex items-center gap-2 mb-2 flex-wrap">
+                    <h3 class="text-xl font-bold">Core Protocol + Ecosystem Allocation</h3>
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#9945FF]/20 border border-[#9945FF]/40 text-[#9945FF] text-[10px] font-bold uppercase tracking-widest">
+                        <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor"><path d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
+                        Solana Grants Applied
+                    </span>
+                </div>
+                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing (2% fee → stakers) · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · 2M $SOLA ecosystem allocation deployed on-chain · Wallet collection active (airdrop eligibility) · <span class="text-[#9945FF]">Solana Foundation Grants application submitted</span></p>
             </div>
             <div class="bg-solana p-8 rounded-2xl border border-[#9945FF]/30">
                 <div class="flex items-center gap-3 mb-2">
