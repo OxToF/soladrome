@@ -73,6 +73,8 @@ export function ClaimBribe() {
   const [loadingTokens,   setLoadingTokens]   = useState(false);
   const [loading,         setLoading]         = useState(false);
   const [status,          setStatus]          = useState("");
+  // Gauge total votes for the currently selected (pool, epoch) — for expected-claim preview
+  const [gaugeTotalVotes, setGaugeTotalVotes] = useState<number | null>(null);
 
   const knownTokens = [
     { symbol: "oSOLA",  mint: new PublicKey("2rAqBLBi2Fjdjqf5za7uzpbYgNiVV74XMDKQ5RdMuEJT"), color: "#bbf7d0" },
@@ -143,10 +145,11 @@ export function ClaimBribe() {
 
   // ── 2. When a vote entry is selected, scan ALL BribeVault for that pool ──────
   useEffect(() => {
-    if (!selected) { setAvailableTokens([]); setSelectedMint(null); return; }
+    if (!selected) { setAvailableTokens([]); setSelectedMint(null); setGaugeTotalVotes(null); return; }
     setLoadingTokens(true);
     setAvailableTokens([]);
     setSelectedMint(null);
+    setGaugeTotalVotes(null);
 
     (async () => {
       try {
@@ -176,13 +179,24 @@ export function ClaimBribe() {
         });
 
         setAvailableTokens(tokens);
+
+        // Fetch gauge total_votes for expected-claim preview
+        const [gaugeAcc] = PublicKey.findProgramAddressSync(
+          [Buffer.from("gauge"), selected.pool.toBuffer(), epochBuf(selected.epoch)], PROGRAM_ID
+        );
+        const gaugeInfo = await connection.getAccountInfo(gaugeAcc);
+        if (gaugeInfo) {
+          // offset: 8 discriminator + 32 pool_id + 8 epoch = 48
+          const raw = gaugeInfo.data.readBigUInt64LE(48);
+          setGaugeTotalVotes(Number(raw) / 1e6);
+        }
       } catch (e) {
         console.error(e);
       } finally {
         setLoadingTokens(false);
       }
     })();
-  }, [selected]);
+  }, [selected, connection]);
 
   // ── 3. Claim ───────────────────────────────────────────────────────────────
   async function claimBribe() {
@@ -333,6 +347,36 @@ export function ClaimBribe() {
           )}
         </div>
       )}
+
+      {/* ── Expected claim preview ── */}
+      {selected && selectedMint && !alreadyClaimed && (() => {
+        const tok = availableTokens.find(t => t.mint.equals(selectedMint!));
+        if (!tok || !gaugeTotalVotes || gaugeTotalVotes === 0) return null;
+        const userShare = selected.votes / gaugeTotalVotes;
+        const expected  = tok.amount * userShare;
+        return (
+          <div className="rounded-lg bg-brand-dark border border-brand-border px-3 py-2 mb-3 text-xs">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-gray-500">Your votes</span>
+              <span className="font-mono text-white">
+                {selected.votes.toLocaleString(undefined, { maximumFractionDigits: 2 })} hiSOLA
+              </span>
+            </div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-gray-500">Total gauge votes</span>
+              <span className="font-mono text-white">
+                {gaugeTotalVotes.toLocaleString(undefined, { maximumFractionDigits: 2 })} hiSOLA
+              </span>
+            </div>
+            <div className="flex items-center justify-between border-t border-brand-border pt-1 mt-1">
+              <span className="text-gray-400 font-semibold">Your share ({(userShare * 100).toFixed(1)}%)</span>
+              <span className="font-mono font-bold text-brand-green">
+                ≈ {expected.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tok.symbol}
+              </span>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Claim button ── */}
       {selected && selectedMint && !alreadyClaimed && (
