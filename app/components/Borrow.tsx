@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import {
-  getProgram, statePda, hiSolaM, floorVault,
+  getProgram, statePda, hiSolaM, floorVault, marketVault,
   positionPda, userAta, commonAccounts, fromUi, toUi,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
@@ -68,6 +68,7 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
             hiSolaMint: hiSolaM,
             userHiSola,
             floorVault,
+            marketVault,
             userUsdc,
             userPosition: position,
             tokenProgram: commonAccounts.tokenProgram,
