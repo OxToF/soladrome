@@ -856,44 +856,45 @@ pub mod soladrome {
 
     // ── Contributor / marketing vesting ──────────────────────────────────────
 
-    /// Authority-only: register a marketing/contributor wallet with an oSOLA allocation.
-    /// Creates a ContributorVesting PDA seeded by the contributor's wallet.
+    /// Authority-only: register a contributor wallet with a dual hiSOLA + oSOLA allocation.
+    /// Mirrors the founder structure — hiSOLA (governance + borrow) + oSOLA (liquid options).
     /// Vesting starts immediately (start_ts = now) — call at launch time.
-    /// The contributor claims via claim_contributor_vesting; borrows via contributor_borrow_usdc.
     pub fn register_contributor(
         ctx: Context<RegisterContributor>,
-        total_amount: u64,
+        hi_sola_amount: u64,
+        o_sola_amount:  u64,
     ) -> Result<()> {
-        require!(total_amount > 0, SoladromeError::InvalidAmount);
+        require!(hi_sola_amount > 0 || o_sola_amount > 0, SoladromeError::InvalidAmount);
         let v = &mut ctx.accounts.contributor_vesting;
-        v.contributor  = ctx.accounts.contributor_wallet.key();
-        v.total_amount = total_amount;
-        v.claimed      = 0;
-        v.start_ts     = Clock::get()?.unix_timestamp;
-        v.bump         = ctx.bumps.contributor_vesting;
+        v.contributor     = ctx.accounts.contributor_wallet.key();
+        v.hi_sola_amount  = hi_sola_amount;
+        v.o_sola_amount   = o_sola_amount;
+        v.hi_sola_claimed = 0;
+        v.o_sola_claimed  = 0;
+        v.start_ts        = Clock::get()?.unix_timestamp;
+        v.bump            = ctx.bumps.contributor_vesting;
         msg!(
-            "Contributor registered: {} | {} oSOLA | start_ts={}",
-            v.contributor, v.total_amount, v.start_ts
+            "Contributor registered: {} | {} hiSOLA + {} oSOLA | start_ts={}",
+            v.contributor, v.hi_sola_amount, v.o_sola_amount, v.start_ts
         );
         Ok(())
     }
 
-    /// Contributor-only: claim linearly-vested oSOLA after the cliff.
-    /// Formula (after cliff):
-    ///   total_vested = total_amount × min(elapsed, DURATION) / DURATION
-    ///   claimable    = total_vested − already_claimed
-    pub fn claim_contributor_vesting(ctx: Context<ClaimContributorVesting>) -> Result<()> {
+    /// Contributor-only: claim linearly-vested hiSOLA after the cliff.
+    /// Mints SOLA to sola_vault (locked backing) + hiSOLA to contributor wallet 1:1.
+    /// Also snapshots the fee accumulator so the contributor earns fees from day one.
+    pub fn claim_contributor_hi_sola(ctx: Context<ClaimContributorHiSola>) -> Result<()> {
         let clock   = Clock::get()?;
         let vesting = &ctx.accounts.contributor_vesting;
         let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
 
-        require!(elapsed >= CONTRIBUTOR_CLIFF_SECS, SoladromeError::VestingCliffNotReached);
-        require!(vesting.claimed < vesting.total_amount, SoladromeError::VestingFullyClaimed);
+        require!(elapsed >= CONTRIBUTOR_CLIFF_SECS,    SoladromeError::VestingCliffNotReached);
+        require!(vesting.hi_sola_claimed < vesting.hi_sola_amount, SoladromeError::VestingFullyClaimed);
 
         let vested_amount = if elapsed >= CONTRIBUTOR_DURATION_SECS {
-            vesting.total_amount
+            vesting.hi_sola_amount
         } else {
-            (vesting.total_amount as u128)
+            (vesting.hi_sola_amount as u128)
                 .checked_mul(elapsed as u128)
                 .ok_or(SoladromeError::Overflow)?
                 .checked_div(CONTRIBUTOR_DURATION_SECS as u128)
@@ -901,7 +902,93 @@ pub mod soladrome {
         };
 
         let claimable = vested_amount
-            .checked_sub(vesting.claimed)
+            .checked_sub(vesting.hi_sola_claimed)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(claimable > 0, SoladromeError::NothingToClaim);
+
+        // Advance accumulator before adding to hiSOLA supply (same pattern as stake_sola)
+        let market_balance = ctx.accounts.market_vault.amount;
+        let acc = math::advance_accumulator(
+            ctx.accounts.protocol_state.fees_per_hi_sola,
+            market_balance,
+            ctx.accounts.protocol_state.last_market_vault_balance,
+            ctx.accounts.protocol_state.total_hi_sola,
+        );
+
+        let bump = ctx.accounts.protocol_state.bump;
+        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+        // Mint SOLA to sola_vault (backing the hiSOLA 1:1)
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint:      ctx.accounts.sola_mint.to_account_info(),
+                    to:        ctx.accounts.sola_vault.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            claimable,
+        )?;
+
+        // Mint hiSOLA to contributor
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint:      ctx.accounts.hi_sola_mint.to_account_info(),
+                    to:        ctx.accounts.contributor_hi_sola.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            claimable,
+        )?;
+
+        // Init/update contributor position debt snapshot
+        let pos = &mut ctx.accounts.contributor_position;
+        if pos.owner == Pubkey::default() {
+            pos.owner = ctx.accounts.contributor.key();
+            pos.bump  = ctx.bumps.contributor_position;
+        }
+        pos.fees_debt = acc;
+
+        let s = &mut ctx.accounts.protocol_state;
+        s.fees_per_hi_sola          = acc;
+        s.last_market_vault_balance = market_balance;
+        s.total_sola    = s.total_sola.checked_add(claimable).ok_or(SoladromeError::Overflow)?;
+        s.total_hi_sola = s.total_hi_sola.checked_add(claimable).ok_or(SoladromeError::Overflow)?;
+
+        ctx.accounts.contributor_vesting.hi_sola_claimed = vesting.hi_sola_claimed
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
+
+        Ok(())
+    }
+
+    /// Contributor-only: claim linearly-vested oSOLA after the cliff.
+    /// Mints oSOLA to contributor wallet — floor-neutral until exercised.
+    pub fn claim_contributor_vesting(ctx: Context<ClaimContributorVesting>) -> Result<()> {
+        let clock   = Clock::get()?;
+        let vesting = &ctx.accounts.contributor_vesting;
+        let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
+
+        require!(elapsed >= CONTRIBUTOR_CLIFF_SECS,   SoladromeError::VestingCliffNotReached);
+        require!(vesting.o_sola_claimed < vesting.o_sola_amount, SoladromeError::VestingFullyClaimed);
+
+        let vested_amount = if elapsed >= CONTRIBUTOR_DURATION_SECS {
+            vesting.o_sola_amount
+        } else {
+            (vesting.o_sola_amount as u128)
+                .checked_mul(elapsed as u128)
+                .ok_or(SoladromeError::Overflow)?
+                .checked_div(CONTRIBUTOR_DURATION_SECS as u128)
+                .ok_or(SoladromeError::Overflow)? as u64
+        };
+
+        let claimable = vested_amount
+            .checked_sub(vesting.o_sola_claimed)
             .ok_or(SoladromeError::Overflow)?;
         require!(claimable > 0, SoladromeError::NothingToClaim);
 
@@ -921,17 +1008,17 @@ pub mod soladrome {
             claimable,
         )?;
 
-        ctx.accounts.contributor_vesting.claimed = vesting.claimed
+        ctx.accounts.contributor_vesting.o_sola_claimed = vesting.o_sola_claimed
             .checked_add(claimable)
             .ok_or(SoladromeError::Overflow)?;
 
         Ok(())
     }
 
-    /// Contributor borrow: draw USDC from floor_vault against claimed oSOLA (10% cap).
-    /// Max cumulative borrow = 10% × contributor_vesting.claimed.
-    /// 2% origination fee → market_vault (same as regular borrow).
-    /// Flash-borrow guard: repay cannot occur in the same slot as this borrow.
+    /// Contributor borrow: draw USDC from floor_vault against hiSOLA collateral.
+    /// Max cumulative borrow = 10 % of the monthly hiSOLA installment
+    ///   = hi_sola_amount / 12 × 10% = hi_sola_amount / 120.
+    /// 2% origination fee → market_vault. Flash-borrow guard included.
     pub fn contributor_borrow_usdc(
         ctx: Context<ContributorBorrowUsdc>,
         usdc_amount: u64,
@@ -946,9 +1033,9 @@ pub mod soladrome {
             ctx.accounts.contributor_position.bump  = ctx.bumps.contributor_position;
         }
 
-        // Cap check: 10% of total oSOLA claimed so far
-        let claimed    = ctx.accounts.contributor_vesting.claimed;
-        let max_borrow = (claimed as u128)
+        // Cap = 10% of monthly hiSOLA installment = hi_sola_amount / 120
+        let monthly_alloc = ctx.accounts.contributor_vesting.hi_sola_amount / 12;
+        let max_borrow    = (monthly_alloc as u128)
             .checked_mul(CONTRIBUTOR_BORROW_CAP_BPS as u128)
             .ok_or(SoladromeError::Overflow)?
             .checked_div(10_000)
@@ -1001,7 +1088,7 @@ pub mod soladrome {
             .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
 
-        // Flash-borrow guard: record slot so repay_usdc cannot fire in the same tx
+        // Flash-borrow guard
         ctx.accounts.contributor_position.last_borrow_slot = Clock::get()?.slot;
 
         Ok(())
@@ -2544,11 +2631,10 @@ pub struct FlashArbitrage<'info> {
 
 // ── Contributor / marketing vesting contexts ──────────────────────────────────
 
-/// Authority registers a contributor wallet and oSOLA allocation.
+/// Authority registers a contributor wallet with hiSOLA + oSOLA allocations.
 /// Called once per contributor (at launch). Vesting starts immediately.
 #[derive(Accounts)]
 pub struct RegisterContributor<'info> {
-    /// Protocol authority only.
     #[account(
         mut,
         address = protocol_state.authority @ SoladromeError::Unauthorized,
@@ -2558,7 +2644,7 @@ pub struct RegisterContributor<'info> {
     #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
     pub protocol_state: Account<'info, ProtocolState>,
 
-    /// CHECK: The beneficiary wallet — identity is enforced by being baked into PDA seeds.
+    /// CHECK: The beneficiary wallet — identity enforced by PDA seeds.
     pub contributor_wallet: UncheckedAccount<'info>,
 
     #[account(
@@ -2574,7 +2660,63 @@ pub struct RegisterContributor<'info> {
     pub rent:           Sysvar<'info, Rent>,
 }
 
-/// Contributor claims linearly-vested oSOLA after the cliff.
+/// Contributor claims vested hiSOLA (governance + borrow collateral tranche).
+/// Mints SOLA to sola_vault + hiSOLA to contributor 1:1. Advances fee accumulator.
+#[derive(Accounts)]
+pub struct ClaimContributorHiSola<'info> {
+    #[account(mut)]
+    pub contributor: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(mut, address = protocol_state.sola_mint)]
+    pub sola_mint: Box<Account<'info, Mint>>,
+
+    #[account(mut, address = protocol_state.hi_sola_mint)]
+    pub hi_sola_mint: Box<Account<'info, Mint>>,
+
+    #[account(mut, address = protocol_state.sola_vault)]
+    pub sola_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Read-only — needed for accumulator snapshot before hiSOLA supply changes.
+    #[account(address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Contributor's hiSOLA ATA — created on first claim if needed.
+    #[account(
+        init_if_needed,
+        payer = contributor,
+        associated_token::mint      = hi_sola_mint,
+        associated_token::authority = contributor,
+    )]
+    pub contributor_hi_sola: Box<Account<'info, TokenAccount>>,
+
+    /// Fee-share position — init on first claim; tracks fees_debt.
+    #[account(
+        init_if_needed,
+        payer = contributor,
+        space = UserPosition::LEN,
+        seeds = [POSITION_SEED, contributor.key().as_ref()],
+        bump,
+    )]
+    pub contributor_position: Account<'info, UserPosition>,
+
+    #[account(
+        mut,
+        seeds = [CONTRIBUTOR_SEED, contributor.key().as_ref()],
+        bump = contributor_vesting.bump,
+        constraint = contributor_vesting.contributor == contributor.key() @ SoladromeError::Unauthorized,
+    )]
+    pub contributor_vesting: Account<'info, ContributorVesting>,
+
+    pub token_program:            Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program:           Program<'info, System>,
+}
+
+/// Contributor claims vested oSOLA (liquid options tranche).
+/// Mints oSOLA to contributor — floor-neutral until exercised.
 #[derive(Accounts)]
 pub struct ClaimContributorVesting<'info> {
     #[account(mut)]
@@ -2598,7 +2740,7 @@ pub struct ClaimContributorVesting<'info> {
     #[account(
         init_if_needed,
         payer = contributor,
-        associated_token::mint  = o_sola_mint,
+        associated_token::mint      = o_sola_mint,
         associated_token::authority = contributor,
     )]
     pub contributor_o_sola: Account<'info, TokenAccount>,
@@ -2608,7 +2750,8 @@ pub struct ClaimContributorVesting<'info> {
     pub system_program:           Program<'info, System>,
 }
 
-/// Contributor borrows USDC from floor_vault (10% cap on claimed oSOLA).
+/// Contributor borrows USDC against hiSOLA collateral.
+/// Cap = 10% of monthly hiSOLA installment = hi_sola_amount / 120.
 /// Flash-borrow guard: repay_usdc requires a strictly later slot.
 #[derive(Accounts)]
 pub struct ContributorBorrowUsdc<'info> {
