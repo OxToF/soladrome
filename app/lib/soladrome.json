@@ -1277,6 +1277,186 @@
       ]
     },
     {
+      "name": "claim_contributor_vesting",
+      "docs": [
+        "Contributor-only: claim linearly-vested oSOLA after the cliff.",
+        "Formula (after cliff):",
+        "total_vested = total_amount × min(elapsed, DURATION) / DURATION",
+        "claimable    = total_vested − already_claimed"
+      ],
+      "discriminator": [
+        151,
+        164,
+        230,
+        161,
+        49,
+        58,
+        231,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "contributor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "o_sola_mint"
+        },
+        {
+          "name": "contributor_vesting",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  105,
+                  98,
+                  117,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "contributor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "contributor_o_sola",
+          "docs": [
+            "Contributor's oSOLA ATA — created on first claim if needed."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "contributor"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "o_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claim_fees",
       "discriminator": [
         82,
@@ -2359,6 +2539,132 @@
       "args": [
         {
           "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "contributor_borrow_usdc",
+      "docs": [
+        "Contributor borrow: draw USDC from floor_vault against claimed oSOLA (10% cap).",
+        "Max cumulative borrow = 10% × contributor_vesting.claimed.",
+        "2% origination fee → market_vault (same as regular borrow).",
+        "Flash-borrow guard: repay cannot occur in the same slot as this borrow."
+      ],
+      "discriminator": [
+        191,
+        82,
+        144,
+        27,
+        109,
+        56,
+        16,
+        50
+      ],
+      "accounts": [
+        {
+          "name": "contributor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "floor_vault",
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "writable": true
+        },
+        {
+          "name": "contributor_usdc",
+          "writable": true
+        },
+        {
+          "name": "contributor_position",
+          "docs": [
+            "Shared UserPosition PDA — same seed as regular users, enables repay_usdc."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "contributor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "contributor_vesting",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  105,
+                  98,
+                  117,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "contributor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usdc_amount",
           "type": "u64"
         }
       ]
@@ -4676,6 +4982,97 @@
       "args": []
     },
     {
+      "name": "register_contributor",
+      "docs": [
+        "Authority-only: register a marketing/contributor wallet with an oSOLA allocation.",
+        "Creates a ContributorVesting PDA seeded by the contributor's wallet.",
+        "Vesting starts immediately (start_ts = now) — call at launch time.",
+        "The contributor claims via claim_contributor_vesting; borrows via contributor_borrow_usdc."
+      ],
+      "discriminator": [
+        14,
+        116,
+        59,
+        252,
+        26,
+        253,
+        91,
+        175
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Protocol authority only."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "contributor_wallet"
+        },
+        {
+          "name": "contributor_vesting",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  105,
+                  98,
+                  117,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "contributor_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "total_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "remove_liquidity",
       "discriminator": [
         80,
@@ -5894,6 +6291,19 @@
       ]
     },
     {
+      "name": "ContributorVesting",
+      "discriminator": [
+        96,
+        23,
+        169,
+        106,
+        124,
+        82,
+        133,
+        10
+      ]
+    },
+    {
       "name": "FounderHiSolaVesting",
       "discriminator": [
         104,
@@ -6209,6 +6619,11 @@
       "code": 6023,
       "name": "FlashBorrowDetected",
       "msg": "Flash-borrow detected: repay cannot occur in the same slot as borrow"
+    },
+    {
+      "code": 6024,
+      "name": "ContributorBorrowCapExceeded",
+      "msg": "Contributor borrow cap exceeded: max 10% of total claimed oSOLA"
     }
   ],
   "types": [
@@ -6297,6 +6712,46 @@
           {
             "name": "total_bribed",
             "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ContributorVesting",
+      "docs": [
+        "Per-contributor oSOLA vesting schedule (marketing, community, service providers).",
+        "",
+        "Created by the authority via `register_contributor` — one PDA per beneficiary.",
+        "The contributor claims oSOLA linearly after a cliff; exercises via `exercise_o_sola`",
+        "to convert to SOLA at floor price (each exercise is floor-positive).",
+        "",
+        "Borrow cap: 10 % of `claimed` oSOLA borrowed as USDC at any time.",
+        "Flash-borrow guard: same slot-based defence as regular `borrow_usdc`.",
+        "",
+        "PDA: [b\"contributor\", contributor_wallet]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "contributor",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_amount",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "type": "u64"
+          },
+          {
+            "name": "start_ts",
+            "type": "i64"
           },
           {
             "name": "bump",

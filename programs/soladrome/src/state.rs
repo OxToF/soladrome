@@ -17,6 +17,14 @@ pub const VESTING_CLIFF_SECS: u64 = 6 * 3_600;
 /// TEST: 24 h devnet — reset to 720 * 24 * 3600 (24 months) for mainnet.
 pub const VESTING_DURATION_SECS: u64 = 24 * 3_600;
 
+// ── Contributor vesting schedule ──────────────────────────────────────────────
+/// Cliff before contributor tokens unlock.
+/// TEST: 1 h devnet — reset to 30 * 24 * 3600 (1 month) for mainnet.
+pub const CONTRIBUTOR_CLIFF_SECS: u64 = 1 * 3_600;
+/// Linear vesting window for contributors (oSOLA released monthly over 12 months).
+/// TEST: 12 h devnet — reset to 12 * 30 * 24 * 3600 (12 months) for mainnet.
+pub const CONTRIBUTOR_DURATION_SECS: u64 = 12 * 3_600;
+
 // ── Ve-layer constants ────────────────────────────────────────────────────────
 /// Minimum lock duration: 1 epoch.
 pub const MIN_LOCK_DURATION: u64 = EPOCH_DURATION;
@@ -282,3 +290,27 @@ pub struct PolState {
     pub bump:             u8,
 }
 impl PolState { pub const LEN: usize = 96; }
+
+// ── Contributor / Marketing vesting ──────────────────────────────────────────
+
+/// Per-contributor oSOLA vesting schedule (marketing, community, service providers).
+///
+/// Created by the authority via `register_contributor` — one PDA per beneficiary.
+/// The contributor claims oSOLA linearly after a cliff; exercises via `exercise_o_sola`
+/// to convert to SOLA at floor price (each exercise is floor-positive).
+///
+/// Borrow cap: 10 % of `claimed` oSOLA borrowed as USDC at any time.
+/// Flash-borrow guard: same slot-based defence as regular `borrow_usdc`.
+///
+/// PDA: [b"contributor", contributor_wallet]
+#[account]
+pub struct ContributorVesting {
+    pub contributor:  Pubkey,  // Beneficiary wallet (immutable after init)
+    pub total_amount: u64,     // Total oSOLA allocated
+    pub claimed:      u64,     // oSOLA already minted to the contributor
+    pub start_ts:     i64,     // Unix timestamp when register_contributor was called
+    pub bump:         u8,
+}
+impl ContributorVesting {
+    pub const LEN: usize = 32 + 8 + 8 + 8 + 1 + 7; // = 64 bytes with alignment padding
+}

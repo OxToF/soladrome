@@ -61,4 +61,7 @@ pub enum SoladromeError {
     // ── Flash-borrow guard ────────────────────────────────────────────────────
     #[msg("Flash-borrow detected: repay cannot occur in the same slot as borrow")]
     FlashBorrowDetected,
+    // ── Contributor / marketing vesting ──────────────────────────────────────
+    #[msg("Contributor borrow cap exceeded: max 10% of total claimed oSOLA")]
+    ContributorBorrowCapExceeded,
 }
