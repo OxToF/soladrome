@@ -3783,6 +3783,150 @@
       ]
     },
     {
+      "name": "founder_borrow_usdc",
+      "docs": [
+        "Founder-only variant of borrow_usdc with a 10 % cap.",
+        "Max cumulative borrow = FOUNDER_BORROW_CAP_BPS (10 %) × total hiSOLA claimed.",
+        "With 7 M hiSOLA vesting linearly over 24 months (~291 k/mo), the founder",
+        "can borrow at most ~29 k USDC per month — enough for running costs while",
+        "the floor vault grows from organic user activity."
+      ],
+      "discriminator": [
+        5,
+        196,
+        173,
+        39,
+        65,
+        107,
+        159,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "founder",
+          "docs": [
+            "Only the hardcoded founder wallet may call this."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "hi_sola_mint"
+        },
+        {
+          "name": "founder_hi_sola",
+          "docs": [
+            "Founder's hiSOLA balance — used as collateral ceiling."
+          ]
+        },
+        {
+          "name": "floor_vault",
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "writable": true
+        },
+        {
+          "name": "founder_usdc",
+          "writable": true
+        },
+        {
+          "name": "founder_position",
+          "docs": [
+            "Tracks founder's cumulative borrow (same seed as regular UserPosition)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "founder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "founder_hi_vesting",
+          "docs": [
+            "Vesting schedule — supplies the `claimed` amount used for the 10 % cap."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  111,
+                  117,
+                  110,
+                  100,
+                  101,
+                  114,
+                  95,
+                  104,
+                  105,
+                  95,
+                  118,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usdc_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "initialize",
       "discriminator": [
         175,
@@ -6055,6 +6199,11 @@
       "code": 6021,
       "name": "VestingFullyClaimed",
       "msg": "All vested tokens have already been claimed"
+    },
+    {
+      "code": 6022,
+      "name": "FounderBorrowCapExceeded",
+      "msg": "Founder borrow cap exceeded: max 10% of total claimed hiSOLA"
     }
   ],
   "types": [
