@@ -6204,6 +6204,11 @@
       "code": 6022,
       "name": "FounderBorrowCapExceeded",
       "msg": "Founder borrow cap exceeded: max 10% of total claimed hiSOLA"
+    },
+    {
+      "code": 6023,
+      "name": "FlashBorrowDetected",
+      "msg": "Flash-borrow detected: repay cannot occur in the same slot as borrow"
     }
   ],
   "types": [
@@ -6752,6 +6757,15 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "last_borrow_slot",
+            "docs": [
+              "Slot at which the most recent borrow was executed.",
+              "repay_usdc requires current_slot > last_borrow_slot — blocks same-tx",
+              "flash-borrow attacks where USDC is borrowed and repaid atomically."
+            ],
+            "type": "u64"
           }
         ]
       }

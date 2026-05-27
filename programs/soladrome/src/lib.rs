@@ -413,6 +413,8 @@ pub mod soladrome {
             .total_usdc_borrowed
             .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
+        // Flash-borrow guard: record the slot so repay_usdc cannot fire in the same tx.
+        ctx.accounts.user_position.last_borrow_slot = Clock::get()?.slot;
         Ok(())
     }
 
@@ -420,6 +422,11 @@ pub mod soladrome {
         require!(usdc_amount > 0, SoladromeError::InvalidAmount);
         let repay = usdc_amount.min(ctx.accounts.user_position.usdc_borrowed);
         require!(repay > 0, SoladromeError::InvalidAmount);
+        // Flash-borrow guard: repay must be in a strictly later slot than borrow.
+        require!(
+            Clock::get()?.slot > ctx.accounts.user_position.last_borrow_slot,
+            SoladromeError::FlashBorrowDetected
+        );
 
         token::transfer(
             CpiContext::new(
@@ -834,6 +841,8 @@ pub mod soladrome {
             .total_usdc_borrowed
             .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
+        // Flash-borrow guard: record the slot so repay_usdc cannot fire in the same tx.
+        ctx.accounts.founder_position.last_borrow_slot = Clock::get()?.slot;
 
         Ok(())
     }

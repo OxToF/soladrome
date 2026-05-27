@@ -76,10 +76,14 @@ pub struct UserPosition {
     pub usdc_borrowed: u64,
     pub fees_debt: u128,  // fees_per_hi_sola at last claim / entry point
     pub bump: u8,
+    /// Slot at which the most recent borrow was executed.
+    /// repay_usdc requires current_slot > last_borrow_slot — blocks same-tx
+    /// flash-borrow attacks where USDC is borrowed and repaid atomically.
+    pub last_borrow_slot: u64,
 }
 
 impl UserPosition {
-    pub const LEN: usize = 128;
+    pub const LEN: usize = 128; // still fits: 32+8+16+1+8 = 65 bytes used, 63 spare
 }
 
 // ── Bribe system ──────────────────────────────────────────────────────────────
