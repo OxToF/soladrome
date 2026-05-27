@@ -19,9 +19,10 @@ mod ve;
 use errors::SoladromeError;
 use amm_state::AmmPool;
 use state::{
-    BribeVault, GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum,
-    LpUserCheckpoint, LpUserInfo, ProtocolState, UserBribeClaim, UserEpochVotes,
-    UserPosition, UserVoteReceipt, PRECISION, EPOCH_DURATION, current_epoch,
+    BribeVault, FounderHiSolaVesting, FounderVesting, GaugeState, GlobalEpochVotes,
+    LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState,
+    UserBribeClaim, UserEpochVotes, UserPosition, UserVoteReceipt,
+    PRECISION, EPOCH_DURATION, current_epoch, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
 };
 pub use amm::*;
 pub use pol::*;
@@ -53,11 +54,14 @@ pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
 
 // Founder allocation — 12% of reference 100 M-token supply, 7% auto-staked.
 pub const FOUNDER_TOTAL: u64    = 12_000_000_000_000; // 12 000 000 SOLA (6 dec)
-pub const FOUNDER_STAKE: u64    =  7_000_000_000_000; //  7 000 000 SOLA → hiSOLA
+pub const FOUNDER_STAKE: u64    =  7_000_000_000_000; //  7 000 000 SOLA → hiSOLA (governance)
+/// 5 000 000 SOLA liquid — held in vesting vault, released linearly after cliff.
+pub const FOUNDER_LIQUID: u64   =  5_000_000_000_000; // FOUNDER_TOTAL − FOUNDER_STAKE
 pub const ECOSYSTEM_TOTAL: u64  =  2_000_000_000_000; //  2 000 000 SOLA — marketing + airdrop
 /// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
 pub const BORROW_FEE_BPS: u64   =    200;             //  2 % of borrowed amount
-//  5 000 000 SOLA liquid
+
+pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
 // ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
 pub const FOUNDER_WALLET: &str = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
@@ -144,6 +148,7 @@ pub mod soladrome {
         s.virtual_usdc = s.virtual_usdc.checked_add(usdc_in).ok_or(SoladromeError::Overflow)?;
         s.virtual_sola = s.virtual_sola.checked_sub(sola_amount).ok_or(SoladromeError::Overflow)?;
         s.total_sola = s.total_sola.checked_add(sola_amount).ok_or(SoladromeError::Overflow)?;
+        s.total_purchased_sola = s.total_purchased_sola.checked_add(sola_amount).ok_or(SoladromeError::Overflow)?;
         s.accumulated_fees = s.accumulated_fees.checked_add(market_amount).ok_or(SoladromeError::Overflow)?;
         Ok(())
     }
@@ -194,12 +199,15 @@ pub mod soladrome {
             .ok_or(SoladromeError::Overflow)?;
 
         // ── Under-collateralisation guard ─────────────────────────────────────
-        // Invariant: floor_vault + total_usdc_borrowed ≥ total_sola
+        // Invariant: floor_vault + total_usdc_borrowed ≥ total_purchased_sola
         //
-        // floor_vault backs liquid SOLA 1:1; outstanding borrows are collateralised
-        // by hiSOLA so they are "logically" still in reserve. Both sides decrease by
-        // sola_amount on sell, so the invariant is preserved iff it held pre-sell.
-        // This explicit post-condition catches any latent protocol inconsistency.
+        // Only SOLA minted via buy_sola or exercise_o_sola carries 1 USDC of
+        // floor backing. Founder/ecosystem allocations are excluded, preventing
+        // unfinanced supply from blocking legitimate user redemptions.
+        ctx.accounts.protocol_state.total_purchased_sola = ctx
+            .accounts.protocol_state.total_purchased_sola
+            .saturating_sub(sola_amount);
+
         let floor_post = ctx.accounts.floor_vault.amount
             .checked_sub(usdc_out)
             .ok_or(SoladromeError::Overflow)?;
@@ -207,7 +215,7 @@ pub mod soladrome {
             .checked_add(ctx.accounts.protocol_state.total_usdc_borrowed)
             .ok_or(SoladromeError::Overflow)?;
         require!(
-            backed >= ctx.accounts.protocol_state.total_sola,
+            backed >= ctx.accounts.protocol_state.total_purchased_sola,
             SoladromeError::InsufficientFloorReserve
         );
 
@@ -481,12 +489,10 @@ pub mod soladrome {
             o_sola_amount,
         )?;
 
-        ctx.accounts.protocol_state.total_sola = ctx
-            .accounts
-            .protocol_state
-            .total_sola
-            .checked_add(o_sola_amount)
-            .ok_or(SoladromeError::Overflow)?;
+        let s = &mut ctx.accounts.protocol_state;
+        s.total_sola = s.total_sola.checked_add(o_sola_amount).ok_or(SoladromeError::Overflow)?;
+        // Exercising oSOLA pays 1 USDC to floor_vault per SOLA — counts as floor-backed supply.
+        s.total_purchased_sola = s.total_purchased_sola.checked_add(o_sola_amount).ok_or(SoladromeError::Overflow)?;
         Ok(())
     }
 
@@ -532,86 +538,38 @@ pub mod soladrome {
         Ok(())
     }
 
-    // One-time founder allocation: 12 M SOLA, of which 7 M are immediately staked.
-    // Only callable by the protocol authority; protected by `founder_allocated` flag.
+    // One-time initialisation of founder vesting schedules.
+    // Does NOT mint any tokens — all minting is deferred to claim instructions.
+    // Protected by `founder_allocated` flag (callable once).
     pub fn mint_founder_allocation(ctx: Context<MintFounderAllocation>) -> Result<()> {
         require!(
             !ctx.accounts.protocol_state.founder_allocated,
             SoladromeError::AlreadyAllocated
         );
 
-        // Advance accumulator *before* adding hiSOLA supply so existing stakers
-        // get their share correctly snapshotted.
-        let market_balance = ctx.accounts.market_vault.amount;
-        let acc = math::advance_accumulator(
-            ctx.accounts.protocol_state.fees_per_hi_sola,
-            market_balance,
-            ctx.accounts.protocol_state.last_market_vault_balance,
-            ctx.accounts.protocol_state.total_hi_sola,
-        );
+        let clock = Clock::get()?;
 
-        // Extract bump before any CPI to avoid borrow-check conflict.
-        let bump = ctx.accounts.protocol_state.bump;
-        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+        // ── hiSOLA progressive vesting (7M, cliff + linear) ─────────────────
+        // Tokens are minted epoch-by-epoch via claim_founder_hi_sola.
+        // Each claim mints SOLA to sola_vault + hiSOLA to founder simultaneously,
+        // giving the protocol time to build floor_vault from user purchases.
+        let hiv = &mut ctx.accounts.founder_hi_vesting;
+        hiv.total_amount = FOUNDER_STAKE;
+        hiv.claimed      = 0;
+        hiv.start_ts     = clock.unix_timestamp;
+        hiv.bump         = ctx.bumps.founder_hi_vesting;
 
-        // ── Step 1: mint FOUNDER_TOTAL SOLA to founder's ATA ────────────────
-        token::mint_to(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                MintTo {
-                    mint:      ctx.accounts.sola_mint.to_account_info(),
-                    to:        ctx.accounts.founder_sola.to_account_info(),
-                    authority: ctx.accounts.protocol_state.to_account_info(),
-                },
-                &[seeds],
-            ),
-            FOUNDER_TOTAL,
-        )?;
+        // ── oSOLA progressive vesting (5M, cliff + linear) ──────────────────
+        // Founder claims oSOLA linearly. To convert to USDC:
+        //   exercise_o_sola (pay 1 USDC → floor_vault, mint 1 SOLA) → sell on AMM.
+        // Each exercise is ADDITIVE to floor_vault (net positive for protocol).
+        let ov = &mut ctx.accounts.founder_vesting;
+        ov.total_amount = FOUNDER_LIQUID;
+        ov.claimed      = 0;
+        ov.start_ts     = clock.unix_timestamp;
+        ov.bump         = ctx.bumps.founder_vesting;
 
-        // ── Step 2: founder transfers FOUNDER_STAKE SOLA → sola_vault ───────
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from:      ctx.accounts.founder_sola.to_account_info(),
-                    to:        ctx.accounts.sola_vault.to_account_info(),
-                    authority: ctx.accounts.authority.to_account_info(),
-                },
-            ),
-            FOUNDER_STAKE,
-        )?;
-
-        // ── Step 3: mint FOUNDER_STAKE hiSOLA to founder ────────────────────
-        token::mint_to(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                MintTo {
-                    mint:      ctx.accounts.hi_sola_mint.to_account_info(),
-                    to:        ctx.accounts.founder_hi_sola.to_account_info(),
-                    authority: ctx.accounts.protocol_state.to_account_info(),
-                },
-                &[seeds],
-            ),
-            FOUNDER_STAKE,
-        )?;
-
-        // ── Step 4: initialise founder position ──────────────────────────────
-        // fees_debt = acc (current accumulator) — founder earns from this point on.
-        let pos = &mut ctx.accounts.founder_position;
-        if pos.owner == Pubkey::default() {
-            pos.owner = ctx.accounts.authority.key();
-            pos.bump  = ctx.bumps.founder_position;
-        }
-        pos.fees_debt = acc;
-
-        // ── Step 5: persist state ────────────────────────────────────────────
-        let s = &mut ctx.accounts.protocol_state;
-        s.fees_per_hi_sola         = acc;
-        s.last_market_vault_balance = market_balance;
-        s.total_sola    = s.total_sola.checked_add(FOUNDER_TOTAL).ok_or(SoladromeError::Overflow)?;
-        s.total_hi_sola = s.total_hi_sola.checked_add(FOUNDER_STAKE).ok_or(SoladromeError::Overflow)?;
-        s.founder_allocated = true;
-
+        ctx.accounts.protocol_state.founder_allocated = true;
         Ok(())
     }
 
@@ -643,6 +601,144 @@ pub mod soladrome {
         let s = &mut ctx.accounts.protocol_state;
         s.total_sola = s.total_sola.checked_add(ECOSYSTEM_TOTAL).ok_or(SoladromeError::Overflow)?;
         s.ecosystem_allocated = true;
+
+        Ok(())
+    }
+
+    // Claim linearly-vested hiSOLA (7M tranche).
+    // Each call mints `claimable` SOLA to sola_vault + `claimable` hiSOLA to founder.
+    // total_sola grows gradually, giving floor_vault time to accumulate from user buys.
+    // Founder uses borrow_usdc against hiSOLA for immediate liquidity (no token selling needed).
+    pub fn claim_founder_hi_sola(ctx: Context<ClaimFounderHiSola>) -> Result<()> {
+        let clock   = Clock::get()?;
+        let vesting = &ctx.accounts.founder_hi_vesting;
+        let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
+
+        require!(elapsed >= VESTING_CLIFF_SECS, SoladromeError::VestingCliffNotReached);
+        require!(vesting.claimed < vesting.total_amount, SoladromeError::VestingFullyClaimed);
+
+        let vested_amount = if elapsed >= VESTING_DURATION_SECS {
+            vesting.total_amount
+        } else {
+            (vesting.total_amount as u128)
+                .checked_mul(elapsed as u128)
+                .ok_or(SoladromeError::Overflow)?
+                .checked_div(VESTING_DURATION_SECS as u128)
+                .ok_or(SoladromeError::Overflow)? as u64
+        };
+
+        let claimable = vested_amount
+            .checked_sub(vesting.claimed)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(claimable > 0, SoladromeError::NothingToClaim);
+
+        // Advance accumulator before adding hiSOLA (same pattern as stake_sola).
+        let market_balance = ctx.accounts.market_vault.amount;
+        let acc = math::advance_accumulator(
+            ctx.accounts.protocol_state.fees_per_hi_sola,
+            market_balance,
+            ctx.accounts.protocol_state.last_market_vault_balance,
+            ctx.accounts.protocol_state.total_hi_sola,
+        );
+
+        let bump = ctx.accounts.protocol_state.bump;
+        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+        // Mint SOLA to sola_vault (locked backing for hiSOLA)
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint:      ctx.accounts.sola_mint.to_account_info(),
+                    to:        ctx.accounts.sola_vault.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            claimable,
+        )?;
+
+        // Mint hiSOLA to founder
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint:      ctx.accounts.hi_sola_mint.to_account_info(),
+                    to:        ctx.accounts.founder_hi_sola.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            claimable,
+        )?;
+
+        // Init/update founder position debt snapshot
+        let pos = &mut ctx.accounts.founder_position;
+        if pos.owner == Pubkey::default() {
+            pos.owner = ctx.accounts.founder.key();
+            pos.bump  = ctx.bumps.founder_position;
+        }
+        pos.fees_debt = acc;
+
+        let s = &mut ctx.accounts.protocol_state;
+        s.fees_per_hi_sola          = acc;
+        s.last_market_vault_balance = market_balance;
+        s.total_sola    = s.total_sola.checked_add(claimable).ok_or(SoladromeError::Overflow)?;
+        s.total_hi_sola = s.total_hi_sola.checked_add(claimable).ok_or(SoladromeError::Overflow)?;
+
+        ctx.accounts.founder_hi_vesting.claimed = ctx.accounts.founder_hi_vesting.claimed
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
+
+        Ok(())
+    }
+
+    // Claim linearly-vested oSOLA (5M tranche).
+    // Mints oSOLA directly to founder — no floor impact.
+    // To realise USDC: exercise_o_sola (pay 1 USDC → floor_vault) → sell SOLA on AMM.
+    // Each exercise is net positive for the floor vault.
+    pub fn claim_founder_vesting(ctx: Context<ClaimFounderVesting>) -> Result<()> {
+        let clock   = Clock::get()?;
+        let vesting = &ctx.accounts.founder_vesting;
+        let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
+
+        require!(elapsed >= VESTING_CLIFF_SECS, SoladromeError::VestingCliffNotReached);
+        require!(vesting.claimed < vesting.total_amount, SoladromeError::VestingFullyClaimed);
+
+        let vested_amount = if elapsed >= VESTING_DURATION_SECS {
+            vesting.total_amount
+        } else {
+            (vesting.total_amount as u128)
+                .checked_mul(elapsed as u128)
+                .ok_or(SoladromeError::Overflow)?
+                .checked_div(VESTING_DURATION_SECS as u128)
+                .ok_or(SoladromeError::Overflow)? as u64
+        };
+
+        let claimable = vested_amount
+            .checked_sub(vesting.claimed)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(claimable > 0, SoladromeError::NothingToClaim);
+
+        // Mint oSOLA to founder — floor-neutral until exercised
+        let bump = ctx.accounts.protocol_state.bump;
+        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
+                    to:        ctx.accounts.founder_o_sola.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            claimable,
+        )?;
+
+        ctx.accounts.founder_vesting.claimed = ctx.accounts.founder_vesting.claimed
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
 
         Ok(())
     }
@@ -1577,6 +1673,7 @@ pub struct ClaimFees<'info> {
 }
 
 // ── MintFounderAllocation ─────────────────────────────────────────────────────
+// Initialises vesting schedules only — zero tokens minted here.
 #[derive(Accounts)]
 pub struct MintFounderAllocation<'info> {
     #[account(mut)]
@@ -1590,53 +1687,32 @@ pub struct MintFounderAllocation<'info> {
     )]
     pub protocol_state: Box<Account<'info, ProtocolState>>,
 
-    #[account(mut, address = protocol_state.sola_mint)]
-    pub sola_mint: Box<Account<'info, Mint>>,
-
-    #[account(mut, address = protocol_state.hi_sola_mint)]
-    pub hi_sola_mint: Box<Account<'info, Mint>>,
-
-    #[account(mut, address = protocol_state.sola_vault)]
-    pub sola_vault: Box<Account<'info, TokenAccount>>,
-
-    /// Market vault — read-only snapshot for accumulator advance before issuing hiSOLA.
-    #[account(address = protocol_state.market_vault)]
-    pub market_vault: Box<Account<'info, TokenAccount>>,
-
-    /// Founder wallet — hardcoded address, cannot be substituted.
+    /// Founder wallet — hardcoded, cannot be substituted.
     #[account(
-        mut,
         address = FOUNDER_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized,
     )]
     pub founder: SystemAccount<'info>,
 
+    /// hiSOLA progressive vesting schedule (7M, cliff + linear).
     #[account(
-        init_if_needed,
+        init,
         payer = authority,
-        associated_token::mint = sola_mint,
-        associated_token::authority = founder,
-    )]
-    pub founder_sola: Box<Account<'info, TokenAccount>>,
-
-    #[account(
-        init_if_needed,
-        payer = authority,
-        associated_token::mint = hi_sola_mint,
-        associated_token::authority = founder,
-    )]
-    pub founder_hi_sola: Box<Account<'info, TokenAccount>>,
-
-    #[account(
-        init_if_needed,
-        payer = authority,
-        space = UserPosition::LEN,
-        seeds = [POSITION_SEED, founder.key().as_ref()],
+        space = 8 + FounderHiSolaVesting::LEN,
+        seeds = [FOUNDER_HI_VESTING_SEED],
         bump,
     )]
-    pub founder_position: Account<'info, UserPosition>,
+    pub founder_hi_vesting: Account<'info, FounderHiSolaVesting>,
 
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
+    /// oSOLA progressive vesting schedule (5M, cliff + linear).
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + FounderVesting::LEN,
+        seeds = [b"founder_vesting"],
+        bump,
+    )]
+    pub founder_vesting: Account<'info, FounderVesting>,
+
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
@@ -1667,6 +1743,103 @@ pub struct MintEcosystemAllocation<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+// ── ClaimFounderHiSola ────────────────────────────────────────────────────────
+
+#[derive(Accounts)]
+pub struct ClaimFounderHiSola<'info> {
+    /// Only the hardcoded founder wallet may call this.
+    #[account(
+        mut,
+        address = FOUNDER_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized,
+    )]
+    pub founder: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(mut, address = protocol_state.sola_mint)]
+    pub sola_mint: Box<Account<'info, Mint>>,
+
+    #[account(mut, address = protocol_state.hi_sola_mint)]
+    pub hi_sola_mint: Box<Account<'info, Mint>>,
+
+    /// Receives freshly locked SOLA backing the claimed hiSOLA.
+    #[account(mut, address = protocol_state.sola_vault)]
+    pub sola_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Read-only — needed for accumulator snapshot before hiSOLA supply changes.
+    #[account(address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Founder's hiSOLA ATA — created on first claim if needed.
+    #[account(
+        init_if_needed,
+        payer = founder,
+        associated_token::mint = hi_sola_mint,
+        associated_token::authority = founder,
+    )]
+    pub founder_hi_sola: Box<Account<'info, TokenAccount>>,
+
+    /// Founder's fee-share position — tracks fees_debt for claim_fees.
+    #[account(
+        init_if_needed,
+        payer = founder,
+        space = UserPosition::LEN,
+        seeds = [POSITION_SEED, founder.key().as_ref()],
+        bump,
+    )]
+    pub founder_position: Account<'info, UserPosition>,
+
+    #[account(
+        mut,
+        seeds = [FOUNDER_HI_VESTING_SEED],
+        bump = founder_hi_vesting.bump,
+    )]
+    pub founder_hi_vesting: Account<'info, FounderHiSolaVesting>,
+
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+// ── ClaimFounderVesting (oSOLA) ───────────────────────────────────────────────
+
+#[derive(Accounts)]
+pub struct ClaimFounderVesting<'info> {
+    /// Only the hardcoded founder wallet may call this.
+    #[account(
+        mut,
+        address = FOUNDER_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized,
+    )]
+    pub founder: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    #[account(address = protocol_state.o_sola_mint)]
+    pub o_sola_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [b"founder_vesting"],
+        bump = founder_vesting.bump,
+    )]
+    pub founder_vesting: Account<'info, FounderVesting>,
+
+    /// Founder's oSOLA ATA — created on first claim if needed.
+    #[account(
+        init_if_needed,
+        payer = founder,
+        associated_token::mint = o_sola_mint,
+        associated_token::authority = founder,
+    )]
+    pub founder_o_sola: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
 }
 
 // ── Bribe system contexts ─────────────────────────────────────────────────────

@@ -9,6 +9,14 @@ pub const PRECISION: u128 = 1_000_000_000_000; // 1e12
 // ── Epoch helpers ─────────────────────────────────────────────────────────────
 pub const EPOCH_DURATION: u64 = 3_600; // TEST: 1h devnet — reset to 7 * 24 * 60 * 60 for mainnet
 
+// ── Founder vesting schedule ──────────────────────────────────────────────────
+/// Cliff before any tokens unlock.
+/// TEST: 6 h devnet — reset to 180 * 24 * 3600 (6 months) for mainnet.
+pub const VESTING_CLIFF_SECS: u64 = 6 * 3_600;
+/// Linear vesting window that starts after the cliff.
+/// TEST: 24 h devnet — reset to 720 * 24 * 3600 (24 months) for mainnet.
+pub const VESTING_DURATION_SECS: u64 = 24 * 3_600;
+
 // ── Ve-layer constants ────────────────────────────────────────────────────────
 /// Minimum lock duration: 1 epoch.
 pub const MIN_LOCK_DURATION: u64 = EPOCH_DURATION;
@@ -51,6 +59,10 @@ pub struct ProtocolState {
     /// Sum of all outstanding USDC borrows across all users.
     /// Invariant: floor_vault + total_usdc_borrowed >= total_sola at all times.
     pub total_usdc_borrowed: u64,
+    /// SOLA minted exclusively via buy_sola or exercise_o_sola (floor-backed supply).
+    /// Used as the invariant denominator in sell_sola, replacing total_sola which
+    /// includes unfinanced founder/ecosystem allocations.
+    pub total_purchased_sola: u64,
 }
 
 impl ProtocolState {
@@ -209,6 +221,46 @@ pub struct LpUserInfo {
 }
 impl LpUserInfo {
     pub const LEN: usize = 16 + 1 + 15; // = 32 with padding
+}
+
+// ── Founder vesting ───────────────────────────────────────────────────────────
+
+/// Progressive hiSOLA distribution for the founder (7 M stake tranche).
+/// Minting is deferred — no SOLA enters total_sola until claim_founder_hi_sola.
+/// Each claim mints claimable SOLA to sola_vault + hiSOLA to founder 1:1.
+/// PDA: [b"founder_hi_vesting"]
+#[account]
+pub struct FounderHiSolaVesting {
+    pub total_amount: u64,  // FOUNDER_STAKE = 7 000 000 SOLA (6 dec)
+    pub claimed: u64,       // hiSOLA already minted to founder
+    pub start_ts: i64,      // unix ts when mint_founder_allocation was executed
+    pub bump: u8,
+}
+impl FounderHiSolaVesting {
+    pub const LEN: usize = 8 + 8 + 8 + 1 + 7; // = 32 bytes
+}
+
+/// Progressive oSOLA vesting for the founder (5 M liquid tranche).
+/// Founder claims oSOLA linearly; exercises via exercise_o_sola to get SOLA
+/// at floor price — each exercise ADDS 1 USDC to floor_vault (net positive).
+///
+/// Vesting formula (after cliff):
+///   total_vested = total_amount × min(elapsed, VESTING_DURATION_SECS) / VESTING_DURATION_SECS
+///   claimable    = total_vested − already_claimed
+///
+/// PDA: [b"founder_vesting"]
+#[account]
+pub struct FounderVesting {
+    /// Total oSOLA under vesting (= FOUNDER_LIQUID = 5 000 000).
+    pub total_amount: u64,
+    /// Cumulative oSOLA already minted to the founder.
+    pub claimed: u64,
+    /// Unix timestamp when `mint_founder_allocation` was executed.
+    pub start_ts: i64,
+    pub bump: u8,
+}
+impl FounderVesting {
+    pub const LEN: usize = 8 + 8 + 8 + 1 + 7; // = 32 bytes with padding
 }
 
 // ── Protocol-Owned Liquidity ──────────────────────────────────────────────────

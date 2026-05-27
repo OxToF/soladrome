@@ -1361,6 +1361,410 @@
       "args": []
     },
     {
+      "name": "claim_founder_hi_sola",
+      "discriminator": [
+        19,
+        134,
+        190,
+        17,
+        205,
+        232,
+        28,
+        2
+      ],
+      "accounts": [
+        {
+          "name": "founder",
+          "docs": [
+            "Only the hardcoded founder wallet may call this."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "sola_mint",
+          "writable": true
+        },
+        {
+          "name": "hi_sola_mint",
+          "writable": true
+        },
+        {
+          "name": "sola_vault",
+          "docs": [
+            "Receives freshly locked SOLA backing the claimed hiSOLA."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read-only — needed for accumulator snapshot before hiSOLA supply changes."
+          ]
+        },
+        {
+          "name": "founder_hi_sola",
+          "docs": [
+            "Founder's hiSOLA ATA — created on first claim if needed."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "founder"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "hi_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "founder_position",
+          "docs": [
+            "Founder's fee-share position — tracks fees_debt for claim_fees."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "founder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "founder_hi_vesting",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  111,
+                  117,
+                  110,
+                  100,
+                  101,
+                  114,
+                  95,
+                  104,
+                  105,
+                  95,
+                  118,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_founder_vesting",
+      "discriminator": [
+        29,
+        26,
+        23,
+        26,
+        121,
+        145,
+        234,
+        127
+      ],
+      "accounts": [
+        {
+          "name": "founder",
+          "docs": [
+            "Only the hardcoded founder wallet may call this."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "o_sola_mint"
+        },
+        {
+          "name": "founder_vesting",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  111,
+                  117,
+                  110,
+                  100,
+                  101,
+                  114,
+                  95,
+                  118,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "founder_o_sola",
+          "docs": [
+            "Founder's oSOLA ATA — created on first claim if needed."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "founder"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "o_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claim_lp_emissions",
       "docs": [
         "Mint a user's pro-rata oSOLA share from LP emissions for a given pool+epoch.",
@@ -4046,242 +4450,75 @@
           }
         },
         {
-          "name": "sola_mint",
-          "writable": true
-        },
-        {
-          "name": "hi_sola_mint",
-          "writable": true
-        },
-        {
-          "name": "sola_vault",
-          "writable": true
-        },
-        {
-          "name": "market_vault",
+          "name": "founder",
           "docs": [
-            "Market vault — read-only snapshot for accumulator advance before issuing hiSOLA."
+            "Founder wallet — hardcoded, cannot be substituted."
           ]
         },
         {
-          "name": "founder",
+          "name": "founder_hi_vesting",
           "docs": [
-            "Founder wallet — hardcoded address, cannot be substituted."
+            "hiSOLA progressive vesting schedule (7M, cliff + linear)."
           ],
-          "writable": true
-        },
-        {
-          "name": "founder_sola",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "founder"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "sola_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "founder_hi_sola",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "founder"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "hi_sola_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "founder_position",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  112,
+                  102,
                   111,
-                  115,
+                  117,
+                  110,
+                  100,
+                  101,
+                  114,
+                  95,
+                  104,
                   105,
+                  95,
+                  118,
+                  101,
+                  115,
                   116,
                   105,
-                  111,
-                  110
+                  110,
+                  103
                 ]
-              },
-              {
-                "kind": "account",
-                "path": "founder"
               }
             ]
           }
         },
         {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+          "name": "founder_vesting",
+          "docs": [
+            "oSOLA progressive vesting schedule (5M, cliff + linear)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  111,
+                  117,
+                  110,
+                  100,
+                  101,
+                  114,
+                  95,
+                  118,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "system_program",
@@ -5513,6 +5750,32 @@
       ]
     },
     {
+      "name": "FounderHiSolaVesting",
+      "discriminator": [
+        104,
+        220,
+        99,
+        75,
+        192,
+        113,
+        32,
+        117
+      ]
+    },
+    {
+      "name": "FounderVesting",
+      "discriminator": [
+        94,
+        149,
+        120,
+        31,
+        36,
+        23,
+        14,
+        164
+      ]
+    },
+    {
       "name": "GaugeState",
       "discriminator": [
         165,
@@ -5782,6 +6045,16 @@
       "code": 6019,
       "name": "InvalidArbPool",
       "msg": "Pool must be a SOLA/USDC pair for flash arbitrage"
+    },
+    {
+      "code": 6020,
+      "name": "VestingCliffNotReached",
+      "msg": "Vesting cliff has not been reached yet"
+    },
+    {
+      "code": 6021,
+      "name": "VestingFullyClaimed",
+      "msg": "All vested tokens have already been claimed"
     }
   ],
   "types": [
@@ -5870,6 +6143,80 @@
           {
             "name": "total_bribed",
             "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FounderHiSolaVesting",
+      "docs": [
+        "Progressive hiSOLA distribution for the founder (7 M stake tranche).",
+        "Minting is deferred — no SOLA enters total_sola until claim_founder_hi_sola.",
+        "Each claim mints claimable SOLA to sola_vault + hiSOLA to founder 1:1.",
+        "PDA: [b\"founder_hi_vesting\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "total_amount",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "type": "u64"
+          },
+          {
+            "name": "start_ts",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FounderVesting",
+      "docs": [
+        "Progressive oSOLA vesting for the founder (5 M liquid tranche).",
+        "Founder claims oSOLA linearly; exercises via exercise_o_sola to get SOLA",
+        "at floor price — each exercise ADDS 1 USDC to floor_vault (net positive).",
+        "",
+        "Vesting formula (after cliff):",
+        "total_vested = total_amount × min(elapsed, VESTING_DURATION_SECS) / VESTING_DURATION_SECS",
+        "claimable    = total_vested − already_claimed",
+        "",
+        "PDA: [b\"founder_vesting\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "total_amount",
+            "docs": [
+              "Total oSOLA under vesting (= FOUNDER_LIQUID = 5 000 000)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "docs": [
+              "Cumulative oSOLA already minted to the founder."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "start_ts",
+            "docs": [
+              "Unix timestamp when `mint_founder_allocation` was executed."
+            ],
+            "type": "i64"
           },
           {
             "name": "bump",
@@ -6180,6 +6527,15 @@
             "docs": [
               "Sum of all outstanding USDC borrows across all users.",
               "Invariant: floor_vault + total_usdc_borrowed >= total_sola at all times."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_purchased_sola",
+            "docs": [
+              "SOLA minted exclusively via buy_sola or exercise_o_sola (floor-backed supply).",
+              "Used as the invariant denominator in sell_sola, replacing total_sola which",
+              "includes unfinanced founder/ecosystem allocations."
             ],
             "type": "u64"
           }
