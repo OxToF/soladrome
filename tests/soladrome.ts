@@ -49,16 +49,42 @@ describe("soladrome", () => {
 
   // ── 1. Initialize ─────────────────────────────────────────────────────────
   it("initializes the protocol", async () => {
-    // Create a mock USDC mint
-    usdcMint = await createMint(
-      connection,
-      wallet.payer,
-      wallet.publicKey,   // mint authority
-      null,
-      DECIMALS
-    );
+    // On devnet, the protocol state may already exist from a prior test run.
+    // If so, reuse the existing USDC mint — never create a new mint mid-protocol.
+    const existingState = await program.account.protocolState.fetchNullable(statePda);
 
-    // Give the test user 10,000 USDC
+    if (existingState) {
+      // Re-run: state PDA already exists. Reuse its USDC mint.
+      usdcMint = existingState.usdcMint;
+    } else {
+      // First run: create a fresh USDC mint and initialize the protocol.
+      usdcMint = await createMint(
+        connection,
+        wallet.payer,
+        wallet.publicKey, // mint authority
+        null,
+        DECIMALS
+      );
+      await program.methods
+        .initialize()
+        .accounts({
+          authority:     wallet.publicKey,
+          protocolState: statePda,
+          usdcMint,
+          solaM,
+          hiSolaM,
+          oSolaM,
+          floorVault:    floorV,
+          marketVault:   marketV,
+          solaVault:     solaVault,
+          tokenProgram:  TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          rent:          anchor.web3.SYSVAR_RENT_PUBKEY,
+        } as any)
+        .rpc();
+    }
+
+    // Ensure user has an ATA for the USDC mint with at least 1 000 USDC.
     const ata = await getOrCreateAssociatedTokenAccount(
       connection,
       wallet.payer,
@@ -66,31 +92,13 @@ describe("soladrome", () => {
       wallet.publicKey
     );
     userUsdcAta = ata.address;
-    await mintTo(connection, wallet.payer, usdcMint, userUsdcAta, wallet.payer, 10_000_000_000);
-
-    await program.methods
-      .initialize()
-      .accounts({
-        authority:     wallet.publicKey,
-        protocolState: statePda,
-        usdcMint,
-        solaM,
-        hiSolaM,
-        oSolaM,
-        floorVault:    floorV,
-        marketVault:   marketV,
-        solaVault:     solaVault,
-        tokenProgram:  TOKEN_PROGRAM_ID,
-        systemProgram: anchor.web3.SystemProgram.programId,
-        rent:          anchor.web3.SYSVAR_RENT_PUBKEY,
-      } as any)
-      .rpc();
+    if (BigInt(ata.amount.toString()) < 1_000_000_000n) {
+      await mintTo(connection, wallet.payer, usdcMint, userUsdcAta, wallet.payer, 10_000_000_000);
+    }
 
     const state = await program.account.protocolState.fetch(statePda);
-    assert.equal(state.usdcMint.toBase58(), usdcMint.toBase58(), "USDC mint stored");
-    assert.equal(state.virtualUsdc.toNumber(), 100_000_000, "virtual USDC = 100");
-    assert.equal(state.virtualSola.toNumber(), 100_000_000, "virtual SOLA = 100");
-    console.log("✅ initialize — state PDA:", statePda.toBase58());
+    assert.equal(state.usdcMint.toBase58(), usdcMint.toBase58(), "USDC mint matches state");
+    console.log("✅ initialize — state PDA:", statePda.toBase58(), "| usdcMint:", usdcMint.toBase58().slice(0, 8) + "…");
   });
 
   // ── 2. Buy SOLA ───────────────────────────────────────────────────────────
@@ -103,9 +111,18 @@ describe("soladrome", () => {
     const stateBefore = await program.account.protocolState.fetch(statePda);
     const usdcBefore  = await getTokenBalance(connection, userUsdcAta);
 
-    // Buy with 10 USDC
+    // Dynamically compute how much USDC to buy to get at least 6 SOLA.
+    // This handles the bonding curve being far from initial state on devnet.
+    // Formula: usdc_in = k / (virtual_sola - target) - virtual_usdc
+    const TARGET_SOLA = 6_000_000n; // 6 SOLA — enough for the entire test chain
+    const vU = BigInt(stateBefore.virtualUsdc.toString());
+    const vS = BigInt(stateBefore.virtualSola.toString());
+    const k  = BigInt(stateBefore.k.toString());
+    const minUsdc = k / (vS - TARGET_SOLA) - vU;
+    const buyAmount = new BN((minUsdc + 1_000_000n).toString()); // +1 USDC safety buffer
+
     await program.methods
-      .buySola(TEN, new BN(1)) // usdc_in=10, min_sola_out=0.000001
+      .buySola(buyAmount, new BN(1)) // min_sola_out = 0.000001 SOLA
       .accounts({
         user:          wallet.publicKey,
         protocolState: statePda,
@@ -120,26 +137,22 @@ describe("soladrome", () => {
       } as any)
       .rpc();
 
-    const stateAfter = await program.account.protocolState.fetch(statePda);
+    const stateAfter  = await program.account.protocolState.fetch(statePda);
     const solaBalance = await getTokenBalance(connection, userSolaAta);
     const usdcAfter   = await getTokenBalance(connection, userUsdcAta);
 
-    // virtual USDC should increase
     assert.isTrue(
       stateAfter.virtualUsdc.gt(stateBefore.virtualUsdc),
       "virtual USDC increased"
     );
-    // user got SOLA
-    assert.isTrue(solaBalance > 0n, "user received SOLA");
-    // user spent USDC
+    assert.isTrue(solaBalance >= BigInt(TARGET_SOLA.toString()), `user received ≥6 SOLA`);
     assert.isTrue(usdcAfter < usdcBefore, "user spent USDC");
-    // floor vault got 1 USDC per SOLA (approx)
     const floorBalance = await getTokenBalance(connection, floorV);
     assert.isTrue(floorBalance > 0n, "floor vault funded");
 
     console.log(
-      `✅ buy_sola — received ${Number(solaBalance) / 1e6} SOLA for 10 USDC`,
-      `| floor_vault: ${Number(floorBalance) / 1e6} USDC`
+      `✅ buy_sola — received ${Number(solaBalance) / 1e6} SOLA for ${Number(buyAmount.toString())/1e6} USDC` +
+      ` | floor_vault: ${Number(floorBalance) / 1e6} USDC`
     );
   });
 
@@ -200,8 +213,9 @@ describe("soladrome", () => {
       mint: hiSolaM, owner: wallet.publicKey,
     });
 
-    const solaBefore   = await getTokenBalance(connection, userSolaAta);
-    const vaultBefore  = await getTokenBalance(connection, solaVault);
+    const solaBefore    = await getTokenBalance(connection, userSolaAta);
+    const hiSolaBefore  = await getTokenBalance(connection, userHiSolaAta).catch(() => 0n);
+    const vaultBefore   = await getTokenBalance(connection, solaVault);
 
     const [positionPda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("position"), wallet.publicKey.toBuffer()],
@@ -237,8 +251,9 @@ describe("soladrome", () => {
       Number(stakeAmount.toString()),
       "SOLA locked"
     );
+    // Use delta (not absolute) — user may have pre-existing hiSOLA from prior devnet runs
     assert.equal(
-      Number(hiSolaAfter),
+      Number(hiSolaAfter - hiSolaBefore),
       Number(stakeAmount.toString()),
       "hiSOLA minted 1:1"
     );
@@ -471,8 +486,8 @@ describe("soladrome", () => {
       .rpc();
 
     const balance = await getTokenBalance(connection, userOSolaAta);
-    assert.equal(Number(balance), Number(ONE.muln(5).toString()), "5 oSOLA received");
-    console.log("✅ distribute_o_sola — 5 oSOLA minted to recipient");
+    assert.isTrue(balance >= BigInt(ONE.muln(5).toString()), "at least 5 oSOLA in account (may have prior balance)");
+    console.log(`✅ distribute_o_sola — ${Number(balance)/1e6} oSOLA in account`);
   });
 
   // ── 9. Exercise oSOLA ────────────────────────────────────────────────────
@@ -581,8 +596,10 @@ describe("soladrome", () => {
     const hiSolaBefore  = await getTokenBalance(connection, userHiSolaAta);
     const stateBefore   = await program.account.protocolState.fetch(statePda);
 
-    // Lock 1 hiSOLA for 4 weeks
-    const FOUR_WEEKS = new BN(4 * 7 * 24 * 60 * 60);
+    // Lock 1 hiSOLA for max duration (104 epochs × EPOCH_DURATION=3600s on devnet)
+    // Mainnet: 104 × 604800 = ~2 years. Devnet: 104 × 3600 = ~4.3 days.
+    const DEVNET_EPOCH = 3_600;
+    const FOUR_WEEKS   = new BN(104 * DEVNET_EPOCH); // = MAX_LOCK_DURATION on devnet
     await program.methods
       .lockHiSola(ONE, FOUR_WEEKS)
       .accounts({
@@ -639,7 +656,7 @@ describe("soladrome", () => {
     // Get current on-chain epoch
     const slot      = await connection.getSlot();
     const blockTime = await connection.getBlockTime(slot);
-    const EPOCH_DUR = 7 * 24 * 60 * 60;
+    const EPOCH_DUR = 3_600; // devnet epoch (= state.rs EPOCH_DURATION)
     const epoch     = Math.floor(blockTime / EPOCH_DUR);
     const epochLE   = Buffer.alloc(8);
     epochLE.writeBigUInt64LE(BigInt(epoch));
@@ -726,25 +743,28 @@ describe("soladrome", () => {
     const FEE_RATE     = 30;   // 0.30 %
     const PROTO_SHARE  = 2000; // 20 % of fee → market_vault
 
-    await program.methods
-      .createPool(FEE_RATE, PROTO_SHARE)
-      .accounts({
-        creator:      wallet.publicKey,
-        tokenAMint,
-        tokenBMint,
-        pool:         poolPda,
-        lpMint:       lpMintPda,
-        tokenAVault:  vaultA,
-        tokenBVault:  vaultB,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: anchor.web3.SystemProgram.programId,
-        rent:         anchor.web3.SYSVAR_RENT_PUBKEY,
-      } as any)
-      .rpc();
+    // Pool may already exist on devnet from a prior run — skip init if so.
+    const existingPool = await program.account.ammPool.fetchNullable(poolPda);
+    if (!existingPool) {
+      await program.methods
+        .createPool(FEE_RATE, PROTO_SHARE)
+        .accounts({
+          creator:      wallet.publicKey,
+          tokenAMint,
+          tokenBMint,
+          pool:         poolPda,
+          lpMint:       lpMintPda,
+          tokenAVault:  vaultA,
+          tokenBVault:  vaultB,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          rent:         anchor.web3.SYSVAR_RENT_PUBKEY,
+        } as any)
+        .rpc();
+    }
 
     const pool = await program.account.ammPool.fetch(poolPda);
-    assert.equal(pool.feeRate, FEE_RATE,    "fee rate stored");
-    assert.equal(pool.totalLp.toNumber(), 0, "pool starts empty");
+    assert.equal(pool.feeRate, FEE_RATE, "fee rate stored");
     console.log(`✅ create_pool — SOLA/USDC pool at ${poolPda.toBase58().slice(0, 8)}…`);
   });
 
@@ -774,31 +794,37 @@ describe("soladrome", () => {
       [Buffer.from("pol_sola_ata")], program.programId
     );
 
-    // Initialize POL with 10 % split suggestion and SOLA/USDC pool as target
-    await program.methods
-      .initializePol(1000, poolPda)
-      .accounts({
-        authority:     wallet.publicKey,
-        protocolState: statePda,
-        polState:      polStatePda,
-        polUsdcVault,
-        polSolaAta,
-        usdcMint,
-        solaMint:      solaM,
-        tokenProgram:  TOKEN_PROGRAM_ID,
-        systemProgram: anchor.web3.SystemProgram.programId,
-        rent:          anchor.web3.SYSVAR_RENT_PUBKEY,
-      } as any)
-      .rpc();
+    // Initialize POL (skip if already done on devnet)
+    const existingPol = await program.account.polState.fetchNullable(polStatePda);
+    if (!existingPol) {
+      await program.methods
+        .initializePol(1000, poolPda)
+        .accounts({
+          authority:     wallet.publicKey,
+          protocolState: statePda,
+          polState:      polStatePda,
+          polUsdcVault,
+          polSolaAta,
+          usdcMint,
+          solaMint:      solaM,
+          tokenProgram:  TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          rent:          anchor.web3.SYSVAR_RENT_PUBKEY,
+        } as any)
+        .rpc();
+    }
 
     const pol = await program.account.polState.fetch(polStatePda);
     assert.equal(pol.polSplitBps, 1000, "split bps stored");
     assert.equal(pol.targetPool.toBase58(), poolPda.toBase58(), "target pool set");
 
     // ── collect_to_pol: redirect 0.1 USDC from market_vault ──────────────
-    const marketBefore    = await getTokenBalance(connection, marketV);
-    const polVaultBefore  = await getTokenBalance(connection, polUsdcVault);
-    const COLLECT_AMOUNT  = new BN(100_000); // 0.1 USDC
+    const marketBefore       = await getTokenBalance(connection, marketV);
+    const polVaultBefore     = await getTokenBalance(connection, polUsdcVault);
+    const COLLECT_AMOUNT     = new BN(100_000); // 0.1 USDC
+    // Snapshot existing lifetime accumulator before this collect (may be non-zero on re-run)
+    const polBefore          = await program.account.polState.fetch(polStatePda);
+    const accumulatedBefore  = polBefore.usdcAccumulated.toNumber();
 
     await program.methods
       .collectToPol(COLLECT_AMOUNT)
@@ -819,9 +845,9 @@ describe("soladrome", () => {
     assert.isTrue(polVaultAfter > polVaultBefore, "pol_usdc_vault funded");
     assert.isTrue(marketAfter < marketBefore,     "market_vault reduced");
     assert.equal(
-      polState.usdcAccumulated.toNumber(),
+      polState.usdcAccumulated.toNumber() - accumulatedBefore,
       COLLECT_AMOUNT.toNumber(),
-      "lifetime accumulator updated"
+      "lifetime accumulator increased by collect amount"
     );
 
     console.log(
@@ -931,26 +957,29 @@ describe("soladrome", () => {
   // Invariant: floor_vault + total_usdc_borrowed ≥ total_sola at all times
   // ══════════════════════════════════════════════════════════════════════════
 
-  it("[invariant] floor_vault + total_usdc_borrowed ≥ total_sola after buy", async () => {
+  it("[invariant] floor_vault + total_usdc_borrowed ≥ total_purchased_sola after buy", async () => {
+    // The floor invariant uses total_purchased_sola — not total_sola — because
+    // founder/ecosystem allocations are unfinanced and should not affect the
+    // floor-redemption guarantee for purchased users.
     const state = await program.account.protocolState.fetch(statePda);
     const floorBalance = await getTokenBalance(connection, floorV);
 
     const backed = BigInt(floorBalance.toString()) +
                    BigInt(state.totalUsdcBorrowed.toString());
-    const supply = BigInt(state.totalSola.toString());
+    const supply = BigInt(state.totalPurchasedSola.toString());
 
     assert.isTrue(
       backed >= supply,
-      `INVARIANT VIOLATED after buy: floor+borrowed(${backed}) < totalSola(${supply})`
+      `INVARIANT VIOLATED after buy: floor+borrowed(${backed}) < totalPurchasedSola(${supply})`
     );
     console.log(
       `✅ [invariant] buy — floor_vault=${Number(floorBalance)/1e6} ` +
       `borrowed=${Number(state.totalUsdcBorrowed)/1e6} ` +
-      `totalSola=${Number(state.totalSola)/1e6}`
+      `totalPurchasedSola=${Number(state.totalPurchasedSola)/1e6}`
     );
   });
 
-  it("[invariant] floor_vault + total_usdc_borrowed ≥ total_sola after sell", async () => {
+  it("[invariant] floor_vault + total_usdc_borrowed ≥ total_purchased_sola after sell", async () => {
     const userSolaAta = anchor.utils.token.associatedAddress({
       mint: solaM, owner: wallet.publicKey,
     });
@@ -974,20 +1003,20 @@ describe("soladrome", () => {
 
     const backed = BigInt(floorBalance.toString()) +
                    BigInt(state.totalUsdcBorrowed.toString());
-    const supply = BigInt(state.totalSola.toString());
+    const supply = BigInt(state.totalPurchasedSola.toString());
 
     assert.isTrue(
       backed >= supply,
-      `INVARIANT VIOLATED after sell: floor+borrowed(${backed}) < totalSola(${supply})`
+      `INVARIANT VIOLATED after sell: floor+borrowed(${backed}) < totalPurchasedSola(${supply})`
     );
     console.log(
       `✅ [invariant] sell — floor_vault=${Number(floorBalance)/1e6} ` +
       `borrowed=${Number(state.totalUsdcBorrowed)/1e6} ` +
-      `totalSola=${Number(state.totalSola)/1e6}`
+      `totalPurchasedSola=${Number(state.totalPurchasedSola)/1e6}`
     );
   });
 
-  it("[invariant] floor_vault + total_usdc_borrowed ≥ total_sola after borrow/repay cycle", async () => {
+  it("[invariant] floor_vault + total_usdc_borrowed ≥ total_purchased_sola after borrow/repay cycle", async () => {
     const userSolaAta    = anchor.utils.token.associatedAddress({ mint: solaM,   owner: wallet.publicKey });
     const userHiSolaAta  = anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: wallet.publicKey });
     const [userPosition] = anchor.web3.PublicKey.findProgramAddressSync(
@@ -997,27 +1026,33 @@ describe("soladrome", () => {
       [Buffer.from("sola_vault")], program.programId
     );
 
-    // Helper: assert invariant
+    // Helper: assert invariant (uses total_purchased_sola — not total_sola)
     const checkInvariant = async (label: string) => {
       const s = await program.account.protocolState.fetch(statePda);
       const floor = await getTokenBalance(connection, floorV);
       const backed = BigInt(floor.toString()) + BigInt(s.totalUsdcBorrowed.toString());
-      const supply = BigInt(s.totalSola.toString());
+      const supply = BigInt(s.totalPurchasedSola.toString());
       assert.isTrue(
         backed >= supply,
-        `INVARIANT VIOLATED at [${label}]: backed(${backed}) < supply(${supply})`
+        `INVARIANT VIOLATED at [${label}]: backed(${backed}) < totalPurchasedSola(${supply})`
       );
-      return { floor, borrowed: s.totalUsdcBorrowed, supply: s.totalSola };
+      return { floor, borrowed: s.totalUsdcBorrowed, supply: s.totalPurchasedSola };
     };
 
-    // ── Buy 5 SOLA to have enough to stake ───────────────────────────────
-    await program.methods.buySola(ONE.muln(5), new BN(0)).accounts({
+    // ── Buy enough to have at least 3 SOLA (stake 2 + sell 1) ───────────
+    const stPre2 = await program.account.protocolState.fetch(statePda);
+    const vU3 = BigInt(stPre2.virtualUsdc.toString());
+    const vS3 = BigInt(stPre2.virtualSola.toString());
+    const k3  = BigInt(stPre2.k.toString());
+    const target3 = 3_000_000n; // 3 SOLA
+    const buyAmt3 = new BN((k3 / (vS3 - target3) - vU3 + 1_000_000n).toString());
+    await program.methods.buySola(buyAmt3, new BN(0)).accounts({
       user: wallet.publicKey, protocolState: statePda,
       solaMint: solaM, userUsdc: userUsdcAta, userSola: userSolaAta,
       floorVault: floorV, marketVault: marketV,
       tokenProgram: TOKEN_PROGRAM_ID,
     } as any).rpc();
-    await checkInvariant("after buy 5 SOLA");
+    await checkInvariant("after buy SOLA for cycle test");
 
     // ── Stake 2 SOLA → hiSOLA ────────────────────────────────────────────
     await program.methods.stakeSola(ONE.muln(2)).accounts({
@@ -1042,9 +1077,10 @@ describe("soladrome", () => {
       systemProgram: anchor.web3.SystemProgram.programId,
     } as any).rpc();
     const afterBorrow = await checkInvariant("after borrow 1 USDC");
-    assert.equal(
-      Number(afterBorrow.borrowed.toString()), 1_000_000,
-      "total_usdc_borrowed tracks protocol-wide borrow"
+    // total_usdc_borrowed may include pre-existing borrows from devnet; just verify it grew
+    assert.isTrue(
+      Number(afterBorrow.borrowed.toString()) >= 1_000_000,
+      "total_usdc_borrowed includes the new 1 USDC borrow"
     );
 
     // ── Sell 1 liquid SOLA — must succeed (backed by hiSOLA collateral) ──
@@ -1063,9 +1099,11 @@ describe("soladrome", () => {
       userPosition, tokenProgram: TOKEN_PROGRAM_ID,
     } as any).rpc();
     const afterRepay = await checkInvariant("after repay");
+    // The user's own borrow is cleared; total may still show pre-existing devnet borrows
+    const posAfterRepay = await program.account.userPosition.fetch(userPosition);
     assert.equal(
-      Number(afterRepay.borrowed.toString()), 0,
-      "total_usdc_borrowed back to 0 after full repay"
+      posAfterRepay.usdcBorrowed.toNumber(), 0,
+      "user's personal debt cleared after repay"
     );
 
     console.log("✅ [invariant] borrow/repay cycle — floor_vault invariant holds throughout");
@@ -1098,5 +1136,216 @@ describe("soladrome", () => {
       );
       console.log("✅ [invariant] sell correctly rejected: floor reserve exhausted");
     }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Security — Flash-borrow guard
+  // Invariant: repay_usdc must execute in a strictly later slot than borrow_usdc
+  // ══════════════════════════════════════════════════════════════════════════
+
+  it("[security] flash-borrow rejected: borrow + repay in same transaction", async () => {
+    const userSolaAta   = anchor.utils.token.associatedAddress({ mint: solaM,   owner: wallet.publicKey });
+    const userHiSolaAta = anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: wallet.publicKey });
+    const [userPosition] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), wallet.publicKey.toBuffer()],
+      program.programId
+    );
+
+    // Ensure we have SOLA to stake (buy 3 SOLA)
+    await program.methods.buySola(ONE.muln(3), new BN(0)).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      solaMint: solaM, userUsdc: userUsdcAta, userSola: userSolaAta,
+      floorVault: floorV, marketVault: marketV,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: anchor.web3.SystemProgram.programId,
+    } as any).rpc();
+
+    // Ensure we have hiSOLA collateral (stake 2 SOLA → 2 hiSOLA)
+    const hiSolaBal = await getTokenBalance(connection, userHiSolaAta);
+    if (hiSolaBal < BigInt(ONE.toString())) {
+      await program.methods.stakeSola(ONE.muln(2)).accounts({
+        user: wallet.publicKey, protocolState: statePda,
+        solaMint: solaM, hiSolaMint: hiSolaM,
+        userSola: userSolaAta, userHiSola: userHiSolaAta,
+        solaVault: solaVault, marketVault: marketV, userPosition,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any).rpc();
+    }
+
+    // Clear any existing debt first (repay in a separate prior slot — always safe)
+    const posState = await program.account.userPosition.fetch(userPosition);
+    if (posState.usdcBorrowed.toNumber() > 0) {
+      await program.methods.repayUsdc(posState.usdcBorrowed).accounts({
+        user: wallet.publicKey, protocolState: statePda,
+        userUsdc: userUsdcAta, floorVault: floorV,
+        userPosition, tokenProgram: TOKEN_PROGRAM_ID,
+      } as any).rpc();
+    }
+
+    // ── Flash-borrow attack: pack borrow + repay into a single transaction ──
+    // Both instructions run in the same slot → guard fires on repay.
+    const borrowIx = await program.methods
+      .borrowUsdc(ONE)
+      .accounts({
+        user: wallet.publicKey, protocolState: statePda,
+        hiSolaMint: hiSolaM, userHiSola: userHiSolaAta,
+        floorVault: floorV, marketVault: marketV,
+        userUsdc: userUsdcAta, userPosition,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    const repayIx = await program.methods
+      .repayUsdc(ONE)
+      .accounts({
+        user: wallet.publicKey, protocolState: statePda,
+        userUsdc: userUsdcAta, floorVault: floorV,
+        userPosition, tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .instruction();
+
+    const flashTx = new anchor.web3.Transaction().add(borrowIx, repayIx);
+
+    try {
+      await provider.sendAndConfirm(flashTx, [wallet.payer]);
+      assert.fail("Expected FlashBorrowDetected — same-slot borrow+repay should be rejected");
+    } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      assert.isTrue(
+        msg.includes("FlashBorrowDetected") || msg.includes("0x1787"),
+        `Expected FlashBorrowDetected (0x1787), got: ${msg}`
+      );
+      // Clean up the borrow debt (left by the partial execution if any)
+      // Note: if the TX failed atomically, no state change occurred — no cleanup needed.
+      console.log("✅ [security] flash-borrow guard correctly rejected same-slot borrow+repay");
+    }
+  });
+
+  it("[security] normal borrow + repay in separate transactions succeeds", async () => {
+    const userHiSolaAta = anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: wallet.publicKey });
+    const [userPosition] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), wallet.publicKey.toBuffer()],
+      program.programId
+    );
+
+    // Ensure no outstanding debt before test
+    const posBefore = await program.account.userPosition.fetch(userPosition);
+    if (posBefore.usdcBorrowed.toNumber() > 0) {
+      await program.methods.repayUsdc(posBefore.usdcBorrowed).accounts({
+        user: wallet.publicKey, protocolState: statePda,
+        userUsdc: userUsdcAta, floorVault: floorV,
+        userPosition, tokenProgram: TOKEN_PROGRAM_ID,
+      } as any).rpc();
+    }
+
+    // TX 1: borrow 0.5 USDC → records last_borrow_slot
+    const borrowAmount = ONE.divn(2); // 0.5 USDC
+    await program.methods.borrowUsdc(borrowAmount).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      hiSolaMint: hiSolaM, userHiSola: userHiSolaAta,
+      floorVault: floorV, marketVault: marketV,
+      userUsdc: userUsdcAta, userPosition,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: anchor.web3.SystemProgram.programId,
+    } as any).rpc();
+
+    const posAfterBorrow = await program.account.userPosition.fetch(userPosition);
+    assert.isTrue(
+      posAfterBorrow.lastBorrowSlot.toNumber() > 0,
+      "last_borrow_slot recorded after borrow"
+    );
+    assert.equal(posAfterBorrow.usdcBorrowed.toString(), borrowAmount.toString(), "debt recorded");
+
+    // TX 2: repay — different transaction → different slot → guard passes
+    await program.methods.repayUsdc(borrowAmount).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      userUsdc: userUsdcAta, floorVault: floorV,
+      userPosition, tokenProgram: TOKEN_PROGRAM_ID,
+    } as any).rpc();
+
+    const posAfterRepay = await program.account.userPosition.fetch(userPosition);
+    assert.equal(posAfterRepay.usdcBorrowed.toNumber(), 0, "debt cleared after normal repay");
+
+    console.log("✅ [security] normal borrow → repay (separate slots) works correctly");
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Invariant — total_purchased_sola tracks floor-backed supply correctly
+  // ══════════════════════════════════════════════════════════════════════════
+
+  it("[invariant] total_purchased_sola increments on buy, decrements on sell", async () => {
+    const userSolaAta = anchor.utils.token.associatedAddress({ mint: solaM, owner: wallet.publicKey });
+
+    const stateBefore = await program.account.protocolState.fetch(statePda);
+    const purchasedBefore = stateBefore.totalPurchasedSola.toNumber();
+    const floorBefore     = await getTokenBalance(connection, floorV);
+
+    // ── Buy enough USDC to get at least 2 SOLA → total_purchased_sola must increase ──
+    // Dynamically compute amount needed (bonding curve state may vary on devnet)
+    const stPre = await program.account.protocolState.fetch(statePda);
+    const vU2 = BigInt(stPre.virtualUsdc.toString());
+    const vS2 = BigInt(stPre.virtualSola.toString());
+    const k2  = BigInt(stPre.k.toString());
+    const target2 = 2_000_000n; // 2 SOLA
+    const buyAmt2 = new BN((k2 / (vS2 - target2) - vU2 + 1_000_000n).toString());
+
+    await program.methods.buySola(buyAmt2, new BN(0)).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      solaMint: solaM, userUsdc: userUsdcAta, userSola: userSolaAta,
+      floorVault: floorV, marketVault: marketV,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: anchor.web3.SystemProgram.programId,
+    } as any).rpc();
+
+    const stateAfterBuy  = await program.account.protocolState.fetch(statePda);
+    const floorAfterBuy  = await getTokenBalance(connection, floorV);
+    const purchasedAfterBuy = stateAfterBuy.totalPurchasedSola.toNumber();
+
+    const solaBought = purchasedAfterBuy - purchasedBefore;
+    assert.isTrue(solaBought > 0, "total_purchased_sola increases on buy");
+
+    // Floor ratio must remain ≥ 1:1 (each SOLA bought adds 1 USDC to floor_vault)
+    assert.isTrue(
+      Number(floorAfterBuy) >= purchasedAfterBuy,
+      `floor_vault (${Number(floorAfterBuy)/1e6}) must be ≥ total_purchased_sola (${purchasedAfterBuy/1e6})`
+    );
+
+    // ── Sell 1 SOLA → total_purchased_sola must decrease ─────────────────
+    await program.methods.sellSola(ONE).accounts({
+      user: wallet.publicKey, protocolState: statePda,
+      solaMint: solaM, userSola: userSolaAta,
+      floorVault: floorV, userUsdc: userUsdcAta,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    } as any).rpc();
+
+    const stateAfterSell = await program.account.protocolState.fetch(statePda);
+    const floorAfterSell = await getTokenBalance(connection, floorV);
+    const purchasedAfterSell = stateAfterSell.totalPurchasedSola.toNumber();
+
+    assert.isTrue(
+      purchasedAfterSell < purchasedAfterBuy,
+      "total_purchased_sola decreases on sell"
+    );
+    assert.equal(
+      purchasedAfterBuy - purchasedAfterSell,
+      Number(ONE.toString()),
+      "total_purchased_sola decremented by exactly 1 SOLA"
+    );
+
+    // Floor ratio still ≥ 1:1 after sell (floor_vault and purchased_sola both drop by 1)
+    assert.isTrue(
+      Number(floorAfterSell) >= purchasedAfterSell,
+      `floor_vault (${Number(floorAfterSell)/1e6}) remains ≥ total_purchased_sola (${purchasedAfterSell/1e6}) after sell`
+    );
+
+    console.log(
+      `✅ [invariant] total_purchased_sola: +${solaBought/1e6} on buy, -${Number(ONE.toString())/1e6} on sell` +
+      ` | floor ratio: ${(Number(floorAfterSell) / purchasedAfterSell).toFixed(4)}`
+    );
   });
 });

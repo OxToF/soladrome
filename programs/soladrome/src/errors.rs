@@ -58,4 +58,7 @@ pub enum SoladromeError {
     // ── Founder borrow cap ────────────────────────────────────────────────────
     #[msg("Founder borrow cap exceeded: max 10% of total claimed hiSOLA")]
     FounderBorrowCapExceeded,
+    // ── Flash-borrow guard ────────────────────────────────────────────────────
+    #[msg("Flash-borrow detected: repay cannot occur in the same slot as borrow")]
+    FlashBorrowDetected,
 }
