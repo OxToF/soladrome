@@ -10,25 +10,30 @@ const WalletMultiButton = dynamic(
   () => import("@solana/wallet-adapter-react-ui").then((m) => m.WalletMultiButton),
   { ssr: false }
 );
-import { Vote }        from "@/components/Vote";
-import { Gauge }       from "@/components/Gauge";
-import { ClaimFees }   from "@/components/ClaimFees";
-import { ClaimBribe }  from "@/components/ClaimBribe";
-import { Stats }       from "@/components/Stats";
-import { Pools }       from "@/components/Pools";
-import { ActionPanel } from "@/components/ActionPanel";
-import { Portfolio }   from "@/components/Portfolio";
-import { FlashArb }    from "@/components/FlashArb";
+import { Vote }         from "@/components/Vote";
+import { Gauge }        from "@/components/Gauge";
+import { ClaimFees }    from "@/components/ClaimFees";
+import { ClaimBribe }   from "@/components/ClaimBribe";
+import { Stats }        from "@/components/Stats";
+import { Pools }        from "@/components/Pools";
+import { ActionPanel }  from "@/components/ActionPanel";
+import { Portfolio }    from "@/components/Portfolio";
+import { FlashArb }     from "@/components/FlashArb";
+import { FounderPanel } from "@/components/FounderPanel";
 
-type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb";
+// Founder wallet — must match FOUNDER_WALLET in programs/soladrome/src/lib.rs
+const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
-const NAV: { id: Page; label: string }[] = [
-  { id: "home",  label: "Home"  },
-  { id: "pools", label: "Pools" },
-  { id: "vote",  label: "Vote"  },
-  { id: "bribe", label: "Bribe" },
-  { id: "claim", label: "Claim" },
-  { id: "arb",   label: "⚡ Arb" },
+type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "founder";
+
+const NAV: { id: Page; label: string; founderOnly?: boolean }[] = [
+  { id: "home",    label: "Home"    },
+  { id: "pools",   label: "Pools"   },
+  { id: "vote",    label: "Vote"    },
+  { id: "bribe",   label: "Bribe"   },
+  { id: "claim",   label: "Claim"   },
+  { id: "arb",     label: "⚡ Arb"  },
+  { id: "founder", label: "👑 Founder", founderOnly: true },
 ];
 
 // Legacy page ids that used to be standalone tabs — redirect them to home
@@ -41,8 +46,12 @@ const TELEGRAM_URL = "https://t.me/+SW4sVvoypbRkZTQ0";
 const EMAIL = "info@soladrome.finance";
 
 export default function Home() {
-  const wallet = useAnchorWallet();
+  const wallet    = useAnchorWallet();
   const [page, setPage] = useState<Page>("home");
+  const isFounder = wallet?.publicKey.toBase58() === FOUNDER_WALLET;
+
+  // Visible nav items: hide founderOnly entries unless this is the founder wallet
+  const visibleNav = NAV.filter((n) => !n.founderOnly || isFounder);
 
   // Enregistre le wallet dans Supabase à chaque connexion
   useEffect(() => {
@@ -85,7 +94,7 @@ export default function Home() {
 
           {/* Nav */}
           <nav className="hidden md:flex items-center gap-1">
-            {NAV.map(({ id, label }) => (
+            {visibleNav.map(({ id, label }) => (
               <button
                 key={id}
                 onClick={() => setPage(id)}
@@ -218,7 +227,7 @@ export default function Home() {
 
           {/* Mobile nav */}
           <div className="flex md:hidden gap-2 mb-6 overflow-x-auto pb-1">
-            {NAV.map(({ id, label }) => (
+            {visibleNav.map(({ id, label }) => (
               <button
                 key={id}
                 onClick={() => setPage(id)}
@@ -268,6 +277,7 @@ export default function Home() {
               <ClaimBribe />
             </div>
           )}
+          {page === "founder" && <FounderPanel />}
         </main>
       )}
 
