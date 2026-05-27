@@ -76,7 +76,12 @@ Three-token system inspired by Velodrome/Beradrome, rebuilt natively for Anchor:
 | **hiSOLA** | Governance + fee share + borrow collateral (stake SOLA to mint) |
 | **oSOLA** | Call-option rewards distributed to liquidity providers |
 
-**Founder allocation (12M SOLA):** 7M auto-staked as hiSOLA on protocol initialization. An on-chain vesting schedule (18-month linear, 10% unlock every 3 months) is planned for Milestone 3 to prevent governance centralization. A soft vote-weight cap (max 30% per address) will be added pre-mainnet.
+**Founder allocation (12M SOLA) — fully progressive, zero at launch:**
+- **7M progressive hiSOLA** — minted in linear tranches via `claim_founder_hi_sola`. Each claim mints SOLA to `sola_vault` + hiSOLA 1:1 to founder. Schedule: 6-month cliff → 24-month linear vesting (devnet: 6h cliff / 24h). Zero hiSOLA at launch; protocol accumulates USDC floor reserves naturally before each tranche unlocks. The founder's primary liquidity path is `borrow_usdc` — borrow USDC against hiSOLA at floor price, no interest, no liquidation.
+- **5M progressive oSOLA** — minted as call-option tokens via `claim_founder_vesting`. Same schedule: 6-month cliff → 24-month linear. oSOLA is exercised via `exercise_o_sola`: burn oSOLA + pay 1 USDC → receive 1 SOLA. Each exercise **adds 1 USDC to `floor_vault`** — net positive for the protocol. Identical to Beradrome's OBERO model (which reached $600k+ TVL). Zero tokens at launch; zero supply impact until after cliff.
+- **Floor invariant fix:** `sell_sola` now checks `floor_vault + total_usdc_borrowed >= total_purchased_sola` where `total_purchased_sola` counts only SOLA minted via `buy_sola` or `exercise_o_sola` — not founder/ecosystem allocations. This eliminates the floor depletion vector entirely: founder allocation never increments `total_purchased_sola`.
+
+A soft vote-weight cap (max 30% per address) will be added pre-mainnet.
 
 **Ecosystem allocation (2M SOLA):** A separate on-chain `mint_ecosystem_allocation` instruction — one-time, authority-only — reserves 2,000,000 SOLA for community airdrop (50%), marketing (25%), trading contests (12.5%) and ecosystem reserve (12.5%). Entirely separate from the founder allocation.
 
@@ -96,8 +101,8 @@ Anyone can create a token pair pool. Trading fees: 80% to LPs / 20% to the proto
 
 ### Smart Contract (Anchor 0.32.1 / Rust)
 - **Language:** Rust / Anchor framework
-- **Instructions:** 20 on-chain instructions, fully tested
-- **Accounts:** 8 custom account types with PDA-based access control
+- **Instructions:** 22 on-chain instructions, fully tested
+- **Accounts:** 9 custom account types with PDA-based access control
 - **Security patterns:**
   - Reward-per-token accumulator (O(1) fee distribution, no loops)
   - PDA-signed treasury (no admin keypair for protocol funds)
@@ -107,6 +112,7 @@ Anyone can create a token pair pool. Trading fees: 80% to LPs / 20% to the proto
   - MINIMUM_LIQUIDITY lock on first AMM deposit (anti-manipulation)
   - Lexicographic mint sorting for unique pool PDA derivation
   - Flash arbitrage atomic execution (single transaction, no reentrancy)
+  - `total_purchased_sola` floor invariant: `sell_sola` checks `floor_vault + borrowed ≥ total_purchased_sola` — founder/ecosystem allocations never inflate the denominator, eliminating the floor depletion vector
 
 ```
 Core instructions:
@@ -124,7 +130,9 @@ vote_gauge                  → hiSOLA holders direct vote weight
 claim_bribe                 → Pro-rata bribe after epoch ends
 distribute_o_sola           → Authority mints oSOLA to LP reward recipients
 exercise_o_sola             → Call-option: burn oSOLA + pay USDC → get SOLA
-mint_founder_allocation     → One-time 12M SOLA founder grant (7M auto-staked)
+mint_founder_allocation     → One-time: initialise two vesting PDAs (7M hiSOLA + 5M oSOLA schedules), zero minting at launch
+claim_founder_hi_sola       → Progressive hiSOLA vest: cliff+linear → mint SOLA to sola_vault + hiSOLA to founder
+claim_founder_vesting       → Progressive oSOLA vest: cliff+linear → mint oSOLA call-options to founder
 mint_ecosystem_allocation   → One-time 2M SOLA for marketing & airdrop (on-chain)
 
 AMM instructions (volatile xy=k):
@@ -190,12 +198,13 @@ Soladrome is the **first native Solana implementation** of this model — and ad
 ## 7. Milestones & Timeline
 
 ### Milestone 1 — Devnet Deployment ✅ Complete
-- ✅ 20 instructions deployed to Solana devnet
+- ✅ 22 instructions deployed to Solana devnet
 - ✅ Frontend live at https://soladrome.finance
 - ✅ Multi-wallet support (Phantom, Solflare, Backpack)
 - ✅ AMM multi-pool live (create pool, add liquidity, xy=k swap)
 - ✅ Flash arbitrage (FARP) live — atomic, 90% to stakers
 - ✅ 2M SOLA ecosystem allocation instruction deployed on-chain
+- ✅ On-chain founder vesting live: 7M hiSOLA progressive (6mo cliff + 24mo linear) + 5M oSOLA progressive (same schedule); zero tokens minted at launch; floor invariant enforced via `total_purchased_sola`
 - ✅ Supabase wallet collection active (airdrop eligibility tracking)
 - ✅ Telegram community launched: https://t.me/+SW4sVvoypbRkZTQ0
 - **Deliverable:** Public devnet address + live frontend + community
@@ -212,7 +221,7 @@ Soladrome is the **first native Solana implementation** of this model — and ad
 - Full smart contract audit by OtterSec or Neodyme
 - Priority: bonding curve invariants, flash arb atomicity, floor vault depletion scenarios
 - Fix all critical/high findings
-- On-chain vesting contract for founder 7M hiSOLA (18 months linear)
+- ~~On-chain vesting for founder allocation~~ **✅ Deployed in Milestone 1** — 7M hiSOLA + 5M oSOLA progressive vesting, cliff + linear enforced on-chain; `total_purchased_sola` floor invariant deployed
 - Vote-weight cap (30% max per address) pre-mainnet
 - Fuzzing with Trident
 - **Deliverable:** Published audit report + vesting contract live
@@ -249,7 +258,7 @@ Soladrome is the **first native Solana implementation** of this model — and ad
 
 ## 9. Traction & Validation
 
-- ✅ Working protocol: 20 instructions, 8 account types, 11 passing end-to-end tests
+- ✅ Working protocol: 22 instructions, 9 account types, 11 passing end-to-end tests
 - ✅ Fully tested on localnet (buy → stake → borrow → claim fees → flash arb → bribe → vote → AMM swap)
 - ✅ Frontend live at https://soladrome.finance (Devnet)
 - ✅ AMM multi-pool live — permissionless pool creation, xy=k swaps, LP tokens

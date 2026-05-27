@@ -50,4 +50,9 @@ pub enum SoladromeError {
     NotProfitable,
     #[msg("Pool must be a SOLA/USDC pair for flash arbitrage")]
     InvalidArbPool,
+    // ── Founder vesting ───────────────────────────────────────────────────────
+    #[msg("Vesting cliff has not been reached yet")]
+    VestingCliffNotReached,
+    #[msg("All vested tokens have already been claimed")]
+    VestingFullyClaimed,
 }
