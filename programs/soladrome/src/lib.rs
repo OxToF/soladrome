@@ -19,10 +19,12 @@ mod ve;
 use errors::SoladromeError;
 use amm_state::AmmPool;
 use state::{
-    BribeVault, FounderHiSolaVesting, FounderVesting, GaugeState, GlobalEpochVotes,
-    LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState,
-    UserBribeClaim, UserEpochVotes, UserPosition, UserVoteReceipt,
-    PRECISION, EPOCH_DURATION, current_epoch, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
+    BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting, GaugeState,
+    GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo,
+    ProtocolState, UserBribeClaim, UserEpochVotes, UserPosition, UserVoteReceipt,
+    PRECISION, EPOCH_DURATION, current_epoch,
+    VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
+    CONTRIBUTOR_CLIFF_SECS, CONTRIBUTOR_DURATION_SECS,
 };
 pub use amm::*;
 pub use pol::*;
@@ -68,6 +70,11 @@ pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
 // ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
 pub const FOUNDER_WALLET: &str = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
+
+// ── Contributor / marketing allocation ────────────────────────────────────────
+pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
+/// Contributor borrow cap: max 10 % of total *claimed* oSOLA ever borrowed as USDC.
+pub const CONTRIBUTOR_BORROW_CAP_BPS: u64 = 1_000; // 10 %
 
 #[program]
 pub mod soladrome {
@@ -843,6 +850,159 @@ pub mod soladrome {
             .ok_or(SoladromeError::Overflow)?;
         // Flash-borrow guard: record the slot so repay_usdc cannot fire in the same tx.
         ctx.accounts.founder_position.last_borrow_slot = Clock::get()?.slot;
+
+        Ok(())
+    }
+
+    // ── Contributor / marketing vesting ──────────────────────────────────────
+
+    /// Authority-only: register a marketing/contributor wallet with an oSOLA allocation.
+    /// Creates a ContributorVesting PDA seeded by the contributor's wallet.
+    /// Vesting starts immediately (start_ts = now) — call at launch time.
+    /// The contributor claims via claim_contributor_vesting; borrows via contributor_borrow_usdc.
+    pub fn register_contributor(
+        ctx: Context<RegisterContributor>,
+        total_amount: u64,
+    ) -> Result<()> {
+        require!(total_amount > 0, SoladromeError::InvalidAmount);
+        let v = &mut ctx.accounts.contributor_vesting;
+        v.contributor  = ctx.accounts.contributor_wallet.key();
+        v.total_amount = total_amount;
+        v.claimed      = 0;
+        v.start_ts     = Clock::get()?.unix_timestamp;
+        v.bump         = ctx.bumps.contributor_vesting;
+        msg!(
+            "Contributor registered: {} | {} oSOLA | start_ts={}",
+            v.contributor, v.total_amount, v.start_ts
+        );
+        Ok(())
+    }
+
+    /// Contributor-only: claim linearly-vested oSOLA after the cliff.
+    /// Formula (after cliff):
+    ///   total_vested = total_amount × min(elapsed, DURATION) / DURATION
+    ///   claimable    = total_vested − already_claimed
+    pub fn claim_contributor_vesting(ctx: Context<ClaimContributorVesting>) -> Result<()> {
+        let clock   = Clock::get()?;
+        let vesting = &ctx.accounts.contributor_vesting;
+        let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
+
+        require!(elapsed >= CONTRIBUTOR_CLIFF_SECS, SoladromeError::VestingCliffNotReached);
+        require!(vesting.claimed < vesting.total_amount, SoladromeError::VestingFullyClaimed);
+
+        let vested_amount = if elapsed >= CONTRIBUTOR_DURATION_SECS {
+            vesting.total_amount
+        } else {
+            (vesting.total_amount as u128)
+                .checked_mul(elapsed as u128)
+                .ok_or(SoladromeError::Overflow)?
+                .checked_div(CONTRIBUTOR_DURATION_SECS as u128)
+                .ok_or(SoladromeError::Overflow)? as u64
+        };
+
+        let claimable = vested_amount
+            .checked_sub(vesting.claimed)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(claimable > 0, SoladromeError::NothingToClaim);
+
+        let bump = ctx.accounts.protocol_state.bump;
+        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
+                    to:        ctx.accounts.contributor_o_sola.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            claimable,
+        )?;
+
+        ctx.accounts.contributor_vesting.claimed = vesting.claimed
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
+
+        Ok(())
+    }
+
+    /// Contributor borrow: draw USDC from floor_vault against claimed oSOLA (10% cap).
+    /// Max cumulative borrow = 10% × contributor_vesting.claimed.
+    /// 2% origination fee → market_vault (same as regular borrow).
+    /// Flash-borrow guard: repay cannot occur in the same slot as this borrow.
+    pub fn contributor_borrow_usdc(
+        ctx: Context<ContributorBorrowUsdc>,
+        usdc_amount: u64,
+    ) -> Result<()> {
+        require!(usdc_amount > 0, SoladromeError::InvalidAmount);
+
+        let bump = ctx.accounts.protocol_state.bump;
+
+        // Initialise position on first borrow
+        if ctx.accounts.contributor_position.owner == Pubkey::default() {
+            ctx.accounts.contributor_position.owner = ctx.accounts.contributor.key();
+            ctx.accounts.contributor_position.bump  = ctx.bumps.contributor_position;
+        }
+
+        // Cap check: 10% of total oSOLA claimed so far
+        let claimed    = ctx.accounts.contributor_vesting.claimed;
+        let max_borrow = (claimed as u128)
+            .checked_mul(CONTRIBUTOR_BORROW_CAP_BPS as u128)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)? as u64;
+        let new_borrowed = ctx.accounts.contributor_position.usdc_borrowed
+            .checked_add(usdc_amount)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(new_borrowed <= max_borrow, SoladromeError::ContributorBorrowCapExceeded);
+
+        // 2% origination fee to market_vault
+        let fee        = usdc_amount.saturating_mul(BORROW_FEE_BPS) / 10_000;
+        let net_amount = usdc_amount.saturating_sub(fee);
+        require!(net_amount > 0, SoladromeError::InvalidAmount);
+
+        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+        // floor_vault → contributor (net amount)
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from:      ctx.accounts.floor_vault.to_account_info(),
+                    to:        ctx.accounts.contributor_usdc.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            net_amount,
+        )?;
+
+        // floor_vault → market_vault (2% fee)
+        if fee > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from:      ctx.accounts.floor_vault.to_account_info(),
+                        to:        ctx.accounts.market_vault.to_account_info(),
+                        authority: ctx.accounts.protocol_state.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                fee,
+            )?;
+        }
+
+        ctx.accounts.contributor_position.usdc_borrowed = new_borrowed;
+        ctx.accounts.protocol_state.total_usdc_borrowed = ctx.accounts.protocol_state
+            .total_usdc_borrowed
+            .checked_add(usdc_amount)
+            .ok_or(SoladromeError::Overflow)?;
+
+        // Flash-borrow guard: record slot so repay_usdc cannot fire in the same tx
+        ctx.accounts.contributor_position.last_borrow_slot = Clock::get()?.slot;
 
         Ok(())
     }
@@ -2380,4 +2540,115 @@ pub struct FlashArbitrage<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program:           Program<'info, System>,
     pub rent:                     Sysvar<'info, Rent>,
+}
+
+// ── Contributor / marketing vesting contexts ──────────────────────────────────
+
+/// Authority registers a contributor wallet and oSOLA allocation.
+/// Called once per contributor (at launch). Vesting starts immediately.
+#[derive(Accounts)]
+pub struct RegisterContributor<'info> {
+    /// Protocol authority only.
+    #[account(
+        mut,
+        address = protocol_state.authority @ SoladromeError::Unauthorized,
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    /// CHECK: The beneficiary wallet — identity is enforced by being baked into PDA seeds.
+    pub contributor_wallet: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + ContributorVesting::LEN,
+        seeds = [CONTRIBUTOR_SEED, contributor_wallet.key().as_ref()],
+        bump,
+    )]
+    pub contributor_vesting: Account<'info, ContributorVesting>,
+
+    pub system_program: Program<'info, System>,
+    pub rent:           Sysvar<'info, Rent>,
+}
+
+/// Contributor claims linearly-vested oSOLA after the cliff.
+#[derive(Accounts)]
+pub struct ClaimContributorVesting<'info> {
+    #[account(mut)]
+    pub contributor: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    #[account(address = protocol_state.o_sola_mint)]
+    pub o_sola_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [CONTRIBUTOR_SEED, contributor.key().as_ref()],
+        bump = contributor_vesting.bump,
+        constraint = contributor_vesting.contributor == contributor.key() @ SoladromeError::Unauthorized,
+    )]
+    pub contributor_vesting: Account<'info, ContributorVesting>,
+
+    /// Contributor's oSOLA ATA — created on first claim if needed.
+    #[account(
+        init_if_needed,
+        payer = contributor,
+        associated_token::mint  = o_sola_mint,
+        associated_token::authority = contributor,
+    )]
+    pub contributor_o_sola: Account<'info, TokenAccount>,
+
+    pub token_program:            Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program:           Program<'info, System>,
+}
+
+/// Contributor borrows USDC from floor_vault (10% cap on claimed oSOLA).
+/// Flash-borrow guard: repay_usdc requires a strictly later slot.
+#[derive(Accounts)]
+pub struct ContributorBorrowUsdc<'info> {
+    #[account(mut)]
+    pub contributor: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    #[account(mut, address = protocol_state.floor_vault)]
+    pub floor_vault: Account<'info, TokenAccount>,
+
+    #[account(mut, address = protocol_state.market_vault)]
+    pub market_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = contributor_usdc.mint == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+        token::authority = contributor,
+    )]
+    pub contributor_usdc: Account<'info, TokenAccount>,
+
+    /// Shared UserPosition PDA — same seed as regular users, enables repay_usdc.
+    #[account(
+        init_if_needed,
+        payer = contributor,
+        space = UserPosition::LEN,
+        seeds = [POSITION_SEED, contributor.key().as_ref()],
+        bump,
+    )]
+    pub contributor_position: Account<'info, UserPosition>,
+
+    #[account(
+        mut,
+        seeds = [CONTRIBUTOR_SEED, contributor.key().as_ref()],
+        bump = contributor_vesting.bump,
+        constraint = contributor_vesting.contributor == contributor.key() @ SoladromeError::Unauthorized,
+    )]
+    pub contributor_vesting: Account<'info, ContributorVesting>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }

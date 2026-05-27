@@ -19,21 +19,24 @@ import { Pools }        from "@/components/Pools";
 import { ActionPanel }  from "@/components/ActionPanel";
 import { Portfolio }    from "@/components/Portfolio";
 import { FlashArb }     from "@/components/FlashArb";
-import { FounderPanel } from "@/components/FounderPanel";
+import { FounderPanel }      from "@/components/FounderPanel";
+import { ContributorPanel, contributorVestingPda } from "@/components/ContributorPanel";
+import { useConnection }   from "@solana/wallet-adapter-react";
 
 // Founder wallet — must match FOUNDER_WALLET in programs/soladrome/src/lib.rs
 const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
-type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "founder";
+type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "founder" | "contributor";
 
-const NAV: { id: Page; label: string; founderOnly?: boolean }[] = [
-  { id: "home",    label: "Home"    },
-  { id: "pools",   label: "Pools"   },
-  { id: "vote",    label: "Vote"    },
-  { id: "bribe",   label: "Bribe"   },
-  { id: "claim",   label: "Claim"   },
-  { id: "arb",     label: "⚡ Arb"  },
-  { id: "founder", label: "👑 Founder", founderOnly: true },
+const NAV: { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean }[] = [
+  { id: "home",        label: "Home"        },
+  { id: "pools",       label: "Pools"       },
+  { id: "vote",        label: "Vote"        },
+  { id: "bribe",       label: "Bribe"       },
+  { id: "claim",       label: "Claim"       },
+  { id: "arb",         label: "⚡ Arb"      },
+  { id: "founder",     label: "👑 Founder",     founderOnly: true      },
+  { id: "contributor", label: "🤝 My Allocation", contributorOnly: true },
 ];
 
 // Legacy page ids that used to be standalone tabs — redirect them to home
@@ -46,12 +49,28 @@ const TELEGRAM_URL = "https://t.me/+SW4sVvoypbRkZTQ0";
 const EMAIL = "info@soladrome.finance";
 
 export default function Home() {
-  const wallet    = useAnchorWallet();
-  const [page, setPage] = useState<Page>("home");
+  const wallet         = useAnchorWallet();
+  const { connection } = useConnection();
+  const [page, setPage]           = useState<Page>("home");
+  const [isContributor, setIsContributor] = useState(false);
+
   const isFounder = wallet?.publicKey.toBase58() === FOUNDER_WALLET;
 
-  // Visible nav items: hide founderOnly entries unless this is the founder wallet
-  const visibleNav = NAV.filter((n) => !n.founderOnly || isFounder);
+  // Detect if connected wallet has a ContributorVesting PDA
+  useEffect(() => {
+    if (!wallet) { setIsContributor(false); return; }
+    const pda = contributorVestingPda(wallet.publicKey);
+    connection.getAccountInfo(pda)
+      .then((info) => setIsContributor(info !== null))
+      .catch(() => setIsContributor(false));
+  }, [wallet?.publicKey.toBase58(), connection]);
+
+  // Visible nav: hide founderOnly / contributorOnly entries unless applicable
+  const visibleNav = NAV.filter((n) => {
+    if (n.founderOnly) return isFounder;
+    if (n.contributorOnly) return isContributor;
+    return true;
+  });
 
   // Enregistre le wallet dans Supabase à chaque connexion
   useEffect(() => {
@@ -277,7 +296,8 @@ export default function Home() {
               <ClaimBribe />
             </div>
           )}
-          {page === "founder" && <FounderPanel />}
+          {page === "founder"     && <FounderPanel />}
+          {page === "contributor" && <ContributorPanel />}
         </main>
       )}
 
