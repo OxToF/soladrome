@@ -292,9 +292,11 @@
                     <div class="bg-black/40 rounded-xl p-4 border border-white/5 space-y-2 text-xs">
                         <div class="flex justify-between"><span class="text-gray-500">Cliff</span><span class="text-white font-semibold">6 months</span></div>
                         <div class="flex justify-between"><span class="text-gray-500">Vesting</span><span class="text-white font-semibold">24 months linear</span></div>
-                        <div class="flex justify-between"><span class="text-gray-500">Liquidity path</span><span class="text-white font-semibold">Borrow USDC against hiSOLA</span></div>
-                        <div class="flex justify-between"><span class="text-gray-500">No-interest loans</span><span class="text-white font-semibold">Up to 1 USDC / 1 hiSOLA held</span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Liquidity path</span><span class="text-white font-semibold">founder_borrow_usdc</span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Borrow cap</span><span class="text-[#14F195] font-semibold">Max 10% of claimed hiSOLA (~29k USDC/mo)</span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">No-interest, no liquidation</span><span class="text-white font-semibold">Floor-guaranteed</span></div>
                     </div>
+                    <p class="text-gray-500 text-xs mt-3 leading-relaxed">The founder leads by example — all hiSOLA is staked, never sold. The 10% monthly borrow cap is enforced on-chain, preventing any single actor from draining the floor vault before organic users arrive.</p>
                 </div>
                 <!-- 5M oSOLA progressive -->
                 <div class="bg-black/30 rounded-2xl p-7 border border-yellow-500/20">
@@ -344,7 +346,7 @@
                         Solana Grants Applied
                     </span>
                 </div>
-                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing (2% fee → stakers) · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · 2M $SOLA ecosystem allocation deployed on-chain · <strong class="text-white">On-chain founder vesting</strong> (5M SOLA · 6-month cliff · 24-month linear · PDA-enforced) · Wallet collection active (airdrop eligibility) · <span class="text-[#9945FF]">Solana Foundation Grants application submitted</span></p>
+                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing (2% fee → stakers) · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · 2M $SOLA ecosystem allocation deployed on-chain · <strong class="text-white">On-chain founder vesting</strong> (7M hiSOLA progressive + 5M oSOLA progressive · 6-month cliff · 24-month linear · PDA-enforced) · <strong class="text-white">Founder borrow cap</strong> (10% of claimed hiSOLA/month · on-chain enforced · floor protection) · Wallet collection active (airdrop eligibility) · <span class="text-[#9945FF]">Solana Foundation Grants application submitted</span></p>
             </div>
             <div class="bg-solana p-8 rounded-2xl border border-[#9945FF]/30">
                 <div class="flex items-center gap-3 mb-2">
@@ -356,8 +358,13 @@
             </div>
             <div class="bg-solana p-8 rounded-2xl border border-white/10">
                 <div class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-2">Phase 3 — Coming</div>
-                <h3 class="text-xl font-bold mb-2">Stable AMM + oSOLA Rewards</h3>
-                <p class="text-gray-400 text-sm">Stable curves for correlated pairs · oSOLA LP rewards · Deeper POL integration · Airdrop distribution to eligible wallets</p>
+                <h3 class="text-xl font-bold mb-2">Protocol Buyback + Stable AMM</h3>
+                <p class="text-gray-400 text-sm">
+                    <strong class="text-white">Protocol Buyback (inspired by HyperLiquid):</strong> 20% of all protocol fees (AMM + borrow) permanently diverted to buy back SOLA from the market and burn it — reducing circulating supply, improving floor per unit for all holders.
+                    Permissionless <code class="text-gray-300">execute_buyback</code> instruction · on-chain <code class="text-gray-300">BuybackState</code> transparency · split adjustable by DAO vote (capped at 50%) · lifetime stats on-chain (<em>usdc_accumulated</em>, <em>sola_burned</em>).
+                    <br class="mb-2">
+                    <span class="text-gray-500">Also: Stable curves for correlated pairs · oSOLA LP rewards · Deeper POL integration · Airdrop distribution to eligible wallets</span>
+                </p>
             </div>
             <div class="bg-solana p-8 rounded-2xl border border-white/10">
                 <div class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-2">Phase 4 — Planned</div>
