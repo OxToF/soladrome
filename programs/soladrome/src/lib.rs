@@ -60,6 +60,9 @@ pub const FOUNDER_LIQUID: u64   =  5_000_000_000_000; // FOUNDER_TOTAL − FOUND
 pub const ECOSYSTEM_TOTAL: u64  =  2_000_000_000_000; //  2 000 000 SOLA — marketing + airdrop
 /// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
 pub const BORROW_FEE_BPS: u64   =    200;             //  2 % of borrowed amount
+/// Founder borrow cap: max 10 % of total *claimed* hiSOLA ever borrowed.
+/// Ensures the founder cannot drain the floor vault before organic users arrive.
+pub const FOUNDER_BORROW_CAP_BPS: u64 = 1_000;       // 10 %
 
 pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
@@ -738,6 +741,98 @@ pub mod soladrome {
 
         ctx.accounts.founder_vesting.claimed = ctx.accounts.founder_vesting.claimed
             .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
+
+        Ok(())
+    }
+
+    // ── Founder borrow (capped) ───────────────────────────────────────────────
+
+    /// Founder-only variant of borrow_usdc with a 10 % cap.
+    /// Max cumulative borrow = FOUNDER_BORROW_CAP_BPS (10 %) × total hiSOLA claimed.
+    /// With 7 M hiSOLA vesting linearly over 24 months (~291 k/mo), the founder
+    /// can borrow at most ~29 k USDC per month — enough for running costs while
+    /// the floor vault grows from organic user activity.
+    pub fn founder_borrow_usdc(ctx: Context<FounderBorrowUsdc>, usdc_amount: u64) -> Result<()> {
+        require!(usdc_amount > 0, SoladromeError::InvalidAmount);
+        let bump = ctx.accounts.protocol_state.bump;
+
+        if ctx.accounts.founder_position.owner == Pubkey::default() {
+            ctx.accounts.founder_position.owner = ctx.accounts.founder.key();
+            ctx.accounts.founder_position.bump  = ctx.bumps.founder_position;
+        }
+
+        // ── Founder-specific cap ─────────────────────────────────────────────
+        let claimed    = ctx.accounts.founder_hi_vesting.claimed;
+        let max_borrow = (claimed as u128)
+            .checked_mul(FOUNDER_BORROW_CAP_BPS as u128)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)? as u64;
+
+        let new_borrowed = ctx
+            .accounts
+            .founder_position
+            .usdc_borrowed
+            .checked_add(usdc_amount)
+            .ok_or(SoladromeError::Overflow)?;
+
+        require!(new_borrowed <= max_borrow, SoladromeError::FounderBorrowCapExceeded);
+
+        // ── Standard borrow checks ───────────────────────────────────────────
+        let hi_sola_balance = ctx.accounts.founder_hi_sola.amount;
+        require!(new_borrowed <= hi_sola_balance, SoladromeError::BorrowLimitExceeded);
+        require!(
+            ctx.accounts.floor_vault.amount >= usdc_amount,
+            SoladromeError::InsufficientFloorReserve
+        );
+
+        // ── 2 % origination fee → market_vault ──────────────────────────────
+        let fee = usdc_amount
+            .checked_mul(BORROW_FEE_BPS)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)?;
+        let founder_receives = usdc_amount
+            .checked_sub(fee)
+            .ok_or(SoladromeError::Overflow)?;
+
+        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from:      ctx.accounts.floor_vault.to_account_info(),
+                    to:        ctx.accounts.founder_usdc.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            founder_receives,
+        )?;
+
+        if fee > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from:      ctx.accounts.floor_vault.to_account_info(),
+                        to:        ctx.accounts.market_vault.to_account_info(),
+                        authority: ctx.accounts.protocol_state.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                fee,
+            )?;
+        }
+
+        ctx.accounts.founder_position.usdc_borrowed = new_borrowed;
+        ctx.accounts.protocol_state.total_usdc_borrowed = ctx
+            .accounts
+            .protocol_state
+            .total_usdc_borrowed
+            .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
 
         Ok(())
@@ -1839,6 +1934,60 @@ pub struct ClaimFounderVesting<'info> {
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+// ── Founder borrow (capped) context ──────────────────────────────────────────
+
+#[derive(Accounts)]
+pub struct FounderBorrowUsdc<'info> {
+    /// Only the hardcoded founder wallet may call this.
+    #[account(
+        mut,
+        address = FOUNDER_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized,
+    )]
+    pub founder: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    #[account(address = protocol_state.hi_sola_mint)]
+    pub hi_sola_mint: Account<'info, Mint>,
+
+    /// Founder's hiSOLA balance — used as collateral ceiling.
+    #[account(token::mint = hi_sola_mint, token::authority = founder)]
+    pub founder_hi_sola: Account<'info, TokenAccount>,
+
+    #[account(mut, address = protocol_state.floor_vault)]
+    pub floor_vault: Account<'info, TokenAccount>,
+
+    #[account(mut, address = protocol_state.market_vault)]
+    pub market_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = founder_usdc.mint == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+    )]
+    pub founder_usdc: Account<'info, TokenAccount>,
+
+    /// Tracks founder's cumulative borrow (same seed as regular UserPosition).
+    #[account(
+        init_if_needed,
+        payer = founder,
+        space = UserPosition::LEN,
+        seeds = [POSITION_SEED, founder.key().as_ref()],
+        bump,
+    )]
+    pub founder_position: Account<'info, UserPosition>,
+
+    /// Vesting schedule — supplies the `claimed` amount used for the 10 % cap.
+    #[account(
+        seeds = [FOUNDER_HI_VESTING_SEED],
+        bump = founder_hi_vesting.bump,
+    )]
+    pub founder_hi_vesting: Account<'info, FounderHiSolaVesting>,
+
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 

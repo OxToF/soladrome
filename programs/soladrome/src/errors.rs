@@ -55,4 +55,7 @@ pub enum SoladromeError {
     VestingCliffNotReached,
     #[msg("All vested tokens have already been claimed")]
     VestingFullyClaimed,
+    // ── Founder borrow cap ────────────────────────────────────────────────────
+    #[msg("Founder borrow cap exceeded: max 10% of total claimed hiSOLA")]
+    FounderBorrowCapExceeded,
 }
