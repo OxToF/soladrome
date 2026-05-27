@@ -293,24 +293,27 @@ impl PolState { pub const LEN: usize = 96; }
 
 // ── Contributor / Marketing vesting ──────────────────────────────────────────
 
-/// Per-contributor oSOLA vesting schedule (marketing, community, service providers).
+/// Per-contributor dual vesting schedule (marketing, community, service providers).
 ///
-/// Created by the authority via `register_contributor` — one PDA per beneficiary.
-/// The contributor claims oSOLA linearly after a cliff; exercises via `exercise_o_sola`
-/// to convert to SOLA at floor price (each exercise is floor-positive).
+/// Mirrors the founder allocation — two tranches per contributor:
+///   • hiSOLA: governance rights + borrow collateral (mints SOLA to sola_vault 1:1)
+///   • oSOLA:  liquid options (exercisable at floor price via exercise_o_sola)
 ///
-/// Borrow cap: 10 % of `claimed` oSOLA borrowed as USDC at any time.
+/// Borrow cap: 10 % of the monthly hiSOLA installment (hi_sola_amount / 12 × 10%).
 /// Flash-borrow guard: same slot-based defence as regular `borrow_usdc`.
+/// Repay:      uses the standard `repay_usdc` instruction (same UserPosition PDA).
 ///
 /// PDA: [b"contributor", contributor_wallet]
 #[account]
 pub struct ContributorVesting {
-    pub contributor:  Pubkey,  // Beneficiary wallet (immutable after init)
-    pub total_amount: u64,     // Total oSOLA allocated
-    pub claimed:      u64,     // oSOLA already minted to the contributor
-    pub start_ts:     i64,     // Unix timestamp when register_contributor was called
-    pub bump:         u8,
+    pub contributor:     Pubkey, // Beneficiary wallet (immutable after init)
+    pub hi_sola_amount:  u64,    // Total hiSOLA allocated
+    pub o_sola_amount:   u64,    // Total oSOLA allocated
+    pub hi_sola_claimed: u64,    // hiSOLA already minted
+    pub o_sola_claimed:  u64,    // oSOLA already minted
+    pub start_ts:        i64,    // Unix timestamp when register_contributor was called
+    pub bump:            u8,
 }
 impl ContributorVesting {
-    pub const LEN: usize = 32 + 8 + 8 + 8 + 1 + 7; // = 64 bytes with alignment padding
+    pub const LEN: usize = 32 + 8 + 8 + 8 + 8 + 8 + 1 + 7; // = 80 bytes
 }
