@@ -2169,7 +2169,7 @@ pub struct ClaimFounderVesting<'info> {
     #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
     pub protocol_state: Account<'info, ProtocolState>,
 
-    #[account(address = protocol_state.o_sola_mint)]
+    #[account(mut, address = protocol_state.o_sola_mint)]
     pub o_sola_mint: Account<'info, Mint>,
 
     #[account(
@@ -2725,7 +2725,7 @@ pub struct ClaimContributorVesting<'info> {
     #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
     pub protocol_state: Account<'info, ProtocolState>,
 
-    #[account(address = protocol_state.o_sola_mint)]
+    #[account(mut, address = protocol_state.o_sola_mint)]
     pub o_sola_mint: Account<'info, Mint>,
 
     #[account(

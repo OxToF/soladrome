@@ -1539,7 +1539,8 @@
           }
         },
         {
-          "name": "o_sola_mint"
+          "name": "o_sola_mint",
+          "writable": true
         },
         {
           "name": "contributor_vesting",
@@ -2027,7 +2028,8 @@
           }
         },
         {
-          "name": "o_sola_mint"
+          "name": "o_sola_mint",
+          "writable": true
         },
         {
           "name": "founder_vesting",
