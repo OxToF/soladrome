@@ -2770,8 +2770,7 @@
       "name": "contributor_borrow_usdc",
       "docs": [
         "Contributor borrow: draw USDC from floor_vault against hiSOLA collateral.",
-        "Max cumulative borrow = 10 % of the monthly hiSOLA installment",
-        "= hi_sola_amount / 12 × 10% = hi_sola_amount / 120.",
+        "Max cumulative borrow = 10 % of total *claimed* hiSOLA (dynamic, mirrors founder logic).",
         "2% origination fee → market_vault. Flash-borrow guard included."
       ],
       "discriminator": [
@@ -5106,6 +5105,36 @@
           ]
         },
         {
+          "name": "user_position",
+          "docs": [
+            "Fee-share position — updated at lock time so the user cannot claim fees",
+            "accumulated by other stakers during their lock period.",
+            "Created on first lock if not yet initialised."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -6284,6 +6313,35 @@
           ]
         },
         {
+          "name": "user_position",
+          "docs": [
+            "Fee-share position — updated at unlock time so the user starts earning",
+            "fees only from the moment of unlock (not backdated to before the lock)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -6439,6 +6497,12 @@
         {
           "name": "sola_vault",
           "writable": true
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read to advance the fee accumulator before supply decreases."
+          ]
         },
         {
           "name": "user_position",

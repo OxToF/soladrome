@@ -9,7 +9,10 @@ crate-type = ["cdylib", "lib"]
 name = "soladrome"
 
 [features]
-default = []
+# "devnet" is ON by default → `anchor build` uses short test durations.
+# For mainnet, build with: anchor build --no-default-features
+default = ["devnet"]
+devnet = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []

@@ -27,8 +27,9 @@
  *   Duration: 12 h → 12 months mainnet  (linear after cliff)
  *
  * Borrow cap (hiSOLA tranche):
- *   max_borrow = hi_sola_amount / 12 × 10%  (= hi_sola_amount / 120)
- *   e.g. 120 000 hiSOLA → monthly = 10 000 → cap = 1 000 USDC
+ *   max_borrow = hi_sola_claimed × 10%  (dynamic — scales with vesting progress)
+ *   e.g. after claiming 10 000 hiSOLA → cap = 1 000 USDC
+ *   After full vest (120 000 hiSOLA) → cap = 12 000 USDC
  */
 import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
@@ -91,15 +92,14 @@ describe("register_contributor (one-shot)", () => {
       } as any)
       .rpc();
 
-    const monthlyHi = hiSolaUi / 12;
-    const borrowCap = monthlyHi * 0.10;
+    const maxBorrowAtFullVest = hiSolaUi * 0.10; // 10% of total allocation
 
     console.log(`✅ Contributor registered!`);
-    console.log(`   Wallet:        ${contributorStr}`);
-    console.log(`   hiSOLA:        ${hiSolaUi.toLocaleString()} hiSOLA  (governance + borrow collateral)`);
-    console.log(`   oSOLA:         ${oSolaUi.toLocaleString()} oSOLA   (liquid options at floor price)`);
-    console.log(`   Monthly hiSOLA: ${monthlyHi.toLocaleString(undefined, {maximumFractionDigits: 2})} hiSOLA/month`);
-    console.log(`   Borrow cap:    ${borrowCap.toLocaleString(undefined, {maximumFractionDigits: 2})} USDC/month`);
+    console.log(`   Wallet:           ${contributorStr}`);
+    console.log(`   hiSOLA:           ${hiSolaUi.toLocaleString()} hiSOLA  (governance + borrow collateral)`);
+    console.log(`   oSOLA:            ${oSolaUi.toLocaleString()} oSOLA   (liquid options at floor price)`);
+    console.log(`   Borrow cap:       dynamic — 10% of claimed hiSOLA at borrow time`);
+    console.log(`   Max borrow cap:   ${maxBorrowAtFullVest.toLocaleString(undefined, {maximumFractionDigits: 2})} USDC (after full vest)`);
     console.log(`   Vesting PDA:   ${contributorVesting.toBase58()}`);
     console.log(`   TX:            ${tx}`);
     console.log(`   Cliff:         1 h devnet (→ 1 month mainnet)`);

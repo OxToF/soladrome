@@ -74,7 +74,8 @@ pub const FOUNDER_WALLET: &str = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
 // ── Contributor / marketing allocation ────────────────────────────────────────
 pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
-/// Contributor borrow cap: max 10 % of total *claimed* oSOLA ever borrowed as USDC.
+/// Contributor borrow cap: max 10 % of total *claimed* hiSOLA at borrow time.
+/// Mirrors the founder logic — scales dynamically with actual claims.
 pub const CONTRIBUTOR_BORROW_CAP_BPS: u64 = 1_000; // 10 %
 
 #[program]
@@ -309,6 +310,20 @@ pub mod soladrome {
             SoladromeError::OutstandingDebt
         );
 
+        // ── Advance accumulator before reducing total_hi_sola ────────────────
+        // Without this, fees that were earned while more stakers were active
+        // would be diluted as if fewer stakers had always existed, over-paying
+        // remaining stakers at the expense of protocol accounting integrity.
+        let market_balance = ctx.accounts.market_vault.amount;
+        let acc = math::advance_accumulator(
+            ctx.accounts.protocol_state.fees_per_hi_sola,
+            market_balance,
+            ctx.accounts.protocol_state.last_market_vault_balance,
+            ctx.accounts.protocol_state.total_hi_sola,
+        );
+        // Checkpoint the departing staker so they can claim fees earned up to now.
+        ctx.accounts.user_position.fees_debt = acc;
+
         token::burn(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -335,10 +350,10 @@ pub mod soladrome {
             hi_sola_amount,
         )?;
 
-        ctx.accounts.protocol_state.total_hi_sola = ctx
-            .accounts
-            .protocol_state
-            .total_hi_sola
+        let s = &mut ctx.accounts.protocol_state;
+        s.fees_per_hi_sola          = acc;
+        s.last_market_vault_balance = market_balance;
+        s.total_hi_sola = s.total_hi_sola
             .checked_sub(hi_sola_amount)
             .ok_or(SoladromeError::Overflow)?;
         Ok(())
@@ -1036,8 +1051,7 @@ pub mod soladrome {
     }
 
     /// Contributor borrow: draw USDC from floor_vault against hiSOLA collateral.
-    /// Max cumulative borrow = 10 % of the monthly hiSOLA installment
-    ///   = hi_sola_amount / 12 × 10% = hi_sola_amount / 120.
+    /// Max cumulative borrow = 10 % of total *claimed* hiSOLA (dynamic, mirrors founder logic).
     /// 2% origination fee → market_vault. Flash-borrow guard included.
     pub fn contributor_borrow_usdc(
         ctx: Context<ContributorBorrowUsdc>,
@@ -1053,9 +1067,10 @@ pub mod soladrome {
             ctx.accounts.contributor_position.bump  = ctx.bumps.contributor_position;
         }
 
-        // Cap = 10% of monthly hiSOLA installment = hi_sola_amount / 120
-        let monthly_alloc = ctx.accounts.contributor_vesting.hi_sola_amount / 12;
-        let max_borrow    = (monthly_alloc as u128)
+        // Cap = 10% of total hiSOLA *claimed so far* (dynamic, scales with actual vesting progress).
+        // Using hi_sola_claimed (not total allocation) mirrors founder_borrow_usdc exactly and
+        // prevents borrowing against unvested tokens.
+        let max_borrow = (ctx.accounts.contributor_vesting.hi_sola_claimed as u128)
             .checked_mul(CONTRIBUTOR_BORROW_CAP_BPS as u128)
             .ok_or(SoladromeError::Overflow)?
             .checked_div(10_000)
@@ -1870,6 +1885,10 @@ pub struct UnstakeHiSola<'info> {
 
     #[account(mut, address = protocol_state.sola_vault)]
     pub sola_vault: Account<'info, TokenAccount>,
+
+    /// Read to advance the fee accumulator before supply decreases.
+    #[account(address = protocol_state.market_vault)]
+    pub market_vault: Account<'info, TokenAccount>,
 
     #[account(
         init_if_needed,

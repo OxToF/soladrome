@@ -79,6 +79,7 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
             userHiSola,
             userSola,
             solaVault: solaVaultAddr,
+            marketVault,
             userPosition: position,
             ...commonAccounts,
           } as any)
