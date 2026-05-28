@@ -74,7 +74,9 @@ pub const FOUNDER_BORROW_CAP_BPS: u64 = 1_000;       // 10 %
 pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
 // ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
-pub const FOUNDER_WALLET: &str = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
+// This is the PERSONAL founder wallet, NOT the Soladrome treasury.
+// Treasury: 46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4 (separate, no on-chain role)
+pub const FOUNDER_WALLET: &str = "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3";
 
 // ── Contributor / marketing allocation ────────────────────────────────────────
 pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
@@ -601,7 +603,7 @@ pub mod soladrome {
         // Persist accumulator state
         let s = &mut ctx.accounts.protocol_state;
         s.fees_per_hi_sola = acc;
-        s.last_market_vault_balance = market_balance - claimable;
+        s.last_market_vault_balance = market_balance.checked_sub(claimable).ok_or(SoladromeError::Overflow)?;
 
         // Move user's debt forward so they can't double-claim
         ctx.accounts.user_position.fees_debt = acc;
@@ -1121,8 +1123,10 @@ pub mod soladrome {
         }
 
         // 2% origination fee to market_vault
-        let fee        = usdc_amount.saturating_mul(BORROW_FEE_BPS) / 10_000;
-        let net_amount = usdc_amount.saturating_sub(fee);
+        let fee = usdc_amount
+            .checked_mul(BORROW_FEE_BPS).ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000).ok_or(SoladromeError::Overflow)?;
+        let net_amount = usdc_amount.checked_sub(fee).ok_or(SoladromeError::Overflow)?;
         require!(net_amount > 0, SoladromeError::InvalidAmount);
 
         let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
@@ -1644,6 +1648,30 @@ pub mod soladrome {
             usdc_out,
         )?;
 
+        // ── Burn the AMM fee remainder ────────────────────────────────────────
+        // Only amount_net was deposited into the pool; the remaining fee_total
+        // SOLA is still in caller_sola. Burn it now so that total_sola (already
+        // incremented by amount_osola above) stays accurate and no unbacked SOLA
+        // leaks into circulation.
+        let fee_total_u64 = fee_total as u64;
+        if fee_total_u64 > 0 {
+            token::burn(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    Burn {
+                        mint:      ctx.accounts.sola_mint.to_account_info(),
+                        from:      ctx.accounts.caller_sola.to_account_info(),
+                        authority: ctx.accounts.caller.to_account_info(),
+                    },
+                ),
+                fee_total_u64,
+            )?;
+            ctx.accounts.protocol_state.total_sola = ctx.accounts.protocol_state.total_sola
+                .checked_sub(fee_total_u64).ok_or(SoladromeError::Overflow)?;
+            ctx.accounts.protocol_state.total_purchased_sola = ctx.accounts.protocol_state.total_purchased_sola
+                .checked_sub(fee_total_u64).ok_or(SoladromeError::Overflow)?;
+        }
+
         // Update pool reserves
         let pool = &mut ctx.accounts.pool;
         if sola_is_a {
@@ -1662,8 +1690,8 @@ pub mod soladrome {
 
         // ── 5. Split proceeds ─────────────────────────────────────────────────
         let caller_reward = (gross_profit as u128)
-            .checked_mul(state::CALLER_ARB_SHARE_BPS as u128).unwrap()
-            .checked_div(10_000).unwrap() as u64;
+            .checked_mul(state::CALLER_ARB_SHARE_BPS as u128).ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000).ok_or(SoladromeError::Overflow)? as u64;
         let protocol_profit = gross_profit.checked_sub(caller_reward).ok_or(SoladromeError::Overflow)?;
 
         // Floor replenishment: amount_osola USDC from caller_usdc → floor_vault
@@ -1880,7 +1908,7 @@ pub struct StakeSola<'info> {
     #[account(
         init_if_needed,
         payer = user,
-        space = UserPosition::LEN,
+        space = 8 + UserPosition::LEN,
         seeds = [POSITION_SEED, user.key().as_ref()],
         bump,
     )]
@@ -1940,7 +1968,7 @@ pub struct UnstakeHiSola<'info> {
     #[account(
         init_if_needed,
         payer = user,
-        space = UserPosition::LEN,
+        space = 8 + UserPosition::LEN,
         seeds = [POSITION_SEED, user.key().as_ref()],
         bump,
     )]
@@ -1981,7 +2009,7 @@ pub struct BorrowUsdc<'info> {
     #[account(
         init_if_needed,
         payer = user,
-        space = UserPosition::LEN,
+        space = 8 + UserPosition::LEN,
         seeds = [POSITION_SEED, user.key().as_ref()],
         bump,
     )]
@@ -2236,7 +2264,7 @@ pub struct ClaimFounderHiSola<'info> {
     #[account(
         init_if_needed,
         payer = founder,
-        space = UserPosition::LEN,
+        space = 8 + UserPosition::LEN,
         seeds = [POSITION_SEED, founder.key().as_ref()],
         bump,
     )]
@@ -2336,7 +2364,7 @@ pub struct FounderBorrowUsdc<'info> {
     #[account(
         init_if_needed,
         payer = founder,
-        space = UserPosition::LEN,
+        space = 8 + UserPosition::LEN,
         seeds = [POSITION_SEED, founder.key().as_ref()],
         bump,
     )]
@@ -2803,7 +2831,7 @@ pub struct ClaimContributorHiSola<'info> {
     #[account(
         init_if_needed,
         payer = contributor,
-        space = UserPosition::LEN,
+        space = 8 + UserPosition::LEN,
         seeds = [POSITION_SEED, contributor.key().as_ref()],
         bump,
     )]
@@ -2891,7 +2919,7 @@ pub struct ContributorBorrowUsdc<'info> {
     #[account(
         init_if_needed,
         payer = contributor,
-        space = UserPosition::LEN,
+        space = 8 + UserPosition::LEN,
         seeds = [POSITION_SEED, contributor.key().as_ref()],
         bump,
     )]
