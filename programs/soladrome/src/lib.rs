@@ -49,8 +49,12 @@ pub const INIT_VIRTUAL_SOLA: u64 = 100_000_000; // 100 SOLA (6 dec)  – floor =
 pub const LP_EMISSION_PER_EPOCH: u64 = 10_000 * 1_000_000; // 10 000 oSOLA (6 dec)
 
 /// Continuous Masterchef-style oSOLA emission per pool per second (6 decimals).
-/// 100_000 = 0.1 oSOLA/second per pool — high rate for devnet visibility.
+/// devnet : 0.1 oSOLA/s  — high rate for fast visibility during testing.
+/// mainnet: 0.001 oSOLA/s ≈ 86 oSOLA/pool/day — conservative, adjust before launch.
+#[cfg(feature = "devnet")]
 pub const OSOLA_EMISSION_PER_SEC: u64 = 100_000;
+#[cfg(not(feature = "devnet"))]
+pub const OSOLA_EMISSION_PER_SEC: u64 = 1_000;
 
 /// Precision factor for the oSOLA-per-LP accumulator.
 pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
@@ -311,9 +315,8 @@ pub mod soladrome {
         );
 
         // ── Advance accumulator before reducing total_hi_sola ────────────────
-        // Without this, fees that were earned while more stakers were active
-        // would be diluted as if fewer stakers had always existed, over-paying
-        // remaining stakers at the expense of protocol accounting integrity.
+        // Without this, fees earned while more stakers were active would be
+        // diluted when calculated against the post-unstake supply.
         let market_balance = ctx.accounts.market_vault.amount;
         let acc = math::advance_accumulator(
             ctx.accounts.protocol_state.fees_per_hi_sola,
@@ -321,7 +324,29 @@ pub mod soladrome {
             ctx.accounts.protocol_state.last_market_vault_balance,
             ctx.accounts.protocol_state.total_hi_sola,
         );
-        // Checkpoint the departing staker so they can claim fees earned up to now.
+
+        // ── Auto-pay pending fees (Masterchef pattern) ───────────────────────
+        // Compute on the FULL pre-unstake balance so the staker captures every
+        // fee earned up to this moment — then set fees_debt = acc so future
+        // claim_fees only credits post-unstake earnings on the residual balance.
+        let pending = math::pending_fees(acc, ctx.accounts.user_position.fees_debt, balance);
+        if pending > 0 {
+            let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from:      ctx.accounts.market_vault.to_account_info(),
+                        to:        ctx.accounts.user_usdc.to_account_info(),
+                        authority: ctx.accounts.protocol_state.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                pending,
+            )?;
+            ctx.accounts.protocol_state.last_market_vault_balance =
+                market_balance.saturating_sub(pending);
+        }
         ctx.accounts.user_position.fees_debt = acc;
 
         token::burn(
@@ -351,8 +376,10 @@ pub mod soladrome {
         )?;
 
         let s = &mut ctx.accounts.protocol_state;
-        s.fees_per_hi_sola          = acc;
-        s.last_market_vault_balance = market_balance;
+        s.fees_per_hi_sola = acc;
+        // Use post-payout balance as snapshot so the auto-paid USDC is not
+        // double-credited to remaining stakers on the next accumulator advance.
+        s.last_market_vault_balance = market_balance.saturating_sub(pending);
         s.total_hi_sola = s.total_hi_sola
             .checked_sub(hi_sola_amount)
             .ok_or(SoladromeError::Overflow)?;
@@ -1556,6 +1583,9 @@ pub mod soladrome {
         )?;
         ctx.accounts.protocol_state.total_sola = ctx.accounts.protocol_state.total_sola
             .checked_add(amount_osola).ok_or(SoladromeError::Overflow)?;
+        // Floor receives amount_osola USDC (step 5), so this SOLA is fully floor-backed.
+        ctx.accounts.protocol_state.total_purchased_sola = ctx.accounts.protocol_state.total_purchased_sola
+            .checked_add(amount_osola).ok_or(SoladromeError::Overflow)?;
 
         // ── 3. AMM swap: sell SOLA → USDC ────────────────────────────────────
         let pool      = &ctx.accounts.pool;
@@ -1584,7 +1614,10 @@ pub mod soladrome {
             (ctx.accounts.token_b_vault.to_account_info(), ctx.accounts.token_a_vault.to_account_info())
         };
 
-        // SOLA: caller → pool vault
+        // SOLA: caller → pool vault (only amount_net — the portion after AMM fee deduction).
+        // The swap was calculated on amount_net, so the vault and reserve must both increase
+        // by exactly amount_net. Sending the full amount_osola would create a vault/reserve
+        // divergence equal to fee_total that grows unboundedly and corrupts LP withdrawals.
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -1594,7 +1627,7 @@ pub mod soladrome {
                     authority: ctx.accounts.caller.to_account_info(),
                 },
             ),
-            amount_osola,
+            amount_net,
         )?;
 
         // USDC: pool vault → caller_usdc (temp holding for split below)
@@ -1886,9 +1919,23 @@ pub struct UnstakeHiSola<'info> {
     #[account(mut, address = protocol_state.sola_vault)]
     pub sola_vault: Account<'info, TokenAccount>,
 
-    /// Read to advance the fee accumulator before supply decreases.
-    #[account(address = protocol_state.market_vault)]
+    /// Source of pending fee payouts. Mutable so fees can be transferred out.
+    #[account(mut, address = protocol_state.market_vault)]
     pub market_vault: Account<'info, TokenAccount>,
+
+    /// USDC mint — needed to init user_usdc ATA on first unstake if absent.
+    #[account(address = protocol_state.usdc_mint)]
+    pub usdc_mint: Account<'info, Mint>,
+
+    /// User's USDC ATA — receives any pending fees auto-paid on unstake.
+    /// Created if it doesn't exist yet.
+    #[account(
+        init_if_needed,
+        payer = user,
+        associated_token::mint      = usdc_mint,
+        associated_token::authority = user,
+    )]
+    pub user_usdc: Account<'info, TokenAccount>,
 
     #[account(
         init_if_needed,

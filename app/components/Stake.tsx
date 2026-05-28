@@ -9,6 +9,7 @@ import {
   getProgram, statePda, solaM, hiSolaM, solaVaultAddr,
   marketVault, positionPda, userAta, commonAccounts, fromUi,
 } from "@/lib/program";
+import { useSoladrome } from "@/lib/SoladromeContext";
 
 type Tab = "stake" | "unstake";
 const PCT = [25, 50, 75, 100] as const;
@@ -16,6 +17,7 @@ const PCT = [25, 50, 75, 100] as const;
 export function Stake({ embedded = false }: { embedded?: boolean }) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
+  const { usdcMint } = useSoladrome();
   const [tab, setTab] = useState<Tab>("stake");
   const [amount, setAmount] = useState("");
   const [balance, setBalance] = useState<number | null>(null);
@@ -69,6 +71,7 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
         setStatus(`✅ Staked → hiSOLA — tx: ${tx.slice(0, 16)}…`);
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
+        const userUsdc = usdcMint ? userAta(usdcMint, wallet.publicKey) : null;
         const tx = await program.methods
           .unstakeHiSola(fromUi(+amount))
           .accounts({
@@ -80,6 +83,8 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
             userSola,
             solaVault: solaVaultAddr,
             marketVault,
+            usdcMint: usdcMint ?? PublicKey.default,
+            userUsdc: userUsdc ?? PublicKey.default,
             userPosition: position,
             ...commonAccounts,
           } as any)
