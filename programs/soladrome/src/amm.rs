@@ -46,6 +46,25 @@ macro_rules! update_pool_rewards {
     }};
 }
 
+/// Advance the per-pool oSOLA reward accumulator.
+/// Identical to the `update_pool_rewards!` macro but callable from other modules
+/// (e.g. `flash_arbitrage` in lib.rs which manipulates pool reserves directly).
+pub fn advance_pool_rewards(pool: &mut AmmPool, now: i64) {
+    if pool.last_reward_ts == 0 {
+        pool.last_reward_ts = now;
+    } else {
+        let elapsed = (now - pool.last_reward_ts).max(0) as u128;
+        if elapsed > 0 && pool.total_lp > 0 {
+            let new_rewards = (OSOLA_EMISSION_PER_SEC as u128).saturating_mul(elapsed);
+            let delta = new_rewards
+                .saturating_mul(LP_REWARD_PRECISION)
+                / (pool.total_lp as u128);
+            pool.osola_reward_per_lp = pool.osola_reward_per_lp.saturating_add(delta);
+        }
+        pool.last_reward_ts = now;
+    }
+}
+
 /// Compute pending oSOLA for a user given current accumulator and their debt.
 fn pending_osola(acc: u128, debt: u128, user_lp: u64) -> u64 {
     if user_lp == 0 || acc <= debt {
