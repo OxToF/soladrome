@@ -7772,6 +7772,12 @@
       "docs": [
         "Tracks total vote-weight already allocated by one user in an epoch (across all pools).",
         "Prevents voting more than the user's hiSOLA balance.",
+        "",
+        "`total_power_snapshot` is captured on the **first** vote of the epoch (hiSOLA + ve-power",
+        "at that exact moment). All subsequent votes in the same epoch are checked against this",
+        "snapshot — preventing a user from over-spending if their lock expires or they transfer",
+        "hiSOLA between two separate `vote_gauge` calls.",
+        "",
         "PDA: [b\"uev\", user, epoch_le8]"
       ],
       "type": {
@@ -7783,6 +7789,10 @@
           },
           {
             "name": "allocated",
+            "type": "u64"
+          },
+          {
+            "name": "total_power_snapshot",
             "type": "u64"
           },
           {

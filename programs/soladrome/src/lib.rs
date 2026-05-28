@@ -1225,17 +1225,23 @@ pub mod soladrome {
         );
         let total_power = hi_sola_balance.saturating_add(ve_power);
 
+        // Init UserEpochVotes on first vote — snapshot total_power as the epoch-wide cap.
+        // Snapshotting here prevents a user from: (a) voting with a lock, letting it expire,
+        // then voting again with fresh hiSOLA balance that exceeds the original cap; or
+        // (b) transferring hiSOLA out between two separate vote_gauge calls in the same epoch.
+        // The snapshot is immutable once set; subsequent votes check against it, not live power.
+        if ctx.accounts.user_epoch_votes.epoch == 0 {
+            ctx.accounts.user_epoch_votes.epoch                = epoch;
+            ctx.accounts.user_epoch_votes.total_power_snapshot = total_power;
+            ctx.accounts.user_epoch_votes.bump                 = ctx.bumps.user_epoch_votes;
+        }
+
+        let power_cap = ctx.accounts.user_epoch_votes.total_power_snapshot;
         let already_allocated = ctx.accounts.user_epoch_votes.allocated;
         let new_total = already_allocated
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
-        require!(new_total <= total_power, SoladromeError::VoteOverflow);
-
-        // Init UserEpochVotes if first vote this epoch
-        if ctx.accounts.user_epoch_votes.epoch == 0 {
-            ctx.accounts.user_epoch_votes.epoch = epoch;
-            ctx.accounts.user_epoch_votes.bump  = ctx.bumps.user_epoch_votes;
-        }
+        require!(new_total <= power_cap, SoladromeError::VoteOverflow);
 
         // Init GaugeState if first vote for this pool this epoch
         if ctx.accounts.gauge_state.pool_id == Pubkey::default() {
@@ -1672,8 +1678,12 @@ pub mod soladrome {
                 .checked_sub(fee_total_u64).ok_or(SoladromeError::Overflow)?;
         }
 
-        // Update pool reserves
+        // Update pool reserves + advance reward accumulator.
+        // Advancing here prevents the next add/remove/swap from retroactively
+        // crediting oSOLA rewards that accrued during this arbitrage call.
+        let clock_now = Clock::get()?.unix_timestamp;
         let pool = &mut ctx.accounts.pool;
+        amm::advance_pool_rewards(pool, clock_now);
         if sola_is_a {
             pool.reserve_a = pool.reserve_a.checked_add(amount_net).ok_or(SoladromeError::Overflow)?;
             pool.reserve_b = pool.reserve_b.checked_sub(usdc_out).ok_or(SoladromeError::Overflow)?;
