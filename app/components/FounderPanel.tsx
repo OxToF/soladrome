@@ -140,11 +140,12 @@ export function FounderPanel() {
   const isFounder = wallet?.publicKey.toBase58() === FOUNDER_WALLET;
 
   // ── On-chain state ──────────────────────────────────────────────────────────
-  const [hiVesting,  setHiVesting]  = useState<{ totalAmount: number; claimed: number; startTs: number } | null>(null);
-  const [oVesting,   setOVesting]   = useState<{ totalAmount: number; claimed: number; startTs: number } | null>(null);
-  const [founderPos, setFounderPos] = useState<{ usdcBorrowed: number } | null>(null);
-  const [hiSolaBal,  setHiSolaBal]  = useState<number>(0);
-  const [nowSecs,    setNowSecs]    = useState<number>(Math.floor(Date.now() / 1000));
+  const [hiVesting,       setHiVesting]       = useState<{ totalAmount: number; claimed: number; startTs: number } | null>(null);
+  const [oVesting,        setOVesting]        = useState<{ totalAmount: number; claimed: number; startTs: number } | null>(null);
+  const [founderPos,      setFounderPos]      = useState<{ usdcBorrowed: number } | null>(null);
+  const [hiSolaBal,       setHiSolaBal]       = useState<number>(0);
+  const [floorVaultBal,   setFloorVaultBal]   = useState<number>(0); // raw USDC
+  const [nowSecs,         setNowSecs]         = useState<number>(Math.floor(Date.now() / 1000));
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [loadingHi,  setLoadingHi]  = useState(false);
@@ -161,11 +162,12 @@ export function FounderPanel() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
 
-      const [hiV, oV, pos, hiBal, slot] = await Promise.allSettled([
+      const [hiV, oV, pos, hiBal, floorBal, slot] = await Promise.allSettled([
         (program.account as any).founderHiSolaVesting.fetch(founderHiVestingPda),
         (program.account as any).founderVesting.fetch(founderVestingPda),
         (program.account as any).userPosition.fetchNullable(positionPda(wallet.publicKey)),
         connection.getTokenAccountBalance(userAta(hiSolaM, wallet.publicKey)),
+        connection.getTokenAccountBalance(floorVault),
         connection.getSlot(),
       ]);
 
@@ -192,6 +194,9 @@ export function FounderPanel() {
       }
       if (hiBal.status === "fulfilled") {
         setHiSolaBal(Number(hiBal.value.value.uiAmount ?? 0));
+      }
+      if (floorBal.status === "fulfilled") {
+        setFloorVaultBal(Number(floorBal.value.value.amount)); // raw
       }
       if (slot.status === "fulfilled") {
         const blockTime = await connection.getBlockTime(slot.value);
@@ -279,9 +284,13 @@ export function FounderPanel() {
   }
 
   // ── Founder borrow / repay ────────────────────────────────────────────────
-  const borrowCap     = hiVesting ? Math.floor(hiVesting.claimed * 0.10) : 0;
-  const currentDebt   = founderPos?.usdcBorrowed ?? 0;
-  const borrowAvail   = Math.max(0, borrowCap - currentDebt) / 1_000_000;
+  const borrowCap      = hiVesting ? Math.floor(hiVesting.claimed * 0.10) : 0;
+  const currentDebt    = founderPos?.usdcBorrowed ?? 0;
+  const capHeadroom    = Math.max(0, borrowCap - currentDebt);          // raw
+  // Actual borrowable = min(cap headroom, floor vault liquidity)
+  const borrowAvailRaw = Math.min(capHeadroom, floorVaultBal);
+  const borrowAvail    = borrowAvailRaw / 1_000_000;
+  const limitedByFloor = floorVaultBal < capHeadroom && capHeadroom > 0;
 
   async function submitBorrow() {
     if (!wallet || !borrowAmt || !usdcMint) return;
@@ -441,15 +450,25 @@ export function FounderPanel() {
             </h3>
 
             {/* Cap info banner */}
-            <div className="flex items-start gap-2 text-xs text-gray-500 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 mb-4">
+            <div className="flex items-start gap-2 text-xs text-gray-500 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 mb-3">
               <span className="text-brand-green text-base leading-none shrink-0">ℹ</span>
               <span>
                 Cap: <span className="text-white font-mono font-semibold">{fmtSola(borrowCap)} USDC</span>
-                {" "}(10% × {fmtSola(hiVesting?.claimed ?? 0)} hiSOLA claimed) ·{" "}
+                {" "}(10% × {fmtSola(hiVesting?.claimed ?? 0)} hiSOLA) ·{" "}
                 Debt: <span className="text-yellow-400 font-mono">{fmtSola(currentDebt)} USDC</span> ·{" "}
-                Available: <span className="text-brand-green font-mono font-semibold">{borrowAvail.toFixed(2)} USDC</span>
+                Available: <span className="text-brand-green font-mono font-semibold">{borrowAvail.toFixed(4)} USDC</span>
               </span>
             </div>
+            {limitedByFloor && (
+              <div className="flex items-start gap-2 text-xs bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2 mb-3">
+                <span className="text-yellow-400 text-base leading-none shrink-0">⚠</span>
+                <span className="text-yellow-300">
+                  Floor vault liquidity ({fmtSola(floorVaultBal)} USDC) is lower than your cap.
+                  Available borrow is limited to floor vault balance.
+                  More SOLA purchases will increase this limit.
+                </span>
+              </div>
+            )}
 
             {/* Tabs */}
             <div className="flex gap-6 mb-5 border-b border-brand-border">
