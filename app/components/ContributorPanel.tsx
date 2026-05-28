@@ -200,15 +200,17 @@ export function ContributorPanel() {
       if (borrowTab === "borrow") {
         tx = await program.methods.contributorBorrowUsdc(fromUi(+borrowAmt))
           .accounts({
-            contributor:         wallet.publicKey,
-            protocolState:       statePda,
+            contributor:            wallet.publicKey,
+            protocolState:          statePda,
             floorVault,
             marketVault,
-            contributorUsdc:     userAta(usdcMint, wallet.publicKey),
-            contributorPosition: positionPda(wallet.publicKey),
-            contributorVesting:  pda,
-            tokenProgram:        commonAccounts.tokenProgram,
-            systemProgram:       commonAccounts.systemProgram,
+            usdcMint:               usdcMint,
+            contributorUsdc:        userAta(usdcMint, wallet.publicKey),
+            contributorPosition:    positionPda(wallet.publicKey),
+            contributorVesting:     pda,
+            tokenProgram:           commonAccounts.tokenProgram,
+            associatedTokenProgram: commonAccounts.associatedTokenProgram,
+            systemProgram:          commonAccounts.systemProgram,
           } as any).rpc();
         setStatus(`✅ Borrowed ${borrowAmt} USDC — tx: ${tx.slice(0,16)}…`);
       } else {

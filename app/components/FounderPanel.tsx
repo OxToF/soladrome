@@ -297,16 +297,18 @@ export function FounderPanel() {
           .founderBorrowUsdc(fromUi(+borrowAmt))
           .accounts({
             founder,
-            protocolState:    statePda,
-            hiSolaMint:       hiSolaM,
-            founderHiSola:    userAta(hiSolaM, founder),
-            floorVault:       floorVault,
-            marketVault:      marketVault,
-            founderUsdc:      userAta(usdcMint, founder),
-            founderPosition:  positionPda(founder),
-            founderHiVesting: founderHiVestingPda,
-            tokenProgram:     commonAccounts.tokenProgram,
-            systemProgram:    commonAccounts.systemProgram,
+            protocolState:          statePda,
+            hiSolaMint:             hiSolaM,
+            founderHiSola:          userAta(hiSolaM, founder),
+            floorVault:             floorVault,
+            marketVault:            marketVault,
+            usdcMint:               usdcMint,
+            founderUsdc:            userAta(usdcMint, founder),
+            founderPosition:        positionPda(founder),
+            founderHiVesting:       founderHiVestingPda,
+            tokenProgram:           commonAccounts.tokenProgram,
+            associatedTokenProgram: commonAccounts.associatedTokenProgram,
+            systemProgram:          commonAccounts.systemProgram,
           } as any)
           .rpc();
         setStatus(`✅ Borrowed ${borrowAmt} USDC — tx: ${tx.slice(0, 16)}…`);
