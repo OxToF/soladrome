@@ -25,6 +25,7 @@ use state::{
     PRECISION, EPOCH_DURATION, current_epoch,
     VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
     CONTRIBUTOR_CLIFF_SECS, CONTRIBUTOR_DURATION_SECS,
+    FLOOR_RESERVE_MIN_BPS,
 };
 pub use amm::*;
 pub use pol::*;
@@ -365,6 +366,16 @@ pub mod soladrome {
             ctx.accounts.floor_vault.amount >= usdc_amount,
             SoladromeError::InsufficientFloorReserve
         );
+        // ── 75% floor buffer guardrail ───────────────────────────────────────
+        // Ensures sell_sola remains liquid for at least 75% of floor-backed supply.
+        {
+            let floor_after = ctx.accounts.floor_vault.amount
+                .checked_sub(usdc_amount).ok_or(SoladromeError::Overflow)?;
+            let min_floor = (ctx.accounts.protocol_state.total_purchased_sola as u128)
+                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128).ok_or(SoladromeError::Overflow)?
+                .checked_div(10_000).ok_or(SoladromeError::Overflow)? as u64;
+            require!(floor_after >= min_floor, SoladromeError::BorrowExceedsFloorBuffer);
+        }
 
         // ── 2 % origination fee (one-time, like Beradrome) ──────────────────
         // fee   → market_vault  → distributed to hiSOLA stakers via accumulator
@@ -800,6 +811,15 @@ pub mod soladrome {
             ctx.accounts.floor_vault.amount >= usdc_amount,
             SoladromeError::InsufficientFloorReserve
         );
+        // ── 75% floor buffer guardrail ───────────────────────────────────────
+        {
+            let floor_after = ctx.accounts.floor_vault.amount
+                .checked_sub(usdc_amount).ok_or(SoladromeError::Overflow)?;
+            let min_floor = (ctx.accounts.protocol_state.total_purchased_sola as u128)
+                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128).ok_or(SoladromeError::Overflow)?
+                .checked_div(10_000).ok_or(SoladromeError::Overflow)? as u64;
+            require!(floor_after >= min_floor, SoladromeError::BorrowExceedsFloorBuffer);
+        }
 
         // ── 2 % origination fee → market_vault ──────────────────────────────
         let fee = usdc_amount
@@ -1044,6 +1064,19 @@ pub mod soladrome {
             .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
         require!(new_borrowed <= max_borrow, SoladromeError::ContributorBorrowCapExceeded);
+        require!(
+            ctx.accounts.floor_vault.amount >= usdc_amount,
+            SoladromeError::InsufficientFloorReserve
+        );
+        // ── 75% floor buffer guardrail ───────────────────────────────────────
+        {
+            let floor_after = ctx.accounts.floor_vault.amount
+                .checked_sub(usdc_amount).ok_or(SoladromeError::Overflow)?;
+            let min_floor = (ctx.accounts.protocol_state.total_purchased_sola as u128)
+                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128).ok_or(SoladromeError::Overflow)?
+                .checked_div(10_000).ok_or(SoladromeError::Overflow)? as u64;
+            require!(floor_after >= min_floor, SoladromeError::BorrowExceedsFloorBuffer);
+        }
 
         // 2% origination fee to market_vault
         let fee        = usdc_amount.saturating_mul(BORROW_FEE_BPS) / 10_000;

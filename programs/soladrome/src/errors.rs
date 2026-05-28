@@ -64,4 +64,7 @@ pub enum SoladromeError {
     // ── Contributor / marketing vesting ──────────────────────────────────────
     #[msg("Contributor borrow cap exceeded: max 10% of total claimed oSOLA")]
     ContributorBorrowCapExceeded,
+    // ── Floor reserve buffer ──────────────────────────────────────────────────
+    #[msg("Borrow would bring floor vault below 75% of floor-backed supply — repay existing borrows or wait for more SOLA purchases")]
+    BorrowExceedsFloorBuffer,
 }

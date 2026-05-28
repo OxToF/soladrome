@@ -37,6 +37,13 @@ pub const MAX_VE_MULTIPLIER: u64 = 4;
 /// Caller keeps 10 % of gross profit; remaining 90 % routes to market_vault → hiSOLA stakers.
 pub const CALLER_ARB_SHARE_BPS: u64 = 1_000;
 
+// ── Floor reserve buffer ──────────────────────────────────────────────────────
+/// After any borrow, the floor vault must hold at least this fraction of
+/// total_purchased_sola (floor-backed supply). 7 500 bps = 75 %.
+/// At most 25 % of the floor vault can be lent out at once.
+/// Guarantees users can always redeem ≥ 75 % of the float via sell_sola.
+pub const FLOOR_RESERVE_MIN_BPS: u64 = 7_500;
+
 pub fn current_epoch(unix_ts: i64) -> u64 {
     (unix_ts.max(0) as u64) / EPOCH_DURATION
 }
