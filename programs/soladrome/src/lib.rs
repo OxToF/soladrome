@@ -2220,9 +2220,16 @@ pub struct FounderBorrowUsdc<'info> {
     #[account(mut, address = protocol_state.market_vault)]
     pub market_vault: Account<'info, TokenAccount>,
 
+    /// USDC mint — needed to init founder_usdc ATA on first borrow.
+    #[account(address = protocol_state.usdc_mint)]
+    pub usdc_mint: Account<'info, Mint>,
+
+    /// Founder's USDC ATA — created on first borrow if needed.
     #[account(
-        mut,
-        constraint = founder_usdc.mint == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+        init_if_needed,
+        payer = founder,
+        associated_token::mint      = usdc_mint,
+        associated_token::authority = founder,
     )]
     pub founder_usdc: Account<'info, TokenAccount>,
 
@@ -2244,6 +2251,7 @@ pub struct FounderBorrowUsdc<'info> {
     pub founder_hi_vesting: Account<'info, FounderHiSolaVesting>,
 
     pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 
@@ -2767,10 +2775,16 @@ pub struct ContributorBorrowUsdc<'info> {
     #[account(mut, address = protocol_state.market_vault)]
     pub market_vault: Account<'info, TokenAccount>,
 
+    /// USDC mint — needed to init contributor_usdc ATA on first borrow.
+    #[account(address = protocol_state.usdc_mint)]
+    pub usdc_mint: Account<'info, Mint>,
+
+    /// Contributor's USDC ATA — created on first borrow if needed.
     #[account(
-        mut,
-        constraint = contributor_usdc.mint == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
-        token::authority = contributor,
+        init_if_needed,
+        payer = contributor,
+        associated_token::mint      = usdc_mint,
+        associated_token::authority = contributor,
     )]
     pub contributor_usdc: Account<'info, TokenAccount>,
 
@@ -2793,5 +2807,6 @@ pub struct ContributorBorrowUsdc<'info> {
     pub contributor_vesting: Account<'info, ContributorVesting>,
 
     pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
