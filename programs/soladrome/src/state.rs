@@ -7,23 +7,53 @@ use anchor_lang::prelude::*;
 pub const PRECISION: u128 = 1_000_000_000_000; // 1e12
 
 // ── Epoch helpers ─────────────────────────────────────────────────────────────
-pub const EPOCH_DURATION: u64 = 3_600; // TEST: 1h devnet — reset to 7 * 24 * 60 * 60 for mainnet
+//
+// ⚠️  TIME-SENSITIVE CONSTANTS — compile-time gated by the "devnet" feature.
+//
+//   Build for devnet  : anchor build                   (default = ["devnet"])
+//   Build for mainnet : anchor build --no-default-features
+//
+// Never deploy the "devnet" build to mainnet — all durations are dramatically
+// shorter for testing and would allow instant cliff bypasses in production.
+
+/// Epoch length.
+/// devnet: 1 h  |  mainnet: 7 days
+#[cfg(feature = "devnet")]
+pub const EPOCH_DURATION: u64 = 3_600;
+#[cfg(not(feature = "devnet"))]
+pub const EPOCH_DURATION: u64 = 7 * 24 * 60 * 60;
 
 // ── Founder vesting schedule ──────────────────────────────────────────────────
-/// Cliff before any tokens unlock.
-/// TEST: 6 h devnet — reset to 180 * 24 * 3600 (6 months) for mainnet.
+
+/// Cliff before any founder tokens unlock.
+/// devnet: 6 h  |  mainnet: 6 months
+#[cfg(feature = "devnet")]
 pub const VESTING_CLIFF_SECS: u64 = 6 * 3_600;
+#[cfg(not(feature = "devnet"))]
+pub const VESTING_CLIFF_SECS: u64 = 180 * 24 * 3_600;
+
 /// Linear vesting window that starts after the cliff.
-/// TEST: 24 h devnet — reset to 720 * 24 * 3600 (24 months) for mainnet.
+/// devnet: 24 h  |  mainnet: 24 months
+#[cfg(feature = "devnet")]
 pub const VESTING_DURATION_SECS: u64 = 24 * 3_600;
+#[cfg(not(feature = "devnet"))]
+pub const VESTING_DURATION_SECS: u64 = 720 * 24 * 3_600;
 
 // ── Contributor vesting schedule ──────────────────────────────────────────────
+
 /// Cliff before contributor tokens unlock.
-/// TEST: 1 h devnet — reset to 30 * 24 * 3600 (1 month) for mainnet.
+/// devnet: 1 h  |  mainnet: 1 month
+#[cfg(feature = "devnet")]
 pub const CONTRIBUTOR_CLIFF_SECS: u64 = 1 * 3_600;
+#[cfg(not(feature = "devnet"))]
+pub const CONTRIBUTOR_CLIFF_SECS: u64 = 30 * 24 * 3_600;
+
 /// Linear vesting window for contributors (oSOLA released monthly over 12 months).
-/// TEST: 12 h devnet — reset to 12 * 30 * 24 * 3600 (12 months) for mainnet.
+/// devnet: 12 h  |  mainnet: 12 months
+#[cfg(feature = "devnet")]
 pub const CONTRIBUTOR_DURATION_SECS: u64 = 12 * 3_600;
+#[cfg(not(feature = "devnet"))]
+pub const CONTRIBUTOR_DURATION_SECS: u64 = 12 * 30 * 24 * 3_600;
 
 // ── Ve-layer constants ────────────────────────────────────────────────────────
 /// Minimum lock duration: 1 epoch.

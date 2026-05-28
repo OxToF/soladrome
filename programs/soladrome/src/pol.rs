@@ -197,6 +197,10 @@ pub fn deploy_pol(
                 .checked_sub(sola_amount).ok_or(SoladromeError::Overflow)?;
             s.total_sola = s.total_sola
                 .checked_add(sola_amount).ok_or(SoladromeError::Overflow)?;
+            // POL-purchased SOLA is fully floor-backed (USDC went to floor_vault),
+            // so it must count in total_purchased_sola to keep sell_sola accurate.
+            s.total_purchased_sola = s.total_purchased_sola
+                .checked_add(sola_amount).ok_or(SoladromeError::Overflow)?;
             s.accumulated_fees = s.accumulated_fees
                 .checked_add(market_amount).ok_or(SoladromeError::Overflow)?;
         }

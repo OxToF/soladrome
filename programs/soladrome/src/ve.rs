@@ -10,9 +10,9 @@ use anchor_spl::{
 use crate::errors::SoladromeError;
 use crate::math;
 use crate::state::{
-    ProtocolState, VeLockPosition, MAX_LOCK_DURATION, MIN_LOCK_DURATION,
+    ProtocolState, UserPosition, VeLockPosition, MAX_LOCK_DURATION, MIN_LOCK_DURATION,
 };
-use crate::STATE_SEED;
+use crate::{POSITION_SEED, STATE_SEED};
 
 pub const VELOCK_SEED:   &[u8] = b"velock";
 pub const VE_VAULT_SEED: &[u8] = b"ve_vault";
@@ -58,6 +58,20 @@ pub fn lock_hi_sola(
         ctx.accounts.protocol_state.last_market_vault_balance,
         ctx.accounts.protocol_state.total_hi_sola,
     );
+
+    // ── Checkpoint user fees_debt before locking ─────────────────────────────
+    // Prevents extracting fees accumulated by other stakers during the lock
+    // period: after unlock, fees_debt is updated again so only post-unlock
+    // fees are claimable. Any pre-lock unclaimed fees should be claimed with
+    // `claim_fees` BEFORE calling `lock_hi_sola`.
+    {
+        let pos = &mut ctx.accounts.user_position;
+        if pos.owner == Pubkey::default() {
+            pos.owner = ctx.accounts.user.key();
+            pos.bump  = ctx.bumps.user_position;
+        }
+        pos.fees_debt = acc;
+    }
 
     // Transfer hiSOLA: user ATA → ve_lock_vault.
     token::transfer(
@@ -138,6 +152,18 @@ pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
     )?;
 
     ctx.accounts.lock_position.amount_locked = 0;
+
+    // ── Checkpoint user fees_debt at unlock time ─────────────────────────────
+    // Sets the baseline for future claims so the user earns fees only from this
+    // point forward — not retroactively during the period they were locked.
+    {
+        let pos = &mut ctx.accounts.user_position;
+        if pos.owner == Pubkey::default() {
+            pos.owner = ctx.accounts.user.key();
+            pos.bump  = ctx.bumps.user_position;
+        }
+        pos.fees_debt = acc;
+    }
 
     // Return locked hiSOLA to the fee distribution pool.
     let s = &mut ctx.accounts.protocol_state;
@@ -223,6 +249,18 @@ pub struct LockHiSola<'info> {
     #[account(address = protocol_state.market_vault)]
     pub market_vault: Box<Account<'info, TokenAccount>>,
 
+    /// Fee-share position — updated at lock time so the user cannot claim fees
+    /// accumulated by other stakers during their lock period.
+    /// Created on first lock if not yet initialised.
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + UserPosition::LEN,
+        seeds = [POSITION_SEED, user.key().as_ref()],
+        bump,
+    )]
+    pub user_position: Box<Account<'info, UserPosition>>,
+
     pub token_program:  Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent:           Sysvar<'info, Rent>,
@@ -272,6 +310,17 @@ pub struct UnlockHiSola<'info> {
     /// Read-only market vault snapshot for accumulator advance.
     #[account(address = protocol_state.market_vault)]
     pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Fee-share position — updated at unlock time so the user starts earning
+    /// fees only from the moment of unlock (not backdated to before the lock).
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + UserPosition::LEN,
+        seeds = [POSITION_SEED, user.key().as_ref()],
+        bump,
+    )]
+    pub user_position: Box<Account<'info, UserPosition>>,
 
     pub token_program:            Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
