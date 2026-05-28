@@ -7045,6 +7045,11 @@
       "code": 6024,
       "name": "ContributorBorrowCapExceeded",
       "msg": "Contributor borrow cap exceeded: max 10% of total claimed oSOLA"
+    },
+    {
+      "code": 6025,
+      "name": "BorrowExceedsFloorBuffer",
+      "msg": "Borrow would bring floor vault below 75% of floor-backed supply — repay existing borrows or wait for more SOLA purchases"
     }
   ],
   "types": [
