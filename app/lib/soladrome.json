@@ -513,7 +513,8 @@
         {
           "name": "user_token_out",
           "docs": [
-            "User's output token ATA."
+            "User's output token ATA — intentionally unconstrained on owner so integrators",
+            "can direct swap output to a different recipient account if desired."
           ],
           "writable": true
         },
@@ -847,6 +848,26 @@
           "name": "user",
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Read-only — used only for the pause check."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "pool",
@@ -2365,6 +2386,7 @@
         },
         {
           "name": "lp_user_checkpoint",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -3009,6 +3031,26 @@
           "signer": true
         },
         {
+          "name": "protocol_state",
+          "docs": [
+            "Read-only — used only for the pause check."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "token_a_mint"
         },
         {
@@ -3485,6 +3527,26 @@
           "name": "depositor",
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Read-only — used only for the pause check."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "pool_id"
@@ -5432,6 +5494,47 @@
       "args": []
     },
     {
+      "name": "pause",
+      "discriminator": [
+        211,
+        22,
+        221,
+        251,
+        74,
+        121,
+        193,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "register_contributor",
       "docs": [
         "Authority-only: register a contributor wallet with a dual hiSOLA + oSOLA allocation.",
@@ -6121,6 +6224,56 @@
       ]
     },
     {
+      "name": "transfer_authority",
+      "discriminator": [
+        48,
+        169,
+        76,
+        72,
+        229,
+        180,
+        55,
+        161
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Current authority — must sign to approve the transfer."
+          ],
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "new_authority",
+          "docs": [
+            "Validation is intentionally minimal: the new authority takes effect immediately."
+          ]
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "unlock_hi_sola",
       "docs": [
         "Return locked hiSOLA after expiry. Restores tokens to the fee pool."
@@ -6352,6 +6505,47 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unpause",
+      "discriminator": [
+        169,
+        144,
+        4,
+        38,
+        10,
+        141,
+        188,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -7215,6 +7409,11 @@
       "code": 6025,
       "name": "BorrowExceedsFloorBuffer",
       "msg": "Borrow would bring floor vault below 75% of floor-backed supply — repay existing borrows or wait for more SOLA purchases"
+    },
+    {
+      "code": 6026,
+      "name": "ProtocolPaused",
+      "msg": "Protocol is paused — only exit instructions (sell, unstake, repay, remove_liquidity, claim, unlock) are available"
     }
   ],
   "types": [
@@ -7747,6 +7946,16 @@
               "includes unfinanced founder/ecosystem allocations."
             ],
             "type": "u64"
+          },
+          {
+            "name": "paused",
+            "docs": [
+              "Emergency pause flag — set by authority via `pause` instruction.",
+              "When true, all state-mutating entry instructions revert with ProtocolPaused.",
+              "Exit paths (sell_sola, unstake, repay, remove_liquidity, claim_*, unlock)",
+              "are intentionally excluded so users can always withdraw their funds."
+            ],
+            "type": "bool"
           }
         ]
       }

@@ -42,6 +42,7 @@ pub fn initialize_pol(
 /// Redirect a portion of market_vault USDC into pol_usdc_vault.
 /// Advances the fee accumulator first so stakers' pending fees are preserved.
 pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
+    require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
     require!(amount > 0, SoladromeError::InvalidAmount);
 
     let market_balance = ctx.accounts.market_vault.amount;
@@ -99,6 +100,7 @@ pub fn deploy_pol(
     usdc_for_lp:   u64,
     min_lp:        u64,
 ) -> Result<()> {
+    require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
     // ── Budget validation ─────────────────────────────────────────────────────
     let total_usdc = usdc_for_sola
         .checked_add(usdc_for_lp)
@@ -480,6 +482,13 @@ pub struct DeployPol<'info> {
         mut,
         seeds = [AMM_POOL_SEED, pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
         bump  = pool.bump,
+        // M-03 FIX: require that at least one token in the target pool is SOLA.
+        // Prevents an authority-key compromise from routing all POL USDC into an
+        // unrelated pool and draining the protocol.
+        constraint = (
+            pool.token_a_mint == protocol_state.sola_mint ||
+            pool.token_b_mint == protocol_state.sola_mint
+        ) @ SoladromeError::InvalidPoolTokens,
     )]
     pub pool: Box<Account<'info, AmmPool>>,
 

@@ -108,10 +108,15 @@ pub struct ProtocolState {
     /// Used as the invariant denominator in sell_sola, replacing total_sola which
     /// includes unfinanced founder/ecosystem allocations.
     pub total_purchased_sola: u64,
+    /// Emergency pause flag — set by authority via `pause` instruction.
+    /// When true, all state-mutating entry instructions revert with ProtocolPaused.
+    /// Exit paths (sell_sola, unstake, repay, remove_liquidity, claim_*, unlock)
+    /// are intentionally excluded so users can always withdraw their funds.
+    pub paused: bool,
 }
 
 impl ProtocolState {
-    pub const LEN: usize = 400;
+    pub const LEN: usize = 400; // 356 bytes used + 44 spare (paused adds 1 byte)
 }
 
 #[account]
