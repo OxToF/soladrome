@@ -84,6 +84,7 @@ pub fn create_pool(
     fee_rate: u16,
     protocol_fee_bps: u16,
 ) -> Result<()> {
+    require!(!ctx.accounts.protocol_state.paused, crate::errors::SoladromeError::ProtocolPaused);
     require!(fee_rate <= MAX_FEE_RATE, SoladromeError::InvalidAmount);
     require!(protocol_fee_bps <= MAX_PROTOCOL_FEE, SoladromeError::InvalidAmount);
 
@@ -121,6 +122,7 @@ pub fn add_liquidity(
     amount_b_desired: u64,
     min_lp: u64,
 ) -> Result<()> {
+    require!(!ctx.accounts.protocol_state.paused, crate::errors::SoladromeError::ProtocolPaused);
     let (lp_out, actual_a, actual_b) = amm_math::lp_for_deposit(
         ctx.accounts.pool.reserve_a,
         ctx.accounts.pool.reserve_b,
@@ -388,6 +390,7 @@ pub fn swap(
     min_out: u64,
     a_to_b: bool,
 ) -> Result<()> {
+    require!(!ctx.accounts.protocol_state.paused, crate::errors::SoladromeError::ProtocolPaused);
     require!(amount_in > 0, SoladromeError::InvalidAmount);
 
     let pool        = &ctx.accounts.pool;
@@ -559,6 +562,10 @@ pub struct CreatePool<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
 
+    /// Read-only — used only for the pause check.
+    #[account(seeds = [crate::STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, crate::state::ProtocolState>>,
+
     pub token_a_mint: Box<Account<'info, Mint>>,
     pub token_b_mint: Box<Account<'info, Mint>>,
 
@@ -713,11 +720,13 @@ pub struct RemoveLiquidity<'info> {
     pub user_lp: Box<Account<'info, TokenAccount>>,
 
     /// User's token-A ATA (must already exist).
-    #[account(mut)]
+    // M-10 FIX: enforce mint to prevent accidental routing of withdrawals to a
+    // wrong-mint account; SPL would reject it anyway but explicit is safer.
+    #[account(mut, constraint = user_token_a.mint == token_a_vault.mint @ SoladromeError::InvalidPoolTokens)]
     pub user_token_a: Box<Account<'info, TokenAccount>>,
 
     /// User's token-B ATA (must already exist).
-    #[account(mut)]
+    #[account(mut, constraint = user_token_b.mint == token_b_vault.mint @ SoladromeError::InvalidPoolTokens)]
     pub user_token_b: Box<Account<'info, TokenAccount>>,
 
     /// Per-user continuous oSOLA reward state for this pool.
@@ -821,10 +830,13 @@ pub struct Swap<'info> {
     pub token_b_vault: Box<Account<'info, TokenAccount>>,
 
     /// User's input token ATA (token_a if a_to_b, token_b otherwise).
-    #[account(mut)]
+    // M-02 FIX: explicit authority check so a caller cannot pass someone else's
+    // token account as the input source (SPL enforces this too, but belt-and-suspenders).
+    #[account(mut, constraint = user_token_in.owner == user.key() @ SoladromeError::Unauthorized)]
     pub user_token_in: Box<Account<'info, TokenAccount>>,
 
-    /// User's output token ATA.
+    /// User's output token ATA — intentionally unconstrained on owner so integrators
+    /// can direct swap output to a different recipient account if desired.
     #[account(mut)]
     pub user_token_out: Box<Account<'info, TokenAccount>>,
 

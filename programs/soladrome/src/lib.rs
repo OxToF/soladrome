@@ -74,9 +74,8 @@ pub const FOUNDER_BORROW_CAP_BPS: u64 = 1_000;       // 10 %
 pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
 // ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
-// This is the PERSONAL founder wallet, NOT the Soladrome treasury.
-// Treasury: 46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4 (separate, no on-chain role)
-pub const FOUNDER_WALLET: &str = "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3";
+// Ledger Nano S — dedicated Soladrome wallet, never used on any other chain.
+pub const FOUNDER_WALLET: &str = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
 // ── Contributor / marketing allocation ────────────────────────────────────────
 pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
@@ -105,9 +104,34 @@ pub mod soladrome {
         Ok(())
     }
 
+    // ── Emergency pause controls ──────────────────────────────────────────────
+    // Authority-only. Freezes all entry instructions while keeping exit paths
+    // (sell_sola, unstake_hi_sola, repay_usdc, remove_liquidity, claim_*, unlock)
+    // always accessible so users can never be trapped.
+
+    pub fn pause(ctx: Context<SetPaused>) -> Result<()> {
+        ctx.accounts.protocol_state.paused = true;
+        Ok(())
+    }
+
+    pub fn unpause(ctx: Context<SetPaused>) -> Result<()> {
+        ctx.accounts.protocol_state.paused = false;
+        Ok(())
+    }
+
+    // Transfer protocol authority to a new address (e.g. Squads multisig vault).
+    // Can only be called by the current authority.
+    // After this call all admin instructions (pause, unpause, initialize_pol, etc.)
+    // must be executed through the new authority — typically via Squads proposal flow.
+    pub fn transfer_authority(ctx: Context<TransferAuthority>) -> Result<()> {
+        ctx.accounts.protocol_state.authority = ctx.accounts.new_authority.key();
+        Ok(())
+    }
+
     // Deposit USDC → receive SOLA via constant-product curve.
     // USDC splits: floor vault (1:1 backing) + market vault (excess fees).
     pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         let vu = ctx.accounts.protocol_state.virtual_usdc;
         let vs = ctx.accounts.protocol_state.virtual_sola;
         let k = ctx.accounts.protocol_state.k;
@@ -243,6 +267,7 @@ pub mod soladrome {
     // Lock SOLA → mint hiSOLA 1:1 (governance + fee share + borrow rights).
     // Sets user's fees_debt to current accumulator so they don't claim past fees.
     pub fn stake_sola(ctx: Context<StakeSola>, sola_amount: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         require!(sola_amount > 0, SoladromeError::InvalidAmount);
 
         // Snapshot accumulator before staking so new hiSOLA only earns future fees.
@@ -303,9 +328,27 @@ pub mod soladrome {
         require!(hi_sola_amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
 
+        // ── Advance accumulator before reducing total_hi_sola ────────────────
+        // Without this, fees earned while more stakers were active would be
+        // diluted when calculated against the post-unstake supply.
+        // SECURITY: acc must be computed BEFORE the position init block so that
+        // a freshly-created position (hiSOLA received via transfer, never staked)
+        // has fees_debt = acc → pending = 0, preventing retroactive market_vault drain.
+        let market_balance = ctx.accounts.market_vault.amount;
+        let acc = math::advance_accumulator(
+            ctx.accounts.protocol_state.fees_per_hi_sola,
+            market_balance,
+            ctx.accounts.protocol_state.last_market_vault_balance,
+            ctx.accounts.protocol_state.total_hi_sola,
+        );
+
         if ctx.accounts.user_position.owner == Pubkey::default() {
             ctx.accounts.user_position.owner = ctx.accounts.user.key();
             ctx.accounts.user_position.bump = ctx.bumps.user_position;
+            // Snapshot the current accumulator so a wallet that received hiSOLA
+            // via transfer (without ever calling stake_sola) cannot claim fees
+            // that accrued before their first protocol interaction.
+            ctx.accounts.user_position.fees_debt = acc;
         }
 
         let balance = ctx.accounts.user_hi_sola.amount;
@@ -314,17 +357,6 @@ pub mod soladrome {
         require!(
             ctx.accounts.user_position.usdc_borrowed <= remaining,
             SoladromeError::OutstandingDebt
-        );
-
-        // ── Advance accumulator before reducing total_hi_sola ────────────────
-        // Without this, fees earned while more stakers were active would be
-        // diluted when calculated against the post-unstake supply.
-        let market_balance = ctx.accounts.market_vault.amount;
-        let acc = math::advance_accumulator(
-            ctx.accounts.protocol_state.fees_per_hi_sola,
-            market_balance,
-            ctx.accounts.protocol_state.last_market_vault_balance,
-            ctx.accounts.protocol_state.total_hi_sola,
         );
 
         // ── Auto-pay pending fees (Masterchef pattern) ───────────────────────
@@ -390,12 +422,22 @@ pub mod soladrome {
 
     // Borrow USDC from floor reserve. Max = hiSOLA balance × 1 USDC (1:1 floor). No liquidation.
     pub fn borrow_usdc(ctx: Context<BorrowUsdc>, usdc_amount: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         require!(usdc_amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
 
         if ctx.accounts.user_position.owner == Pubkey::default() {
             ctx.accounts.user_position.owner = ctx.accounts.user.key();
             ctx.accounts.user_position.bump = ctx.bumps.user_position;
+            // SECURITY: snapshot accumulator so a wallet that received hiSOLA via
+            // transfer (without staking) cannot retroactively claim fees through
+            // claim_fees after this position is initialized with fees_debt = 0.
+            ctx.accounts.user_position.fees_debt = math::advance_accumulator(
+                ctx.accounts.protocol_state.fees_per_hi_sola,
+                ctx.accounts.market_vault.amount,
+                ctx.accounts.protocol_state.last_market_vault_balance,
+                ctx.accounts.protocol_state.total_hi_sola,
+            );
         }
 
         let hi_sola_balance = ctx.accounts.user_hi_sola.amount;
@@ -519,6 +561,7 @@ pub mod soladrome {
 
     // Burn oSOLA + pay floor USDC → receive SOLA. Strengthens floor reserve.
     pub fn exercise_o_sola(ctx: Context<ExerciseOSola>, o_sola_amount: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         require!(o_sola_amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
         let usdc_cost = o_sola_amount;
@@ -1178,6 +1221,7 @@ pub mod soladrome {
     /// Permissionless: any protocol deposits bribe tokens to attract hiSOLA votes.
     /// epoch must equal the current epoch — bribes target the live voting window.
     pub fn deposit_bribe(ctx: Context<DepositBribe>, epoch: u64, amount: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         require!(amount > 0, SoladromeError::InvalidAmount);
         let clock = Clock::get()?;
         require!(epoch == current_epoch(clock.unix_timestamp), SoladromeError::WrongEpoch);
@@ -1212,6 +1256,7 @@ pub mod soladrome {
     /// Total allocated across all pools ≤ raw hiSOLA + ve-weighted locked hiSOLA.
     /// One UserVoteReceipt per (user, pool, epoch) — double-vote for same pool is blocked.
     pub fn vote_gauge(ctx: Context<VoteGauge>, epoch: u64, votes: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         require!(votes > 0, SoladromeError::InvalidAmount);
         let clock = Clock::get()?;
         require!(epoch == current_epoch(clock.unix_timestamp), SoladromeError::WrongEpoch);
@@ -1279,6 +1324,7 @@ pub mod soladrome {
     /// Record a time-weighted LP balance snapshot for the caller in a given pool+epoch.
     /// Must be called before the epoch ends; updates both the user and pool accumulators.
     pub fn checkpoint_lp(ctx: Context<CheckpointLp>, epoch: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         let clock      = Clock::get()?;
         let now        = clock.unix_timestamp;
         let epoch_start = (epoch * EPOCH_DURATION) as i64;
@@ -1404,6 +1450,11 @@ pub mod soladrome {
             ),
             user_osola,
         )?;
+
+        // M-01 FIX: reset weighted_balance after a successful claim so that
+        // checkpoint_lp for the next epoch does not overwrite unclaimed data.
+        // Double-claim is still blocked by the LpEpochClaim PDA (init = fails if exists).
+        ctx.accounts.lp_user_checkpoint.weighted_balance = 0;
 
         ctx.accounts.lp_epoch_claim.bump = ctx.bumps.lp_epoch_claim;
         Ok(())
@@ -1544,6 +1595,7 @@ pub mod soladrome {
         amount: u64,
         lock_duration_secs: u64,
     ) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         ve::lock_hi_sola(ctx, amount, lock_duration_secs)
     }
 
@@ -1560,6 +1612,7 @@ pub mod soladrome {
         amount_osola: u64,
         min_profit_usdc: u64,
     ) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         require!(amount_osola > 0, SoladromeError::InvalidAmount);
 
         let state_bump = ctx.accounts.protocol_state.bump;
@@ -1740,6 +1793,41 @@ pub mod soladrome {
 
 // ── Account Contexts ──────────────────────────────────────────────────────────
 
+/// Shared context for pause / unpause — authority-only.
+#[derive(Accounts)]
+pub struct SetPaused<'info> {
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [STATE_SEED],
+        bump = protocol_state.bump,
+        has_one = authority @ SoladromeError::Unauthorized,
+    )]
+    pub protocol_state: Account<'info, ProtocolState>,
+}
+
+/// Transfer protocol authority to a new pubkey (e.g. Squads multisig vault).
+/// Current authority must sign; new_authority is just a pubkey — no signature required
+/// (Squads vault is a PDA and cannot sign directly).
+#[derive(Accounts)]
+pub struct TransferAuthority<'info> {
+    /// Current authority — must sign to approve the transfer.
+    pub authority: Signer<'info>,
+
+    /// CHECK: arbitrary pubkey — can be a Squads vault PDA or any wallet.
+    /// Validation is intentionally minimal: the new authority takes effect immediately.
+    pub new_authority: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [STATE_SEED],
+        bump = protocol_state.bump,
+        has_one = authority @ SoladromeError::Unauthorized,
+    )]
+    pub protocol_state: Account<'info, ProtocolState>,
+}
+
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
@@ -1874,9 +1962,12 @@ pub struct SellSola<'info> {
     #[account(mut, address = protocol_state.floor_vault)]
     pub floor_vault: Account<'info, TokenAccount>,
 
+    // M-11 FIX: enforce owner so sell proceeds cannot be routed to a third-party
+    // account (e.g., forced deposit into victim wallets or protocol vaults).
     #[account(
         mut,
-        constraint = user_usdc.mint == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+        constraint = user_usdc.mint  == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+        constraint = user_usdc.owner == user.key()               @ SoladromeError::Unauthorized,
     )]
     pub user_usdc: Account<'info, TokenAccount>,
 
@@ -2010,9 +2101,13 @@ pub struct BorrowUsdc<'info> {
     #[account(mut, address = protocol_state.market_vault)]
     pub market_vault: Account<'info, TokenAccount>,
 
+    // M-04 FIX: enforce token::authority so borrowed USDC cannot be silently
+    // routed to market_vault or any other protocol account, which would allow
+    // converting a borrow into artificial fee income claimable via claim_fees.
     #[account(
         mut,
-        constraint = user_usdc.mint == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+        constraint = user_usdc.mint  == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+        constraint = user_usdc.owner == user.key()               @ SoladromeError::Unauthorized,
     )]
     pub user_usdc: Account<'info, TokenAccount>,
 
@@ -2144,9 +2239,12 @@ pub struct ClaimFees<'info> {
     #[account(mut, address = protocol_state.market_vault)]
     pub market_vault: Account<'info, TokenAccount>,
 
+    // ClaimFees: enforce owner so fee payouts cannot be silently routed to
+    // a third-party account by a malicious caller.
     #[account(
         mut,
-        constraint = user_usdc.mint == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+        constraint = user_usdc.mint  == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+        constraint = user_usdc.owner == user.key()               @ SoladromeError::Unauthorized,
     )]
     pub user_usdc: Account<'info, TokenAccount>,
 
@@ -2400,6 +2498,10 @@ pub struct DepositBribe<'info> {
     #[account(mut)]
     pub depositor: Signer<'info>,
 
+    /// Read-only — used only for the pause check.
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
     /// CHECK: External pool address used as bribe label — validation by seeds only.
     pub pool_id: UncheckedAccount<'info>,
 
@@ -2573,6 +2675,10 @@ pub struct CheckpointLp<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
+    /// Read-only — used only for the pause check.
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
     #[account(
         seeds = [b"amm_pool", pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
         bump = pool.bump,
@@ -2681,7 +2787,10 @@ pub struct ClaimLpEmissions<'info> {
     )]
     pub pool_epoch_accum: Box<Account<'info, LpPoolEpochAccum>>,
 
+    // M-01 FIX: mut so we can reset weighted_balance = 0 after claiming,
+    // preventing a future checkpoint_lp call from silently discarding unclaimed data.
     #[account(
+        mut,
         seeds = [b"lp_ckpt", pool.key().as_ref(), user.key().as_ref()],
         bump = lp_user_checkpoint.bump,
         constraint = lp_user_checkpoint.last_epoch == epoch @ SoladromeError::NothingToClaim,

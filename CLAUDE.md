@@ -72,7 +72,7 @@ solana program show 4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd
 - **`k` is never recomputed** — it is set once at `initialize` (`100e6 × 100e6`); virtual reserves drift, `k` stays fixed
 - **`sell_sola` does not move virtual reserves** — only `buy_sola` updates `virtual_usdc` / `virtual_sola`
 - **Accumulator must be advanced before changing `total_hi_sola`** — both `stake_sola` and `mint_founder_allocation` snapshot the accumulator first
-- **Founder allocation is one-time** — guarded by `founder_allocated` flag on `ProtocolState`; hardcoded wallet `CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3`
+- **Founder allocation is one-time** — guarded by `founder_allocated` flag on `ProtocolState`; hardcoded wallet `46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4` (Ledger Nano S, dedicated Soladrome wallet)
 
 ### PDA seeds quick reference
 

@@ -67,4 +67,7 @@ pub enum SoladromeError {
     // ── Floor reserve buffer ──────────────────────────────────────────────────
     #[msg("Borrow would bring floor vault below 75% of floor-backed supply — repay existing borrows or wait for more SOLA purchases")]
     BorrowExceedsFloorBuffer,
+    // ── Emergency pause ───────────────────────────────────────────────────────
+    #[msg("Protocol is paused — only exit instructions (sell, unstake, repay, remove_liquidity, claim, unlock) are available")]
+    ProtocolPaused,
 }
