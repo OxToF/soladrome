@@ -206,11 +206,15 @@ pub struct UserEpochVotes {
     pub epoch: u64,
     pub allocated: u64, // cumulative votes cast this epoch across all pools
     pub total_power_snapshot: u64, // hiSOLA + ve-power at time of first vote (immutable after init)
+    /// Extra voting power earned by burning oSOLA this epoch.
+    /// Resets every epoch (new PDA). Not subject to the 30% hiSOLA cap —
+    /// burning oSOLA is a deflationary act that justifies uncapped influence.
+    pub o_sola_bonus: u64,
     pub bump: u8,
 }
 impl UserEpochVotes {
     pub const LEN: usize = 64;
-} // 8+8+8+1 = 25 bytes used, 39 spare
+} // 8+8+8+8+1 = 33 bytes used, 31 spare
 
 /// Created during claim_bribe — its existence proves the claim was made.
 /// PDA: [b"bribe_claim", user, pool_id, reward_mint, epoch_le8]

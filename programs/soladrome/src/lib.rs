@@ -1477,31 +1477,29 @@ pub mod soladrome {
             ctx.accounts.user_epoch_votes.bump = ctx.bumps.user_epoch_votes;
         }
 
-        let power_cap = ctx.accounts.user_epoch_votes.total_power_snapshot;
+        // ── 30% per-address cap applies only to hiSOLA governance power ─────
+        // oSOLA burn bonus is additive and uncapped: burning oSOLA is a
+        // deflationary act (permanent value destruction) that earns extra
+        // influence for the current epoch only.
+        let hi_sola_cap = ctx.accounts.user_epoch_votes.total_power_snapshot;
+        let o_sola_bonus = ctx.accounts.user_epoch_votes.o_sola_bonus;
 
-        // ── 30% per-address governance cap ───────────────────────────────────
-        // A single address may not allocate more than VOTE_WEIGHT_CAP_BPS of
-        // total_hi_sola as voting power, regardless of ve-multiplier or balance.
-        // This prevents governance capture by a well-funded single actor.
-        // The cap is computed from the live total_hi_sola so it tightens/relaxes
-        // proportionally as the staking supply changes — fair to all participants.
         let global_cap = ctx
             .accounts
             .protocol_state
             .total_hi_sola
             .saturating_mul(VOTE_WEIGHT_CAP_BPS)
             / 10_000;
-        let effective_cap = power_cap.min(global_cap);
+        let effective_hi_sola = hi_sola_cap.min(global_cap);
+
+        // Total power = capped hiSOLA portion + uncapped oSOLA burn bonus
+        let power_cap = effective_hi_sola.saturating_add(o_sola_bonus);
 
         let already_allocated = ctx.accounts.user_epoch_votes.allocated;
         let new_total = already_allocated
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
         require!(new_total <= power_cap, SoladromeError::VoteOverflow);
-        require!(
-            new_total <= effective_cap,
-            SoladromeError::VoteWeightCapExceeded
-        );
 
         // Init GaugeState if first vote for this pool this epoch
         if ctx.accounts.gauge_state.pool_id == Pubkey::default() {
@@ -1535,6 +1533,60 @@ pub mod soladrome {
         gev.total_votes = gev
             .total_votes
             .checked_add(votes)
+            .ok_or(SoladromeError::Overflow)?;
+
+        Ok(())
+    }
+
+    /// Burn oSOLA to gain additional voting power for the current epoch.
+    ///
+    /// Unlike hiSOLA (which gives permanent voting rights + fees + borrow),
+    /// burning oSOLA grants **epoch-scoped** vote weight only — it resets
+    /// with every new epoch (new UserEpochVotes PDA).
+    ///
+    /// The oSOLA bonus is NOT subject to the 30% per-address cap:
+    /// burning tokens is a permanent, deflationary act that justifies
+    /// uncapped influence for that epoch.
+    ///
+    /// Conversion: 1 oSOLA (6 dec) = 1 vote unit (same as 1 hiSOLA).
+    pub fn burn_o_sola_for_votes(
+        ctx: Context<BurnOSolaForVotes>,
+        amount: u64,
+        epoch: u64,
+    ) -> Result<()> {
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        require!(amount > 0, SoladromeError::InvalidAmount);
+        let clock = Clock::get()?;
+        require!(
+            epoch == current_epoch(clock.unix_timestamp),
+            SoladromeError::WrongEpoch
+        );
+
+        // Burn the oSOLA — permanent, irreversible.
+        token::burn(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                token::Burn {
+                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
+                    from:      ctx.accounts.user_o_sola.to_account_info(),
+                    authority: ctx.accounts.user.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
+
+        // Credit voting power for this epoch only.
+        let uev = &mut ctx.accounts.user_epoch_votes;
+        if uev.epoch == 0 {
+            uev.epoch = epoch;
+            uev.bump  = ctx.bumps.user_epoch_votes;
+        }
+        uev.o_sola_bonus = uev
+            .o_sola_bonus
+            .checked_add(amount)
             .ok_or(SoladromeError::Overflow)?;
 
         Ok(())
@@ -2999,6 +3051,46 @@ pub struct ClaimBribe<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+/// Burn oSOLA to gain epoch-scoped voting power.
+/// Seeds for user_epoch_votes: [b"uev", user, epoch_le8] — same as vote_gauge.
+/// The o_sola_bonus field on UserEpochVotes is credited here.
+#[derive(Accounts)]
+#[instruction(amount: u64, epoch: u64)]
+pub struct BurnOSolaForVotes<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    /// Read-only — used for pause check and o_sola_mint address.
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    /// The oSOLA mint — needed for the burn CPI.
+    #[account(mut, address = protocol_state.o_sola_mint)]
+    pub o_sola_mint: Box<Account<'info, Mint>>,
+
+    /// User's oSOLA token account — tokens are burned from here.
+    #[account(
+        mut,
+        token::mint      = o_sola_mint,
+        token::authority = user,
+    )]
+    pub user_o_sola: Box<Account<'info, TokenAccount>>,
+
+    /// Epoch vote tracker — created on first burn if it doesn't exist yet.
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + UserEpochVotes::LEN,
+        seeds = [b"uev", user.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub user_epoch_votes: Box<Account<'info, UserEpochVotes>>,
+
+    pub token_program:  Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent:           Sysvar<'info, Rent>,
 }
 
 // ── LP Emission contexts ──────────────────────────────────────────────────────
