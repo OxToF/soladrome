@@ -1,0 +1,8 @@
+[fuzz.metrics]
+enabled = true
+
+
+[[fuzz.programs]]
+address = "4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd"
+program = "../target/deploy/soladrome.so"
+ 
