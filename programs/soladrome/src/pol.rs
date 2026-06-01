@@ -15,34 +15,37 @@ use crate::math;
 use crate::state::{PolState, ProtocolState};
 use crate::{LP_DEAD_PUBKEY, STATE_SEED};
 
-pub const POL_SEED:           &[u8] = b"pol";
+pub const POL_SEED: &[u8] = b"pol";
 pub const POL_USDC_VAULT_SEED: &[u8] = b"pol_usdc_vault";
-pub const POL_SOLA_ATA_SEED:  &[u8] = b"pol_sola_ata";
-pub const POL_LP_VAULT_SEED:  &[u8] = b"pol_lp_vault";
+pub const POL_SOLA_ATA_SEED: &[u8] = b"pol_sola_ata";
+pub const POL_LP_VAULT_SEED: &[u8] = b"pol_lp_vault";
 
 // ── Instructions ──────────────────────────────────────────────────────────────
 
 /// One-time setup: create the PolState PDA and its two token holding accounts.
 /// Authority-only. pol_lp_vault is created lazily on the first deploy_pol call.
 pub fn initialize_pol(
-    ctx:          Context<InitializePol>,
+    ctx: Context<InitializePol>,
     pol_split_bps: u16,
-    target_pool:  Pubkey,
+    target_pool: Pubkey,
 ) -> Result<()> {
     require!(pol_split_bps <= 5_000, SoladromeError::InvalidAmount); // max 50 %
 
-    let pol          = &mut ctx.accounts.pol_state;
-    pol.pol_split_bps    = pol_split_bps;
-    pol.target_pool      = target_pool;
+    let pol = &mut ctx.accounts.pol_state;
+    pol.pol_split_bps = pol_split_bps;
+    pol.target_pool = target_pool;
     pol.usdc_accumulated = 0;
-    pol.bump             = ctx.bumps.pol_state;
+    pol.bump = ctx.bumps.pol_state;
     Ok(())
 }
 
 /// Redirect a portion of market_vault USDC into pol_usdc_vault.
 /// Advances the fee accumulator first so stakers' pending fees are preserved.
 pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
-    require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        SoladromeError::ProtocolPaused
+    );
     require!(amount > 0, SoladromeError::InvalidAmount);
 
     let market_balance = ctx.accounts.market_vault.amount;
@@ -56,15 +59,15 @@ pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
         ctx.accounts.protocol_state.total_hi_sola,
     );
 
-    let state_bump   = ctx.accounts.protocol_state.bump;
+    let state_bump = ctx.accounts.protocol_state.bump;
     let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
 
     token::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from:      ctx.accounts.market_vault.to_account_info(),
-                to:        ctx.accounts.pol_usdc_vault.to_account_info(),
+                from: ctx.accounts.market_vault.to_account_info(),
+                to: ctx.accounts.pol_usdc_vault.to_account_info(),
                 authority: ctx.accounts.protocol_state.to_account_info(),
             },
             &[state_seeds],
@@ -73,11 +76,13 @@ pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
     )?;
 
     let s = &mut ctx.accounts.protocol_state;
-    s.fees_per_hi_sola         = acc;
+    s.fees_per_hi_sola = acc;
     s.last_market_vault_balance = market_balance - amount;
 
     ctx.accounts.pol_state.usdc_accumulated = ctx
-        .accounts.pol_state.usdc_accumulated
+        .accounts
+        .pol_state
+        .usdc_accumulated
         .checked_add(amount)
         .ok_or(SoladromeError::Overflow)?;
 
@@ -93,14 +98,17 @@ pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
 ///   usdc_for_lp USDC from pol_usdc_vault into the target AMM pool. LP tokens
 ///   are held permanently in pol_lp_vault.
 pub fn deploy_pol(
-    ctx:          Context<DeployPol>,
+    ctx: Context<DeployPol>,
     usdc_for_sola: u64,
-    min_sola_out:  u64,
-    sola_for_lp:   u64,
-    usdc_for_lp:   u64,
-    min_lp:        u64,
+    min_sola_out: u64,
+    sola_for_lp: u64,
+    usdc_for_lp: u64,
+    min_lp: u64,
 ) -> Result<()> {
-    require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        SoladromeError::ProtocolPaused
+    );
     // ── Budget validation ─────────────────────────────────────────────────────
     let total_usdc = usdc_for_sola
         .checked_add(usdc_for_lp)
@@ -113,22 +121,22 @@ pub fn deploy_pol(
 
     // ── Snapshot reads before mutable borrows ─────────────────────────────────
     let state_bump = ctx.accounts.protocol_state.bump;
-    let pol_bump   = ctx.accounts.pol_state.bump;
-    let vu         = ctx.accounts.protocol_state.virtual_usdc;
-    let vs         = ctx.accounts.protocol_state.virtual_sola;
-    let k_val      = ctx.accounts.protocol_state.k;
+    let pol_bump = ctx.accounts.pol_state.bump;
+    let vu = ctx.accounts.protocol_state.virtual_usdc;
+    let vs = ctx.accounts.protocol_state.virtual_sola;
+    let k_val = ctx.accounts.protocol_state.k;
 
-    let pool_reserve_a    = ctx.accounts.pool.reserve_a;
-    let pool_reserve_b    = ctx.accounts.pool.reserve_b;
-    let pool_total_lp     = ctx.accounts.pool.total_lp;
+    let pool_reserve_a = ctx.accounts.pool.reserve_a;
+    let pool_reserve_b = ctx.accounts.pool.reserve_b;
+    let pool_total_lp = ctx.accounts.pool.total_lp;
     let pool_token_a_mint = ctx.accounts.pool.token_a_mint;
     let pool_token_b_mint = ctx.accounts.pool.token_b_mint;
-    let pool_bump         = ctx.accounts.pool.bump;
-    let pre_sola_balance  = ctx.accounts.pol_sola_ata.amount;
+    let pool_bump = ctx.accounts.pool.bump;
+    let pre_sola_balance = ctx.accounts.pol_sola_ata.amount;
 
-    let pol_seeds:   &[&[u8]] = &[POL_SEED, &[pol_bump]];
+    let pol_seeds: &[&[u8]] = &[POL_SEED, &[pol_bump]];
     let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
-    let pool_seeds:  &[&[u8]] = &[
+    let pool_seeds: &[&[u8]] = &[
         AMM_POOL_SEED,
         pool_token_a_mint.as_ref(),
         pool_token_b_mint.as_ref(),
@@ -138,10 +146,13 @@ pub fn deploy_pol(
     // ── Phase 1: Buy SOLA via bonding curve ───────────────────────────────────
     let sola_minted: u64 = if usdc_for_sola > 0 {
         let sola_amount = math::sola_out(vu, vs, k_val, usdc_for_sola)?;
-        require!(sola_amount >= min_sola_out, SoladromeError::SlippageExceeded);
+        require!(
+            sola_amount >= min_sola_out,
+            SoladromeError::SlippageExceeded
+        );
         require!(sola_amount > 0, SoladromeError::InvalidAmount);
 
-        let floor_amount  = sola_amount;
+        let floor_amount = sola_amount;
         let market_amount = usdc_for_sola
             .checked_sub(floor_amount)
             .ok_or(SoladromeError::Overflow)?;
@@ -151,8 +162,8 @@ pub fn deploy_pol(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from:      ctx.accounts.pol_usdc_vault.to_account_info(),
-                    to:        ctx.accounts.floor_vault.to_account_info(),
+                    from: ctx.accounts.pol_usdc_vault.to_account_info(),
+                    to: ctx.accounts.floor_vault.to_account_info(),
                     authority: ctx.accounts.pol_state.to_account_info(),
                 },
                 &[pol_seeds],
@@ -166,8 +177,8 @@ pub fn deploy_pol(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
                     Transfer {
-                        from:      ctx.accounts.pol_usdc_vault.to_account_info(),
-                        to:        ctx.accounts.market_vault.to_account_info(),
+                        from: ctx.accounts.pol_usdc_vault.to_account_info(),
+                        to: ctx.accounts.market_vault.to_account_info(),
                         authority: ctx.accounts.pol_state.to_account_info(),
                     },
                     &[pol_seeds],
@@ -181,8 +192,8 @@ pub fn deploy_pol(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.sola_mint.to_account_info(),
-                    to:        ctx.accounts.pol_sola_ata.to_account_info(),
+                    mint: ctx.accounts.sola_mint.to_account_info(),
+                    to: ctx.accounts.pol_sola_ata.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[state_seeds],
@@ -193,18 +204,28 @@ pub fn deploy_pol(
         // Update bonding curve state (scoped borrow)
         {
             let s = &mut ctx.accounts.protocol_state;
-            s.virtual_usdc = s.virtual_usdc
-                .checked_add(usdc_for_sola).ok_or(SoladromeError::Overflow)?;
-            s.virtual_sola = s.virtual_sola
-                .checked_sub(sola_amount).ok_or(SoladromeError::Overflow)?;
-            s.total_sola = s.total_sola
-                .checked_add(sola_amount).ok_or(SoladromeError::Overflow)?;
+            s.virtual_usdc = s
+                .virtual_usdc
+                .checked_add(usdc_for_sola)
+                .ok_or(SoladromeError::Overflow)?;
+            s.virtual_sola = s
+                .virtual_sola
+                .checked_sub(sola_amount)
+                .ok_or(SoladromeError::Overflow)?;
+            s.total_sola = s
+                .total_sola
+                .checked_add(sola_amount)
+                .ok_or(SoladromeError::Overflow)?;
             // POL-purchased SOLA is fully floor-backed (USDC went to floor_vault),
             // so it must count in total_purchased_sola to keep sell_sola accurate.
-            s.total_purchased_sola = s.total_purchased_sola
-                .checked_add(sola_amount).ok_or(SoladromeError::Overflow)?;
-            s.accumulated_fees = s.accumulated_fees
-                .checked_add(market_amount).ok_or(SoladromeError::Overflow)?;
+            s.total_purchased_sola = s
+                .total_purchased_sola
+                .checked_add(sola_amount)
+                .ok_or(SoladromeError::Overflow)?;
+            s.accumulated_fees = s
+                .accumulated_fees
+                .checked_add(market_amount)
+                .ok_or(SoladromeError::Overflow)?;
         }
 
         sola_amount
@@ -251,11 +272,11 @@ pub fn deploy_pol(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
                     from: ctx.accounts.pol_sola_ata.to_account_info(),
-                    to:   if sola_is_a {
-                              ctx.accounts.pool_token_a_vault.to_account_info()
-                          } else {
-                              ctx.accounts.pool_token_b_vault.to_account_info()
-                          },
+                    to: if sola_is_a {
+                        ctx.accounts.pool_token_a_vault.to_account_info()
+                    } else {
+                        ctx.accounts.pool_token_b_vault.to_account_info()
+                    },
                     authority: ctx.accounts.pol_state.to_account_info(),
                 },
                 &[pol_seeds],
@@ -269,11 +290,11 @@ pub fn deploy_pol(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
                     from: ctx.accounts.pol_usdc_vault.to_account_info(),
-                    to:   if sola_is_a {
-                              ctx.accounts.pool_token_b_vault.to_account_info()
-                          } else {
-                              ctx.accounts.pool_token_a_vault.to_account_info()
-                          },
+                    to: if sola_is_a {
+                        ctx.accounts.pool_token_b_vault.to_account_info()
+                    } else {
+                        ctx.accounts.pool_token_a_vault.to_account_info()
+                    },
                     authority: ctx.accounts.pol_state.to_account_info(),
                 },
                 &[pol_seeds],
@@ -287,8 +308,8 @@ pub fn deploy_pol(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
                     MintTo {
-                        mint:      ctx.accounts.lp_mint.to_account_info(),
-                        to:        ctx.accounts.lp_dead_ata.to_account_info(),
+                        mint: ctx.accounts.lp_mint.to_account_info(),
+                        to: ctx.accounts.lp_dead_ata.to_account_info(),
                         authority: ctx.accounts.pool.to_account_info(),
                     },
                     &[pool_seeds],
@@ -302,8 +323,8 @@ pub fn deploy_pol(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.lp_mint.to_account_info(),
-                    to:        ctx.accounts.pol_lp_vault.to_account_info(),
+                    mint: ctx.accounts.lp_mint.to_account_info(),
+                    to: ctx.accounts.pol_lp_vault.to_account_info(),
                     authority: ctx.accounts.pool.to_account_info(),
                 },
                 &[pool_seeds],
@@ -314,9 +335,18 @@ pub fn deploy_pol(
         // Update pool reserves
         {
             let pool = &mut ctx.accounts.pool;
-            pool.reserve_a = pool.reserve_a.checked_add(actual_a).ok_or(SoladromeError::Overflow)?;
-            pool.reserve_b = pool.reserve_b.checked_add(actual_b).ok_or(SoladromeError::Overflow)?;
-            pool.total_lp  = pool.total_lp.checked_add(lp_out).ok_or(SoladromeError::Overflow)?;
+            pool.reserve_a = pool
+                .reserve_a
+                .checked_add(actual_a)
+                .ok_or(SoladromeError::Overflow)?;
+            pool.reserve_b = pool
+                .reserve_b
+                .checked_add(actual_b)
+                .ok_or(SoladromeError::Overflow)?;
+            pool.total_lp = pool
+                .total_lp
+                .checked_add(lp_out)
+                .ok_or(SoladromeError::Overflow)?;
         }
     }
 
@@ -374,9 +404,9 @@ pub struct InitializePol<'info> {
     #[account(address = protocol_state.sola_mint)]
     pub sola_mint: Box<Account<'info, Mint>>,
 
-    pub token_program:  Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
-    pub rent:           Sysvar<'info, Rent>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
@@ -435,7 +465,6 @@ pub struct DeployPol<'info> {
     pub pol_state: Box<Account<'info, PolState>>,
 
     // ── POL token vaults ──────────────────────────────────────────────────────
-
     #[account(
         mut,
         seeds = [POL_USDC_VAULT_SEED],
@@ -466,7 +495,6 @@ pub struct DeployPol<'info> {
     pub pol_lp_vault: Box<Account<'info, TokenAccount>>,
 
     // ── Bonding curve accounts ─────────────────────────────────────────────────
-
     #[account(mut, address = protocol_state.sola_mint)]
     pub sola_mint: Box<Account<'info, Mint>>,
 
@@ -477,7 +505,6 @@ pub struct DeployPol<'info> {
     pub market_vault: Box<Account<'info, TokenAccount>>,
 
     // ── AMM pool ──────────────────────────────────────────────────────────────
-
     #[account(
         mut,
         seeds = [AMM_POOL_SEED, pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
@@ -502,7 +529,6 @@ pub struct DeployPol<'info> {
     pub pool_token_b_vault: Box<Account<'info, TokenAccount>>,
 
     // ── MINIMUM_LIQUIDITY dead address (first deposit only) ───────────────────
-
     #[account(
         init_if_needed,
         payer = authority,
@@ -515,7 +541,7 @@ pub struct DeployPol<'info> {
     #[account(address = LP_DEAD_PUBKEY)]
     pub lp_dead: UncheckedAccount<'info>,
 
-    pub token_program:            Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program:           Program<'info, System>,
+    pub system_program: Program<'info, System>,
 }

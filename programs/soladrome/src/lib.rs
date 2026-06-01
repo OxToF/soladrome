@@ -7,28 +7,29 @@ use anchor_spl::{
     token::{self, Burn, Mint, MintTo, Token, TokenAccount, Transfer},
 };
 
-mod errors;
-mod math;
-mod state;
+mod amm;
 mod amm_math;
 mod amm_state;
-mod amm;
+mod errors;
+mod math;
 mod pol;
+mod state;
 mod ve;
 
-use errors::SoladromeError;
-use amm_state::AmmPool;
-use state::{
-    BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting, GaugeState,
-    GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo,
-    ProtocolState, UserBribeClaim, UserEpochVotes, UserPosition, UserVoteReceipt,
-    PRECISION, EPOCH_DURATION, current_epoch,
-    VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
-    CONTRIBUTOR_CLIFF_SECS, CONTRIBUTOR_DURATION_SECS,
-    FLOOR_RESERVE_MIN_BPS,
-};
+#[allow(ambiguous_glob_reexports)]
 pub use amm::*;
+use amm_state::AmmPool;
+use errors::SoladromeError;
+#[allow(ambiguous_glob_reexports)]
 pub use pol::*;
+use state::{
+    current_epoch, BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting,
+    GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, ProtocolState,
+    UserBribeClaim, UserEpochVotes, UserPosition, UserVoteReceipt, CONTRIBUTOR_CLIFF_SECS,
+    CONTRIBUTOR_DURATION_SECS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, VESTING_CLIFF_SECS,
+    VESTING_DURATION_SECS,
+};
+#[allow(ambiguous_glob_reexports)]
 pub use ve::*;
 
 /// Canonical dead address for MINIMUM_LIQUIDITY lock (System Program address).
@@ -66,16 +67,16 @@ pub const OSOLA_EMISSION_PER_SEC: u64 = 1_000;
 pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
 
 // Founder allocation — 12% of reference 100 M-token supply, 7% auto-staked.
-pub const FOUNDER_TOTAL: u64    = 12_000_000_000_000; // 12 000 000 SOLA (6 dec)
-pub const FOUNDER_STAKE: u64    =  7_000_000_000_000; //  7 000 000 SOLA → hiSOLA (governance)
+pub const FOUNDER_TOTAL: u64 = 12_000_000_000_000; // 12 000 000 SOLA (6 dec)
+pub const FOUNDER_STAKE: u64 = 7_000_000_000_000; //  7 000 000 SOLA → hiSOLA (governance)
 /// 5 000 000 SOLA liquid — held in vesting vault, released linearly after cliff.
-pub const FOUNDER_LIQUID: u64   =  5_000_000_000_000; // FOUNDER_TOTAL − FOUNDER_STAKE
-pub const ECOSYSTEM_TOTAL: u64  =  2_000_000_000_000; //  2 000 000 SOLA — marketing + airdrop
+pub const FOUNDER_LIQUID: u64 = 5_000_000_000_000; // FOUNDER_TOTAL − FOUNDER_STAKE
+pub const ECOSYSTEM_TOTAL: u64 = 2_000_000_000_000; //  2 000 000 SOLA — marketing + airdrop
 /// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
-pub const BORROW_FEE_BPS: u64   =    200;             //  2 % of borrowed amount
+pub const BORROW_FEE_BPS: u64 = 200; //  2 % of borrowed amount
 /// Founder borrow cap: max 10 % of total *claimed* hiSOLA ever borrowed.
 /// Ensures the founder cannot drain the floor vault before organic users arrive.
-pub const FOUNDER_BORROW_CAP_BPS: u64 = 1_000;       // 10 %
+pub const FOUNDER_BORROW_CAP_BPS: u64 = 1_000; // 10 %
 
 pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
@@ -150,14 +151,20 @@ pub mod soladrome {
     // Deposit USDC → receive SOLA via constant-product curve.
     // USDC splits: floor vault (1:1 backing) + market vault (excess fees).
     pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         let vu = ctx.accounts.protocol_state.virtual_usdc;
         let vs = ctx.accounts.protocol_state.virtual_sola;
         let k = ctx.accounts.protocol_state.k;
         let bump = ctx.accounts.protocol_state.bump;
 
         let sola_amount = math::sola_out(vu, vs, k, usdc_in)?;
-        require!(sola_amount >= min_sola_out, SoladromeError::SlippageExceeded);
+        require!(
+            sola_amount >= min_sola_out,
+            SoladromeError::SlippageExceeded
+        );
         require!(sola_amount > 0, SoladromeError::InvalidAmount);
 
         let floor_amount = sola_amount; // 1 USDC per SOLA (1:1, both 6 dec)
@@ -206,11 +213,26 @@ pub mod soladrome {
         )?;
 
         let s = &mut ctx.accounts.protocol_state;
-        s.virtual_usdc = s.virtual_usdc.checked_add(usdc_in).ok_or(SoladromeError::Overflow)?;
-        s.virtual_sola = s.virtual_sola.checked_sub(sola_amount).ok_or(SoladromeError::Overflow)?;
-        s.total_sola = s.total_sola.checked_add(sola_amount).ok_or(SoladromeError::Overflow)?;
-        s.total_purchased_sola = s.total_purchased_sola.checked_add(sola_amount).ok_or(SoladromeError::Overflow)?;
-        s.accumulated_fees = s.accumulated_fees.checked_add(market_amount).ok_or(SoladromeError::Overflow)?;
+        s.virtual_usdc = s
+            .virtual_usdc
+            .checked_add(usdc_in)
+            .ok_or(SoladromeError::Overflow)?;
+        s.virtual_sola = s
+            .virtual_sola
+            .checked_sub(sola_amount)
+            .ok_or(SoladromeError::Overflow)?;
+        s.total_sola = s
+            .total_sola
+            .checked_add(sola_amount)
+            .ok_or(SoladromeError::Overflow)?;
+        s.total_purchased_sola = s
+            .total_purchased_sola
+            .checked_add(sola_amount)
+            .ok_or(SoladromeError::Overflow)?;
+        s.accumulated_fees = s
+            .accumulated_fees
+            .checked_add(market_amount)
+            .ok_or(SoladromeError::Overflow)?;
         Ok(())
     }
 
@@ -266,10 +288,15 @@ pub mod soladrome {
         // floor backing. Founder/ecosystem allocations are excluded, preventing
         // unfinanced supply from blocking legitimate user redemptions.
         ctx.accounts.protocol_state.total_purchased_sola = ctx
-            .accounts.protocol_state.total_purchased_sola
+            .accounts
+            .protocol_state
+            .total_purchased_sola
             .saturating_sub(sola_amount);
 
-        let floor_post = ctx.accounts.floor_vault.amount
+        let floor_post = ctx
+            .accounts
+            .floor_vault
+            .amount
             .checked_sub(usdc_out)
             .ok_or(SoladromeError::Overflow)?;
         let backed = floor_post
@@ -286,7 +313,10 @@ pub mod soladrome {
     // Lock SOLA → mint hiSOLA 1:1 (governance + fee share + borrow rights).
     // Sets user's fees_debt to current accumulator so they don't claim past fees.
     pub fn stake_sola(ctx: Context<StakeSola>, sola_amount: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         require!(sola_amount > 0, SoladromeError::InvalidAmount);
 
         // Snapshot accumulator before staking so new hiSOLA only earns future fees.
@@ -338,7 +368,10 @@ pub mod soladrome {
         let s = &mut ctx.accounts.protocol_state;
         s.fees_per_hi_sola = acc;
         s.last_market_vault_balance = market_balance;
-        s.total_hi_sola = s.total_hi_sola.checked_add(sola_amount).ok_or(SoladromeError::Overflow)?;
+        s.total_hi_sola = s
+            .total_hi_sola
+            .checked_add(sola_amount)
+            .ok_or(SoladromeError::Overflow)?;
         Ok(())
     }
 
@@ -389,8 +422,8 @@ pub mod soladrome {
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
                     Transfer {
-                        from:      ctx.accounts.market_vault.to_account_info(),
-                        to:        ctx.accounts.user_usdc.to_account_info(),
+                        from: ctx.accounts.market_vault.to_account_info(),
+                        to: ctx.accounts.user_usdc.to_account_info(),
                         authority: ctx.accounts.protocol_state.to_account_info(),
                     },
                     &[seeds],
@@ -433,7 +466,8 @@ pub mod soladrome {
         // Use post-payout balance as snapshot so the auto-paid USDC is not
         // double-credited to remaining stakers on the next accumulator advance.
         s.last_market_vault_balance = market_balance.saturating_sub(pending);
-        s.total_hi_sola = s.total_hi_sola
+        s.total_hi_sola = s
+            .total_hi_sola
             .checked_sub(hi_sola_amount)
             .ok_or(SoladromeError::Overflow)?;
         Ok(())
@@ -441,7 +475,10 @@ pub mod soladrome {
 
     // Borrow USDC from floor reserve. Max = hiSOLA balance × 1 USDC (1:1 floor). No liquidation.
     pub fn borrow_usdc(ctx: Context<BorrowUsdc>, usdc_amount: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         require!(usdc_amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
 
@@ -466,7 +503,10 @@ pub mod soladrome {
             .usdc_borrowed
             .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
-        require!(new_borrowed <= hi_sola_balance, SoladromeError::BorrowLimitExceeded);
+        require!(
+            new_borrowed <= hi_sola_balance,
+            SoladromeError::BorrowLimitExceeded
+        );
         require!(
             ctx.accounts.floor_vault.amount >= usdc_amount,
             SoladromeError::InsufficientFloorReserve
@@ -474,12 +514,21 @@ pub mod soladrome {
         // ── 75% floor buffer guardrail ───────────────────────────────────────
         // Ensures sell_sola remains liquid for at least 75% of floor-backed supply.
         {
-            let floor_after = ctx.accounts.floor_vault.amount
-                .checked_sub(usdc_amount).ok_or(SoladromeError::Overflow)?;
+            let floor_after = ctx
+                .accounts
+                .floor_vault
+                .amount
+                .checked_sub(usdc_amount)
+                .ok_or(SoladromeError::Overflow)?;
             let min_floor = (ctx.accounts.protocol_state.total_purchased_sola as u128)
-                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128).ok_or(SoladromeError::Overflow)?
-                .checked_div(10_000).ok_or(SoladromeError::Overflow)? as u64;
-            require!(floor_after >= min_floor, SoladromeError::BorrowExceedsFloorBuffer);
+                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128)
+                .ok_or(SoladromeError::Overflow)?
+                .checked_div(10_000)
+                .ok_or(SoladromeError::Overflow)? as u64;
+            require!(
+                floor_after >= min_floor,
+                SoladromeError::BorrowExceedsFloorBuffer
+            );
         }
 
         // ── 2 % origination fee (one-time, like Beradrome) ──────────────────
@@ -503,7 +552,7 @@ pub mod soladrome {
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
                     from: ctx.accounts.floor_vault.to_account_info(),
-                    to:   ctx.accounts.user_usdc.to_account_info(),
+                    to: ctx.accounts.user_usdc.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -518,7 +567,7 @@ pub mod soladrome {
                     ctx.accounts.token_program.to_account_info(),
                     Transfer {
                         from: ctx.accounts.floor_vault.to_account_info(),
-                        to:   ctx.accounts.market_vault.to_account_info(),
+                        to: ctx.accounts.market_vault.to_account_info(),
                         authority: ctx.accounts.protocol_state.to_account_info(),
                     },
                     &[seeds],
@@ -580,7 +629,10 @@ pub mod soladrome {
 
     // Burn oSOLA + pay floor USDC → receive SOLA. Strengthens floor reserve.
     pub fn exercise_o_sola(ctx: Context<ExerciseOSola>, o_sola_amount: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         require!(o_sola_amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
         let usdc_cost = o_sola_amount;
@@ -624,9 +676,15 @@ pub mod soladrome {
         )?;
 
         let s = &mut ctx.accounts.protocol_state;
-        s.total_sola = s.total_sola.checked_add(o_sola_amount).ok_or(SoladromeError::Overflow)?;
+        s.total_sola = s
+            .total_sola
+            .checked_add(o_sola_amount)
+            .ok_or(SoladromeError::Overflow)?;
         // Exercising oSOLA pays 1 USDC to floor_vault per SOLA — counts as floor-backed supply.
-        s.total_purchased_sola = s.total_purchased_sola.checked_add(o_sola_amount).ok_or(SoladromeError::Overflow)?;
+        s.total_purchased_sola = s
+            .total_purchased_sola
+            .checked_add(o_sola_amount)
+            .ok_or(SoladromeError::Overflow)?;
         Ok(())
     }
 
@@ -644,7 +702,8 @@ pub mod soladrome {
         );
 
         let hi_sola_balance = ctx.accounts.user_hi_sola.amount;
-        let claimable = math::pending_fees(acc, ctx.accounts.user_position.fees_debt, hi_sola_balance);
+        let claimable =
+            math::pending_fees(acc, ctx.accounts.user_position.fees_debt, hi_sola_balance);
         require!(claimable > 0, SoladromeError::NothingToClaim);
 
         let bump = ctx.accounts.protocol_state.bump;
@@ -665,7 +724,9 @@ pub mod soladrome {
         // Persist accumulator state
         let s = &mut ctx.accounts.protocol_state;
         s.fees_per_hi_sola = acc;
-        s.last_market_vault_balance = market_balance.checked_sub(claimable).ok_or(SoladromeError::Overflow)?;
+        s.last_market_vault_balance = market_balance
+            .checked_sub(claimable)
+            .ok_or(SoladromeError::Overflow)?;
 
         // Move user's debt forward so they can't double-claim
         ctx.accounts.user_position.fees_debt = acc;
@@ -689,9 +750,9 @@ pub mod soladrome {
         // giving the protocol time to build floor_vault from user purchases.
         let hiv = &mut ctx.accounts.founder_hi_vesting;
         hiv.total_amount = FOUNDER_STAKE;
-        hiv.claimed      = 0;
-        hiv.start_ts     = clock.unix_timestamp;
-        hiv.bump         = ctx.bumps.founder_hi_vesting;
+        hiv.claimed = 0;
+        hiv.start_ts = clock.unix_timestamp;
+        hiv.bump = ctx.bumps.founder_hi_vesting;
 
         // ── oSOLA progressive vesting (5M, cliff + linear) ──────────────────
         // Founder claims oSOLA linearly. To convert to USDC:
@@ -699,9 +760,9 @@ pub mod soladrome {
         // Each exercise is ADDITIVE to floor_vault (net positive for protocol).
         let ov = &mut ctx.accounts.founder_vesting;
         ov.total_amount = FOUNDER_LIQUID;
-        ov.claimed      = 0;
-        ov.start_ts     = clock.unix_timestamp;
-        ov.bump         = ctx.bumps.founder_vesting;
+        ov.claimed = 0;
+        ov.start_ts = clock.unix_timestamp;
+        ov.bump = ctx.bumps.founder_vesting;
 
         ctx.accounts.protocol_state.founder_allocated = true;
         Ok(())
@@ -723,8 +784,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.sola_mint.to_account_info(),
-                    to:        ctx.accounts.authority_sola.to_account_info(),
+                    mint: ctx.accounts.sola_mint.to_account_info(),
+                    to: ctx.accounts.authority_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -733,7 +794,10 @@ pub mod soladrome {
         )?;
 
         let s = &mut ctx.accounts.protocol_state;
-        s.total_sola = s.total_sola.checked_add(ECOSYSTEM_TOTAL).ok_or(SoladromeError::Overflow)?;
+        s.total_sola = s
+            .total_sola
+            .checked_add(ECOSYSTEM_TOTAL)
+            .ok_or(SoladromeError::Overflow)?;
         s.ecosystem_allocated = true;
 
         Ok(())
@@ -744,13 +808,22 @@ pub mod soladrome {
     // total_sola grows gradually, giving floor_vault time to accumulate from user buys.
     // Founder uses borrow_usdc against hiSOLA for immediate liquidity (no token selling needed).
     pub fn claim_founder_hi_sola(ctx: Context<ClaimFounderHiSola>) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
-        let clock   = Clock::get()?;
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        let clock = Clock::get()?;
         let vesting = &ctx.accounts.founder_hi_vesting;
         let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
 
-        require!(elapsed >= VESTING_CLIFF_SECS, SoladromeError::VestingCliffNotReached);
-        require!(vesting.claimed < vesting.total_amount, SoladromeError::VestingFullyClaimed);
+        require!(
+            elapsed >= VESTING_CLIFF_SECS,
+            SoladromeError::VestingCliffNotReached
+        );
+        require!(
+            vesting.claimed < vesting.total_amount,
+            SoladromeError::VestingFullyClaimed
+        );
 
         let vested_amount = if elapsed >= VESTING_DURATION_SECS {
             vesting.total_amount
@@ -784,8 +857,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.sola_mint.to_account_info(),
-                    to:        ctx.accounts.sola_vault.to_account_info(),
+                    mint: ctx.accounts.sola_mint.to_account_info(),
+                    to: ctx.accounts.sola_vault.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -798,8 +871,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.hi_sola_mint.to_account_info(),
-                    to:        ctx.accounts.founder_hi_sola.to_account_info(),
+                    mint: ctx.accounts.hi_sola_mint.to_account_info(),
+                    to: ctx.accounts.founder_hi_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -811,17 +884,26 @@ pub mod soladrome {
         let pos = &mut ctx.accounts.founder_position;
         if pos.owner == Pubkey::default() {
             pos.owner = ctx.accounts.founder.key();
-            pos.bump  = ctx.bumps.founder_position;
+            pos.bump = ctx.bumps.founder_position;
         }
         pos.fees_debt = acc;
 
         let s = &mut ctx.accounts.protocol_state;
-        s.fees_per_hi_sola          = acc;
+        s.fees_per_hi_sola = acc;
         s.last_market_vault_balance = market_balance;
-        s.total_sola    = s.total_sola.checked_add(claimable).ok_or(SoladromeError::Overflow)?;
-        s.total_hi_sola = s.total_hi_sola.checked_add(claimable).ok_or(SoladromeError::Overflow)?;
+        s.total_sola = s
+            .total_sola
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
+        s.total_hi_sola = s
+            .total_hi_sola
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
 
-        ctx.accounts.founder_hi_vesting.claimed = ctx.accounts.founder_hi_vesting.claimed
+        ctx.accounts.founder_hi_vesting.claimed = ctx
+            .accounts
+            .founder_hi_vesting
+            .claimed
             .checked_add(claimable)
             .ok_or(SoladromeError::Overflow)?;
 
@@ -833,12 +915,18 @@ pub mod soladrome {
     // To realise USDC: exercise_o_sola (pay 1 USDC → floor_vault) → sell SOLA on AMM.
     // Each exercise is net positive for the floor vault.
     pub fn claim_founder_vesting(ctx: Context<ClaimFounderVesting>) -> Result<()> {
-        let clock   = Clock::get()?;
+        let clock = Clock::get()?;
         let vesting = &ctx.accounts.founder_vesting;
         let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
 
-        require!(elapsed >= VESTING_CLIFF_SECS, SoladromeError::VestingCliffNotReached);
-        require!(vesting.claimed < vesting.total_amount, SoladromeError::VestingFullyClaimed);
+        require!(
+            elapsed >= VESTING_CLIFF_SECS,
+            SoladromeError::VestingCliffNotReached
+        );
+        require!(
+            vesting.claimed < vesting.total_amount,
+            SoladromeError::VestingFullyClaimed
+        );
 
         let vested_amount = if elapsed >= VESTING_DURATION_SECS {
             vesting.total_amount
@@ -862,8 +950,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
-                    to:        ctx.accounts.founder_o_sola.to_account_info(),
+                    mint: ctx.accounts.o_sola_mint.to_account_info(),
+                    to: ctx.accounts.founder_o_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -871,7 +959,10 @@ pub mod soladrome {
             claimable,
         )?;
 
-        ctx.accounts.founder_vesting.claimed = ctx.accounts.founder_vesting.claimed
+        ctx.accounts.founder_vesting.claimed = ctx
+            .accounts
+            .founder_vesting
+            .claimed
             .checked_add(claimable)
             .ok_or(SoladromeError::Overflow)?;
 
@@ -886,17 +977,20 @@ pub mod soladrome {
     /// can borrow at most ~29 k USDC per month — enough for running costs while
     /// the floor vault grows from organic user activity.
     pub fn founder_borrow_usdc(ctx: Context<FounderBorrowUsdc>, usdc_amount: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         require!(usdc_amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
 
         if ctx.accounts.founder_position.owner == Pubkey::default() {
             ctx.accounts.founder_position.owner = ctx.accounts.founder.key();
-            ctx.accounts.founder_position.bump  = ctx.bumps.founder_position;
+            ctx.accounts.founder_position.bump = ctx.bumps.founder_position;
         }
 
         // ── Founder-specific cap ─────────────────────────────────────────────
-        let claimed    = ctx.accounts.founder_hi_vesting.claimed;
+        let claimed = ctx.accounts.founder_hi_vesting.claimed;
         let max_borrow = (claimed as u128)
             .checked_mul(FOUNDER_BORROW_CAP_BPS as u128)
             .ok_or(SoladromeError::Overflow)?
@@ -910,23 +1004,38 @@ pub mod soladrome {
             .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
 
-        require!(new_borrowed <= max_borrow, SoladromeError::FounderBorrowCapExceeded);
+        require!(
+            new_borrowed <= max_borrow,
+            SoladromeError::FounderBorrowCapExceeded
+        );
 
         // ── Standard borrow checks ───────────────────────────────────────────
         let hi_sola_balance = ctx.accounts.founder_hi_sola.amount;
-        require!(new_borrowed <= hi_sola_balance, SoladromeError::BorrowLimitExceeded);
+        require!(
+            new_borrowed <= hi_sola_balance,
+            SoladromeError::BorrowLimitExceeded
+        );
         require!(
             ctx.accounts.floor_vault.amount >= usdc_amount,
             SoladromeError::InsufficientFloorReserve
         );
         // ── 75% floor buffer guardrail ───────────────────────────────────────
         {
-            let floor_after = ctx.accounts.floor_vault.amount
-                .checked_sub(usdc_amount).ok_or(SoladromeError::Overflow)?;
+            let floor_after = ctx
+                .accounts
+                .floor_vault
+                .amount
+                .checked_sub(usdc_amount)
+                .ok_or(SoladromeError::Overflow)?;
             let min_floor = (ctx.accounts.protocol_state.total_purchased_sola as u128)
-                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128).ok_or(SoladromeError::Overflow)?
-                .checked_div(10_000).ok_or(SoladromeError::Overflow)? as u64;
-            require!(floor_after >= min_floor, SoladromeError::BorrowExceedsFloorBuffer);
+                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128)
+                .ok_or(SoladromeError::Overflow)?
+                .checked_div(10_000)
+                .ok_or(SoladromeError::Overflow)? as u64;
+            require!(
+                floor_after >= min_floor,
+                SoladromeError::BorrowExceedsFloorBuffer
+            );
         }
 
         // ── 2 % origination fee → market_vault ──────────────────────────────
@@ -945,8 +1054,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from:      ctx.accounts.floor_vault.to_account_info(),
-                    to:        ctx.accounts.founder_usdc.to_account_info(),
+                    from: ctx.accounts.floor_vault.to_account_info(),
+                    to: ctx.accounts.founder_usdc.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -959,8 +1068,8 @@ pub mod soladrome {
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
                     Transfer {
-                        from:      ctx.accounts.floor_vault.to_account_info(),
-                        to:        ctx.accounts.market_vault.to_account_info(),
+                        from: ctx.accounts.floor_vault.to_account_info(),
+                        to: ctx.accounts.market_vault.to_account_info(),
                         authority: ctx.accounts.protocol_state.to_account_info(),
                     },
                     &[seeds],
@@ -990,20 +1099,26 @@ pub mod soladrome {
     pub fn register_contributor(
         ctx: Context<RegisterContributor>,
         hi_sola_amount: u64,
-        o_sola_amount:  u64,
+        o_sola_amount: u64,
     ) -> Result<()> {
-        require!(hi_sola_amount > 0 || o_sola_amount > 0, SoladromeError::InvalidAmount);
+        require!(
+            hi_sola_amount > 0 || o_sola_amount > 0,
+            SoladromeError::InvalidAmount
+        );
         let v = &mut ctx.accounts.contributor_vesting;
-        v.contributor     = ctx.accounts.contributor_wallet.key();
-        v.hi_sola_amount  = hi_sola_amount;
-        v.o_sola_amount   = o_sola_amount;
+        v.contributor = ctx.accounts.contributor_wallet.key();
+        v.hi_sola_amount = hi_sola_amount;
+        v.o_sola_amount = o_sola_amount;
         v.hi_sola_claimed = 0;
-        v.o_sola_claimed  = 0;
-        v.start_ts        = Clock::get()?.unix_timestamp;
-        v.bump            = ctx.bumps.contributor_vesting;
+        v.o_sola_claimed = 0;
+        v.start_ts = Clock::get()?.unix_timestamp;
+        v.bump = ctx.bumps.contributor_vesting;
         msg!(
             "Contributor registered: {} | {} hiSOLA + {} oSOLA | start_ts={}",
-            v.contributor, v.hi_sola_amount, v.o_sola_amount, v.start_ts
+            v.contributor,
+            v.hi_sola_amount,
+            v.o_sola_amount,
+            v.start_ts
         );
         Ok(())
     }
@@ -1012,12 +1127,18 @@ pub mod soladrome {
     /// Mints SOLA to sola_vault (locked backing) + hiSOLA to contributor wallet 1:1.
     /// Also snapshots the fee accumulator so the contributor earns fees from day one.
     pub fn claim_contributor_hi_sola(ctx: Context<ClaimContributorHiSola>) -> Result<()> {
-        let clock   = Clock::get()?;
+        let clock = Clock::get()?;
         let vesting = &ctx.accounts.contributor_vesting;
         let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
 
-        require!(elapsed >= CONTRIBUTOR_CLIFF_SECS,    SoladromeError::VestingCliffNotReached);
-        require!(vesting.hi_sola_claimed < vesting.hi_sola_amount, SoladromeError::VestingFullyClaimed);
+        require!(
+            elapsed >= CONTRIBUTOR_CLIFF_SECS,
+            SoladromeError::VestingCliffNotReached
+        );
+        require!(
+            vesting.hi_sola_claimed < vesting.hi_sola_amount,
+            SoladromeError::VestingFullyClaimed
+        );
 
         let vested_amount = if elapsed >= CONTRIBUTOR_DURATION_SECS {
             vesting.hi_sola_amount
@@ -1051,8 +1172,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.sola_mint.to_account_info(),
-                    to:        ctx.accounts.sola_vault.to_account_info(),
+                    mint: ctx.accounts.sola_mint.to_account_info(),
+                    to: ctx.accounts.sola_vault.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -1065,8 +1186,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.hi_sola_mint.to_account_info(),
-                    to:        ctx.accounts.contributor_hi_sola.to_account_info(),
+                    mint: ctx.accounts.hi_sola_mint.to_account_info(),
+                    to: ctx.accounts.contributor_hi_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -1078,17 +1199,24 @@ pub mod soladrome {
         let pos = &mut ctx.accounts.contributor_position;
         if pos.owner == Pubkey::default() {
             pos.owner = ctx.accounts.contributor.key();
-            pos.bump  = ctx.bumps.contributor_position;
+            pos.bump = ctx.bumps.contributor_position;
         }
         pos.fees_debt = acc;
 
         let s = &mut ctx.accounts.protocol_state;
-        s.fees_per_hi_sola          = acc;
+        s.fees_per_hi_sola = acc;
         s.last_market_vault_balance = market_balance;
-        s.total_sola    = s.total_sola.checked_add(claimable).ok_or(SoladromeError::Overflow)?;
-        s.total_hi_sola = s.total_hi_sola.checked_add(claimable).ok_or(SoladromeError::Overflow)?;
+        s.total_sola = s
+            .total_sola
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
+        s.total_hi_sola = s
+            .total_hi_sola
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
 
-        ctx.accounts.contributor_vesting.hi_sola_claimed = vesting.hi_sola_claimed
+        ctx.accounts.contributor_vesting.hi_sola_claimed = vesting
+            .hi_sola_claimed
             .checked_add(claimable)
             .ok_or(SoladromeError::Overflow)?;
 
@@ -1098,12 +1226,18 @@ pub mod soladrome {
     /// Contributor-only: claim linearly-vested oSOLA after the cliff.
     /// Mints oSOLA to contributor wallet — floor-neutral until exercised.
     pub fn claim_contributor_vesting(ctx: Context<ClaimContributorVesting>) -> Result<()> {
-        let clock   = Clock::get()?;
+        let clock = Clock::get()?;
         let vesting = &ctx.accounts.contributor_vesting;
         let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
 
-        require!(elapsed >= CONTRIBUTOR_CLIFF_SECS,   SoladromeError::VestingCliffNotReached);
-        require!(vesting.o_sola_claimed < vesting.o_sola_amount, SoladromeError::VestingFullyClaimed);
+        require!(
+            elapsed >= CONTRIBUTOR_CLIFF_SECS,
+            SoladromeError::VestingCliffNotReached
+        );
+        require!(
+            vesting.o_sola_claimed < vesting.o_sola_amount,
+            SoladromeError::VestingFullyClaimed
+        );
 
         let vested_amount = if elapsed >= CONTRIBUTOR_DURATION_SECS {
             vesting.o_sola_amount
@@ -1127,8 +1261,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
-                    to:        ctx.accounts.contributor_o_sola.to_account_info(),
+                    mint: ctx.accounts.o_sola_mint.to_account_info(),
+                    to: ctx.accounts.contributor_o_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -1136,7 +1270,8 @@ pub mod soladrome {
             claimable,
         )?;
 
-        ctx.accounts.contributor_vesting.o_sola_claimed = vesting.o_sola_claimed
+        ctx.accounts.contributor_vesting.o_sola_claimed = vesting
+            .o_sola_claimed
             .checked_add(claimable)
             .ok_or(SoladromeError::Overflow)?;
 
@@ -1150,7 +1285,10 @@ pub mod soladrome {
         ctx: Context<ContributorBorrowUsdc>,
         usdc_amount: u64,
     ) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         require!(usdc_amount > 0, SoladromeError::InvalidAmount);
 
         let bump = ctx.accounts.protocol_state.bump;
@@ -1158,7 +1296,7 @@ pub mod soladrome {
         // Initialise position on first borrow
         if ctx.accounts.contributor_position.owner == Pubkey::default() {
             ctx.accounts.contributor_position.owner = ctx.accounts.contributor.key();
-            ctx.accounts.contributor_position.bump  = ctx.bumps.contributor_position;
+            ctx.accounts.contributor_position.bump = ctx.bumps.contributor_position;
         }
 
         // Cap = 10% of total hiSOLA *claimed so far* (dynamic, scales with actual vesting progress).
@@ -1169,29 +1307,48 @@ pub mod soladrome {
             .ok_or(SoladromeError::Overflow)?
             .checked_div(10_000)
             .ok_or(SoladromeError::Overflow)? as u64;
-        let new_borrowed = ctx.accounts.contributor_position.usdc_borrowed
+        let new_borrowed = ctx
+            .accounts
+            .contributor_position
+            .usdc_borrowed
             .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
-        require!(new_borrowed <= max_borrow, SoladromeError::ContributorBorrowCapExceeded);
+        require!(
+            new_borrowed <= max_borrow,
+            SoladromeError::ContributorBorrowCapExceeded
+        );
         require!(
             ctx.accounts.floor_vault.amount >= usdc_amount,
             SoladromeError::InsufficientFloorReserve
         );
         // ── 75% floor buffer guardrail ───────────────────────────────────────
         {
-            let floor_after = ctx.accounts.floor_vault.amount
-                .checked_sub(usdc_amount).ok_or(SoladromeError::Overflow)?;
+            let floor_after = ctx
+                .accounts
+                .floor_vault
+                .amount
+                .checked_sub(usdc_amount)
+                .ok_or(SoladromeError::Overflow)?;
             let min_floor = (ctx.accounts.protocol_state.total_purchased_sola as u128)
-                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128).ok_or(SoladromeError::Overflow)?
-                .checked_div(10_000).ok_or(SoladromeError::Overflow)? as u64;
-            require!(floor_after >= min_floor, SoladromeError::BorrowExceedsFloorBuffer);
+                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128)
+                .ok_or(SoladromeError::Overflow)?
+                .checked_div(10_000)
+                .ok_or(SoladromeError::Overflow)? as u64;
+            require!(
+                floor_after >= min_floor,
+                SoladromeError::BorrowExceedsFloorBuffer
+            );
         }
 
         // 2% origination fee to market_vault
         let fee = usdc_amount
-            .checked_mul(BORROW_FEE_BPS).ok_or(SoladromeError::Overflow)?
-            .checked_div(10_000).ok_or(SoladromeError::Overflow)?;
-        let net_amount = usdc_amount.checked_sub(fee).ok_or(SoladromeError::Overflow)?;
+            .checked_mul(BORROW_FEE_BPS)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)?;
+        let net_amount = usdc_amount
+            .checked_sub(fee)
+            .ok_or(SoladromeError::Overflow)?;
         require!(net_amount > 0, SoladromeError::InvalidAmount);
 
         let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
@@ -1201,8 +1358,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from:      ctx.accounts.floor_vault.to_account_info(),
-                    to:        ctx.accounts.contributor_usdc.to_account_info(),
+                    from: ctx.accounts.floor_vault.to_account_info(),
+                    to: ctx.accounts.contributor_usdc.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -1216,8 +1373,8 @@ pub mod soladrome {
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
                     Transfer {
-                        from:      ctx.accounts.floor_vault.to_account_info(),
-                        to:        ctx.accounts.market_vault.to_account_info(),
+                        from: ctx.accounts.floor_vault.to_account_info(),
+                        to: ctx.accounts.market_vault.to_account_info(),
                         authority: ctx.accounts.protocol_state.to_account_info(),
                     },
                     &[seeds],
@@ -1227,7 +1384,9 @@ pub mod soladrome {
         }
 
         ctx.accounts.contributor_position.usdc_borrowed = new_borrowed;
-        ctx.accounts.protocol_state.total_usdc_borrowed = ctx.accounts.protocol_state
+        ctx.accounts.protocol_state.total_usdc_borrowed = ctx
+            .accounts
+            .protocol_state
             .total_usdc_borrowed
             .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
@@ -1243,32 +1402,41 @@ pub mod soladrome {
     /// Permissionless: any protocol deposits bribe tokens to attract hiSOLA votes.
     /// epoch must equal the current epoch — bribes target the live voting window.
     pub fn deposit_bribe(ctx: Context<DepositBribe>, epoch: u64, amount: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         require!(amount > 0, SoladromeError::InvalidAmount);
         let clock = Clock::get()?;
-        require!(epoch == current_epoch(clock.unix_timestamp), SoladromeError::WrongEpoch);
+        require!(
+            epoch == current_epoch(clock.unix_timestamp),
+            SoladromeError::WrongEpoch
+        );
 
         // First-time vault init (pool_id starts as default when account is blank)
         if ctx.accounts.bribe_vault.pool_id == Pubkey::default() {
-            ctx.accounts.bribe_vault.pool_id     = ctx.accounts.pool_id.key();
+            ctx.accounts.bribe_vault.pool_id = ctx.accounts.pool_id.key();
             ctx.accounts.bribe_vault.reward_mint = ctx.accounts.reward_mint.key();
-            ctx.accounts.bribe_vault.epoch       = epoch;
-            ctx.accounts.bribe_vault.bump        = ctx.bumps.bribe_vault;
+            ctx.accounts.bribe_vault.epoch = epoch;
+            ctx.accounts.bribe_vault.bump = ctx.bumps.bribe_vault;
         }
 
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from:      ctx.accounts.depositor_token.to_account_info(),
-                    to:        ctx.accounts.bribe_token_vault.to_account_info(),
+                    from: ctx.accounts.depositor_token.to_account_info(),
+                    to: ctx.accounts.bribe_token_vault.to_account_info(),
                     authority: ctx.accounts.depositor.to_account_info(),
                 },
             ),
             amount,
         )?;
 
-        ctx.accounts.bribe_vault.total_bribed = ctx.accounts.bribe_vault.total_bribed
+        ctx.accounts.bribe_vault.total_bribed = ctx
+            .accounts
+            .bribe_vault
+            .total_bribed
             .checked_add(amount)
             .ok_or(SoladromeError::Overflow)?;
         Ok(())
@@ -1278,10 +1446,16 @@ pub mod soladrome {
     /// Total allocated across all pools ≤ raw hiSOLA + ve-weighted locked hiSOLA.
     /// One UserVoteReceipt per (user, pool, epoch) — double-vote for same pool is blocked.
     pub fn vote_gauge(ctx: Context<VoteGauge>, epoch: u64, votes: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         require!(votes > 0, SoladromeError::InvalidAmount);
         let clock = Clock::get()?;
-        require!(epoch == current_epoch(clock.unix_timestamp), SoladromeError::WrongEpoch);
+        require!(
+            epoch == current_epoch(clock.unix_timestamp),
+            SoladromeError::WrongEpoch
+        );
 
         // Total power = unlocked hiSOLA (1×) + ve-weighted locked hiSOLA (up to 4×).
         let hi_sola_balance = ctx.accounts.user_hi_sola.amount;
@@ -1298,9 +1472,9 @@ pub mod soladrome {
         // (b) transferring hiSOLA out between two separate vote_gauge calls in the same epoch.
         // The snapshot is immutable once set; subsequent votes check against it, not live power.
         if ctx.accounts.user_epoch_votes.epoch == 0 {
-            ctx.accounts.user_epoch_votes.epoch                = epoch;
+            ctx.accounts.user_epoch_votes.epoch = epoch;
             ctx.accounts.user_epoch_votes.total_power_snapshot = total_power;
-            ctx.accounts.user_epoch_votes.bump                 = ctx.bumps.user_epoch_votes;
+            ctx.accounts.user_epoch_votes.bump = ctx.bumps.user_epoch_votes;
         }
 
         let power_cap = ctx.accounts.user_epoch_votes.total_power_snapshot;
@@ -1311,7 +1485,10 @@ pub mod soladrome {
         // This prevents governance capture by a well-funded single actor.
         // The cap is computed from the live total_hi_sola so it tightens/relaxes
         // proportionally as the staking supply changes — fair to all participants.
-        let global_cap = ctx.accounts.protocol_state.total_hi_sola
+        let global_cap = ctx
+            .accounts
+            .protocol_state
+            .total_hi_sola
             .saturating_mul(VOTE_WEIGHT_CAP_BPS)
             / 10_000;
         let effective_cap = power_cap.min(global_cap);
@@ -1321,24 +1498,30 @@ pub mod soladrome {
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
         require!(new_total <= power_cap, SoladromeError::VoteOverflow);
-        require!(new_total <= effective_cap, SoladromeError::VoteWeightCapExceeded);
+        require!(
+            new_total <= effective_cap,
+            SoladromeError::VoteWeightCapExceeded
+        );
 
         // Init GaugeState if first vote for this pool this epoch
         if ctx.accounts.gauge_state.pool_id == Pubkey::default() {
             ctx.accounts.gauge_state.pool_id = ctx.accounts.pool_id.key();
-            ctx.accounts.gauge_state.epoch   = epoch;
-            ctx.accounts.gauge_state.bump    = ctx.bumps.gauge_state;
+            ctx.accounts.gauge_state.epoch = epoch;
+            ctx.accounts.gauge_state.bump = ctx.bumps.gauge_state;
         }
-        ctx.accounts.gauge_state.total_votes = ctx.accounts.gauge_state.total_votes
+        ctx.accounts.gauge_state.total_votes = ctx
+            .accounts
+            .gauge_state
+            .total_votes
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
 
         // Record vote receipt (init enforces one-shot per pool per epoch)
-        ctx.accounts.user_vote_receipt.user    = ctx.accounts.user.key();
+        ctx.accounts.user_vote_receipt.user = ctx.accounts.user.key();
         ctx.accounts.user_vote_receipt.pool_id = ctx.accounts.pool_id.key();
-        ctx.accounts.user_vote_receipt.epoch   = epoch;
-        ctx.accounts.user_vote_receipt.votes   = votes;
-        ctx.accounts.user_vote_receipt.bump    = ctx.bumps.user_vote_receipt;
+        ctx.accounts.user_vote_receipt.epoch = epoch;
+        ctx.accounts.user_vote_receipt.votes = votes;
+        ctx.accounts.user_vote_receipt.bump = ctx.bumps.user_vote_receipt;
 
         // Persist allocation counter
         ctx.accounts.user_epoch_votes.allocated = new_total;
@@ -1347,9 +1530,10 @@ pub mod soladrome {
         let gev = &mut ctx.accounts.global_epoch_votes;
         if gev.epoch == 0 {
             gev.epoch = epoch;
-            gev.bump  = ctx.bumps.global_epoch_votes;
+            gev.bump = ctx.bumps.global_epoch_votes;
         }
-        gev.total_votes = gev.total_votes
+        gev.total_votes = gev
+            .total_votes
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
 
@@ -1359,33 +1543,41 @@ pub mod soladrome {
     /// Record a time-weighted LP balance snapshot for the caller in a given pool+epoch.
     /// Must be called before the epoch ends; updates both the user and pool accumulators.
     pub fn checkpoint_lp(ctx: Context<CheckpointLp>, epoch: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
-        let clock      = Clock::get()?;
-        let now        = clock.unix_timestamp;
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        let clock = Clock::get()?;
+        let now = clock.unix_timestamp;
         let epoch_start = (epoch * EPOCH_DURATION) as i64;
-        let epoch_end   = ((epoch + 1) * EPOCH_DURATION) as i64;
+        let epoch_end = ((epoch + 1) * EPOCH_DURATION) as i64;
 
         require!(now >= epoch_start, SoladromeError::WrongEpoch);
-        require!(now <  epoch_end,   SoladromeError::EpochNotEnded);
+        require!(now < epoch_end, SoladromeError::EpochNotEnded);
 
-        let pool_key  = ctx.accounts.pool.key();
+        let pool_key = ctx.accounts.pool.key();
         let lp_supply = ctx.accounts.lp_mint.supply;
-        let user_lp   = ctx.accounts.user_lp.amount;
+        let user_lp = ctx.accounts.user_lp.amount;
 
         // ── Pool accumulator ────────────────────────────────────────────
         let pa = &mut ctx.accounts.pool_epoch_accum;
         if pa.epoch == 0 {
-            pa.epoch          = epoch;
-            pa.pool           = pool_key;
+            pa.epoch = epoch;
+            pa.pool = pool_key;
             pa.last_update_ts = epoch_start;
             pa.last_lp_supply = lp_supply;
-            pa.bump           = ctx.bumps.pool_epoch_accum;
+            pa.bump = ctx.bumps.pool_epoch_accum;
         }
         require!(!pa.finalized, SoladromeError::EpochNotFinalized);
 
         let pa_elapsed = (now - pa.last_update_ts).max(0) as u128;
-        pa.total_weighted_supply = pa.total_weighted_supply
-            .checked_add((pa.last_lp_supply as u128).checked_mul(pa_elapsed).ok_or(SoladromeError::Overflow)?)
+        pa.total_weighted_supply = pa
+            .total_weighted_supply
+            .checked_add(
+                (pa.last_lp_supply as u128)
+                    .checked_mul(pa_elapsed)
+                    .ok_or(SoladromeError::Overflow)?,
+            )
             .ok_or(SoladromeError::Overflow)?;
         pa.last_update_ts = now;
         pa.last_lp_supply = lp_supply;
@@ -1393,22 +1585,27 @@ pub mod soladrome {
         // ── User checkpoint ─────────────────────────────────────────────
         let ckpt = &mut ctx.accounts.lp_user_checkpoint;
         if ckpt.pool == Pubkey::default() {
-            ckpt.user           = ctx.accounts.user.key();
-            ckpt.pool           = pool_key;
-            ckpt.last_epoch     = epoch;
+            ckpt.user = ctx.accounts.user.key();
+            ckpt.pool = pool_key;
+            ckpt.last_epoch = epoch;
             ckpt.last_update_ts = epoch_start;
-            ckpt.bump           = ctx.bumps.lp_user_checkpoint;
+            ckpt.bump = ctx.bumps.lp_user_checkpoint;
         }
         // Reset for a new epoch
         if ckpt.last_epoch < epoch {
             ckpt.weighted_balance = 0;
-            ckpt.last_update_ts   = epoch_start;
-            ckpt.last_epoch       = epoch;
+            ckpt.last_update_ts = epoch_start;
+            ckpt.last_epoch = epoch;
         }
 
         let ckpt_elapsed = (now - ckpt.last_update_ts).max(0) as u128;
-        ckpt.weighted_balance = ckpt.weighted_balance
-            .checked_add((user_lp as u128).checked_mul(ckpt_elapsed).ok_or(SoladromeError::Overflow)?)
+        ckpt.weighted_balance = ckpt
+            .weighted_balance
+            .checked_add(
+                (user_lp as u128)
+                    .checked_mul(ckpt_elapsed)
+                    .ok_or(SoladromeError::Overflow)?,
+            )
             .ok_or(SoladromeError::Overflow)?;
         ckpt.last_update_ts = now;
 
@@ -1418,10 +1615,16 @@ pub mod soladrome {
     /// Finalize the LP emission allocation for one pool after its epoch has ended.
     /// Permissionless — anyone can call. Records how much oSOLA this pool's LPs may claim.
     pub fn emit_pool_rewards(ctx: Context<EmitPoolRewards>, epoch: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
-        let clock     = Clock::get()?;
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        let clock = Clock::get()?;
         let epoch_end = ((epoch + 1) * EPOCH_DURATION) as i64;
-        require!(clock.unix_timestamp >= epoch_end, SoladromeError::EpochNotEnded);
+        require!(
+            clock.unix_timestamp >= epoch_end,
+            SoladromeError::EpochNotEnded
+        );
 
         let pool_accum = &mut ctx.accounts.pool_epoch_accum;
         require!(!pool_accum.finalized, SoladromeError::AlreadyAllocated);
@@ -1430,29 +1633,36 @@ pub mod soladrome {
 
         // Initialise if nobody checkpointed this epoch
         if pool_accum.epoch == 0 {
-            pool_accum.epoch          = epoch;
-            pool_accum.pool           = ctx.accounts.pool.key();
+            pool_accum.epoch = epoch;
+            pool_accum.pool = ctx.accounts.pool.key();
             pool_accum.last_update_ts = (epoch * EPOCH_DURATION) as i64;
             pool_accum.last_lp_supply = lp_supply;
-            pool_accum.bump           = ctx.bumps.pool_epoch_accum;
+            pool_accum.bump = ctx.bumps.pool_epoch_accum;
         }
 
         // Add remaining time from last checkpoint to epoch end
         let remaining = (epoch_end - pool_accum.last_update_ts).max(0) as u128;
-        pool_accum.total_weighted_supply = pool_accum.total_weighted_supply
-            .checked_add((pool_accum.last_lp_supply as u128).checked_mul(remaining).ok_or(SoladromeError::Overflow)?)
+        pool_accum.total_weighted_supply = pool_accum
+            .total_weighted_supply
+            .checked_add(
+                (pool_accum.last_lp_supply as u128)
+                    .checked_mul(remaining)
+                    .ok_or(SoladromeError::Overflow)?,
+            )
             .ok_or(SoladromeError::Overflow)?;
         pool_accum.last_update_ts = epoch_end;
         pool_accum.last_lp_supply = lp_supply;
 
         let total_votes = ctx.accounts.global_epoch_votes.total_votes as u128;
-        let pool_votes  = ctx.accounts.gauge_state.total_votes as u128;
+        let pool_votes = ctx.accounts.gauge_state.total_votes as u128;
         require!(total_votes > 0, SoladromeError::NoVotes);
-        require!(pool_votes  > 0, SoladromeError::NoVotes);
+        require!(pool_votes > 0, SoladromeError::NoVotes);
 
         pool_accum.osola_allocated = (LP_EMISSION_PER_EPOCH as u128)
-            .checked_mul(pool_votes).ok_or(SoladromeError::Overflow)?
-            .checked_div(total_votes).ok_or(SoladromeError::Overflow)? as u64;
+            .checked_mul(pool_votes)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(total_votes)
+            .ok_or(SoladromeError::Overflow)? as u64;
         pool_accum.finalized = true;
 
         Ok(())
@@ -1461,26 +1671,31 @@ pub mod soladrome {
     /// Mint a user's pro-rata oSOLA share from LP emissions for a given pool+epoch.
     /// Requires: epoch finalized, user checkpointed during epoch, not yet claimed.
     pub fn claim_lp_emissions(ctx: Context<ClaimLpEmissions>, _epoch: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
-        let pa   = &ctx.accounts.pool_epoch_accum;
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        let pa = &ctx.accounts.pool_epoch_accum;
         let ckpt = &ctx.accounts.lp_user_checkpoint;
 
         require!(pa.total_weighted_supply > 0, SoladromeError::NothingToClaim);
-        require!(ckpt.weighted_balance    > 0, SoladromeError::NothingToClaim);
+        require!(ckpt.weighted_balance > 0, SoladromeError::NothingToClaim);
 
         let user_osola = (pa.osola_allocated as u128)
-            .checked_mul(ckpt.weighted_balance).ok_or(SoladromeError::Overflow)?
-            .checked_div(pa.total_weighted_supply).ok_or(SoladromeError::Overflow)? as u64;
+            .checked_mul(ckpt.weighted_balance)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(pa.total_weighted_supply)
+            .ok_or(SoladromeError::Overflow)? as u64;
         require!(user_osola > 0, SoladromeError::NothingToClaim);
 
-        let bump  = ctx.accounts.protocol_state.bump;
+        let bump = ctx.accounts.protocol_state.bump;
         let seeds = &[STATE_SEED, &[bump][..]];
         token::mint_to(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
-                    to:        ctx.accounts.user_o_sola.to_account_info(),
+                    mint: ctx.accounts.o_sola_mint.to_account_info(),
+                    to: ctx.accounts.user_o_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -1502,10 +1717,13 @@ pub mod soladrome {
     /// Creating UserBribeClaim PDA is the idempotency guard (init = fails if exists).
     pub fn claim_bribe(ctx: Context<ClaimBribe>, epoch: u64) -> Result<()> {
         let clock = Clock::get()?;
-        require!(epoch < current_epoch(clock.unix_timestamp), SoladromeError::EpochNotEnded);
+        require!(
+            epoch < current_epoch(clock.unix_timestamp),
+            SoladromeError::EpochNotEnded
+        );
 
-        let total_votes  = ctx.accounts.gauge_state.total_votes;
-        let user_votes   = ctx.accounts.user_vote_receipt.votes;
+        let total_votes = ctx.accounts.gauge_state.total_votes;
+        let user_votes = ctx.accounts.user_vote_receipt.votes;
         let total_bribed = ctx.accounts.bribe_vault.total_bribed;
         require!(
             total_votes > 0 && user_votes > 0 && total_bribed > 0,
@@ -1521,9 +1739,9 @@ pub mod soladrome {
         require!(claimable > 0, SoladromeError::NothingToClaim);
 
         // Sign with bribe_vault PDA
-        let pool_key   = ctx.accounts.pool_id.key();
-        let mint_key   = ctx.accounts.reward_mint.key();
-        let epoch_le   = epoch.to_le_bytes();
+        let pool_key = ctx.accounts.pool_id.key();
+        let mint_key = ctx.accounts.reward_mint.key();
+        let epoch_le = epoch.to_le_bytes();
         let vault_bump = [ctx.accounts.bribe_vault.bump];
         let seeds: &[&[u8]] = &[
             b"bribe_vault",
@@ -1537,8 +1755,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from:      ctx.accounts.bribe_token_vault.to_account_info(),
-                    to:        ctx.accounts.user_reward_ata.to_account_info(),
+                    from: ctx.accounts.bribe_token_vault.to_account_info(),
+                    to: ctx.accounts.user_reward_ata.to_account_info(),
                     authority: ctx.accounts.bribe_vault.to_account_info(),
                 },
                 &[seeds],
@@ -1553,15 +1771,29 @@ pub mod soladrome {
 
     // ── AMM multi-pool instructions ───────────────────────────────────────────
 
-    pub fn create_pool(ctx: Context<CreatePool>, fee_rate: u16, protocol_fee_bps: u16) -> Result<()> {
+    pub fn create_pool(
+        ctx: Context<CreatePool>,
+        fee_rate: u16,
+        protocol_fee_bps: u16,
+    ) -> Result<()> {
         amm::create_pool(ctx, fee_rate, protocol_fee_bps)
     }
 
-    pub fn add_liquidity(ctx: Context<AddLiquidity>, amount_a_desired: u64, amount_b_desired: u64, min_lp: u64) -> Result<()> {
+    pub fn add_liquidity(
+        ctx: Context<AddLiquidity>,
+        amount_a_desired: u64,
+        amount_b_desired: u64,
+        min_lp: u64,
+    ) -> Result<()> {
         amm::add_liquidity(ctx, amount_a_desired, amount_b_desired, min_lp)
     }
 
-    pub fn remove_liquidity(ctx: Context<RemoveLiquidity>, lp_amount: u64, min_a: u64, min_b: u64) -> Result<()> {
+    pub fn remove_liquidity(
+        ctx: Context<RemoveLiquidity>,
+        lp_amount: u64,
+        min_a: u64,
+        min_b: u64,
+    ) -> Result<()> {
         amm::remove_liquidity(ctx, lp_amount, min_a, min_b)
     }
 
@@ -1576,7 +1808,10 @@ pub mod soladrome {
 
     // Mint oSOLA to a recipient as LP reward. Authority-only.
     pub fn distribute_o_sola(ctx: Context<DistributeOSola>, amount: u64) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         require!(amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
 
@@ -1616,12 +1851,19 @@ pub mod soladrome {
     pub fn deploy_pol(
         ctx: Context<DeployPol>,
         usdc_for_sola: u64,
-        min_sola_out:  u64,
-        sola_for_lp:   u64,
-        usdc_for_lp:   u64,
-        min_lp:        u64,
+        min_sola_out: u64,
+        sola_for_lp: u64,
+        usdc_for_lp: u64,
+        min_lp: u64,
     ) -> Result<()> {
-        pol::deploy_pol(ctx, usdc_for_sola, min_sola_out, sola_for_lp, usdc_for_lp, min_lp)
+        pol::deploy_pol(
+            ctx,
+            usdc_for_sola,
+            min_sola_out,
+            sola_for_lp,
+            usdc_for_lp,
+            min_lp,
+        )
     }
 
     // ── Ve-layer ──────────────────────────────────────────────────────────────
@@ -1650,7 +1892,10 @@ pub mod soladrome {
         amount_osola: u64,
         min_profit_usdc: u64,
     ) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
         require!(amount_osola > 0, SoladromeError::InvalidAmount);
 
         let state_bump = ctx.accounts.protocol_state.bump;
@@ -1661,8 +1906,8 @@ pub mod soladrome {
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 Burn {
-                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
-                    from:      ctx.accounts.caller_o_sola.to_account_info(),
+                    mint: ctx.accounts.o_sola_mint.to_account_info(),
+                    from: ctx.accounts.caller_o_sola.to_account_info(),
                     authority: ctx.accounts.caller.to_account_info(),
                 },
             ),
@@ -1674,29 +1919,37 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.sola_mint.to_account_info(),
-                    to:        ctx.accounts.caller_sola.to_account_info(),
+                    mint: ctx.accounts.sola_mint.to_account_info(),
+                    to: ctx.accounts.caller_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[state_seeds],
             ),
             amount_osola,
         )?;
-        ctx.accounts.protocol_state.total_sola = ctx.accounts.protocol_state.total_sola
-            .checked_add(amount_osola).ok_or(SoladromeError::Overflow)?;
+        ctx.accounts.protocol_state.total_sola = ctx
+            .accounts
+            .protocol_state
+            .total_sola
+            .checked_add(amount_osola)
+            .ok_or(SoladromeError::Overflow)?;
         // Floor receives amount_osola USDC (step 5), so this SOLA is fully floor-backed.
-        ctx.accounts.protocol_state.total_purchased_sola = ctx.accounts.protocol_state.total_purchased_sola
-            .checked_add(amount_osola).ok_or(SoladromeError::Overflow)?;
+        ctx.accounts.protocol_state.total_purchased_sola = ctx
+            .accounts
+            .protocol_state
+            .total_purchased_sola
+            .checked_add(amount_osola)
+            .ok_or(SoladromeError::Overflow)?;
 
         // ── 3. AMM swap: sell SOLA → USDC ────────────────────────────────────
-        let pool      = &ctx.accounts.pool;
+        let pool = &ctx.accounts.pool;
         let pool_bump = pool.bump;
-        let mint_a    = pool.token_a_mint;
-        let mint_b    = pool.token_b_mint;
+        let mint_a = pool.token_a_mint;
+        let mint_b = pool.token_b_mint;
         let sola_is_a = mint_a == ctx.accounts.protocol_state.sola_mint;
 
-        let fee_rate   = pool.fee_rate as u128;
-        let fee_total  = amount_osola as u128 * fee_rate / 10_000;
+        let fee_rate = pool.fee_rate as u128;
+        let fee_total = amount_osola as u128 * fee_rate / 10_000;
         let amount_net = (amount_osola as u128 - fee_total) as u64;
 
         let (reserve_in, reserve_out) = if sola_is_a {
@@ -1707,12 +1960,23 @@ pub mod soladrome {
 
         let usdc_out = amm_math::swap_out(reserve_in, reserve_out, amount_net)?;
 
-        let pool_seeds: &[&[u8]] = &[AMM_POOL_SEED, mint_a.as_ref(), mint_b.as_ref(), &[pool_bump]];
+        let pool_seeds: &[&[u8]] = &[
+            AMM_POOL_SEED,
+            mint_a.as_ref(),
+            mint_b.as_ref(),
+            &[pool_bump],
+        ];
 
         let (vault_sola, vault_usdc) = if sola_is_a {
-            (ctx.accounts.token_a_vault.to_account_info(), ctx.accounts.token_b_vault.to_account_info())
+            (
+                ctx.accounts.token_a_vault.to_account_info(),
+                ctx.accounts.token_b_vault.to_account_info(),
+            )
         } else {
-            (ctx.accounts.token_b_vault.to_account_info(), ctx.accounts.token_a_vault.to_account_info())
+            (
+                ctx.accounts.token_b_vault.to_account_info(),
+                ctx.accounts.token_a_vault.to_account_info(),
+            )
         };
 
         // SOLA: caller → pool vault (only amount_net — the portion after AMM fee deduction).
@@ -1723,8 +1987,8 @@ pub mod soladrome {
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from:      ctx.accounts.caller_sola.to_account_info(),
-                    to:        vault_sola,
+                    from: ctx.accounts.caller_sola.to_account_info(),
+                    to: vault_sola,
                     authority: ctx.accounts.caller.to_account_info(),
                 },
             ),
@@ -1736,8 +2000,8 @@ pub mod soladrome {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from:      vault_usdc,
-                    to:        ctx.accounts.caller_usdc.to_account_info(),
+                    from: vault_usdc,
+                    to: ctx.accounts.caller_usdc.to_account_info(),
                     authority: ctx.accounts.pool.to_account_info(),
                 },
                 &[pool_seeds],
@@ -1756,17 +2020,25 @@ pub mod soladrome {
                 CpiContext::new(
                     ctx.accounts.token_program.to_account_info(),
                     Burn {
-                        mint:      ctx.accounts.sola_mint.to_account_info(),
-                        from:      ctx.accounts.caller_sola.to_account_info(),
+                        mint: ctx.accounts.sola_mint.to_account_info(),
+                        from: ctx.accounts.caller_sola.to_account_info(),
                         authority: ctx.accounts.caller.to_account_info(),
                     },
                 ),
                 fee_total_u64,
             )?;
-            ctx.accounts.protocol_state.total_sola = ctx.accounts.protocol_state.total_sola
-                .checked_sub(fee_total_u64).ok_or(SoladromeError::Overflow)?;
-            ctx.accounts.protocol_state.total_purchased_sola = ctx.accounts.protocol_state.total_purchased_sola
-                .checked_sub(fee_total_u64).ok_or(SoladromeError::Overflow)?;
+            ctx.accounts.protocol_state.total_sola = ctx
+                .accounts
+                .protocol_state
+                .total_sola
+                .checked_sub(fee_total_u64)
+                .ok_or(SoladromeError::Overflow)?;
+            ctx.accounts.protocol_state.total_purchased_sola = ctx
+                .accounts
+                .protocol_state
+                .total_purchased_sola
+                .checked_sub(fee_total_u64)
+                .ok_or(SoladromeError::Overflow)?;
         }
 
         // Update pool reserves + advance reward accumulator.
@@ -1776,32 +2048,53 @@ pub mod soladrome {
         let pool = &mut ctx.accounts.pool;
         amm::advance_pool_rewards(pool, clock_now);
         if sola_is_a {
-            pool.reserve_a = pool.reserve_a.checked_add(amount_net).ok_or(SoladromeError::Overflow)?;
-            pool.reserve_b = pool.reserve_b.checked_sub(usdc_out).ok_or(SoladromeError::Overflow)?;
+            pool.reserve_a = pool
+                .reserve_a
+                .checked_add(amount_net)
+                .ok_or(SoladromeError::Overflow)?;
+            pool.reserve_b = pool
+                .reserve_b
+                .checked_sub(usdc_out)
+                .ok_or(SoladromeError::Overflow)?;
         } else {
-            pool.reserve_b = pool.reserve_b.checked_add(amount_net).ok_or(SoladromeError::Overflow)?;
-            pool.reserve_a = pool.reserve_a.checked_sub(usdc_out).ok_or(SoladromeError::Overflow)?;
+            pool.reserve_b = pool
+                .reserve_b
+                .checked_add(amount_net)
+                .ok_or(SoladromeError::Overflow)?;
+            pool.reserve_a = pool
+                .reserve_a
+                .checked_sub(usdc_out)
+                .ok_or(SoladromeError::Overflow)?;
         }
 
         // ── 4. Profitability check ────────────────────────────────────────────
         // Floor needs `amount_osola` USDC to back the freshly minted SOLA.
         require!(usdc_out > amount_osola, SoladromeError::NotProfitable);
-        let gross_profit = usdc_out.checked_sub(amount_osola).ok_or(SoladromeError::Overflow)?;
-        require!(gross_profit >= min_profit_usdc, SoladromeError::SlippageExceeded);
+        let gross_profit = usdc_out
+            .checked_sub(amount_osola)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(
+            gross_profit >= min_profit_usdc,
+            SoladromeError::SlippageExceeded
+        );
 
         // ── 5. Split proceeds ─────────────────────────────────────────────────
         let caller_reward = (gross_profit as u128)
-            .checked_mul(state::CALLER_ARB_SHARE_BPS as u128).ok_or(SoladromeError::Overflow)?
-            .checked_div(10_000).ok_or(SoladromeError::Overflow)? as u64;
-        let protocol_profit = gross_profit.checked_sub(caller_reward).ok_or(SoladromeError::Overflow)?;
+            .checked_mul(state::CALLER_ARB_SHARE_BPS as u128)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)? as u64;
+        let protocol_profit = gross_profit
+            .checked_sub(caller_reward)
+            .ok_or(SoladromeError::Overflow)?;
 
         // Floor replenishment: amount_osola USDC from caller_usdc → floor_vault
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from:      ctx.accounts.caller_usdc.to_account_info(),
-                    to:        ctx.accounts.floor_vault.to_account_info(),
+                    from: ctx.accounts.caller_usdc.to_account_info(),
+                    to: ctx.accounts.floor_vault.to_account_info(),
                     authority: ctx.accounts.caller.to_account_info(),
                 },
             ),
@@ -1813,14 +2106,17 @@ pub mod soladrome {
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from:      ctx.accounts.caller_usdc.to_account_info(),
-                    to:        ctx.accounts.market_vault.to_account_info(),
+                    from: ctx.accounts.caller_usdc.to_account_info(),
+                    to: ctx.accounts.market_vault.to_account_info(),
                     authority: ctx.accounts.caller.to_account_info(),
                 },
             ),
             protocol_profit,
         )?;
-        ctx.accounts.protocol_state.accumulated_fees = ctx.accounts.protocol_state.accumulated_fees
+        ctx.accounts.protocol_state.accumulated_fees = ctx
+            .accounts
+            .protocol_state
+            .accumulated_fees
             .saturating_add(protocol_profit);
 
         // caller_reward stays in caller_usdc — no extra transfer needed
@@ -2919,10 +3215,10 @@ pub struct FlashArbitrage<'info> {
     #[account(mut, address = protocol_state.market_vault)]
     pub market_vault: Box<Account<'info, TokenAccount>>,
 
-    pub token_program:            Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program:           Program<'info, System>,
-    pub rent:                     Sysvar<'info, Rent>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 // ── Contributor / marketing vesting contexts ──────────────────────────────────
@@ -2953,7 +3249,7 @@ pub struct RegisterContributor<'info> {
     pub contributor_vesting: Account<'info, ContributorVesting>,
 
     pub system_program: Program<'info, System>,
-    pub rent:           Sysvar<'info, Rent>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 /// Contributor claims vested hiSOLA (governance + borrow collateral tranche).
@@ -3006,9 +3302,9 @@ pub struct ClaimContributorHiSola<'info> {
     )]
     pub contributor_vesting: Account<'info, ContributorVesting>,
 
-    pub token_program:            Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program:           Program<'info, System>,
+    pub system_program: Program<'info, System>,
 }
 
 /// Contributor claims vested oSOLA (liquid options tranche).
@@ -3041,9 +3337,9 @@ pub struct ClaimContributorVesting<'info> {
     )]
     pub contributor_o_sola: Account<'info, TokenAccount>,
 
-    pub token_program:            Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program:           Program<'info, System>,
+    pub system_program: Program<'info, System>,
 }
 
 /// Contributor borrows USDC against hiSOLA collateral.
