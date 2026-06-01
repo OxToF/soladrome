@@ -63,3 +63,45 @@ export function symbolByMint(mint: string, usdcMint: PublicKey | null): string {
 export function decimalsForMint(mint: string, usdcMint: PublicKey | null): number {
   return getTokenList(usdcMint).find((t) => t.mint === mint)?.decimals ?? 6;
 }
+
+// ── Pool whitelist filter ─────────────────────────────────────────────────────
+//
+// Soladrome's AMM is permissionless — anyone can create a pool with any mint.
+// To protect users from spam / unknown tokens, we only display pools where
+// AT LEAST ONE token is in the trusted registry below.
+//
+// Add new protocol tokens here as partnerships are established (JitoSOL, JTO…).
+// The list is checked at display time only — it does NOT affect on-chain state.
+
+const TRUSTED_MINTS = new Set([
+  // ── Soladrome protocol tokens ──
+  solaM.toString(),
+  oSolaM.toString(),
+  // hiSOLA mint (PDA-derived, kept as constant address)
+  "nc1errcnXjKN4aZYL7AP89op26EMn5a2VcDT82wrTwW",
+  // ── Infrastructure ──
+  WSOL_MINT,                                              // wSOL
+  // ── Partners / blue-chip ──
+  "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",       // JitoSOL
+  "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",        // JTO
+  "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",        // JUP
+  "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",        // ORCA
+  "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTa3CbChoKBRP",        // MNDE (Marinade)
+  "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",        // mSOL
+  "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",        // bSOL (Blaze)
+]);
+
+/**
+ * Returns true if the pool should be shown in the UI.
+ * A pool passes if at least one of its token mints is trusted.
+ * USDC is added dynamically from on-chain state.
+ */
+export function isPoolTrusted(
+  mintA: string,
+  mintB: string,
+  usdcMint: PublicKey | null,
+): boolean {
+  const mints = new Set(TRUSTED_MINTS);
+  if (usdcMint) mints.add(usdcMint.toString());
+  return mints.has(mintA) || mints.has(mintB);
+}

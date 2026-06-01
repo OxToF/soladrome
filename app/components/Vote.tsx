@@ -6,7 +6,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { getProgram, statePda, hiSolaM, userAta, PROGRAM_ID as PROG_ID } from "@/lib/program";
-import { symbolByMint } from "@/lib/tokens";
+import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
 
@@ -98,11 +98,17 @@ export function Vote() {
     const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
     const program  = getProgram(provider);
     (program.account as any).ammPool.all().then((all: any[]) => {
-      setAmmPools(all.map((p: any) => {
-        const sA = symbolByMint(p.account.tokenAMint.toString(), usdcMint);
-        const sB = symbolByMint(p.account.tokenBMint.toString(), usdcMint);
-        return { label: `${sA}/${sB}`, addr: p.publicKey.toString() };
-      }));
+      setAmmPools(
+        all
+          .filter((p: any) =>
+            isPoolTrusted(p.account.tokenAMint.toString(), p.account.tokenBMint.toString(), usdcMint)
+          )
+          .map((p: any) => {
+            const sA = symbolByMint(p.account.tokenAMint.toString(), usdcMint);
+            const sB = symbolByMint(p.account.tokenBMint.toString(), usdcMint);
+            return { label: `${sA}/${sB}`, addr: p.publicKey.toString() };
+          })
+      );
     }).catch(() => {});
   }, [connection, wallet, usdcMint]);
 

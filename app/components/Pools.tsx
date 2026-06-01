@@ -17,7 +17,7 @@ import {
   buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
   WSOL_MINT_STR,
 } from "@/lib/program";
-import { getTokenList, symbolByMint, WSOL_MINT, decimalsForMint } from "@/lib/tokens";
+import { getTokenList, symbolByMint, WSOL_MINT, decimalsForMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
@@ -180,8 +180,11 @@ export function Pools() {
       const all      = await (program.account as any).ammPool.all();
       const usdcStr = usdcMint?.toString() ?? "";
 
-      // First pass: build pool infos
-      const infos: PoolInfo[] = all.map((p: any) => {
+      // First pass: build pool infos — filter out spam/unknown-token pools
+      const trusted = all.filter((p: any) =>
+        isPoolTrusted(p.account.tokenAMint.toString(), p.account.tokenBMint.toString(), usdcMint)
+      );
+      const infos: PoolInfo[] = trusted.map((p: any) => {
         const mA   = p.account.tokenAMint.toString();
         const mB   = p.account.tokenBMint.toString();
         const decA = decimalsForMint(mA, usdcMint);
