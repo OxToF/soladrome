@@ -10,7 +10,7 @@ import {
   userAta, commonAccounts, PROGRAM_ID,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
-import { symbolByMint } from "@/lib/tokens";
+import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
 function epochBuf(e: number) {
   const b = Buffer.alloc(8);
@@ -48,8 +48,11 @@ export function LpEmissions() {
     const provider = new AnchorProvider(connection, wallet, {});
     const program  = getProgram(provider);
 
-    // Fetch all AMM pools
-    const allPools = await (program.account as any).ammPool.all().catch(() => []);
+    // Fetch all AMM pools — filter out spam/unknown-token pools
+    const rawPools = await (program.account as any).ammPool.all().catch(() => []);
+    const allPools = rawPools.filter((p: any) =>
+      isPoolTrusted(p.account.tokenAMint.toString(), p.account.tokenBMint.toString(), usdcMint)
+    );
     const prevEpoch = epoch - 1;
     const prevEb    = epochBuf(prevEpoch); // epoch whose rewards can be claimed now
 
