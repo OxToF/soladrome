@@ -99,10 +99,12 @@ export function Vote() {
         [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROG_ID
       );
       const uevInfo = await connection.getAccountInfo(uevPda);
+      console.log("[UEV] pda:", uevPda.toBase58(), "exists:", !!uevInfo, "len:", uevInfo?.data.length);
       if (uevInfo && uevInfo.data.length >= 40) {
-        const alloc  = Number(uevInfo.data.readBigUInt64LE(16)) / 1e6; // allocated
-        const cap    = Number(uevInfo.data.readBigUInt64LE(24)) / 1e6; // total_power_snapshot
-        const bonus  = Number(uevInfo.data.readBigUInt64LE(32)) / 1e6; // o_sola_bonus
+        const alloc  = Number(uevInfo.data.readBigUInt64LE(16)) / 1e6;
+        const cap    = Number(uevInfo.data.readBigUInt64LE(24)) / 1e6;
+        const bonus  = Number(uevInfo.data.readBigUInt64LE(32)) / 1e6;
+        console.log("[UEV] alloc:", alloc, "cap:", cap, "bonus:", bonus, "raw@32:", uevInfo.data.readBigUInt64LE(32).toString());
         setAllocated(alloc);
         setPowerCap(cap);
         setOSolaBonus(bonus);
