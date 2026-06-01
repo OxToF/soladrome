@@ -116,8 +116,19 @@ pub struct ProtocolState {
 }
 
 impl ProtocolState {
-    pub const LEN: usize = 400; // 356 bytes used + 44 spare (paused adds 1 byte)
+    // Total account space INCLUDING the 8-byte Anchor discriminator.
+    // Fields: 8×Pubkey(256) + 6×u64(48) + 2×u128(32) + u8(1) + 3×bool(3) + u64×2(16) = 356 bytes
+    // + 8 discriminator = 364 bytes used; 36 bytes spare to 400.
+    // ⚠️ Update this value whenever a field is added or removed.
+    pub const LEN: usize = 400;
 }
+
+// Compile-time guard: if ProtocolState grows past LEN the program will fail to
+// deploy rather than silently corrupting accounts at runtime.
+const _: () = assert!(
+    ProtocolState::LEN >= 8 + std::mem::size_of::<ProtocolState>(),
+    "ProtocolState::LEN is too small — update it to fit the struct"
+);
 
 #[account]
 #[derive(Default)]

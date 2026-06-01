@@ -124,6 +124,19 @@ pub mod soladrome {
     // After this call all admin instructions (pause, unpause, initialize_pol, etc.)
     // must be executed through the new authority — typically via Squads proposal flow.
     pub fn transfer_authority(ctx: Context<TransferAuthority>) -> Result<()> {
+        // SECURITY: reject the zero/default pubkey — passing it would permanently lock all
+        // authority-gated instructions with no recovery path (has_one = authority would
+        // never be satisfiable again). A typo or social-engineering attack must not be
+        // able to brick the protocol forever.
+        require!(
+            ctx.accounts.new_authority.key() != Pubkey::default(),
+            SoladromeError::InvalidAmount
+        );
+        // Also reject transferring to the current authority (no-op that wastes a TX).
+        require!(
+            ctx.accounts.new_authority.key() != ctx.accounts.protocol_state.authority,
+            SoladromeError::InvalidAmount
+        );
         ctx.accounts.protocol_state.authority = ctx.accounts.new_authority.key();
         Ok(())
     }
@@ -725,6 +738,7 @@ pub mod soladrome {
     // total_sola grows gradually, giving floor_vault time to accumulate from user buys.
     // Founder uses borrow_usdc against hiSOLA for immediate liquidity (no token selling needed).
     pub fn claim_founder_hi_sola(ctx: Context<ClaimFounderHiSola>) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         let clock   = Clock::get()?;
         let vesting = &ctx.accounts.founder_hi_vesting;
         let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
@@ -866,6 +880,7 @@ pub mod soladrome {
     /// can borrow at most ~29 k USDC per month — enough for running costs while
     /// the floor vault grows from organic user activity.
     pub fn founder_borrow_usdc(ctx: Context<FounderBorrowUsdc>, usdc_amount: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         require!(usdc_amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
 
@@ -1129,6 +1144,7 @@ pub mod soladrome {
         ctx: Context<ContributorBorrowUsdc>,
         usdc_amount: u64,
     ) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         require!(usdc_amount > 0, SoladromeError::InvalidAmount);
 
         let bump = ctx.accounts.protocol_state.bump;
@@ -1383,6 +1399,7 @@ pub mod soladrome {
     /// Finalize the LP emission allocation for one pool after its epoch has ended.
     /// Permissionless — anyone can call. Records how much oSOLA this pool's LPs may claim.
     pub fn emit_pool_rewards(ctx: Context<EmitPoolRewards>, epoch: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         let clock     = Clock::get()?;
         let epoch_end = ((epoch + 1) * EPOCH_DURATION) as i64;
         require!(clock.unix_timestamp >= epoch_end, SoladromeError::EpochNotEnded);
@@ -1425,6 +1442,7 @@ pub mod soladrome {
     /// Mint a user's pro-rata oSOLA share from LP emissions for a given pool+epoch.
     /// Requires: epoch finalized, user checkpointed during epoch, not yet claimed.
     pub fn claim_lp_emissions(ctx: Context<ClaimLpEmissions>, _epoch: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         let pa   = &ctx.accounts.pool_epoch_accum;
         let ckpt = &ctx.accounts.lp_user_checkpoint;
 
@@ -1539,6 +1557,7 @@ pub mod soladrome {
 
     // Mint oSOLA to a recipient as LP reward. Authority-only.
     pub fn distribute_o_sola(ctx: Context<DistributeOSola>, amount: u64) -> Result<()> {
+        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
         require!(amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
 
@@ -1595,7 +1614,7 @@ pub mod soladrome {
         amount: u64,
         lock_duration_secs: u64,
     ) -> Result<()> {
-        require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+        // Pause check is enforced inside ve::lock_hi_sola so all call-sites are covered.
         ve::lock_hi_sola(ctx, amount, lock_duration_secs)
     }
 
@@ -2718,6 +2737,10 @@ pub struct CheckpointLp<'info> {
 pub struct EmitPoolRewards<'info> {
     #[account(mut)]
     pub caller: Signer<'info>,
+
+    /// Read-only — used only for the pause check.
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
 
     #[account(
         seeds = [b"amm_pool", pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
