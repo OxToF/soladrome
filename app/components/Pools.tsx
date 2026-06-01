@@ -373,6 +373,7 @@ export function Pools() {
         .createPool(+newFee, +newProto)
         .accounts({
           creator:       wallet.publicKey,
+          protocolState: statePda,
           tokenAMint:    mintAPk,
           tokenBMint:    mintBPk,
           pool:          poolAddr,
