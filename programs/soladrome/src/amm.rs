@@ -413,7 +413,6 @@ pub fn swap(
     require!(amount_out >= min_out, SoladromeError::SlippageExceeded);
 
     let pool_bump = pool.bump;
-    let state_bump = ctx.accounts.protocol_state.bump;
     let pool_seeds: &[&[u8]] = &[AMM_POOL_SEED,
         ctx.accounts.pool.token_a_mint.as_ref(),
         ctx.accounts.pool.token_b_mint.as_ref(),

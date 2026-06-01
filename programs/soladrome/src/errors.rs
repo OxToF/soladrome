@@ -70,4 +70,7 @@ pub enum SoladromeError {
     // ── Emergency pause ───────────────────────────────────────────────────────
     #[msg("Protocol is paused — only exit instructions (sell, unstake, repay, remove_liquidity, claim, unlock) are available")]
     ProtocolPaused,
+    // ── Governance cap ────────────────────────────────────────────────────────
+    #[msg("Vote would exceed the 30% per-address voting cap — no single address may control more than 30% of total hiSOLA voting power")]
+    VoteWeightCapExceeded,
 }

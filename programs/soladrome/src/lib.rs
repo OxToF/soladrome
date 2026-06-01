@@ -48,6 +48,12 @@ pub const INIT_VIRTUAL_SOLA: u64 = 100_000_000; // 100 SOLA (6 dec)  – floor =
 /// Total oSOLA minted per epoch, split proportionally across voted pools (legacy gauge system).
 pub const LP_EMISSION_PER_EPOCH: u64 = 10_000 * 1_000_000; // 10 000 oSOLA (6 dec)
 
+/// Maximum voting power any single address may allocate in one epoch,
+/// expressed as a fraction of total_hi_sola (basis points, 10 000 = 100%).
+/// 3 000 bps = 30% — prevents governance capture by a single actor while
+/// remaining more restrictive than Aerodrome/Velodrome (which have no cap).
+pub const VOTE_WEIGHT_CAP_BPS: u64 = 3_000;
+
 /// Continuous Masterchef-style oSOLA emission per pool per second (6 decimals).
 /// devnet : 0.1 oSOLA/s  — high rate for fast visibility during testing.
 /// mainnet: 0.001 oSOLA/s ≈ 86 oSOLA/pool/day — conservative, adjust before launch.
@@ -1298,11 +1304,24 @@ pub mod soladrome {
         }
 
         let power_cap = ctx.accounts.user_epoch_votes.total_power_snapshot;
+
+        // ── 30% per-address governance cap ───────────────────────────────────
+        // A single address may not allocate more than VOTE_WEIGHT_CAP_BPS of
+        // total_hi_sola as voting power, regardless of ve-multiplier or balance.
+        // This prevents governance capture by a well-funded single actor.
+        // The cap is computed from the live total_hi_sola so it tightens/relaxes
+        // proportionally as the staking supply changes — fair to all participants.
+        let global_cap = ctx.accounts.protocol_state.total_hi_sola
+            .saturating_mul(VOTE_WEIGHT_CAP_BPS)
+            / 10_000;
+        let effective_cap = power_cap.min(global_cap);
+
         let already_allocated = ctx.accounts.user_epoch_votes.allocated;
         let new_total = already_allocated
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
         require!(new_total <= power_cap, SoladromeError::VoteOverflow);
+        require!(new_total <= effective_cap, SoladromeError::VoteWeightCapExceeded);
 
         // Init GaugeState if first vote for this pool this epoch
         if ctx.accounts.gauge_state.pool_id == Pubkey::default() {
