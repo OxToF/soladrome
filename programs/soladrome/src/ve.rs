@@ -30,6 +30,9 @@ pub fn lock_hi_sola(
     amount:             u64,
     lock_duration_secs: u64,
 ) -> Result<()> {
+    // Pause check lives here (not only in the lib.rs wrapper) so any future
+    // internal call-site cannot accidentally bypass the emergency freeze.
+    require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
     require!(amount > 0, SoladromeError::InvalidAmount);
     require!(lock_duration_secs >= MIN_LOCK_DURATION, SoladromeError::InvalidAmount);
     require!(lock_duration_secs <= MAX_LOCK_DURATION, SoladromeError::InvalidAmount);

@@ -343,6 +343,7 @@ pub fn remove_liquidity(
 
 /// Claim accumulated oSOLA rewards for the caller's LP position without changing liquidity.
 pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
+    require!(!ctx.accounts.protocol_state.paused, crate::errors::SoladromeError::ProtocolPaused);
     let user_lp = ctx.accounts.user_lp.amount;
 
     // Update pool accumulator
@@ -418,8 +419,6 @@ pub fn swap(
         ctx.accounts.pool.token_b_mint.as_ref(),
         &[pool_bump],
     ];
-    let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
-
     let (vault_in, vault_out, user_in, user_out) = if a_to_b {
         (
             ctx.accounts.token_a_vault.to_account_info(),
@@ -484,7 +483,6 @@ pub fn swap(
         }
         // else: fee stays in vault — LP earns 100% of the swap fee for non-USDC pools
     }
-    let _ = state_seeds;
 
     let pool = &mut ctx.accounts.pool;
     if a_to_b {
@@ -720,13 +718,22 @@ pub struct RemoveLiquidity<'info> {
     pub user_lp: Box<Account<'info, TokenAccount>>,
 
     /// User's token-A ATA (must already exist).
-    // M-10 FIX: enforce mint to prevent accidental routing of withdrawals to a
-    // wrong-mint account; SPL would reject it anyway but explicit is safer.
-    #[account(mut, constraint = user_token_a.mint == token_a_vault.mint @ SoladromeError::InvalidPoolTokens)]
+    // M-10 FIX: enforce mint to prevent wrong-mint routing.
+    // Review fix: also enforce owner so a front-runner cannot substitute an arbitrary
+    // same-mint account and redirect LP withdrawal proceeds to a wallet they control.
+    #[account(
+        mut,
+        constraint = user_token_a.mint  == token_a_vault.mint @ SoladromeError::InvalidPoolTokens,
+        constraint = user_token_a.owner == user.key()         @ SoladromeError::Unauthorized,
+    )]
     pub user_token_a: Box<Account<'info, TokenAccount>>,
 
     /// User's token-B ATA (must already exist).
-    #[account(mut, constraint = user_token_b.mint == token_b_vault.mint @ SoladromeError::InvalidPoolTokens)]
+    #[account(
+        mut,
+        constraint = user_token_b.mint  == token_b_vault.mint @ SoladromeError::InvalidPoolTokens,
+        constraint = user_token_b.owner == user.key()         @ SoladromeError::Unauthorized,
+    )]
     pub user_token_b: Box<Account<'info, TokenAccount>>,
 
     /// Per-user continuous oSOLA reward state for this pool.
