@@ -7434,6 +7434,11 @@
       "code": 6026,
       "name": "ProtocolPaused",
       "msg": "Protocol is paused — only exit instructions (sell, unstake, repay, remove_liquidity, claim, unlock) are available"
+    },
+    {
+      "code": 6027,
+      "name": "VoteWeightCapExceeded",
+      "msg": "Vote would exceed the 30% per-address voting cap — no single address may control more than 30% of total hiSOLA voting power"
     }
   ],
   "types": [
