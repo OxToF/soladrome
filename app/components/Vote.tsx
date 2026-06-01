@@ -244,7 +244,11 @@ export function Vote() {
         .rpc();
       setStatus(`✅ ${amt.toFixed(4)} oSOLA brûlés → voting power boosté — tx: ${tx.slice(0, 16)}…`);
       setBurnAmount("");
-      fetchBalance();
+      // Optimistic update — reflect immediately without waiting for RPC propagation
+      setOSolaBonus(prev => prev + amt);
+      setOSolaBalance(prev => prev !== null ? Math.max(0, prev - amt) : null);
+      // Authoritative refresh after RPC propagates (~2s on devnet)
+      setTimeout(() => fetchBalance(), 2000);
     } catch (e: any) {
       setStatus(`❌ ${e?.message ?? e}`);
     } finally { setLoading(false); }
@@ -309,7 +313,10 @@ export function Vote() {
       setStatus(`✅ Vote recorded — tx: ${tx.slice(0, 16)}…`);
       setVotes("");
       setVotedPools(prev => new Set([...prev, poolId]));
-      fetchBalance(); // also refreshes allocated / remaining
+      // Optimistic update for allocated counter
+      setAllocated(prev => prev + parseFloat(votes));
+      // Authoritative refresh after RPC propagates
+      setTimeout(() => fetchBalance(), 2000);
     } catch (e: any) {
       const msg = e?.message ?? String(e);
       if (msg.includes("already in use") || msg.includes("0x0")) {
