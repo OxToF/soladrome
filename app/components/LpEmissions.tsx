@@ -156,6 +156,7 @@ export function LpEmissions() {
         .checkpointLp(new BN(epoch))
         .accounts({
           user:              wallet.publicKey,
+          protocolState:     statePda,
           pool:              poolPk,
           lpMint,
           userLp:            userLpAta,
@@ -195,6 +196,7 @@ export function LpEmissions() {
         .emitPoolRewards(new BN(prevEpoch))
         .accounts({
           caller:           wallet.publicKey,
+          protocolState:    statePda,
           pool:             poolPk,
           lpMint,
           gaugeState,
