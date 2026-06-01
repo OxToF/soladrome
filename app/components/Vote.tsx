@@ -59,11 +59,15 @@ export function Vote() {
   // All bribe tokens for the selected pool this epoch
   const [bribes, setBribes] = useState<{ symbol: string; amount: number; color: string }[]>([]);
 
-  // Total voting power = hiSOLA cap (30%-limited) + oSOLA burn bonus (uncapped)
-  const totalPower = powerCap !== null
-    ? powerCap + oSolaBonus
-    : balance !== null ? balance + oSolaBonus : null;
-  const remaining = totalPower !== null ? Math.max(0, totalPower - allocated) : null;
+  // Total voting power = hiSOLA cap + oSOLA burn bonus (uncapped).
+  // powerCap = 0 means the user burned oSOLA before casting any vote → snapshot
+  // not set yet by vote_gauge. In that case, fall back to the live hiSOLA balance
+  // so the hiSOLA component isn't lost from the display.
+  const hiSolaCap = (powerCap !== null && powerCap > 0)
+    ? powerCap                  // snapshotted by vote_gauge on first vote
+    : (balance ?? 0);           // not voted yet → use live balance
+  const totalPower = hiSolaCap + oSolaBonus;
+  const remaining  = Math.max(0, totalPower - allocated);
 
   const fetchBalance = useCallback(async () => {
     if (!wallet) {
@@ -324,7 +328,7 @@ export function Vote() {
         setVotedPools(prev => new Set([...prev, poolId]));
       } else if (msg.includes("VoteOverflow") || msg.includes("6011") ||
                  msg.includes("VoteWeightCapExceeded") || msg.includes("6028")) {
-        const rem = remaining !== null ? remaining.toFixed(4) : "0";
+        const rem = remaining.toFixed(4);
         setStatus(`❌ Vote exceeds your remaining power (${rem} hiSOLA left this epoch). Reduce the amount.`);
         fetchBalance(); // refresh allocated count
       } else {
@@ -376,7 +380,7 @@ export function Vote() {
           <div className="ml-auto flex items-center gap-3 text-xs text-gray-500">
             {balance !== null && <span>hiSOLA: <span className="text-gray-300 font-mono">{balance.toFixed(2)}</span></span>}
             {oSolaBonus > 0 && <span>🔥 Burn bonus: <span className="text-brand-green font-mono">{oSolaBonus.toFixed(2)}</span></span>}
-            {remaining !== null && <span>Remaining: <span className={`font-mono ${remaining <= 0 ? "text-red-400" : "text-white"}`}>{remaining.toFixed(4)}</span></span>}
+            {balance !== null &&<span>Remaining: <span className={`font-mono ${remaining <= 0 ? "text-red-400" : "text-white"}`}>{remaining.toFixed(4)}</span></span>}
           </div>
         )}
       </div>
@@ -509,7 +513,7 @@ export function Vote() {
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-gray-400">hiSOLA to allocate</span>
             <div className="text-right">
-              {remaining !== null && (
+              {balance !== null &&(
                 <button
                   className="text-gray-300 hover:text-brand-green transition-colors font-mono text-xs"
                   onClick={() => applyPct(100)}
