@@ -27,6 +27,20 @@ export function Vote() {
   const epoch = currentEpoch();
   const end   = epochEnd(epoch);
 
+  // Known bribe tokens — add any protocol token here for display purposes.
+  // Any unlisted mint is shown as a truncated address.
+  const knownTokens = [
+    { symbol: "oSOLA",   mint: new PublicKey("2rAqBLBi2Fjdjqf5za7uzpbYgNiVV74XMDKQ5RdMuEJT"), color: "#bbf7d0" },
+    { symbol: "SOLA",    mint: new PublicKey("HENFwJCzmBAo2Qybrszr28tqLtEFYkXwN6h87AD5gS9p"),  color: "#4ade80" },
+    { symbol: "hiSOLA",  mint: new PublicKey("nc1errcnXjKN4aZYL7AP89op26EMn5a2VcDT82wrTwW"),   color: "#86efac" },
+    { symbol: "JitoSOL", mint: new PublicKey("J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"), color: "#e05c5c" },
+    { symbol: "JTO",     mint: new PublicKey("jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL"),  color: "#f97316" },
+    { symbol: "JUP",     mint: new PublicKey("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"),  color: "#a78bfa" },
+    { symbol: "ORCA",    mint: new PublicKey("orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE"), color: "#36d1dc" },
+    { symbol: "MNDE",    mint: new PublicKey("MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTa3CbChoKBRP"), color: "#3b82f6" },
+    ...(usdcMint ? [{ symbol: "USDC", mint: usdcMint, color: "#2775ca" }] : []),
+  ];
+
   const [poolId,       setPoolId]       = useState("");
   const [votes,        setVotes]        = useState("");
   const [balance,      setBalance]      = useState<number | null>(null);
@@ -38,7 +52,8 @@ export function Vote() {
   const [votedPools,   setVotedPools]   = useState<Set<string>>(new Set());
   // Live gauge info for selected pool
   const [gaugeVotes,   setGaugeVotes]   = useState<number | null>(null);
-  const [bribeAmount,  setBribeAmount]  = useState<number | null>(null);
+  // All bribe tokens for the selected pool this epoch
+  const [bribes, setBribes] = useState<{ symbol: string; amount: number; color: string }[]>([]);
 
   // remaining = available power not yet allocated this epoch
   const remaining = powerCap !== null
@@ -111,45 +126,59 @@ export function Vote() {
 
   useEffect(() => { checkVotedPools(); }, [checkVotedPools]);
 
-  // Live gauge state + bribe amount for the selected pool
+  // Live gauge votes + ALL bribe tokens for the selected pool this epoch
   useEffect(() => {
     setGaugeVotes(null);
-    setBribeAmount(null);
+    setBribes([]);
     if (!poolId) return;
     let cancelled = false;
     (async () => {
       try {
+        const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
+        const program  = getProgram(provider);
         const pool = new PublicKey(poolId);
         const ep   = currentEpoch();
         const eb   = Buffer.alloc(8);
         eb.writeBigUInt64LE(BigInt(ep));
 
-        // Gauge PDA
+        // Gauge total votes
         const [gaugePda] = PublicKey.findProgramAddressSync(
           [Buffer.from("gauge"), pool.toBuffer(), eb], PROGRAM_ID
         );
         const gaugeInfo = await connection.getAccountInfo(gaugePda);
         if (!cancelled && gaugeInfo) {
-          // total_votes at offset 8 (discriminator) + 32 (pool_id) + 8 (epoch) = offset 48, u64 LE
-          const totalVotesRaw = gaugeInfo.data.readBigUInt64LE(48);
-          setGaugeVotes(Number(totalVotesRaw) / 1e6);
+          // offset 8 discrim + 32 pool_id + 8 epoch = 48
+          setGaugeVotes(Number(gaugeInfo.data.readBigUInt64LE(48)) / 1e6);
         }
 
-        // oSOLA bribe vault PDA (hardcoded oSOLA mint for display)
-        const oSolaMint = new PublicKey("2rAqBLBi2Fjdjqf5za7uzpbYgNiVV74XMDKQ5RdMuEJT");
-        const [bribeVaultPda] = PublicKey.findProgramAddressSync(
-          [Buffer.from("bribe_vault"), pool.toBuffer(), oSolaMint.toBuffer(), eb], PROGRAM_ID
+        // Scan ALL BribeVault accounts for this pool (memcmp on pool_id at offset 8)
+        const vaults: any[] = await (program.account as any).bribeVault.all([
+          { memcmp: { offset: 8, bytes: pool.toBase58() } },
+        ]);
+
+        if (cancelled) return;
+
+        // Filter to current epoch with a non-zero deposit
+        const matching = vaults.filter(
+          v => Number(v.account.epoch) === ep && Number(v.account.totalBribed) > 0
         );
-        const bribeInfo = await connection.getAccountInfo(bribeVaultPda);
-        if (!cancelled && bribeInfo) {
-          // total_bribed at offset 8 + 32 (pool_id) + 32 (reward_mint) + 8 (epoch) = offset 80, u64 LE
-          const totalBribedRaw = bribeInfo.data.readBigUInt64LE(80);
-          setBribeAmount(Number(totalBribedRaw) / 1e6);
-        }
-      } catch { /* pool not found or not initialized yet */ }
+
+        // Map to display objects, resolving symbol from tokens registry
+        const result = matching.map(v => {
+          const mintStr = (v.account.rewardMint as PublicKey).toBase58();
+          const known   = knownTokens.find(t => t.mint.toBase58() === mintStr);
+          return {
+            symbol: known?.symbol ?? mintStr.slice(0, 6) + "…",
+            color:  known?.color  ?? "#888",
+            amount: Number(v.account.totalBribed) / 1e6,
+          };
+        });
+
+        setBribes(result);
+      } catch { /* pool not initialised yet */ }
     })();
     return () => { cancelled = true; };
-  }, [poolId, connection]);
+  }, [poolId, connection, wallet]);
 
   function applyPct(pct: number) {
     if (!remaining || remaining <= 0) return;
@@ -349,10 +378,10 @@ export function Vote() {
           </div>
         </div>
 
-        {/* Live gauge + bribe info */}
-        {poolId && (gaugeVotes !== null || bribeAmount !== null) && (
-          <div className="rounded-lg bg-brand-dark border border-brand-border px-3 py-2 mb-3 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-3">
+        {/* Live gauge + ALL bribe tokens */}
+        {poolId && (gaugeVotes !== null || bribes.length > 0) && (
+          <div className="rounded-lg bg-brand-dark border border-brand-border px-3 py-2 mb-3 text-xs space-y-2">
+            <div className="flex items-center justify-between">
               {gaugeVotes !== null && (
                 <span className="text-gray-400">
                   🗳 Gauge:{" "}
@@ -361,27 +390,32 @@ export function Vote() {
                   </span>
                 </span>
               )}
-              {bribeAmount !== null && bribeAmount > 0 && (
-                <span className="text-gray-400">
-                  🎁 Bribe:{" "}
-                  <span className="text-brand-green font-mono">
-                    {bribeAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} oSOLA
-                  </span>
-                </span>
-              )}
-              {bribeAmount === null || bribeAmount === 0 ? (
+              {bribes.length === 0 && (
                 <span className="text-gray-600 italic">No bribe deposited this epoch</span>
-              ) : null}
+              )}
             </div>
-            {gaugeVotes !== null && bribeAmount !== null && bribeAmount > 0 && votes && parseFloat(votes) > 0 && (
-              <span className="text-gray-500 ml-3">
-                Your est.:{" "}
-                <span className="text-white font-mono">
-                  {(bribeAmount * parseFloat(votes) / (gaugeVotes + parseFloat(votes))).toLocaleString(
-                    undefined, { maximumFractionDigits: 2 }
-                  )} oSOLA
-                </span>
-              </span>
+            {bribes.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {bribes.map((b) => (
+                  <span key={b.symbol} className="flex items-center gap-1 text-gray-400">
+                    🎁
+                    <span className="font-mono" style={{ color: b.color }}>
+                      {b.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {b.symbol}
+                    </span>
+                    {/* Estimated reward for this vote amount */}
+                    {gaugeVotes !== null && votes && parseFloat(votes) > 0 && (
+                      <span className="text-gray-600">
+                        (est.{" "}
+                        <span className="text-white font-mono">
+                          {(b.amount * parseFloat(votes) / (gaugeVotes + parseFloat(votes))).toLocaleString(
+                            undefined, { maximumFractionDigits: 4 }
+                          )}{" "}{b.symbol}
+                        </span>)
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
             )}
           </div>
         )}
