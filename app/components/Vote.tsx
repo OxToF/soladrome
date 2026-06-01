@@ -30,6 +30,8 @@ export function Vote() {
   const [poolId,       setPoolId]       = useState("");
   const [votes,        setVotes]        = useState("");
   const [balance,      setBalance]      = useState<number | null>(null);
+  const [allocated,    setAllocated]    = useState<number>(0);   // hiSOLA already voted this epoch
+  const [powerCap,     setPowerCap]     = useState<number | null>(null); // snapshotted power cap
   const [loading,      setLoading]      = useState(false);
   const [status,       setStatus]       = useState("");
   const [ammPools,     setAmmPools]     = useState<{ label: string; addr: string }[]>([]);
@@ -38,13 +40,40 @@ export function Vote() {
   const [gaugeVotes,   setGaugeVotes]   = useState<number | null>(null);
   const [bribeAmount,  setBribeAmount]  = useState<number | null>(null);
 
+  // remaining = available power not yet allocated this epoch
+  const remaining = powerCap !== null
+    ? Math.max(0, powerCap - allocated)
+    : balance !== null ? Math.max(0, balance - allocated) : null;
+
   const fetchBalance = useCallback(async () => {
-    if (!wallet) { setBalance(null); return; }
+    if (!wallet) { setBalance(null); setAllocated(0); setPowerCap(null); return; }
     try {
       const ata  = userAta(hiSolaM, wallet.publicKey);
       const info = await connection.getTokenAccountBalance(ata);
       setBalance(Number(info.value.uiAmount ?? 0));
     } catch { setBalance(0); }
+
+    // Read UserEpochVotes to get already-allocated votes this epoch.
+    // Seeds: [b"uev", user, epoch_le8]
+    // Layout: discriminator(8) + epoch(8) + allocated(8) + total_power_snapshot(8) + bump(1)
+    try {
+      const ep = currentEpoch();
+      const eb = Buffer.alloc(8);
+      eb.writeBigUInt64LE(BigInt(ep));
+      const [uevPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROG_ID
+      );
+      const uevInfo = await connection.getAccountInfo(uevPda);
+      if (uevInfo && uevInfo.data.length >= 32) {
+        const alloc  = Number(uevInfo.data.readBigUInt64LE(16)) / 1e6; // allocated
+        const cap    = Number(uevInfo.data.readBigUInt64LE(24)) / 1e6; // total_power_snapshot
+        setAllocated(alloc);
+        setPowerCap(cap);
+      } else {
+        setAllocated(0);
+        setPowerCap(null); // no votes yet → remaining = full balance
+      }
+    } catch { setAllocated(0); setPowerCap(null); }
   }, [connection, wallet]);
 
   useEffect(() => { fetchBalance(); }, [fetchBalance]);
@@ -123,8 +152,8 @@ export function Vote() {
   }, [poolId, connection]);
 
   function applyPct(pct: number) {
-    if (!balance || balance <= 0) return;
-    setVotes(((balance * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
+    if (!remaining || remaining <= 0) return;
+    setVotes(((remaining * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
   }
 
   function tryPool(): PublicKey | null {
@@ -186,14 +215,17 @@ export function Vote() {
       setStatus(`✅ Vote recorded — tx: ${tx.slice(0, 16)}…`);
       setVotes("");
       setVotedPools(prev => new Set([...prev, poolId]));
-      fetchBalance();
+      fetchBalance(); // also refreshes allocated / remaining
     } catch (e: any) {
       const msg = e?.message ?? String(e);
       if (msg.includes("already in use") || msg.includes("0x0")) {
         setStatus("✅ Vote already recorded for this pool this epoch.");
         setVotedPools(prev => new Set([...prev, poolId]));
-      } else if (msg.includes("VoteOverflow") || msg.includes("6011")) {
-        setStatus("❌ You already voted for this epoch — no voting power left.");
+      } else if (msg.includes("VoteOverflow") || msg.includes("6011") ||
+                 msg.includes("VoteWeightCapExceeded") || msg.includes("6028")) {
+        const rem = remaining !== null ? remaining.toFixed(4) : "0";
+        setStatus(`❌ Vote exceeds your remaining power (${rem} hiSOLA left this epoch). Reduce the amount.`);
+        fetchBalance(); // refresh allocated count
       } else {
         setStatus(`❌ ${msg}`);
       }
@@ -274,17 +306,24 @@ export function Vote() {
         <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-gray-400">hiSOLA to allocate</span>
-            {balance !== null && (
-              <span className="text-xs text-gray-500">
-                Balance:{" "}
+            <div className="text-right">
+              {remaining !== null && (
                 <button
-                  className="text-gray-300 hover:text-brand-green transition-colors font-mono"
+                  className="text-gray-300 hover:text-brand-green transition-colors font-mono text-xs"
                   onClick={() => applyPct(100)}
                 >
-                  {balance.toLocaleString(undefined, { maximumFractionDigits: 4 })} hiSOLA
+                  Remaining:{" "}
+                  <span className={remaining <= 0 ? "text-red-400" : "text-brand-green"}>
+                    {remaining.toLocaleString(undefined, { maximumFractionDigits: 4 })} hiSOLA
+                  </span>
                 </button>
-              </span>
-            )}
+              )}
+              {allocated > 0 && (
+                <p className="text-[10px] text-gray-600 mt-0.5">
+                  {allocated.toLocaleString(undefined, { maximumFractionDigits: 4 })} already allocated this epoch
+                </p>
+              )}
+            </div>
           </div>
           <input
             className="w-full bg-transparent text-right text-2xl font-bold text-white placeholder-gray-600 focus:outline-none mb-3"
