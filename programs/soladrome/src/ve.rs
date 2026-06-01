@@ -14,7 +14,7 @@ use crate::state::{
 };
 use crate::{POSITION_SEED, STATE_SEED};
 
-pub const VELOCK_SEED:   &[u8] = b"velock";
+pub const VELOCK_SEED: &[u8] = b"velock";
 pub const VE_VAULT_SEED: &[u8] = b"ve_vault";
 
 // ── Instructions ──────────────────────────────────────────────────────────────
@@ -25,17 +25,22 @@ pub const VE_VAULT_SEED: &[u8] = b"ve_vault";
 /// accumulator denominator — locked holders trade fee yield for ve power.
 /// Subsequent calls on an existing lock may add tokens or extend the end date
 /// (never shorten). Locking into an expired position resets it.
-pub fn lock_hi_sola(
-    ctx:                Context<LockHiSola>,
-    amount:             u64,
-    lock_duration_secs: u64,
-) -> Result<()> {
+pub fn lock_hi_sola(ctx: Context<LockHiSola>, amount: u64, lock_duration_secs: u64) -> Result<()> {
     // Pause check lives here (not only in the lib.rs wrapper) so any future
     // internal call-site cannot accidentally bypass the emergency freeze.
-    require!(!ctx.accounts.protocol_state.paused, SoladromeError::ProtocolPaused);
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        SoladromeError::ProtocolPaused
+    );
     require!(amount > 0, SoladromeError::InvalidAmount);
-    require!(lock_duration_secs >= MIN_LOCK_DURATION, SoladromeError::InvalidAmount);
-    require!(lock_duration_secs <= MAX_LOCK_DURATION, SoladromeError::InvalidAmount);
+    require!(
+        lock_duration_secs >= MIN_LOCK_DURATION,
+        SoladromeError::InvalidAmount
+    );
+    require!(
+        lock_duration_secs <= MAX_LOCK_DURATION,
+        SoladromeError::InvalidAmount
+    );
 
     let clock = Clock::get()?;
     let new_lock_end_ts = (clock.unix_timestamp as u64)
@@ -49,7 +54,10 @@ pub fn lock_hi_sola(
             && lock.amount_locked > 0
             && lock.lock_end_ts > clock.unix_timestamp
         {
-            require!(new_lock_end_ts >= lock.lock_end_ts, SoladromeError::InvalidAmount);
+            require!(
+                new_lock_end_ts >= lock.lock_end_ts,
+                SoladromeError::InvalidAmount
+            );
         }
     }
 
@@ -71,7 +79,7 @@ pub fn lock_hi_sola(
         let pos = &mut ctx.accounts.user_position;
         if pos.owner == Pubkey::default() {
             pos.owner = ctx.accounts.user.key();
-            pos.bump  = ctx.bumps.user_position;
+            pos.bump = ctx.bumps.user_position;
         }
         pos.fees_debt = acc;
     }
@@ -81,8 +89,8 @@ pub fn lock_hi_sola(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from:      ctx.accounts.user_hi_sola.to_account_info(),
-                to:        ctx.accounts.ve_lock_vault.to_account_info(),
+                from: ctx.accounts.user_hi_sola.to_account_info(),
+                to: ctx.accounts.ve_lock_vault.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
@@ -94,9 +102,10 @@ pub fn lock_hi_sola(
         let lock = &mut ctx.accounts.lock_position;
         if lock.owner == Pubkey::default() {
             lock.owner = ctx.accounts.user.key();
-            lock.bump  = ctx.bumps.lock_position;
+            lock.bump = ctx.bumps.lock_position;
         }
-        lock.amount_locked = lock.amount_locked
+        lock.amount_locked = lock
+            .amount_locked
             .checked_add(amount)
             .ok_or(SoladromeError::Overflow)?;
         lock.lock_end_ts = new_lock_end_ts;
@@ -104,9 +113,10 @@ pub fn lock_hi_sola(
 
     // Remove locked hiSOLA from the fee distribution pool.
     let s = &mut ctx.accounts.protocol_state;
-    s.fees_per_hi_sola         = acc;
+    s.fees_per_hi_sola = acc;
     s.last_market_vault_balance = market_balance;
-    s.total_hi_sola = s.total_hi_sola
+    s.total_hi_sola = s
+        .total_hi_sola
         .checked_sub(amount)
         .ok_or(SoladromeError::Overflow)?;
 
@@ -120,9 +130,9 @@ pub fn lock_hi_sola(
 pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
     let clock = Clock::get()?;
 
-    let amount    = ctx.accounts.lock_position.amount_locked;
-    let lock_bump  = ctx.accounts.lock_position.bump;
-    let user_key  = ctx.accounts.user.key();
+    let amount = ctx.accounts.lock_position.amount_locked;
+    let lock_bump = ctx.accounts.lock_position.bump;
+    let user_key = ctx.accounts.user.key();
 
     require!(amount > 0, SoladromeError::InvalidAmount);
     require!(
@@ -145,8 +155,8 @@ pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from:      ctx.accounts.ve_lock_vault.to_account_info(),
-                to:        ctx.accounts.user_hi_sola.to_account_info(),
+                from: ctx.accounts.ve_lock_vault.to_account_info(),
+                to: ctx.accounts.user_hi_sola.to_account_info(),
                 authority: ctx.accounts.lock_position.to_account_info(),
             },
             &[lock_seeds],
@@ -163,16 +173,17 @@ pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
         let pos = &mut ctx.accounts.user_position;
         if pos.owner == Pubkey::default() {
             pos.owner = ctx.accounts.user.key();
-            pos.bump  = ctx.bumps.user_position;
+            pos.bump = ctx.bumps.user_position;
         }
         pos.fees_debt = acc;
     }
 
     // Return locked hiSOLA to the fee distribution pool.
     let s = &mut ctx.accounts.protocol_state;
-    s.fees_per_hi_sola         = acc;
+    s.fees_per_hi_sola = acc;
     s.last_market_vault_balance = market_balance;
-    s.total_hi_sola = s.total_hi_sola
+    s.total_hi_sola = s
+        .total_hi_sola
         .checked_add(amount)
         .ok_or(SoladromeError::Overflow)?;
 
@@ -184,20 +195,16 @@ pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
 /// Attempt to read ve_power from an UncheckedAccount.
 /// Returns 0 if the account is missing, owned by another program, or expired.
 /// Callers pass SystemProgram as a placeholder when not using a ve lock.
-pub fn try_load_ve_power(
-    account_info: &AccountInfo,
-    user:         &Pubkey,
-    current_ts:   i64,
-) -> u64 {
+pub fn try_load_ve_power(account_info: &AccountInfo, user: &Pubkey, current_ts: i64) -> u64 {
     if account_info.owner != &crate::ID {
         return 0;
     }
     let data = match account_info.try_borrow_data() {
-        Ok(d)  => d,
+        Ok(d) => d,
         Err(_) => return 0,
     };
     let lock = match VeLockPosition::try_deserialize(&mut &data[..]) {
-        Ok(l)  => l,
+        Ok(l) => l,
         Err(_) => return 0,
     };
     if &lock.owner != user || lock.amount_locked == 0 {
@@ -264,9 +271,9 @@ pub struct LockHiSola<'info> {
     )]
     pub user_position: Box<Account<'info, UserPosition>>,
 
-    pub token_program:  Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
-    pub rent:           Sysvar<'info, Rent>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
@@ -325,7 +332,7 @@ pub struct UnlockHiSola<'info> {
     )]
     pub user_position: Box<Account<'info, UserPosition>>,
 
-    pub token_program:            Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program:           Program<'info, System>,
+    pub system_program: Program<'info, System>,
 }

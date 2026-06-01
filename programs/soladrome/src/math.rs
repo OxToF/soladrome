@@ -34,16 +34,13 @@ pub fn advance_accumulator(
     if market_vault_balance <= last_market_vault_balance || total_hi_sola == 0 {
         return fees_per_hi_sola;
     }
-    let new_fees = (market_vault_balance
-        .checked_sub(last_market_vault_balance)
-        .unwrap_or(0)) as u128;
+    let new_fees = market_vault_balance.saturating_sub(last_market_vault_balance) as u128;
     // M-09 NOTE: new_fees ≤ u64::MAX ≈ 1.8e19; PRECISION = 1e12.
     // new_fees * PRECISION ≤ 1.8e31 << u128::MAX ≈ 3.4e38 → multiplication
     // cannot overflow u128 in practice. saturating_mul is kept as a compile-time
     // guarantee; saturating_add on fees_per_hi_sola is similarly safe given that
     // the accumulator only resets to u128::MAX at astronomically high fee volumes.
-    fees_per_hi_sola
-        .saturating_add(new_fees.saturating_mul(PRECISION) / total_hi_sola as u128)
+    fees_per_hi_sola.saturating_add(new_fees.saturating_mul(PRECISION) / total_hi_sola as u128)
 }
 
 /// Pending claimable USDC for a user (rounded down).

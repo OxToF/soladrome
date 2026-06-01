@@ -8,19 +8,19 @@ use anchor_spl::{
 };
 
 use crate::amm_math::{self, MINIMUM_LIQUIDITY};
-use crate::amm_state::{AmmPool, sort_mints};
+use crate::amm_state::{sort_mints, AmmPool};
 use crate::errors::SoladromeError;
 use crate::state::{LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState, EPOCH_DURATION};
 use crate::{LP_REWARD_PRECISION, OSOLA_EMISSION_PER_SEC, STATE_SEED};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-pub const AMM_POOL_SEED:  &[u8] = b"amm_pool";
-pub const LP_MINT_SEED:   &[u8] = b"lp_mint";
-pub const VAULT_A_SEED:   &[u8] = b"vault_a";
-pub const VAULT_B_SEED:   &[u8] = b"vault_b";
+pub const AMM_POOL_SEED: &[u8] = b"amm_pool";
+pub const LP_MINT_SEED: &[u8] = b"lp_mint";
+pub const VAULT_A_SEED: &[u8] = b"vault_a";
+pub const VAULT_B_SEED: &[u8] = b"vault_b";
 
-pub const MAX_FEE_RATE:        u16 = 1_000; // 10% max swap fee
-pub const MAX_PROTOCOL_FEE:    u16 = 5_000; // 50% of fee max to protocol
+pub const MAX_FEE_RATE: u16 = 1_000; // 10% max swap fee
+pub const MAX_PROTOCOL_FEE: u16 = 5_000; // 50% of fee max to protocol
 
 // ── Reward accumulator helpers ────────────────────────────────────────────────
 
@@ -33,13 +33,10 @@ macro_rules! update_pool_rewards {
         } else {
             let elapsed = ($now - $pool.last_reward_ts).max(0) as u128;
             if elapsed > 0 && $pool.total_lp > 0 {
-                let new_rewards =
-                    (OSOLA_EMISSION_PER_SEC as u128).saturating_mul(elapsed);
-                let delta = new_rewards
-                    .saturating_mul(LP_REWARD_PRECISION)
-                    / ($pool.total_lp as u128);
-                $pool.osola_reward_per_lp =
-                    $pool.osola_reward_per_lp.saturating_add(delta);
+                let new_rewards = (OSOLA_EMISSION_PER_SEC as u128).saturating_mul(elapsed);
+                let delta =
+                    new_rewards.saturating_mul(LP_REWARD_PRECISION) / ($pool.total_lp as u128);
+                $pool.osola_reward_per_lp = $pool.osola_reward_per_lp.saturating_add(delta);
             }
             $pool.last_reward_ts = $now;
         }
@@ -56,9 +53,7 @@ pub fn advance_pool_rewards(pool: &mut AmmPool, now: i64) {
         let elapsed = (now - pool.last_reward_ts).max(0) as u128;
         if elapsed > 0 && pool.total_lp > 0 {
             let new_rewards = (OSOLA_EMISSION_PER_SEC as u128).saturating_mul(elapsed);
-            let delta = new_rewards
-                .saturating_mul(LP_REWARD_PRECISION)
-                / (pool.total_lp as u128);
+            let delta = new_rewards.saturating_mul(LP_REWARD_PRECISION) / (pool.total_lp as u128);
             pool.osola_reward_per_lp = pool.osola_reward_per_lp.saturating_add(delta);
         }
         pool.last_reward_ts = now;
@@ -79,14 +74,16 @@ fn pending_osola(acc: u128, debt: u128, user_lp: u64) -> u64 {
 /// Create a new volatile (xy=k) AMM pool for any two distinct token mints.
 /// Permissionless — anyone can create a pool.
 /// Mints are sorted internally so (A, B) and (B, A) map to the same pool.
-pub fn create_pool(
-    ctx: Context<CreatePool>,
-    fee_rate: u16,
-    protocol_fee_bps: u16,
-) -> Result<()> {
-    require!(!ctx.accounts.protocol_state.paused, crate::errors::SoladromeError::ProtocolPaused);
+pub fn create_pool(ctx: Context<CreatePool>, fee_rate: u16, protocol_fee_bps: u16) -> Result<()> {
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        crate::errors::SoladromeError::ProtocolPaused
+    );
     require!(fee_rate <= MAX_FEE_RATE, SoladromeError::InvalidAmount);
-    require!(protocol_fee_bps <= MAX_PROTOCOL_FEE, SoladromeError::InvalidAmount);
+    require!(
+        protocol_fee_bps <= MAX_PROTOCOL_FEE,
+        SoladromeError::InvalidAmount
+    );
 
     let mint_a_key = ctx.accounts.token_a_mint.key();
     let mint_b_key = ctx.accounts.token_b_mint.key();
@@ -99,17 +96,17 @@ pub fn create_pool(
     );
 
     let pool = &mut ctx.accounts.pool;
-    pool.token_a_mint     = mint_a_key;
-    pool.token_b_mint     = mint_b_key;
-    pool.token_a_vault    = ctx.accounts.token_a_vault.key();
-    pool.token_b_vault    = ctx.accounts.token_b_vault.key();
-    pool.lp_mint          = ctx.accounts.lp_mint.key();
-    pool.fee_rate         = fee_rate;
+    pool.token_a_mint = mint_a_key;
+    pool.token_b_mint = mint_b_key;
+    pool.token_a_vault = ctx.accounts.token_a_vault.key();
+    pool.token_b_vault = ctx.accounts.token_b_vault.key();
+    pool.lp_mint = ctx.accounts.lp_mint.key();
+    pool.fee_rate = fee_rate;
     pool.protocol_fee_bps = protocol_fee_bps;
-    pool.total_lp         = 0;
-    pool.reserve_a        = 0;
-    pool.reserve_b        = 0;
-    pool.bump             = ctx.bumps.pool;
+    pool.total_lp = 0;
+    pool.reserve_a = 0;
+    pool.reserve_b = 0;
+    pool.bump = ctx.bumps.pool;
     Ok(())
 }
 
@@ -122,7 +119,10 @@ pub fn add_liquidity(
     amount_b_desired: u64,
     min_lp: u64,
 ) -> Result<()> {
-    require!(!ctx.accounts.protocol_state.paused, crate::errors::SoladromeError::ProtocolPaused);
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        crate::errors::SoladromeError::ProtocolPaused
+    );
     let (lp_out, actual_a, actual_b) = amm_math::lp_for_deposit(
         ctx.accounts.pool.reserve_a,
         ctx.accounts.pool.reserve_b,
@@ -137,8 +137,8 @@ pub fn add_liquidity(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from:      ctx.accounts.user_token_a.to_account_info(),
-                to:        ctx.accounts.token_a_vault.to_account_info(),
+                from: ctx.accounts.user_token_a.to_account_info(),
+                to: ctx.accounts.token_a_vault.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
@@ -150,8 +150,8 @@ pub fn add_liquidity(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from:      ctx.accounts.user_token_b.to_account_info(),
-                to:        ctx.accounts.token_b_vault.to_account_info(),
+                from: ctx.accounts.user_token_b.to_account_info(),
+                to: ctx.accounts.token_b_vault.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
@@ -160,11 +160,16 @@ pub fn add_liquidity(
 
     // Extract values we'll need for seeds before any mutable borrows
     let pool_bump = ctx.accounts.pool.bump;
-    let mint_a    = ctx.accounts.pool.token_a_mint;
-    let mint_b    = ctx.accounts.pool.token_b_mint;
+    let mint_a = ctx.accounts.pool.token_a_mint;
+    let mint_b = ctx.accounts.pool.token_b_mint;
     let user_lp_pre = ctx.accounts.user_lp.amount; // balance before this mint
 
-    let pool_seeds: &[&[u8]] = &[AMM_POOL_SEED, mint_a.as_ref(), mint_b.as_ref(), &[pool_bump]];
+    let pool_seeds: &[&[u8]] = &[
+        AMM_POOL_SEED,
+        mint_a.as_ref(),
+        mint_b.as_ref(),
+        &[pool_bump],
+    ];
 
     // Mint MINIMUM_LIQUIDITY to a dead address on first deposit (locked forever)
     if ctx.accounts.pool.total_lp == 0 {
@@ -172,8 +177,8 @@ pub fn add_liquidity(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.lp_mint.to_account_info(),
-                    to:        ctx.accounts.lp_dead_ata.to_account_info(),
+                    mint: ctx.accounts.lp_mint.to_account_info(),
+                    to: ctx.accounts.lp_dead_ata.to_account_info(),
                     authority: ctx.accounts.pool.to_account_info(),
                 },
                 &[pool_seeds],
@@ -199,8 +204,8 @@ pub fn add_liquidity(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
-                    to:        ctx.accounts.user_o_sola.to_account_info(),
+                    mint: ctx.accounts.o_sola_mint.to_account_info(),
+                    to: ctx.accounts.user_o_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[state_seeds],
@@ -221,8 +226,8 @@ pub fn add_liquidity(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             MintTo {
-                mint:      ctx.accounts.lp_mint.to_account_info(),
-                to:        ctx.accounts.user_lp.to_account_info(),
+                mint: ctx.accounts.lp_mint.to_account_info(),
+                to: ctx.accounts.user_lp.to_account_info(),
                 authority: ctx.accounts.pool.to_account_info(),
             },
             &[pool_seeds],
@@ -231,9 +236,18 @@ pub fn add_liquidity(
     )?;
 
     let pool = &mut ctx.accounts.pool;
-    pool.reserve_a = pool.reserve_a.checked_add(actual_a).ok_or(SoladromeError::Overflow)?;
-    pool.reserve_b = pool.reserve_b.checked_add(actual_b).ok_or(SoladromeError::Overflow)?;
-    pool.total_lp  = pool.total_lp.checked_add(lp_out).ok_or(SoladromeError::Overflow)?;
+    pool.reserve_a = pool
+        .reserve_a
+        .checked_add(actual_a)
+        .ok_or(SoladromeError::Overflow)?;
+    pool.reserve_b = pool
+        .reserve_b
+        .checked_add(actual_b)
+        .ok_or(SoladromeError::Overflow)?;
+    pool.total_lp = pool
+        .total_lp
+        .checked_add(lp_out)
+        .ok_or(SoladromeError::Overflow)?;
     Ok(())
 }
 
@@ -264,8 +278,8 @@ pub fn remove_liquidity(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
-                    to:        ctx.accounts.user_o_sola.to_account_info(),
+                    mint: ctx.accounts.o_sola_mint.to_account_info(),
+                    to: ctx.accounts.user_o_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[state_seeds],
@@ -283,20 +297,19 @@ pub fn remove_liquidity(
 
     // ── Burn LP and return tokens ─────────────────────────────────────────────
     let pool = &ctx.accounts.pool;
-    let (amount_a, amount_b) = amm_math::tokens_for_lp(
-        pool.reserve_a,
-        pool.reserve_b,
-        pool.total_lp,
-        lp_amount,
-    )?;
-    require!(amount_a >= min_a && amount_b >= min_b, SoladromeError::SlippageExceeded);
+    let (amount_a, amount_b) =
+        amm_math::tokens_for_lp(pool.reserve_a, pool.reserve_b, pool.total_lp, lp_amount)?;
+    require!(
+        amount_a >= min_a && amount_b >= min_b,
+        SoladromeError::SlippageExceeded
+    );
 
     token::burn(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             Burn {
-                mint:      ctx.accounts.lp_mint.to_account_info(),
-                from:      ctx.accounts.user_lp.to_account_info(),
+                mint: ctx.accounts.lp_mint.to_account_info(),
+                from: ctx.accounts.user_lp.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
@@ -304,16 +317,21 @@ pub fn remove_liquidity(
     )?;
 
     let pool_bump = ctx.accounts.pool.bump;
-    let mint_a    = ctx.accounts.pool.token_a_mint;
-    let mint_b    = ctx.accounts.pool.token_b_mint;
-    let pool_seeds: &[&[u8]] = &[AMM_POOL_SEED, mint_a.as_ref(), mint_b.as_ref(), &[pool_bump]];
+    let mint_a = ctx.accounts.pool.token_a_mint;
+    let mint_b = ctx.accounts.pool.token_b_mint;
+    let pool_seeds: &[&[u8]] = &[
+        AMM_POOL_SEED,
+        mint_a.as_ref(),
+        mint_b.as_ref(),
+        &[pool_bump],
+    ];
 
     token::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from:      ctx.accounts.token_a_vault.to_account_info(),
-                to:        ctx.accounts.user_token_a.to_account_info(),
+                from: ctx.accounts.token_a_vault.to_account_info(),
+                to: ctx.accounts.user_token_a.to_account_info(),
                 authority: ctx.accounts.pool.to_account_info(),
             },
             &[pool_seeds],
@@ -325,8 +343,8 @@ pub fn remove_liquidity(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from:      ctx.accounts.token_b_vault.to_account_info(),
-                to:        ctx.accounts.user_token_b.to_account_info(),
+                from: ctx.accounts.token_b_vault.to_account_info(),
+                to: ctx.accounts.user_token_b.to_account_info(),
                 authority: ctx.accounts.pool.to_account_info(),
             },
             &[pool_seeds],
@@ -335,15 +353,27 @@ pub fn remove_liquidity(
     )?;
 
     let pool = &mut ctx.accounts.pool;
-    pool.reserve_a = pool.reserve_a.checked_sub(amount_a).ok_or(SoladromeError::Overflow)?;
-    pool.reserve_b = pool.reserve_b.checked_sub(amount_b).ok_or(SoladromeError::Overflow)?;
-    pool.total_lp  = pool.total_lp.checked_sub(lp_amount).ok_or(SoladromeError::Overflow)?;
+    pool.reserve_a = pool
+        .reserve_a
+        .checked_sub(amount_a)
+        .ok_or(SoladromeError::Overflow)?;
+    pool.reserve_b = pool
+        .reserve_b
+        .checked_sub(amount_b)
+        .ok_or(SoladromeError::Overflow)?;
+    pool.total_lp = pool
+        .total_lp
+        .checked_sub(lp_amount)
+        .ok_or(SoladromeError::Overflow)?;
     Ok(())
 }
 
 /// Claim accumulated oSOLA rewards for the caller's LP position without changing liquidity.
 pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
-    require!(!ctx.accounts.protocol_state.paused, crate::errors::SoladromeError::ProtocolPaused);
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        crate::errors::SoladromeError::ProtocolPaused
+    );
     let user_lp = ctx.accounts.user_lp.amount;
 
     // Update pool accumulator
@@ -363,8 +393,8 @@ pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             MintTo {
-                mint:      ctx.accounts.o_sola_mint.to_account_info(),
-                to:        ctx.accounts.user_o_sola.to_account_info(),
+                mint: ctx.accounts.o_sola_mint.to_account_info(),
+                to: ctx.accounts.user_o_sola.to_account_info(),
                 authority: ctx.accounts.protocol_state.to_account_info(),
             },
             &[state_seeds],
@@ -385,23 +415,21 @@ pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
 /// a_to_b: true  → sell token_a, receive token_b
 ///         false → sell token_b, receive token_a
 /// Fee split: LP portion stays in reserves, protocol portion → market_vault.
-pub fn swap(
-    ctx: Context<Swap>,
-    amount_in: u64,
-    min_out: u64,
-    a_to_b: bool,
-) -> Result<()> {
-    require!(!ctx.accounts.protocol_state.paused, crate::errors::SoladromeError::ProtocolPaused);
+pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> Result<()> {
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        crate::errors::SoladromeError::ProtocolPaused
+    );
     require!(amount_in > 0, SoladromeError::InvalidAmount);
 
-    let pool        = &ctx.accounts.pool;
-    let fee_rate    = pool.fee_rate as u128;
-    let proto_bps   = pool.protocol_fee_bps as u128;
+    let pool = &ctx.accounts.pool;
+    let fee_rate = pool.fee_rate as u128;
+    let proto_bps = pool.protocol_fee_bps as u128;
 
-    let amount_in_u128  = amount_in as u128;
-    let fee_total       = amount_in_u128 * fee_rate / 10_000;
-    let fee_protocol    = fee_total * proto_bps / 10_000;
-    let amount_in_net   = amount_in_u128 - fee_total;
+    let amount_in_u128 = amount_in as u128;
+    let fee_total = amount_in_u128 * fee_rate / 10_000;
+    let fee_protocol = fee_total * proto_bps / 10_000;
+    let amount_in_net = amount_in_u128 - fee_total;
 
     let (reserve_in, reserve_out) = if a_to_b {
         (pool.reserve_a, pool.reserve_b)
@@ -413,7 +441,8 @@ pub fn swap(
     require!(amount_out >= min_out, SoladromeError::SlippageExceeded);
 
     let pool_bump = pool.bump;
-    let pool_seeds: &[&[u8]] = &[AMM_POOL_SEED,
+    let pool_seeds: &[&[u8]] = &[
+        AMM_POOL_SEED,
         ctx.accounts.pool.token_a_mint.as_ref(),
         ctx.accounts.pool.token_b_mint.as_ref(),
         &[pool_bump],
@@ -437,7 +466,11 @@ pub fn swap(
     token::transfer(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
-            Transfer { from: user_in, to: vault_in, authority: ctx.accounts.user.to_account_info() },
+            Transfer {
+                from: user_in,
+                to: vault_in,
+                authority: ctx.accounts.user.to_account_info(),
+            },
         ),
         amount_in,
     )?;
@@ -445,7 +478,11 @@ pub fn swap(
     token::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
-            Transfer { from: vault_out, to: user_out, authority: ctx.accounts.pool.to_account_info() },
+            Transfer {
+                from: vault_out,
+                to: user_out,
+                authority: ctx.accounts.pool.to_account_info(),
+            },
             &[pool_seeds],
         ),
         amount_out,
@@ -466,9 +503,12 @@ pub fn swap(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
                     Transfer {
-                        from:      if a_to_b { ctx.accounts.token_a_vault.to_account_info() }
-                                   else      { ctx.accounts.token_b_vault.to_account_info() },
-                        to:        ctx.accounts.market_vault.to_account_info(),
+                        from: if a_to_b {
+                            ctx.accounts.token_a_vault.to_account_info()
+                        } else {
+                            ctx.accounts.token_b_vault.to_account_info()
+                        },
+                        to: ctx.accounts.market_vault.to_account_info(),
                         authority: ctx.accounts.pool.to_account_info(),
                     },
                     &[pool_seeds],
@@ -476,7 +516,9 @@ pub fn swap(
                 fee_proto_u64,
             )?;
             ctx.accounts.protocol_state.accumulated_fees = ctx
-                .accounts.protocol_state.accumulated_fees
+                .accounts
+                .protocol_state
+                .accumulated_fees
                 .saturating_add(fee_proto_u64);
             fee_routed = fee_protocol;
         }
@@ -486,66 +528,89 @@ pub fn swap(
     let pool = &mut ctx.accounts.pool;
     if a_to_b {
         let net_a = (amount_in as u128 - fee_routed) as u64;
-        pool.reserve_a = pool.reserve_a.checked_add(net_a).ok_or(SoladromeError::Overflow)?;
-        pool.reserve_b = pool.reserve_b.checked_sub(amount_out).ok_or(SoladromeError::Overflow)?;
+        pool.reserve_a = pool
+            .reserve_a
+            .checked_add(net_a)
+            .ok_or(SoladromeError::Overflow)?;
+        pool.reserve_b = pool
+            .reserve_b
+            .checked_sub(amount_out)
+            .ok_or(SoladromeError::Overflow)?;
     } else {
         let net_b = (amount_in as u128 - fee_routed) as u64;
-        pool.reserve_b = pool.reserve_b.checked_add(net_b).ok_or(SoladromeError::Overflow)?;
-        pool.reserve_a = pool.reserve_a.checked_sub(amount_out).ok_or(SoladromeError::Overflow)?;
+        pool.reserve_b = pool
+            .reserve_b
+            .checked_add(net_b)
+            .ok_or(SoladromeError::Overflow)?;
+        pool.reserve_a = pool
+            .reserve_a
+            .checked_sub(amount_out)
+            .ok_or(SoladromeError::Overflow)?;
     }
     Ok(())
 }
 
 // ── LP emission auto-checkpoint helper (kept for standalone checkpoint_lp) ────
 /// Called automatically on every add/remove liquidity (legacy, kept for compatibility).
+#[allow(clippy::too_many_arguments)]
 pub fn lp_auto_checkpoint(
     ckpt: &mut LpUserCheckpoint,
-    pa:   &mut LpPoolEpochAccum,
-    pool_key:      Pubkey,
-    user_key:      Pubkey,
-    user_lp_pre:   u64,
+    pa: &mut LpPoolEpochAccum,
+    pool_key: Pubkey,
+    user_key: Pubkey,
+    user_lp_pre: u64,
     lp_supply_pre: u64,
-    now:           i64,
-    epoch:         u64,
-    ckpt_bump:     u8,
-    pa_bump:       u8,
+    now: i64,
+    epoch: u64,
+    ckpt_bump: u8,
+    pa_bump: u8,
 ) -> Result<()> {
     let epoch_start = (epoch * EPOCH_DURATION) as i64;
 
     if pa.epoch == 0 {
-        pa.pool           = pool_key;
-        pa.epoch          = epoch;
+        pa.pool = pool_key;
+        pa.epoch = epoch;
         pa.last_update_ts = epoch_start;
         pa.last_lp_supply = lp_supply_pre;
-        pa.bump           = pa_bump;
+        pa.bump = pa_bump;
     }
 
     if !pa.finalized {
         let pa_elapsed = (now - pa.last_update_ts).max(0) as u128;
-        pa.total_weighted_supply = pa.total_weighted_supply
-            .checked_add((pa.last_lp_supply as u128).checked_mul(pa_elapsed).ok_or(SoladromeError::Overflow)?)
+        pa.total_weighted_supply = pa
+            .total_weighted_supply
+            .checked_add(
+                (pa.last_lp_supply as u128)
+                    .checked_mul(pa_elapsed)
+                    .ok_or(SoladromeError::Overflow)?,
+            )
             .ok_or(SoladromeError::Overflow)?;
         pa.last_update_ts = now;
         pa.last_lp_supply = lp_supply_pre;
     }
 
     if ckpt.pool == Pubkey::default() {
-        ckpt.user           = user_key;
-        ckpt.pool           = pool_key;
-        ckpt.last_epoch     = epoch;
+        ckpt.user = user_key;
+        ckpt.pool = pool_key;
+        ckpt.last_epoch = epoch;
         ckpt.last_update_ts = epoch_start;
-        ckpt.bump           = ckpt_bump;
+        ckpt.bump = ckpt_bump;
     }
 
     if ckpt.last_epoch < epoch {
         ckpt.weighted_balance = 0;
-        ckpt.last_update_ts   = epoch_start;
-        ckpt.last_epoch       = epoch;
+        ckpt.last_update_ts = epoch_start;
+        ckpt.last_epoch = epoch;
     }
 
     let ckpt_elapsed = (now - ckpt.last_update_ts).max(0) as u128;
-    ckpt.weighted_balance = ckpt.weighted_balance
-        .checked_add((user_lp_pre as u128).checked_mul(ckpt_elapsed).ok_or(SoladromeError::Overflow)?)
+    ckpt.weighted_balance = ckpt
+        .weighted_balance
+        .checked_add(
+            (user_lp_pre as u128)
+                .checked_mul(ckpt_elapsed)
+                .ok_or(SoladromeError::Overflow)?,
+        )
         .ok_or(SoladromeError::Overflow)?;
     ckpt.last_update_ts = now;
 
@@ -605,9 +670,9 @@ pub struct CreatePool<'info> {
     )]
     pub token_b_vault: Box<Account<'info, TokenAccount>>,
 
-    pub token_program:  Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
-    pub rent:           Sysvar<'info, Rent>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
@@ -686,10 +751,10 @@ pub struct AddLiquidity<'info> {
     )]
     pub user_o_sola: Box<Account<'info, TokenAccount>>,
 
-    pub rent:                     Sysvar<'info, Rent>,
-    pub token_program:            Program<'info, Token>,
+    pub rent: Sysvar<'info, Rent>,
+    pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program:           Program<'info, System>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -762,10 +827,10 @@ pub struct RemoveLiquidity<'info> {
     )]
     pub user_o_sola: Box<Account<'info, TokenAccount>>,
 
-    pub rent:                     Sysvar<'info, Rent>,
-    pub token_program:            Program<'info, Token>,
+    pub rent: Sysvar<'info, Rent>,
+    pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program:           Program<'info, System>,
+    pub system_program: Program<'info, System>,
 }
 
 /// Claim accumulated oSOLA without changing LP position.
@@ -811,10 +876,10 @@ pub struct ClaimLpRewards<'info> {
     )]
     pub user_o_sola: Box<Account<'info, TokenAccount>>,
 
-    pub token_program:            Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program:           Program<'info, System>,
-    pub rent:                     Sysvar<'info, Rent>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]

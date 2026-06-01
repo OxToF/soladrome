@@ -44,7 +44,7 @@ pub const VESTING_DURATION_SECS: u64 = 720 * 24 * 3_600;
 /// Cliff before contributor tokens unlock.
 /// devnet: 1 h  |  mainnet: 1 month
 #[cfg(feature = "devnet")]
-pub const CONTRIBUTOR_CLIFF_SECS: u64 = 1 * 3_600;
+pub const CONTRIBUTOR_CLIFF_SECS: u64 = 3_600;
 #[cfg(not(feature = "devnet"))]
 pub const CONTRIBUTOR_CLIFF_SECS: u64 = 30 * 24 * 3_600;
 
@@ -85,16 +85,16 @@ pub struct ProtocolState {
     pub sola_mint: Pubkey,
     pub hi_sola_mint: Pubkey,
     pub o_sola_mint: Pubkey,
-    pub floor_vault: Pubkey,          // USDC: 1 USDC per SOLA in supply
-    pub market_vault: Pubkey,         // USDC: excess above floor (fee revenue)
-    pub sola_vault: Pubkey,           // locked SOLA from stakers
-    pub virtual_usdc: u64,            // virtual USDC in bonding curve
-    pub virtual_sola: u64,            // virtual SOLA in bonding curve
-    pub k: u128,                      // constant product = virtual_usdc * virtual_sola
-    pub total_sola: u64,              // real SOLA minted (not virtual)
+    pub floor_vault: Pubkey,  // USDC: 1 USDC per SOLA in supply
+    pub market_vault: Pubkey, // USDC: excess above floor (fee revenue)
+    pub sola_vault: Pubkey,   // locked SOLA from stakers
+    pub virtual_usdc: u64,    // virtual USDC in bonding curve
+    pub virtual_sola: u64,    // virtual SOLA in bonding curve
+    pub k: u128,              // constant product = virtual_usdc * virtual_sola
+    pub total_sola: u64,      // real SOLA minted (not virtual)
     pub total_hi_sola: u64,
-    pub accumulated_fees: u64,        // lifetime market vault inflows
-    pub fees_per_hi_sola: u128,       // cumulative USDC-per-hiSOLA × PRECISION
+    pub accumulated_fees: u64,          // lifetime market vault inflows
+    pub fees_per_hi_sola: u128,         // cumulative USDC-per-hiSOLA × PRECISION
     pub last_market_vault_balance: u64, // snapshot used to detect new fees
     pub bump: u8,
     /// Prevents mint_founder_allocation from being called more than once.
@@ -135,7 +135,7 @@ const _: () = assert!(
 pub struct UserPosition {
     pub owner: Pubkey,
     pub usdc_borrowed: u64,
-    pub fees_debt: u128,  // fees_per_hi_sola at last claim / entry point
+    pub fees_debt: u128, // fees_per_hi_sola at last claim / entry point
     pub bump: u8,
     /// Slot at which the most recent borrow was executed.
     /// repay_usdc requires current_slot > last_borrow_slot — blocks same-tx
@@ -154,37 +154,43 @@ impl UserPosition {
 /// PDA: [b"bribe_vault", pool_id, reward_mint, epoch_le8]
 #[account]
 pub struct BribeVault {
-    pub pool_id:      Pubkey,  // External pool being incentivised (label only)
-    pub reward_mint:  Pubkey,  // Token offered as bribe
-    pub epoch:        u64,     // Epoch this bribe applies to
-    pub total_bribed: u64,     // Cumulative amount deposited this epoch
-    pub bump:         u8,
+    pub pool_id: Pubkey,     // External pool being incentivised (label only)
+    pub reward_mint: Pubkey, // Token offered as bribe
+    pub epoch: u64,          // Epoch this bribe applies to
+    pub total_bribed: u64,   // Cumulative amount deposited this epoch
+    pub bump: u8,
 }
-impl BribeVault { pub const LEN: usize = 128; }
+impl BribeVault {
+    pub const LEN: usize = 128;
+}
 
 /// Aggregate hiSOLA vote-weight directed at a pool for one epoch.
 /// PDA: [b"gauge", pool_id, epoch_le8]
 #[account]
 pub struct GaugeState {
-    pub pool_id:     Pubkey,
-    pub epoch:       u64,
+    pub pool_id: Pubkey,
+    pub epoch: u64,
     pub total_votes: u64,
-    pub bump:        u8,
+    pub bump: u8,
 }
-impl GaugeState { pub const LEN: usize = 96; }
+impl GaugeState {
+    pub const LEN: usize = 96;
+}
 
 /// Records one user's vote for a specific (pool, epoch) pair.
 /// Created with `init` — immutable once written, prevents double-voting for same pool.
 /// PDA: [b"vote", user, pool_id, epoch_le8]
 #[account]
 pub struct UserVoteReceipt {
-    pub user:    Pubkey,
+    pub user: Pubkey,
     pub pool_id: Pubkey,
-    pub epoch:   u64,
-    pub votes:   u64,  // hiSOLA weight committed to this pool
-    pub bump:    u8,
+    pub epoch: u64,
+    pub votes: u64, // hiSOLA weight committed to this pool
+    pub bump: u8,
 }
-impl UserVoteReceipt { pub const LEN: usize = 128; }
+impl UserVoteReceipt {
+    pub const LEN: usize = 128;
+}
 
 /// Tracks total vote-weight already allocated by one user in an epoch (across all pools).
 /// Prevents voting more than the user's hiSOLA balance.
@@ -197,12 +203,14 @@ impl UserVoteReceipt { pub const LEN: usize = 128; }
 /// PDA: [b"uev", user, epoch_le8]
 #[account]
 pub struct UserEpochVotes {
-    pub epoch:                u64,
-    pub allocated:            u64,  // cumulative votes cast this epoch across all pools
-    pub total_power_snapshot: u64,  // hiSOLA + ve-power at time of first vote (immutable after init)
-    pub bump:                 u8,
+    pub epoch: u64,
+    pub allocated: u64, // cumulative votes cast this epoch across all pools
+    pub total_power_snapshot: u64, // hiSOLA + ve-power at time of first vote (immutable after init)
+    pub bump: u8,
 }
-impl UserEpochVotes { pub const LEN: usize = 64; } // 8+8+8+1 = 25 bytes used, 39 spare
+impl UserEpochVotes {
+    pub const LEN: usize = 64;
+} // 8+8+8+1 = 25 bytes used, 39 spare
 
 /// Created during claim_bribe — its existence proves the claim was made.
 /// PDA: [b"bribe_claim", user, pool_id, reward_mint, epoch_le8]
@@ -210,7 +218,9 @@ impl UserEpochVotes { pub const LEN: usize = 64; } // 8+8+8+1 = 25 bytes used, 3
 pub struct UserBribeClaim {
     pub bump: u8,
 }
-impl UserBribeClaim { pub const LEN: usize = 32; }
+impl UserBribeClaim {
+    pub const LEN: usize = 32;
+}
 
 // ── Ve-layer ──────────────────────────────────────────────────────────────────
 
@@ -221,12 +231,14 @@ impl UserBribeClaim { pub const LEN: usize = 32; }
 /// PDA: [b"velock", user]
 #[account]
 pub struct VeLockPosition {
-    pub owner:         Pubkey,
-    pub amount_locked: u64,  // hiSOLA held in ve_lock_vault
-    pub lock_end_ts:   i64,  // Unix timestamp when lock expires
-    pub bump:          u8,
+    pub owner: Pubkey,
+    pub amount_locked: u64, // hiSOLA held in ve_lock_vault
+    pub lock_end_ts: i64,   // Unix timestamp when lock expires
+    pub bump: u8,
 }
-impl VeLockPosition { pub const LEN: usize = 96; }
+impl VeLockPosition {
+    pub const LEN: usize = 96;
+}
 
 // ── LP Emission checkpointing ─────────────────────────────────────────────────
 
@@ -235,11 +247,13 @@ impl VeLockPosition { pub const LEN: usize = 96; }
 /// PDA: [b"epoch_votes", epoch_le8]
 #[account]
 pub struct GlobalEpochVotes {
-    pub epoch:       u64,
+    pub epoch: u64,
     pub total_votes: u64,
-    pub bump:        u8,
+    pub bump: u8,
 }
-impl GlobalEpochVotes { pub const LEN: usize = 32; }
+impl GlobalEpochVotes {
+    pub const LEN: usize = 32;
+}
 
 /// Continuous time-weighted LP balance for one (user, pool) pair.
 /// Accumulates: weighted_balance += lp_balance × elapsed_secs each checkpoint.
@@ -247,30 +261,34 @@ impl GlobalEpochVotes { pub const LEN: usize = 32; }
 /// PDA: [b"lp_ckpt", pool, user]
 #[account]
 pub struct LpUserCheckpoint {
-    pub user:             Pubkey,
-    pub pool:             Pubkey,
-    pub weighted_balance: u128,  // sum(lp_balance × elapsed_secs) for last_epoch
-    pub last_update_ts:   i64,
-    pub last_epoch:       u64,
-    pub bump:             u8,
+    pub user: Pubkey,
+    pub pool: Pubkey,
+    pub weighted_balance: u128, // sum(lp_balance × elapsed_secs) for last_epoch
+    pub last_update_ts: i64,
+    pub last_epoch: u64,
+    pub bump: u8,
 }
-impl LpUserCheckpoint { pub const LEN: usize = 32+32+16+8+8+1+7; }
+impl LpUserCheckpoint {
+    pub const LEN: usize = 32 + 32 + 16 + 8 + 8 + 1 + 7;
+}
 
 /// Time-weighted total LP supply for one pool in one epoch.
 /// Finalized by emit_pool_rewards after epoch ends; records oSOLA allocation.
 /// PDA: [b"lp_pool_epoch", pool, epoch_le8]
 #[account]
 pub struct LpPoolEpochAccum {
-    pub pool:                  Pubkey,
-    pub epoch:                 u64,
+    pub pool: Pubkey,
+    pub epoch: u64,
     pub total_weighted_supply: u128,
-    pub last_update_ts:        i64,
-    pub last_lp_supply:        u64,
-    pub osola_allocated:       u64,
-    pub finalized:             bool,
-    pub bump:                  u8,
+    pub last_update_ts: i64,
+    pub last_lp_supply: u64,
+    pub osola_allocated: u64,
+    pub finalized: bool,
+    pub bump: u8,
 }
-impl LpPoolEpochAccum { pub const LEN: usize = 32+8+16+8+8+8+1+1+18; }
+impl LpPoolEpochAccum {
+    pub const LEN: usize = 32 + 8 + 16 + 8 + 8 + 8 + 1 + 1 + 18;
+}
 
 /// Proof-of-claim for LP emissions — created by claim_lp_emissions, blocks replay.
 /// PDA: [b"lp_claim", user, pool, epoch_le8]
@@ -278,7 +296,9 @@ impl LpPoolEpochAccum { pub const LEN: usize = 32+8+16+8+8+8+1+1+18; }
 pub struct LpEpochClaim {
     pub bump: u8,
 }
-impl LpEpochClaim { pub const LEN: usize = 32; }
+impl LpEpochClaim {
+    pub const LEN: usize = 32;
+}
 
 // ── Continuous LP reward tracking (Masterchef-style) ─────────────────────────
 
@@ -288,8 +308,8 @@ impl LpEpochClaim { pub const LEN: usize = 32; }
 #[account]
 #[derive(Default)]
 pub struct LpUserInfo {
-    pub reward_debt: u128,  // pool.osola_reward_per_lp snapshot at last interaction
-    pub bump:        u8,
+    pub reward_debt: u128, // pool.osola_reward_per_lp snapshot at last interaction
+    pub bump: u8,
 }
 impl LpUserInfo {
     pub const LEN: usize = 16 + 1 + 15; // = 32 with padding
@@ -303,9 +323,9 @@ impl LpUserInfo {
 /// PDA: [b"founder_hi_vesting"]
 #[account]
 pub struct FounderHiSolaVesting {
-    pub total_amount: u64,  // FOUNDER_STAKE = 7 000 000 SOLA (6 dec)
-    pub claimed: u64,       // hiSOLA already minted to founder
-    pub start_ts: i64,      // unix ts when mint_founder_allocation was executed
+    pub total_amount: u64, // FOUNDER_STAKE = 7 000 000 SOLA (6 dec)
+    pub claimed: u64,      // hiSOLA already minted to founder
+    pub start_ts: i64,     // unix ts when mint_founder_allocation was executed
     pub bump: u8,
 }
 impl FounderHiSolaVesting {
@@ -342,14 +362,16 @@ impl FounderVesting {
 #[account]
 pub struct PolState {
     /// Suggested % of market_vault fees to divert (informational, enforced off-chain).
-    pub pol_split_bps:    u16,
+    pub pol_split_bps: u16,
     /// AmmPool PDA that receives POL liquidity deposits.
-    pub target_pool:      Pubkey,
+    pub target_pool: Pubkey,
     /// Lifetime USDC routed through collect_to_pol.
     pub usdc_accumulated: u64,
-    pub bump:             u8,
+    pub bump: u8,
 }
-impl PolState { pub const LEN: usize = 96; }
+impl PolState {
+    pub const LEN: usize = 96;
+}
 
 // ── Contributor / Marketing vesting ──────────────────────────────────────────
 
@@ -366,13 +388,13 @@ impl PolState { pub const LEN: usize = 96; }
 /// PDA: [b"contributor", contributor_wallet]
 #[account]
 pub struct ContributorVesting {
-    pub contributor:     Pubkey, // Beneficiary wallet (immutable after init)
-    pub hi_sola_amount:  u64,    // Total hiSOLA allocated
-    pub o_sola_amount:   u64,    // Total oSOLA allocated
-    pub hi_sola_claimed: u64,    // hiSOLA already minted
-    pub o_sola_claimed:  u64,    // oSOLA already minted
-    pub start_ts:        i64,    // Unix timestamp when register_contributor was called
-    pub bump:            u8,
+    pub contributor: Pubkey,  // Beneficiary wallet (immutable after init)
+    pub hi_sola_amount: u64,  // Total hiSOLA allocated
+    pub o_sola_amount: u64,   // Total oSOLA allocated
+    pub hi_sola_claimed: u64, // hiSOLA already minted
+    pub o_sola_claimed: u64,  // oSOLA already minted
+    pub start_ts: i64,        // Unix timestamp when register_contributor was called
+    pub bump: u8,
 }
 impl ContributorVesting {
     pub const LEN: usize = 32 + 8 + 8 + 8 + 8 + 8 + 1 + 7; // = 80 bytes
