@@ -662,6 +662,122 @@
       ]
     },
     {
+      "name": "burn_o_sola_for_votes",
+      "docs": [
+        "Burn oSOLA to gain additional voting power for the current epoch.",
+        "",
+        "Unlike hiSOLA (which gives permanent voting rights + fees + borrow),",
+        "burning oSOLA grants **epoch-scoped** vote weight only — it resets",
+        "with every new epoch (new UserEpochVotes PDA).",
+        "",
+        "The oSOLA bonus is NOT subject to the 30% per-address cap:",
+        "burning tokens is a permanent, deflationary act that justifies",
+        "uncapped influence for that epoch.",
+        "",
+        "Conversion: 1 oSOLA (6 dec) = 1 vote unit (same as 1 hiSOLA)."
+      ],
+      "discriminator": [
+        24,
+        211,
+        86,
+        182,
+        106,
+        228,
+        211,
+        4
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Read-only — used for pause check and o_sola_mint address."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "o_sola_mint",
+          "docs": [
+            "The oSOLA mint — needed for the burn CPI."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_o_sola",
+          "docs": [
+            "User's oSOLA token account — tokens are burned from here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_epoch_votes",
+          "docs": [
+            "Epoch vote tracker — created on first burn if it doesn't exist yet."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  101,
+                  118
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "epoch",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "buy_sola",
       "discriminator": [
         107,
@@ -8027,6 +8143,15 @@
           },
           {
             "name": "total_power_snapshot",
+            "type": "u64"
+          },
+          {
+            "name": "o_sola_bonus",
+            "docs": [
+              "Extra voting power earned by burning oSOLA this epoch.",
+              "Resets every epoch (new PDA). Not subject to the 30% hiSOLA cap —",
+              "burning oSOLA is a deflationary act that justifies uncapped influence."
+            ],
             "type": "u64"
           },
           {
