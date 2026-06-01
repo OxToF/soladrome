@@ -93,7 +93,7 @@ impl FuzzTest {
         let r = self.trident.process_transaction(&[init_ix], Some("initialize"));
         if !r.is_success() { return; }
 
-        // Fund caller with USDC (10M) + buy some SOLA first so AMM pool has inventory
+        // Fund caller with 10M USDC.
         let caller_usdc = self.trident.get_associated_token_address(&usdc_mint, &authority, &TOKEN_PROGRAM_ID);
         let ix = self.trident.initialize_associated_token_account(&authority, &usdc_mint, &authority);
         self.trident.process_transaction(&[ix], Some("create_caller_usdc_ata"));
@@ -109,8 +109,10 @@ impl FuzzTest {
         let ix = self.trident.initialize_associated_token_account(&authority, &o_sola_mint, &authority);
         self.trident.process_transaction(&[ix], Some("create_caller_osola_ata"));
 
-        // Buy 500k USDC worth of SOLA to seed the floor vault and get SOLA
-        let buy_ix = BuySolaInstruction::data(BuySolaInstructionData::new(500_000_000_000, 0))
+        // Buy 50 USDC (50_000_000 base) of SOLA.
+        // With INIT_VIRTUAL_USDC = INIT_VIRTUAL_SOLA = 100 USDC, buying 50 USDC yields
+        // ~33 SOLA (constant product), which is enough to seed the AMM pool.
+        let buy_ix = BuySolaInstruction::data(BuySolaInstructionData::new(50_000_000, 0))
             .accounts(BuySolaInstructionAccounts::new(
                 authority, protocol_state, sola_mint,
                 caller_usdc, caller_sola, floor_vault, market_vault,
@@ -156,10 +158,18 @@ impl FuzzTest {
             &program_id(),
         ).0;
 
+        // Add liquidity with a deliberate price imbalance to enable flash arb.
+        // floor price = 1 USDC/SOLA; we want AMM price >> 1 USDC/SOLA.
+        // Deposit 1 SOLA + 100 USDC → AMM price = 100 USDC/SOLA → 100× arb opportunity.
+        // User has ~33 SOLA (safe for 1) and ~9.95M USDC (safe for 100).
+        let (amount_a, amount_b) = if mint_a == sola_mint {
+            (1_000_000_u64, 100_000_000_u64) // 1 SOLA (token_a) + 100 USDC (token_b)
+        } else {
+            (100_000_000_u64, 1_000_000_u64) // 100 USDC (token_a) + 1 SOLA (token_b)
+        };
         let add_liq_ix = AddLiquidityInstruction::data(AddLiquidityInstructionData::new(
-            100_000_000_000, // 100k token A
-            100_000_000_000, // 100k token B
-            0,               // min_lp = 0
+            amount_a, amount_b,
+            0, // min_lp = 0
         ))
         .accounts(AddLiquidityInstructionAccounts::new(
             authority, pool_pda, lp_mint_pda, vault_a_pda, vault_b_pda,
@@ -170,6 +180,21 @@ impl FuzzTest {
         ))
         .instruction();
         self.trident.process_transaction(&[add_liq_ix], Some("add_liquidity"));
+
+        // Give the caller oSOLA so flash_arbitrage has something to exercise.
+        // 1 000 oSOLA = 1_000_000_000 base units (6 dec).
+        let dist_ix = DistributeOSolaInstruction::data(DistributeOSolaInstructionData::new(
+            1_000_000_000,
+        ))
+        .accounts(DistributeOSolaInstructionAccounts::new(
+            authority,
+            authority,         // recipient = authority (caller)
+            protocol_state,
+            o_sola_mint,
+            caller_o_sola,
+        ))
+        .instruction();
+        self.trident.process_transaction(&[dist_ix], Some("seed_osola"));
 
         // Snapshot baselines before fuzzing starts
         self.market_vault_baseline = self.trident
