@@ -12,6 +12,7 @@ import { currentEpoch, epochLabel } from "@/lib/epoch";
 
 // ── PDA helpers ───────────────────────────────────────────────────────────────
 const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("state")], PROGRAM_ID);
 function epochBuf(epoch: number) {
   const b = Buffer.alloc(8);
   b.writeUInt32LE(epoch >>> 0, 0);
@@ -151,6 +152,7 @@ export function Gauge() {
         .accounts({
           depositor: wallet.publicKey, poolId: pool, rewardMint: mint,
           depositorToken, bribeVault, bribeTokenVault,
+          protocolState: statePda,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
