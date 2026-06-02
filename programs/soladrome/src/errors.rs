@@ -73,4 +73,7 @@ pub enum SoladromeError {
     // ── Governance cap ────────────────────────────────────────────────────────
     #[msg("Vote would exceed the 30% per-address voting cap — no single address may control more than 30% of total hiSOLA voting power")]
     VoteWeightCapExceeded,
+    // ── Bribe rollover ────────────────────────────────────────────────────────
+    #[msg("Rollover too early — epoch had votes, wait ROLLOVER_DELAY_EPOCHS before recycling remainder")]
+    RolloverTooEarly,
 }

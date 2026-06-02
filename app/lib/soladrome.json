@@ -5357,6 +5357,62 @@
       ]
     },
     {
+      "name": "migrate_user_position",
+      "docs": [
+        "One-time account migration — expands an existing UserPosition from the",
+        "pre-`last_borrow_slot` layout (LEN=120, space=128) to the current layout",
+        "(LEN=128, space=136).  The 8 new bytes are zeroed so last_borrow_slot=0.",
+        "Permissionless per-user: the owner pays the extra rent and signs."
+      ],
+      "discriminator": [
+        247,
+        89,
+        105,
+        105,
+        212,
+        67,
+        232,
+        16
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "user_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "mint_ecosystem_allocation",
       "discriminator": [
         103,
@@ -6099,6 +6155,228 @@
       "args": [
         {
           "name": "usdc_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "rollover_bribe",
+      "docs": [
+        "Move remaining (unclaimed) bribe tokens from a past epoch into the current epoch vault.",
+        "",
+        "Two cases:",
+        "• Zero-vote pool (gauge absent or total_votes == 0): rollover allowed immediately",
+        "after the epoch ends — nobody can ever claim, so recycling is safe.",
+        "• Pool with votes: a ROLLOVER_DELAY_EPOCHS grace period is enforced so that",
+        "slow voters are not robbed before they get a chance to claim.",
+        "",
+        "Permissionless — anyone can call this for any (pool, token, old_epoch) triple."
+      ],
+      "discriminator": [
+        212,
+        250,
+        42,
+        31,
+        23,
+        191,
+        181,
+        216
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool_id"
+        },
+        {
+          "name": "reward_mint"
+        },
+        {
+          "name": "old_bribe_vault",
+          "docs": [
+            "Source: old epoch bribe metadata."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "old_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "old_bribe_token_vault",
+          "docs": [
+            "Source: old epoch token vault."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "old_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "old_gauge_state",
+          "docs": [
+            "PDA seeds [b\"gauge\", pool_id, old_epoch_le8] verified in instruction body."
+          ]
+        },
+        {
+          "name": "new_bribe_vault",
+          "docs": [
+            "Destination: current epoch bribe metadata (created if not yet seeded)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "new_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "new_bribe_token_vault",
+          "docs": [
+            "Destination: current epoch token vault (created if not yet seeded)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "new_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "old_epoch",
+          "type": "u64"
+        },
+        {
+          "name": "new_epoch",
           "type": "u64"
         }
       ]
@@ -7555,6 +7833,11 @@
       "code": 6027,
       "name": "VoteWeightCapExceeded",
       "msg": "Vote would exceed the 30% per-address voting cap — no single address may control more than 30% of total hiSOLA voting power"
+    },
+    {
+      "code": 6028,
+      "name": "RolloverTooEarly",
+      "msg": "Rollover too early — epoch had votes, wait ROLLOVER_DELAY_EPOCHS before recycling remainder"
     }
   ],
   "types": [

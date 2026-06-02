@@ -66,6 +66,12 @@ pub const OSOLA_EMISSION_PER_SEC: u64 = 1_000;
 /// Precision factor for the oSOLA-per-LP accumulator.
 pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
 
+/// Grace period before unfinished bribe tokens can be rolled to the next epoch.
+/// Protects voters who haven't claimed yet from having funds recycled under them.
+/// Pools with zero votes are exempt — their tokens are immediately rollable.
+/// devnet: 2 epochs = 2 h · mainnet: 2 epochs = 14 days
+pub const ROLLOVER_DELAY_EPOCHS: u64 = 2;
+
 // Founder allocation — 12% of reference 100 M-token supply, 7% auto-staked.
 pub const FOUNDER_TOTAL: u64 = 12_000_000_000_000; // 12 000 000 SOLA (6 dec)
 pub const FOUNDER_STAKE: u64 = 7_000_000_000_000; //  7 000 000 SOLA → hiSOLA (governance)
@@ -1821,6 +1827,109 @@ pub mod soladrome {
         Ok(())
     }
 
+    /// Move remaining (unclaimed) bribe tokens from a past epoch into the current epoch vault.
+    ///
+    /// Two cases:
+    ///   • Zero-vote pool (gauge absent or total_votes == 0): rollover allowed immediately
+    ///     after the epoch ends — nobody can ever claim, so recycling is safe.
+    ///   • Pool with votes: a ROLLOVER_DELAY_EPOCHS grace period is enforced so that
+    ///     slow voters are not robbed before they get a chance to claim.
+    ///
+    /// Permissionless — anyone can call this for any (pool, token, old_epoch) triple.
+    pub fn rollover_bribe(
+        ctx: Context<RolloverBribe>,
+        old_epoch: u64,
+        new_epoch: u64,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        let curr_epoch = current_epoch(clock.unix_timestamp);
+
+        require!(new_epoch == curr_epoch, SoladromeError::WrongEpoch);
+        require!(old_epoch < curr_epoch, SoladromeError::EpochNotEnded);
+
+        // Verify old_gauge_state is the canonical PDA for (pool, old_epoch)
+        let old_epoch_le = old_epoch.to_le_bytes();
+        let (expected_gauge, _) = Pubkey::find_program_address(
+            &[
+                b"gauge",
+                ctx.accounts.pool_id.key().as_ref(),
+                old_epoch_le.as_ref(),
+            ],
+            ctx.program_id,
+        );
+        require_keys_eq!(
+            ctx.accounts.old_gauge_state.key(),
+            expected_gauge,
+            SoladromeError::Unauthorized
+        );
+
+        // Check whether the old gauge recorded any votes
+        let gauge_data = ctx.accounts.old_gauge_state.try_borrow_data()?;
+        let has_votes = gauge_data.len() >= 56
+            && u64::from_le_bytes(gauge_data[48..56].try_into().unwrap()) > 0;
+        drop(gauge_data);
+
+        if has_votes {
+            require!(
+                curr_epoch >= old_epoch.saturating_add(ROLLOVER_DELAY_EPOCHS),
+                SoladromeError::RolloverTooEarly
+            );
+        }
+
+        let amount = ctx.accounts.old_bribe_token_vault.amount;
+        require!(amount > 0, SoladromeError::NothingToClaim);
+
+        // Transfer: sign as old_bribe_vault PDA
+        let pool_key = ctx.accounts.pool_id.key();
+        let mint_key = ctx.accounts.reward_mint.key();
+        let vault_bump = [ctx.accounts.old_bribe_vault.bump];
+        let seeds: &[&[u8]] = &[
+            b"bribe_vault",
+            pool_key.as_ref(),
+            mint_key.as_ref(),
+            old_epoch_le.as_ref(),
+            vault_bump.as_ref(),
+        ];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.old_bribe_token_vault.to_account_info(),
+                    to: ctx.accounts.new_bribe_token_vault.to_account_info(),
+                    authority: ctx.accounts.old_bribe_vault.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )?;
+
+        // Initialise new vault on first rollover/deposit
+        if ctx.accounts.new_bribe_vault.pool_id == Pubkey::default() {
+            ctx.accounts.new_bribe_vault.pool_id = ctx.accounts.pool_id.key();
+            ctx.accounts.new_bribe_vault.reward_mint = ctx.accounts.reward_mint.key();
+            ctx.accounts.new_bribe_vault.epoch = new_epoch;
+            ctx.accounts.new_bribe_vault.bump = ctx.bumps.new_bribe_vault;
+        }
+
+        ctx.accounts.new_bribe_vault.total_bribed = ctx
+            .accounts
+            .new_bribe_vault
+            .total_bribed
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
+
+        Ok(())
+    }
+
+    /// One-time account migration — expands an existing UserPosition from the
+    /// pre-`last_borrow_slot` layout (LEN=120, space=128) to the current layout
+    /// (LEN=128, space=136).  The 8 new bytes are zeroed so last_borrow_slot=0.
+    /// Permissionless per-user: the owner pays the extra rent and signs.
+    pub fn migrate_user_position(_ctx: Context<MigrateUserPosition>) -> Result<()> {
+        Ok(())
+    }
+
     // ── AMM multi-pool instructions ───────────────────────────────────────────
 
     pub fn create_pool(
@@ -3051,6 +3160,86 @@ pub struct ClaimBribe<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+/// Transfer remaining bribe tokens from a past epoch's vault into the current epoch's vault.
+/// Permissionless — callable by anyone once the grace period has passed.
+#[derive(Accounts)]
+#[instruction(old_epoch: u64, new_epoch: u64)]
+pub struct RolloverBribe<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Pool label — seeds validated in instruction body.
+    pub pool_id: UncheckedAccount<'info>,
+
+    pub reward_mint: Box<Account<'info, Mint>>,
+
+    /// Source: old epoch bribe metadata.
+    #[account(
+        seeds = [b"bribe_vault", pool_id.key().as_ref(), reward_mint.key().as_ref(), old_epoch.to_le_bytes().as_ref()],
+        bump = old_bribe_vault.bump,
+    )]
+    pub old_bribe_vault: Box<Account<'info, BribeVault>>,
+
+    /// Source: old epoch token vault.
+    #[account(
+        mut,
+        seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), old_epoch.to_le_bytes().as_ref()],
+        bump,
+        token::mint = reward_mint,
+        token::authority = old_bribe_vault,
+    )]
+    pub old_bribe_token_vault: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: GaugeState for (pool, old_epoch) — may be absent if no votes were cast.
+    /// PDA seeds [b"gauge", pool_id, old_epoch_le8] verified in instruction body.
+    pub old_gauge_state: UncheckedAccount<'info>,
+
+    /// Destination: current epoch bribe metadata (created if not yet seeded).
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + BribeVault::LEN,
+        seeds = [b"bribe_vault", pool_id.key().as_ref(), reward_mint.key().as_ref(), new_epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub new_bribe_vault: Box<Account<'info, BribeVault>>,
+
+    /// Destination: current epoch token vault (created if not yet seeded).
+    #[account(
+        init_if_needed,
+        payer = payer,
+        token::mint = reward_mint,
+        token::authority = new_bribe_vault,
+        seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), new_epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub new_bribe_token_vault: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+/// Expands an existing UserPosition account from the old 128-byte layout to
+/// the current 136-byte layout.  The 8 extra bytes are zeroed (last_borrow_slot=0).
+#[derive(Accounts)]
+pub struct MigrateUserPosition<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        realloc = 8 + UserPosition::LEN,
+        realloc::payer = user,
+        realloc::zero = true,
+        seeds = [POSITION_SEED, user.key().as_ref()],
+        bump = user_position.bump,
+    )]
+    pub user_position: Account<'info, UserPosition>,
+
+    pub system_program: Program<'info, System>,
 }
 
 /// Burn oSOLA to gain epoch-scoped voting power.
