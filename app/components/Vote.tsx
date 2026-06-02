@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import { getProgram, statePda, hiSolaM, oSolaM, userAta, PROGRAM_ID as PROG_ID } from "@/lib/program";
+import { getProgram, statePda, hiSolaM, userAta, PROGRAM_ID as PROG_ID } from "@/lib/program";
 import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
@@ -42,11 +42,8 @@ export function Vote() {
   ];
 
   const [poolId,       setPoolId]       = useState("");
-  const [tab,          setTab]          = useState<"vote" | "burn">("vote");
   const [votes,        setVotes]        = useState("");
-  const [burnAmount,   setBurnAmount]   = useState("");
   const [balance,      setBalance]      = useState<number | null>(null);
-  const [oSolaBalance, setOSolaBalance] = useState<number | null>(null);
   const [allocated,    setAllocated]    = useState<number>(0);   // votes already cast this epoch
   const [oSolaBonus,   setOSolaBonus]   = useState<number>(0);   // voting power from burned oSOLA
   const [powerCap,     setPowerCap]     = useState<number | null>(null);
@@ -71,7 +68,7 @@ export function Vote() {
 
   const fetchBalance = useCallback(async () => {
     if (!wallet) {
-      setBalance(null); setOSolaBalance(null);
+      setBalance(null);
       setAllocated(0); setOSolaBonus(0); setPowerCap(null);
       return;
     }
@@ -81,13 +78,6 @@ export function Vote() {
       const info = await connection.getTokenAccountBalance(ata);
       setBalance(Number(info.value.uiAmount ?? 0));
     } catch { setBalance(0); }
-
-    // oSOLA balance
-    try {
-      const ata  = userAta(oSolaM, wallet.publicKey);
-      const info = await connection.getTokenAccountBalance(ata);
-      setOSolaBalance(Number(info.value.uiAmount ?? 0));
-    } catch { setOSolaBalance(0); }
 
     // Read UserEpochVotes — layout after adding o_sola_bonus field:
     // discriminator(8) + epoch(8) + allocated(8) + total_power_snapshot(8) + o_sola_bonus(8) + bump(1)
@@ -214,52 +204,6 @@ export function Vote() {
     setVotes(((remaining * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
   }
 
-  function applyBurnPct(pct: number) {
-    if (!oSolaBalance || oSolaBalance <= 0) return;
-    setBurnAmount(((oSolaBalance * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
-  }
-
-  async function burnForVotes() {
-    if (!wallet || !burnAmount) return;
-    const amt = parseFloat(burnAmount);
-    if (isNaN(amt) || amt <= 0) { setStatus("❌ Montant invalide"); return; }
-    setLoading(true); setStatus("");
-    try {
-      const provider = new AnchorProvider(connection, wallet, {});
-      const program  = getProgram(provider);
-      const ep = currentEpoch();
-      const rawAmount = new BN(Math.floor(amt * 1_000_000));
-      const eb = Buffer.alloc(8);
-      eb.writeBigUInt64LE(BigInt(ep));
-      const [userEpochVotes] = PublicKey.findProgramAddressSync(
-        [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROG_ID
-      );
-      const userOSola = userAta(oSolaM, wallet.publicKey);
-      const tx = await program.methods
-        .burnOSolaForVotes(rawAmount, new BN(ep))
-        .accounts({
-          user:           wallet.publicKey,
-          protocolState:  statePda,
-          oSolaMint:      oSolaM,
-          userOSola,
-          userEpochVotes,
-          tokenProgram:   (await import("@solana/spl-token")).TOKEN_PROGRAM_ID,
-          systemProgram:  SystemProgram.programId,
-          rent:           SYSVAR_RENT_PUBKEY,
-        } as any)
-        .rpc();
-      setStatus(`✅ ${amt.toFixed(4)} oSOLA brûlés → voting power boosté — tx: ${tx.slice(0, 16)}…`);
-      setBurnAmount("");
-      // Optimistic update — reflect immediately without waiting for RPC propagation
-      setOSolaBonus(prev => prev + amt);
-      setOSolaBalance(prev => prev !== null ? Math.max(0, prev - amt) : null);
-      // Authoritative refresh after RPC propagates (~2s on devnet)
-      setTimeout(() => fetchBalance(), 2000);
-    } catch (e: any) {
-      setStatus(`❌ ${e?.message ?? e}`);
-    } finally { setLoading(false); }
-  }
-
   function tryPool(): PublicKey | null {
     try { return new PublicKey(poolId); } catch { return null; }
   }
@@ -362,108 +306,15 @@ export function Vote() {
         </div>
       </div>
 
-      {/* Tab selector */}
-      <div className="flex gap-2">
-        {(["vote", "burn"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => { setTab(t); setStatus(""); }}
-            className={`px-5 py-2 rounded-xl text-sm font-semibold transition-colors ${
-              tab === t
-                ? "bg-brand-green text-brand-dark"
-                : "border border-brand-border text-gray-400 hover:border-brand-green hover:text-brand-green"
-            }`}
-          >
-            {t === "vote" ? "🗳 Vote" : "🔥 Burn oSOLA"}
-          </button>
-        ))}
-        {/* Voting power summary */}
-        {(balance !== null || oSolaBonus > 0) && (
-          <div className="ml-auto flex items-center gap-3 text-xs text-gray-500">
-            {balance !== null && <span>hiSOLA: <span className="text-gray-300 font-mono">{balance.toFixed(2)}</span></span>}
-            {oSolaBonus > 0 && <span>🔥 Burn bonus: <span className="text-brand-green font-mono">{oSolaBonus.toFixed(2)}</span></span>}
-            {balance !== null &&<span>Remaining: <span className={`font-mono ${remaining <= 0 ? "text-red-400" : "text-white"}`}>{remaining.toFixed(4)}</span></span>}
-          </div>
-        )}
-      </div>
-
-      {/* ── Burn oSOLA panel ─────────────────────────────────────────── */}
-      {tab === "burn" && (
-        <div className="card">
-          <h2 className="text-lg font-bold text-white mb-1">🔥 Burn oSOLA → Voting Power</h2>
-          <p className="text-xs text-gray-500 mb-5">
-            Burn oSOLA to gain extra gauge-voting power for this epoch only.<br />
-            1 oSOLA burned = 1 vote unit — uncapped, resets each epoch.
-          </p>
-
-          <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-gray-400">oSOLA to burn</span>
-              {oSolaBalance !== null && (
-                <button
-                  className="text-xs font-mono text-gray-300 hover:text-brand-green transition-colors"
-                  onClick={() => applyBurnPct(100)}
-                >
-                  Balance: {oSolaBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })} oSOLA
-                </button>
-              )}
-            </div>
-            <input
-              className="w-full bg-transparent text-right text-2xl font-bold text-white placeholder-gray-600 focus:outline-none mb-3"
-              type="text"
-              inputMode="decimal"
-              placeholder="0"
-              value={burnAmount}
-              onChange={(e) => setBurnAmount(e.target.value)}
-            />
-            <div className="flex gap-2">
-              {PCT.map((pct) => (
-                <button
-                  key={pct}
-                  onClick={() => applyBurnPct(pct)}
-                  disabled={!oSolaBalance}
-                  className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-400
-                             hover:border-brand-green hover:text-brand-green transition-colors
-                             disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  {pct === 100 ? "Max" : `${pct}%`}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Preview */}
-          {burnAmount && parseFloat(burnAmount) > 0 && (
-            <div className="rounded-lg border border-brand-border px-3 py-2 mb-4 text-xs text-gray-400 flex items-center justify-between">
-              <span>You burn <span className="text-white font-mono">{parseFloat(burnAmount).toFixed(4)} oSOLA</span></span>
-              <span>→ You gain <span className="text-brand-green font-mono">+{parseFloat(burnAmount).toFixed(4)} votes</span> this epoch</span>
-            </div>
-          )}
-
-          {oSolaBonus > 0 && (
-            <div className="rounded-lg border border-brand-green/30 bg-brand-green/5 px-3 py-2 mb-4 text-xs text-brand-green">
-              🔥 Already burned this epoch: <span className="font-mono font-bold">{oSolaBonus.toFixed(4)} oSOLA</span> = <span className="font-mono font-bold">{oSolaBonus.toFixed(4)} bonus votes</span>
-            </div>
-          )}
-
-          <button
-            onClick={burnForVotes}
-            disabled={loading || !wallet || !burnAmount || parseFloat(burnAmount) <= 0}
-            className="btn-primary w-full disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {loading ? "Burning…" : "🔥 Burn oSOLA for votes"}
-          </button>
-
-          {status && (
-            <p className={`mt-3 text-xs text-center ${status.startsWith("✅") ? "text-brand-green" : "text-red-400"}`}>
-              {status}
-            </p>
-          )}
+      {/* Voting power summary bar */}
+      {(balance !== null || oSolaBonus > 0) && (
+        <div className="flex items-center gap-3 text-xs text-gray-500 px-1">
+          {balance !== null && <span>hiSOLA: <span className="text-gray-300 font-mono">{balance.toFixed(2)}</span></span>}
+          {oSolaBonus > 0 && <span>🔥 Burn bonus: <span className="text-brand-green font-mono">{oSolaBonus.toFixed(2)}</span></span>}
+          <span className="ml-auto">Remaining: <span className={`font-mono ${remaining <= 0 ? "text-red-400" : "text-white"}`}>{remaining.toFixed(4)}</span></span>
         </div>
       )}
 
-      {/* ── Vote panel ───────────────────────────────────────────────── */}
-      {tab === "vote" && (
       <div className="card">
         <h2 className="text-lg font-bold text-white mb-1">Vote for a pool</h2>
         <p className="text-xs text-gray-500 mb-6">
@@ -615,7 +466,6 @@ export function Vote() {
 
         {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
       </div>
-      )} {/* end tab === "vote" */}
     </div>
   );
 }

@@ -6,16 +6,19 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import {
   getProgram, statePda, solaM, hiSolaM, oSolaM,
-  positionPda, userAta, toUi,
+  positionPda, userAta, toUi, PROGRAM_ID,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { currentEpoch } from "@/lib/epoch";
+import { PublicKey } from "@solana/web3.js";
 
 interface PortfolioData {
   solaBalance:   number;
   hiSolaBalance: number;
   oSolaBalance:  number;
-  debt:          number;   // UserPosition.usdcBorrowed
-  marketPrice:   number;   // virtualUsdc / virtualSola
+  oSolaBonus:    number;   // extra voting power from burning oSOLA this epoch
+  debt:          number;
+  marketPrice:   number;
 }
 
 export function Portfolio() {
@@ -56,7 +59,23 @@ export function Portfolio() {
       if (vSola > 0) marketPrice = vUsdc / vSola;
     }
 
-    setData({ solaBalance, hiSolaBalance, oSolaBalance, debt, marketPrice });
+    // Read o_sola_bonus from UserEpochVotes for current epoch
+    // Layout: discriminator(8) + epoch(8) + allocated(8) + total_power_snapshot(8) + o_sola_bonus(8)
+    let oSolaBonus = 0;
+    try {
+      const ep = currentEpoch();
+      const eb = Buffer.alloc(8);
+      eb.writeBigUInt64LE(BigInt(ep));
+      const [uevPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROGRAM_ID
+      );
+      const uevInfo = await connection.getAccountInfo(uevPda);
+      if (uevInfo && uevInfo.data.length >= 40) {
+        oSolaBonus = Number(uevInfo.data.readBigUInt64LE(32)) / 1e6;
+      }
+    } catch { /* no UEV account yet — bonus stays 0 */ }
+
+    setData({ solaBalance, hiSolaBalance, oSolaBalance, oSolaBonus, debt, marketPrice });
   }, [connection, wallet, usdcMint]);
 
   useEffect(() => {
@@ -91,9 +110,16 @@ export function Portfolio() {
           <p className="text-sm font-semibold text-white">hiSOLA</p>
           <p className="text-xs text-gray-500">
             Voting Power{" "}
-            <span className="text-gray-300">
-              {data ? data.hiSolaBalance.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}
+            <span className="text-gray-300 font-mono">
+              {data
+                ? (data.hiSolaBalance + data.oSolaBonus).toLocaleString(undefined, { maximumFractionDigits: 2 })
+                : "—"}
             </span>
+            {(data?.oSolaBonus ?? 0) > 0 && (
+              <span className="ml-1 text-brand-green text-[10px]">
+                (incl. 🔥 {data!.oSolaBonus.toLocaleString(undefined, { maximumFractionDigits: 2 })} burn)
+              </span>
+            )}
           </p>
           <p className="text-xs text-gray-500">
             Available credit{" "}
