@@ -7,7 +7,7 @@ const connection   = new anchor.web3.Connection("https://api.devnet.solana.com",
 const provider     = new anchor.AnchorProvider(connection, {} as any, {});
 const program      = new anchor.Program(idl as any, provider);
 
-const TARGET_EPOCH = 29649450n;
+const TARGET_EPOCH = BigInt(Math.floor(Date.now() / 1000)) / 604_800n; // current 7-day epoch — override for a specific past epoch
 const USER         = new PublicKey("HMY1hCg2aVpKLmXGiiEqVFDMTstPfcxji7zNf8UPRvtb");
 
 const KNOWN: Record<string, string> = {
@@ -27,7 +27,7 @@ async function main() {
   const s = await (program.account as any).protocolState.fetch(statePda);
   KNOWN[(s.usdcMint as PublicKey).toBase58()] = "USDC";
 
-  const nowEpoch = BigInt(Math.floor(Date.now() / 1000)) / 60n;
+  const nowEpoch = BigInt(Math.floor(Date.now() / 1000)) / 604_800n;
   console.log(`Epoch ${TARGET_EPOCH} — scan complet`);
   console.log(`Époque courante : ${nowEpoch}\n`);
 

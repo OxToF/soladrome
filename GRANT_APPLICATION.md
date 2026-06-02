@@ -76,14 +76,15 @@ Three-token system inspired by Velodrome/Beradrome, rebuilt natively for Anchor:
 | **hiSOLA** | Governance + fee share + borrow collateral (stake SOLA to mint) |
 | **oSOLA** | Call-option rewards distributed to liquidity providers |
 
-**Founder allocation (12M SOLA) — fully progressive, zero at launch:**
-- **7M progressive hiSOLA** — minted in linear tranches via `claim_founder_hi_sola`. Each claim mints SOLA to `sola_vault` + hiSOLA 1:1 to founder. Schedule: 6-month cliff → 24-month linear vesting (devnet: 6h cliff / 24h). Zero hiSOLA at launch; protocol accumulates USDC floor reserves naturally before each tranche unlocks. The founder's primary liquidity path is `borrow_usdc` — borrow USDC against hiSOLA at floor price, no interest, no liquidation.
+**Founder allocation (12.25M SOLA total — three tranches):**
+- **7M progressive hiSOLA** — minted in linear tranches via `claim_founder_hi_sola`. Each claim mints SOLA to `sola_vault` + hiSOLA 1:1 to founder. Schedule: 6-month cliff → 24-month linear vesting. Zero hiSOLA at launch; protocol accumulates USDC floor reserves naturally before each tranche unlocks. The founder's primary liquidity path is `borrow_usdc` — borrow USDC against hiSOLA at floor price, no interest, no liquidation.
 - **5M progressive oSOLA** — minted as call-option tokens via `claim_founder_vesting`. Same schedule: 6-month cliff → 24-month linear. oSOLA is exercised via `exercise_o_sola`: burn oSOLA + pay 1 USDC → receive 1 SOLA. Each exercise **adds 1 USDC to `floor_vault`** — net positive for the protocol. Identical to Beradrome's OBERO model (which reached $600k+ TVL). Zero tokens at launch; zero supply impact until after cliff.
-- **Floor invariant fix:** `sell_sola` now checks `floor_vault + total_usdc_borrowed >= total_purchased_sola` where `total_purchased_sola` counts only SOLA minted via `buy_sola` or `exercise_o_sola` — not founder/ecosystem allocations. This eliminates the floor depletion vector entirely: founder allocation never increments `total_purchased_sola`.
+- **250k liquid SOLA** — minted at launch via `mint_ecosystem_allocation` directly to the founder wallet. No lock, no vesting. Represents ~2% of the total founder allocation; provides near-term operational income while the 6-month cliff runs. Not counted in `total_purchased_sola` — cannot deplete the floor vault via `sell_sola` (on-chain enforced).
+- **Floor invariant fix:** `sell_sola` checks `total_purchased_sola >= sola_amount` before decrementing, then verifies `floor_vault + total_usdc_borrowed >= total_purchased_sola`. `total_purchased_sola` counts only SOLA minted via `buy_sola` or `exercise_o_sola` — not founder/ecosystem allocations. This eliminates the floor depletion vector entirely.
 
 A soft vote-weight cap (max 30% per address) will be added pre-mainnet.
 
-**Ecosystem allocation (2M SOLA):** A separate on-chain `mint_ecosystem_allocation` instruction — one-time, authority-only — reserves 2,000,000 SOLA for community airdrop (50%), marketing (25%), trading contests (12.5%) and ecosystem reserve (12.5%). Entirely separate from the founder allocation.
+**Ecosystem allocation (1.75M SOLA):** A separate on-chain `mint_ecosystem_allocation` instruction — one-time, authority-only — reserves 1,750,000 SOLA for community airdrop (50%), marketing (25%), trading contests (12.5%) and ecosystem reserve (12.5%). The same instruction also delivers the 250k founder liquid tranche above. Total tokens minted by this instruction: 2,000,000 SOLA.
 
 ### 3.5 Permissionless Bribe System
 

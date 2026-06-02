@@ -7,11 +7,11 @@ const connection  = new anchor.web3.Connection("https://api.devnet.solana.com", 
 const provider    = new anchor.AnchorProvider(connection, {} as any, {});
 const program     = new anchor.Program(idl as any, provider);
 
-const EPOCH_S     = 60n;
-const TARGET_EPOCH = 29649450n;  // ← change here to check a specific epoch
-const toUi        = (bn: anchor.BN) => bn.toNumber() / 1_000_000;
-const nowSec      = BigInt(Math.floor(Date.now() / 1000));
-const curEpoch    = nowSec / EPOCH_S;
+const EPOCH_S      = 604_800n;                                     // 7 days — matches on-chain EPOCH_DURATION
+const nowSec       = BigInt(Math.floor(Date.now() / 1000));
+const curEpoch     = nowSec / EPOCH_S;
+const TARGET_EPOCH = curEpoch;                                     // ← override to check a specific past epoch
+const toUi         = (bn: anchor.BN) => bn.toNumber() / 1_000_000;
 
 function epochBuf(epoch: bigint): Buffer {
   const b = Buffer.alloc(8);

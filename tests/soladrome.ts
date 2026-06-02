@@ -596,10 +596,10 @@ describe("soladrome", () => {
     const hiSolaBefore  = await getTokenBalance(connection, userHiSolaAta);
     const stateBefore   = await program.account.protocolState.fetch(statePda);
 
-    // Lock 1 hiSOLA for max duration (104 epochs × EPOCH_DURATION=3600s on devnet)
-    // Mainnet: 104 × 604800 = ~2 years. Devnet: 104 × 3600 = ~4.3 days.
-    const DEVNET_EPOCH = 3_600;
-    const FOUR_WEEKS   = new BN(104 * DEVNET_EPOCH); // = MAX_LOCK_DURATION on devnet
+    // Lock 1 hiSOLA for max duration (104 epochs × EPOCH_DURATION=604800s = ~2 years)
+    // EPOCH_DURATION is now always 604 800 s on both devnet and mainnet.
+    const EPOCH_DURATION = 604_800;
+    const FOUR_WEEKS     = new BN(104 * EPOCH_DURATION); // = MAX_LOCK_DURATION
     await program.methods
       .lockHiSola(ONE, FOUR_WEEKS)
       .accounts({
@@ -656,7 +656,7 @@ describe("soladrome", () => {
     // Get current on-chain epoch
     const slot      = await connection.getSlot();
     const blockTime = await connection.getBlockTime(slot);
-    const EPOCH_DUR = 3_600; // devnet epoch (= state.rs EPOCH_DURATION)
+    const EPOCH_DUR = 604_800; // EPOCH_DURATION = 7 days (same on devnet and mainnet)
     const epoch     = Math.floor(blockTime / EPOCH_DUR);
     const epochLE   = Buffer.alloc(8);
     epochLE.writeBigUInt64LE(BigInt(epoch));

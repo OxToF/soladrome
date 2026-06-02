@@ -16,12 +16,8 @@ pub const PRECISION: u128 = 1_000_000_000_000; // 1e12
 // Never deploy the "devnet" build to mainnet — all durations are dramatically
 // shorter for testing and would allow instant cliff bypasses in production.
 
-/// Epoch length.
-/// devnet: 1 h  |  mainnet: 7 days
-#[cfg(feature = "devnet")]
-pub const EPOCH_DURATION: u64 = 3_600;
-#[cfg(not(feature = "devnet"))]
-pub const EPOCH_DURATION: u64 = 7 * 24 * 60 * 60;
+/// Epoch length: 7 days on both devnet and mainnet.
+pub const EPOCH_DURATION: u64 = 7 * 24 * 60 * 60; // 604 800 s
 
 // ── Founder vesting schedule ──────────────────────────────────────────────────
 
