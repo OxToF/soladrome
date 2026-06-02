@@ -39,6 +39,13 @@ export function Gauge() {
   const wallet         = useAnchorWallet();
   const { usdcMint }   = useSoladrome();
 
+  // ── Rollover state ────────────────────────────────────────────────────────
+  const [rolloverEpoch, setRolloverEpoch] = useState("");
+  const [rolloverPool,  setRolloverPool]  = useState("");
+  const [rolloverMint,  setRolloverMint]  = useState("");
+  const [rolloverLoading, setRolloverLoading] = useState(false);
+  const [rolloverStatus,  setRolloverStatus]  = useState("");
+
   const [poolId,     setPoolId]     = useState("");
   const [rewardMint, setRewardMint] = useState("");
   const [amount,     setAmount]     = useState("");
@@ -133,6 +140,53 @@ export function Gauge() {
 
   function parsePool(): PublicKey | null { try { return new PublicKey(poolId); } catch { return null; } }
   function parseMint(): PublicKey | null { try { return new PublicKey(rewardMint); } catch { return null; } }
+
+  // ── Rollover bribe ───────────────────────────────────────────────────────────
+  async function rolloverBribe() {
+    if (!wallet) return;
+    let oldEp: number, pool: PublicKey, mint: PublicKey;
+    try {
+      oldEp = parseInt(rolloverEpoch);
+      pool  = new PublicKey(rolloverPool);
+      mint  = new PublicKey(rolloverMint);
+    } catch { setRolloverStatus("❌ Invalid epoch / pool / mint"); return; }
+    if (isNaN(oldEp) || oldEp <= 0) { setRolloverStatus("❌ Invalid epoch number"); return; }
+
+    setRolloverLoading(true); setRolloverStatus("");
+    try {
+      const provider = new AnchorProvider(connection, wallet, {});
+      const program  = getProgram(provider);
+      const newEp = currentEpoch();
+
+      const oldBribeVault      = bribeVaultPda(pool, mint, oldEp);
+      const oldBribeTokenVault = bribeTokensPda(pool, mint, oldEp);
+      const oldGaugeState      = gaugePda(pool, oldEp);
+      const newBribeVault      = bribeVaultPda(pool, mint, newEp);
+      const newBribeTokenVault = bribeTokensPda(pool, mint, newEp);
+
+      const tx = await program.methods
+        .rolloverBribe(new BN(oldEp), new BN(newEp))
+        .accounts({
+          payer: wallet.publicKey, poolId: pool, rewardMint: mint,
+          oldBribeVault, oldBribeTokenVault, oldGaugeState,
+          newBribeVault, newBribeTokenVault,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        } as any).rpc();
+      setRolloverStatus(`✅ Rolled over to epoch ${newEp} — tx: ${tx.slice(0, 16)}…`);
+      setRolloverEpoch(""); setRolloverPool(""); setRolloverMint("");
+    } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      if (msg.includes("RolloverTooEarly") || msg.includes("6029")) {
+        setRolloverStatus("❌ Grace period not passed yet — wait ROLLOVER_DELAY_EPOCHS.");
+      } else if (msg.includes("NothingToClaim") || msg.includes("6007")) {
+        setRolloverStatus("❌ No tokens remaining in that vault.");
+      } else {
+        setRolloverStatus(`❌ ${msg}`);
+      }
+    } finally { setRolloverLoading(false); }
+  }
 
   // ── Deposit bribe ────────────────────────────────────────────────────────────
   async function depositBribe() {
@@ -310,6 +364,30 @@ export function Gauge() {
       </button>
 
       {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+
+      {/* ── Rollover section ── */}
+      <div className="mt-6 border-t border-brand-border pt-5">
+        <p className="text-xs text-gray-500 mb-1 uppercase tracking-widest">Rollover unclaimed bribes</p>
+        <p className="text-xs text-gray-600 mb-3">
+          Move remaining tokens from a past epoch into the current one.
+          Pools with zero votes can be rolled immediately; pools with votes require a 2-epoch grace period.
+        </p>
+        <div className="flex flex-col gap-2 mb-3">
+          <input className="input" placeholder="Old epoch number (e.g. 494541)"
+            value={rolloverEpoch} onChange={e => setRolloverEpoch(e.target.value)} />
+          <input className="input" placeholder="Pool address"
+            value={rolloverPool} onChange={e => setRolloverPool(e.target.value)} />
+          <input className="input" placeholder="Bribe token mint"
+            value={rolloverMint} onChange={e => setRolloverMint(e.target.value)} />
+        </div>
+        <button
+          className="w-full text-sm py-2 rounded-xl border border-brand-border text-gray-400 hover:border-brand-green hover:text-brand-green transition-colors disabled:opacity-30"
+          onClick={rolloverBribe}
+          disabled={rolloverLoading || !wallet || !rolloverEpoch || !rolloverPool || !rolloverMint}>
+          {rolloverLoading ? "Rolling over…" : "↻ Rollover to current epoch"}
+        </button>
+        {rolloverStatus && <p className="mt-2 text-xs text-gray-400 break-all">{rolloverStatus}</p>}
+      </div>
     </div>
   );
 }

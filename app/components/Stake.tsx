@@ -107,6 +107,20 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
       const position   = positionPda(wallet.publicKey);
 
       if (tab === "stake") {
+        // Auto-migrate user_position if it exists with the old 128-byte layout
+        const posInfo = await connection.getAccountInfo(position);
+        if (posInfo && posInfo.data.length === 128) {
+          setStatus("Migrating account layout…");
+          await program.methods
+            .migrateUserPosition()
+            .accounts({
+              user: wallet.publicKey,
+              userPosition: position,
+              systemProgram: SystemProgram.programId,
+            } as any)
+            .rpc();
+        }
+
         const tx = await program.methods
           .stakeSola(fromUi(+amount))
           .accounts({
