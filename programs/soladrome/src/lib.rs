@@ -73,11 +73,16 @@ pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
 pub const ROLLOVER_DELAY_EPOCHS: u64 = 2;
 
 // Founder allocation — 12% of reference 100 M-token supply, 7% auto-staked.
-pub const FOUNDER_TOTAL: u64 = 12_000_000_000_000; // 12 000 000 SOLA (6 dec)
-pub const FOUNDER_STAKE: u64 = 7_000_000_000_000; //  7 000 000 SOLA → hiSOLA (governance)
-/// 5 000 000 SOLA liquid — held in vesting vault, released linearly after cliff.
-pub const FOUNDER_LIQUID: u64 = 5_000_000_000_000; // FOUNDER_TOTAL − FOUNDER_STAKE
-pub const ECOSYSTEM_TOTAL: u64 = 2_000_000_000_000; //  2 000 000 SOLA — marketing + airdrop
+/// Total founder allocation across all three tranches (reference only — never used as a cap).
+/// 7M hiSOLA (vesting) + 5M oSOLA (vesting) + 250k SOLA (immediate liquid) = 12.25M
+pub const FOUNDER_TOTAL: u64 = 12_250_000_000_000; // 12 250 000 SOLA (6 dec)
+pub const FOUNDER_STAKE: u64 = 7_000_000_000_000; //  7 000 000 SOLA → hiSOLA (governance vesting)
+/// 5 000 000 oSOLA — held in vesting vault, released linearly after cliff.
+pub const FOUNDER_LIQUID: u64 = 5_000_000_000_000; //  5 000 000 oSOLA vesting tranche
+pub const ECOSYSTEM_TOTAL: u64 = 1_750_000_000_000; //  1 750 000 SOLA — marketing + airdrop
+/// Liquid SOLA sent directly to the founder wallet at ecosystem allocation time.
+/// Separate from the 7M hiSOLA vesting — provides immediate income while vesting cliff runs.
+pub const FOUNDER_IMMEDIATE_SOLA: u64 = 250_000_000_000; //    250 000 SOLA — liquid, no lock
 /// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
 pub const BORROW_FEE_BPS: u64 = 200; //  2 % of borrowed amount
 /// Founder borrow cap: max 10 % of total *claimed* hiSOLA ever borrowed.
@@ -291,13 +296,19 @@ pub mod soladrome {
         // Invariant: floor_vault + total_usdc_borrowed ≥ total_purchased_sola
         //
         // Only SOLA minted via buy_sola or exercise_o_sola carries 1 USDC of
-        // floor backing. Founder/ecosystem allocations are excluded, preventing
-        // unfinanced supply from blocking legitimate user redemptions.
+        // floor backing. Founder/ecosystem allocations are excluded: they are
+        // never added to total_purchased_sola, so they cannot be redeemed at
+        // floor price via sell_sola (this check enforces that).
+        require!(
+            ctx.accounts.protocol_state.total_purchased_sola >= sola_amount,
+            SoladromeError::InsufficientFloorReserve
+        );
         ctx.accounts.protocol_state.total_purchased_sola = ctx
             .accounts
             .protocol_state
             .total_purchased_sola
-            .saturating_sub(sola_amount);
+            .checked_sub(sola_amount)
+            .ok_or(SoladromeError::Overflow)?;
 
         let floor_post = ctx
             .accounts
@@ -778,6 +789,10 @@ pub mod soladrome {
     // Entirely separate from the founder allocation; protected by `ecosystem_allocated` flag.
     pub fn mint_ecosystem_allocation(ctx: Context<MintEcosystemAllocation>) -> Result<()> {
         require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        require!(
             !ctx.accounts.protocol_state.ecosystem_allocated,
             SoladromeError::AlreadyAllocated
         );
@@ -785,7 +800,7 @@ pub mod soladrome {
         let bump = ctx.accounts.protocol_state.bump;
         let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
 
-        // Mint ECOSYSTEM_TOTAL SOLA directly to authority's ATA — liquid, no auto-stake.
+        // 1 750 000 SOLA → authority ATA (marketing + airdrop budget).
         token::mint_to(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -799,10 +814,26 @@ pub mod soladrome {
             ECOSYSTEM_TOTAL,
         )?;
 
+        // 250 000 SOLA → founder wallet, liquid, no vesting.
+        // Provides immediate income while the 7M hiSOLA vesting cliff runs (6 months).
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint: ctx.accounts.sola_mint.to_account_info(),
+                    to: ctx.accounts.founder_sola.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            FOUNDER_IMMEDIATE_SOLA,
+        )?;
+
         let s = &mut ctx.accounts.protocol_state;
         s.total_sola = s
             .total_sola
             .checked_add(ECOSYSTEM_TOTAL)
+            .and_then(|v| v.checked_add(FOUNDER_IMMEDIATE_SOLA))
             .ok_or(SoladromeError::Overflow)?;
         s.ecosystem_allocated = true;
 
@@ -2811,7 +2842,7 @@ pub struct MintEcosystemAllocation<'info> {
     #[account(mut, address = protocol_state.sola_mint)]
     pub sola_mint: Box<Account<'info, Mint>>,
 
-    /// Authority's SOLA ATA — receives the ecosystem allocation.
+    /// Authority's SOLA ATA — receives the ecosystem allocation (1 750 000 SOLA).
     #[account(
         init_if_needed,
         payer = authority,
@@ -2819,6 +2850,19 @@ pub struct MintEcosystemAllocation<'info> {
         associated_token::authority = authority,
     )]
     pub authority_sola: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: hardcoded founder wallet — receives FOUNDER_IMMEDIATE_SOLA (250 000 SOLA).
+    #[account(address = FOUNDER_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized)]
+    pub founder: UncheckedAccount<'info>,
+
+    /// Founder's SOLA ATA — created here if it doesn't exist yet.
+    #[account(
+        init_if_needed,
+        payer = authority,
+        associated_token::mint = sola_mint,
+        associated_token::authority = founder,
+    )]
+    pub founder_sola: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
