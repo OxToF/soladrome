@@ -3,15 +3,16 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
-import { AnchorProvider } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { AnchorProvider, BN } from "@coral-xyz/anchor";
+import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
-  getProgram, statePda, solaM, hiSolaM, solaVaultAddr,
-  marketVault, positionPda, userAta, commonAccounts, fromUi,
+  getProgram, statePda, solaM, hiSolaM, oSolaM, solaVaultAddr,
+  marketVault, positionPda, userAta, commonAccounts, fromUi, PROGRAM_ID,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { currentEpoch } from "@/lib/epoch";
 
-type Tab = "stake" | "unstake";
+type Tab = "stake" | "unstake" | "burn";
 const PCT = [25, 50, 75, 100] as const;
 
 export function Stake({ embedded = false }: { embedded?: boolean }) {
@@ -24,14 +25,32 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
+  const [oSolaBonus, setOSolaBonus] = useState<number>(0);
+
   const fetchBalance = useCallback(async () => {
     if (!wallet) { setBalance(null); return; }
-    const mint = tab === "stake" ? solaM : hiSolaM;
+    const mint = tab === "stake" ? solaM : tab === "unstake" ? hiSolaM : oSolaM;
     try {
       const ata  = userAta(mint, wallet.publicKey);
       const info = await connection.getTokenAccountBalance(ata);
       setBalance(Number(info.value.uiAmount ?? 0));
     } catch { setBalance(0); }
+
+    // Read current epoch's oSOLA burn bonus for display
+    if (tab === "burn") {
+      try {
+        const ep = currentEpoch();
+        const eb = Buffer.alloc(8);
+        eb.writeBigUInt64LE(BigInt(ep));
+        const [uevPda] = PublicKey.findProgramAddressSync(
+          [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROGRAM_ID
+        );
+        const uevInfo = await connection.getAccountInfo(uevPda);
+        if (uevInfo && uevInfo.data.length >= 40) {
+          setOSolaBonus(Number(uevInfo.data.readBigUInt64LE(32)) / 1e6);
+        } else { setOSolaBonus(0); }
+      } catch { setOSolaBonus(0); }
+    }
   }, [connection, wallet, tab]);
 
   useEffect(() => { fetchBalance(); }, [fetchBalance]);
@@ -39,6 +58,41 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
   function applyPct(pct: number) {
     if (!balance || balance <= 0) return;
     setAmount(((balance * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
+  }
+
+  async function burnForVotes() {
+    if (!wallet || !amount) return;
+    const amt = parseFloat(amount);
+    if (isNaN(amt) || amt <= 0) return;
+    setLoading(true); setStatus("");
+    try {
+      const provider = new AnchorProvider(connection, wallet, {});
+      const program  = getProgram(provider);
+      const ep = currentEpoch();
+      const eb = Buffer.alloc(8);
+      eb.writeBigUInt64LE(BigInt(ep));
+      const [userEpochVotes] = PublicKey.findProgramAddressSync(
+        [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROGRAM_ID
+      );
+      const tx = await program.methods
+        .burnOSolaForVotes(new BN(Math.floor(amt * 1_000_000)), new BN(ep))
+        .accounts({
+          user:           wallet.publicKey,
+          protocolState:  statePda,
+          oSolaMint:      oSolaM,
+          userOSola:      userAta(oSolaM, wallet.publicKey),
+          userEpochVotes,
+          tokenProgram:   (await import("@solana/spl-token")).TOKEN_PROGRAM_ID,
+          systemProgram:  SystemProgram.programId,
+          rent:           SYSVAR_RENT_PUBKEY,
+        } as any)
+        .rpc();
+      setStatus(`✅ ${amt.toFixed(4)} oSOLA brûlés → +${amt.toFixed(4)} votes — tx: ${tx.slice(0, 16)}…`);
+      setAmount("");
+      setOSolaBonus(prev => prev + amt);
+      setTimeout(() => { fetchBalance(); window.dispatchEvent(new CustomEvent("soladrome:refresh")); }, 2000);
+    } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
+    finally { setLoading(false); }
   }
 
   async function submit() {
@@ -101,31 +155,42 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
     }
   }
 
+  const tabLabel = { stake: "Stake", unstake: "Unstake", burn: "🔥 Burn" };
+  const inputLabel = { stake: "SOLA to lock", unstake: "hiSOLA to unlock", burn: "oSOLA to burn" };
+  const tokenLabel = { stake: "SOLA", unstake: "hiSOLA", burn: "oSOLA" };
+
   return (
     <div className={embedded ? "" : "card"}>
       <h2 className="text-lg font-bold mb-4 text-white">
-        {tab === "stake" ? "Stake SOLA → hiSOLA" : "Unstake hiSOLA → SOLA"}
+        {tab === "stake" ? "Stake SOLA → hiSOLA"
+          : tab === "unstake" ? "Unstake hiSOLA → SOLA"
+          : "🔥 Burn oSOLA → Voting Power"}
       </h2>
 
       <div className="flex gap-6 mb-6 border-b border-brand-border">
-        {(["stake", "unstake"] as Tab[]).map((t) => (
+        {(["stake", "unstake", "burn"] as Tab[]).map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => { setTab(t); setAmount(""); setStatus(""); }}
             className={`pb-2 text-sm font-semibold uppercase tracking-wide transition-colors ${
               tab === t ? "tab-active" : "text-gray-500 hover:text-gray-300"
             }`}
           >
-            {t}
+            {tabLabel[t]}
           </button>
         ))}
       </div>
 
+      {/* Burn bonus info */}
+      {tab === "burn" && oSolaBonus > 0 && (
+        <div className="rounded-lg border border-brand-green/30 bg-brand-green/5 px-3 py-2 mb-3 text-xs text-brand-green">
+          🔥 Already burned this epoch: <span className="font-mono font-bold">{oSolaBonus.toFixed(4)} oSOLA</span> = <span className="font-mono font-bold">+{oSolaBonus.toFixed(4)} votes</span>
+        </div>
+      )}
+
       <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-gray-400">
-            {tab === "stake" ? "SOLA to lock" : "hiSOLA to unlock"}
-          </span>
+          <span className="text-xs text-gray-400">{inputLabel[tab]}</span>
           {balance !== null && (
             <span className="text-xs text-gray-500">
               Balance:{" "}
@@ -133,7 +198,7 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
                 className="text-gray-300 hover:text-brand-green transition-colors font-mono"
                 onClick={() => applyPct(100)}
               >
-                {balance.toLocaleString(undefined, { maximumFractionDigits: 4 })} {tab === "stake" ? "SOLA" : "hiSOLA"}
+                {balance.toLocaleString(undefined, { maximumFractionDigits: 4 })} {tokenLabel[tab]}
               </button>
             </span>
           )}
@@ -165,15 +230,20 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
       <p className="text-xs text-gray-500 mb-4">
         {tab === "stake"
           ? "hiSOLA gives governance rights, fee share & borrow power"
-          : "Repay outstanding debt before unstaking"}
+          : tab === "unstake"
+          ? "Repay outstanding debt before unstaking"
+          : "1 oSOLA burned = 1 vote unit for this epoch only — resets each epoch"}
       </p>
 
       <button
         className="btn-primary w-full"
-        onClick={submit}
+        onClick={tab === "burn" ? burnForVotes : submit}
         disabled={loading || !wallet || !amount}
       >
-        {loading ? "Processing…" : tab === "stake" ? "Stake" : "Unstake"}
+        {loading ? "Processing…"
+          : tab === "stake" ? "Stake"
+          : tab === "unstake" ? "Unstake"
+          : "🔥 Burn oSOLA for votes"}
       </button>
 
       {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
