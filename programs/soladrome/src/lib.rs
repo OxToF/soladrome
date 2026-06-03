@@ -24,10 +24,11 @@ use errors::SoladromeError;
 pub use pol::*;
 use state::{
     current_epoch, BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting,
-    GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, ProtocolState,
-    UserBribeClaim, UserEpochVotes, UserPosition, UserVoteReceipt, CONTRIBUTOR_CLIFF_SECS,
-    CONTRIBUTOR_DURATION_SECS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, VESTING_CLIFF_SECS,
-    VESTING_DURATION_SECS,
+    GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint,
+    PartnerAllocation, ProtocolState, UserBribeClaim, UserEpochVotes, UserPosition,
+    UserVoteConfig, UserVoteReceipt, VeLockPosition, CONTRIBUTOR_CLIFF_SECS,
+    CONTRIBUTOR_DURATION_SECS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION,
+    MIN_LOCK_DURATION, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
 };
 #[allow(ambiguous_glob_reexports)]
 pub use ve::*;
@@ -101,11 +102,18 @@ pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
 /// Mirrors the founder logic — scales dynamically with actual claims.
 pub const CONTRIBUTOR_BORROW_CAP_BPS: u64 = 1_000; // 10 %
 
+// ── Protocol Partner allocation ───────────────────────────────────────────────
+pub const PARTNER_SEED: &[u8] = b"partner";
+
+// ── Vote carry-over ───────────────────────────────────────────────────────────
+pub const VOTE_CONFIG_SEED: &[u8] = b"vote_config";
+
 #[program]
 pub mod soladrome {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        let clock = Clock::get()?;
         let s = &mut ctx.accounts.protocol_state;
         s.authority = ctx.accounts.authority.key();
         s.usdc_mint = ctx.accounts.usdc_mint.key();
@@ -119,6 +127,12 @@ pub mod soladrome {
         s.virtual_sola = INIT_VIRTUAL_SOLA;
         s.k = INIT_VIRTUAL_USDC as u128 * INIT_VIRTUAL_SOLA as u128;
         s.bump = ctx.bumps.protocol_state;
+        // Epoch emission decay — default: 10 000 oSOLA/epoch, −1%/epoch, 10% floor.
+        // Override before launch with `configure_emissions` if needed.
+        s.osola_emission_initial = LP_EMISSION_PER_EPOCH;
+        s.osola_emission_decay_bps = 9_900;
+        s.osola_emission_floor_bps = 1_000;
+        s.osola_emission_start_epoch = current_epoch(clock.unix_timestamp);
         Ok(())
     }
 
@@ -1434,6 +1448,170 @@ pub mod soladrome {
         Ok(())
     }
 
+    // ── Protocol Partner allocation ───────────────────────────────────────────
+
+    /// Authority-only: register a protocol partner with a one-time locked hiSOLA allocation.
+    ///
+    /// Unlike contributors (cliff + linear vesting), the partner claims the full amount
+    /// once via `claim_partner_allocation` — hiSOLA is minted directly to their
+    /// ve_lock_vault (never touches the wallet), giving immediate voting power while
+    /// borrow remains blocked for the entire lock duration.
+    ///
+    /// `lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].
+    /// Suggested mainnet value: 52 × 604 800 = 31 449 600 s (≈ 12 months).
+    pub fn register_partner(
+        ctx: Context<RegisterPartner>,
+        hi_sola_amount: u64,
+        lock_duration_secs: u64,
+    ) -> Result<()> {
+        require!(hi_sola_amount > 0, SoladromeError::InvalidAmount);
+        require!(
+            lock_duration_secs >= MIN_LOCK_DURATION,
+            SoladromeError::InvalidAmount
+        );
+        require!(
+            lock_duration_secs <= MAX_LOCK_DURATION,
+            SoladromeError::InvalidAmount
+        );
+
+        let pa = &mut ctx.accounts.partner_allocation;
+        pa.partner = ctx.accounts.partner_wallet.key();
+        pa.hi_sola_amount = hi_sola_amount;
+        pa.lock_duration_secs = lock_duration_secs;
+        pa.claimed = false;
+        pa.start_ts = Clock::get()?.unix_timestamp;
+        pa.bump = ctx.bumps.partner_allocation;
+
+        msg!(
+            "Partner registered: {} | {} hiSOLA | lock={}s",
+            pa.partner,
+            pa.hi_sola_amount,
+            pa.lock_duration_secs,
+        );
+        Ok(())
+    }
+
+    /// Partner claims their one-time hiSOLA allocation.
+    ///
+    /// hiSOLA is minted DIRECTLY into the partner's ve_lock_vault — the wallet
+    /// receives nothing.  This means:
+    /// - Voting power is available immediately via VeLockPosition (up to 4× at max lock).
+    /// - `borrow_usdc` is naturally blocked (wallet hiSOLA balance = 0).
+    /// - `total_hi_sola` is NOT incremented: locked hiSOLA is excluded from the fee
+    ///   accumulator denominator, so existing stakers are not diluted during the lock.
+    /// - `UserPosition.fees_debt` is snapshotted at the current accumulator so the
+    ///   partner earns staking fees only from their eventual `unlock_hi_sola` forward.
+    ///
+    /// After lock expiry: call `unlock_hi_sola` → hiSOLA returns to wallet → standard
+    /// rules apply (fee share, borrow up to 75 % floor buffer, re-lock for more ve).
+    pub fn claim_partner_allocation(ctx: Context<ClaimPartnerAllocation>) -> Result<()> {
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        require!(
+            !ctx.accounts.partner_allocation.claimed,
+            SoladromeError::PartnerAlreadyClaimed
+        );
+
+        let amount = ctx.accounts.partner_allocation.hi_sola_amount;
+        let lock_duration = ctx.accounts.partner_allocation.lock_duration_secs;
+
+        // Snapshot accumulator BEFORE any hiSOLA supply change (same invariant as stake_sola).
+        let market_balance = ctx.accounts.market_vault.amount;
+        let acc = math::advance_accumulator(
+            ctx.accounts.protocol_state.fees_per_hi_sola,
+            market_balance,
+            ctx.accounts.protocol_state.last_market_vault_balance,
+            ctx.accounts.protocol_state.total_hi_sola,
+        );
+
+        let clock = Clock::get()?;
+        let lock_end_ts = (clock.unix_timestamp as u64)
+            .checked_add(lock_duration)
+            .ok_or(SoladromeError::Overflow)? as i64;
+
+        let bump = ctx.accounts.protocol_state.bump;
+        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+        // ── Mint SOLA to sola_vault (1:1 backing for the hiSOLA) ─────────────
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint: ctx.accounts.sola_mint.to_account_info(),
+                    to: ctx.accounts.sola_vault.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )?;
+
+        // ── Mint hiSOLA directly to ve_lock_vault — bypasses wallet ──────────
+        // Wallet balance stays 0 → borrow_usdc naturally blocked for lock duration.
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint: ctx.accounts.hi_sola_mint.to_account_info(),
+                    to: ctx.accounts.ve_lock_vault.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )?;
+
+        // ── Create / update VeLockPosition ────────────────────────────────────
+        {
+            let lock = &mut ctx.accounts.lock_position;
+            if lock.owner == Pubkey::default() {
+                lock.owner = ctx.accounts.partner.key();
+                lock.bump = ctx.bumps.lock_position;
+            }
+            lock.amount_locked = lock
+                .amount_locked
+                .checked_add(amount)
+                .ok_or(SoladromeError::Overflow)?;
+            lock.lock_end_ts = lock_end_ts;
+        }
+
+        // ── Snapshot fees_debt at current accumulator ─────────────────────────
+        // The partner earns staking fees only from unlock forward — not during
+        // the lock period when their hiSOLA is excluded from total_hi_sola.
+        {
+            let pos = &mut ctx.accounts.partner_position;
+            if pos.owner == Pubkey::default() {
+                pos.owner = ctx.accounts.partner.key();
+                pos.bump = ctx.bumps.partner_position;
+            }
+            pos.fees_debt = acc;
+        }
+
+        // ── Update protocol state ─────────────────────────────────────────────
+        // total_sola += amount   (SOLA backing added to sola_vault)
+        // total_hi_sola: UNCHANGED — locked hiSOLA excluded from fee pool,
+        //   matching the semantics of lock_hi_sola (which subtracts from total_hi_sola).
+        let s = &mut ctx.accounts.protocol_state;
+        s.fees_per_hi_sola = acc;
+        s.last_market_vault_balance = market_balance;
+        s.total_sola = s
+            .total_sola
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
+
+        ctx.accounts.partner_allocation.claimed = true;
+
+        msg!(
+            "Partner allocation claimed: {} | {} hiSOLA locked until {}",
+            ctx.accounts.partner.key(),
+            amount,
+            lock_end_ts,
+        );
+        Ok(())
+    }
+
     // ── Bribe system ─────────────────────────────────────────────────────────
 
     /// Permissionless: any protocol deposits bribe tokens to attract hiSOLA votes.
@@ -1568,6 +1746,207 @@ pub mod soladrome {
             gev.bump = ctx.bumps.global_epoch_votes;
         }
         gev.total_votes = gev
+            .total_votes
+            .checked_add(votes)
+            .ok_or(SoladromeError::Overflow)?;
+
+        Ok(())
+    }
+
+    // ── Emission decay configuration ──────────────────────────────────────────
+
+    /// Authority-only: reconfigure the epoch oSOLA emission decay curve.
+    ///
+    /// Resets the decay clock to the current epoch — the new `initial` becomes
+    /// the emission for epoch 0 of the new schedule.  Use this to:
+    /// - Boost emissions at launch (high `initial`, soft `decay_bps`)
+    /// - Reduce emissions once pools are deep (lower `initial`)
+    /// - Adjust the floor to keep a minimum incentive long-term
+    ///
+    /// `decay_bps` in [1, 10_000]:
+    ///   10 000 = no decay (flat forever)
+    ///    9 900 = −1 %/epoch  (−40 %/year)
+    ///    9 800 = −2 %/epoch  (−65 %/year)
+    ///
+    /// `floor_bps` in [0, 10_000]: minimum emission as % of `initial`.
+    ///   1 000 = 10 % floor (recommended — never reaches zero).
+    pub fn configure_emissions(
+        ctx: Context<ConfigureEmissions>,
+        initial: u64,
+        decay_bps: u16,
+        floor_bps: u16,
+    ) -> Result<()> {
+        require!(initial > 0, SoladromeError::InvalidAmount);
+        require!(
+            decay_bps >= 1 && decay_bps <= 10_000,
+            SoladromeError::InvalidAmount
+        );
+        require!(floor_bps <= 10_000, SoladromeError::InvalidAmount);
+
+        let clock = Clock::get()?;
+        let s = &mut ctx.accounts.protocol_state;
+        s.osola_emission_initial = initial;
+        s.osola_emission_decay_bps = decay_bps;
+        s.osola_emission_floor_bps = floor_bps;
+        s.osola_emission_start_epoch = current_epoch(clock.unix_timestamp);
+
+        msg!(
+            "Emissions reconfigured: initial={} decay_bps={} floor_bps={} start_epoch={}",
+            initial,
+            decay_bps,
+            floor_bps,
+            s.osola_emission_start_epoch,
+        );
+        Ok(())
+    }
+
+    // ── Vote carry-over ───────────────────────────────────────────────────────
+
+    /// Save or update the caller's persistent gauge vote allocation.
+    ///
+    /// Once `auto_replay = true`, any external caller (keeper, cron bot, partner)
+    /// can invoke `replay_vote` each epoch without the owner signing — enabling
+    /// fully passive bribe collection, identical to Beradrome/Velodrome behaviour.
+    ///
+    /// Constraints:
+    /// - `n_pools` in [1, 5]
+    /// - `bps[0..n_pools]` must sum to exactly 10 000 (100 %)
+    /// - Unused slots: `pools[i] = Pubkey::default()`, `bps[i] = 0`
+    pub fn set_vote_config(
+        ctx: Context<SetVoteConfig>,
+        pools: [Pubkey; 5],
+        bps: [u16; 5],
+        n_pools: u8,
+        auto_replay: bool,
+    ) -> Result<()> {
+        require!(
+            n_pools >= 1 && n_pools as usize <= UserVoteConfig::MAX_POOLS,
+            SoladromeError::InvalidVoteConfig
+        );
+        let total_bps: u32 = bps[..n_pools as usize].iter().map(|&b| b as u32).sum();
+        require!(total_bps == 10_000, SoladromeError::InvalidVoteConfig);
+
+        let cfg = &mut ctx.accounts.vote_config;
+        if cfg.bump == 0 {
+            cfg.bump = ctx.bumps.vote_config;
+        }
+        cfg.pools = pools;
+        cfg.bps = bps;
+        cfg.n_pools = n_pools;
+        cfg.auto_replay = auto_replay;
+        Ok(())
+    }
+
+    /// Permissionless epoch vote carry-over for one pool entry.
+    ///
+    /// Reproduces a single `vote_gauge` call using the owner's saved config.
+    /// The CALLER signs and pays rent; the OWNER's hiSOLA balance and ve-power
+    /// determine the actual vote weight — the owner need not be online.
+    ///
+    /// Call once per pool entry per epoch (up to `config.n_pools` times).
+    /// Fails if `auto_replay = false` (`VoteConfigDisabled`).
+    /// Fails if `pool_id` not found in config (`PoolNotInConfig`).
+    /// Fails if `UserVoteReceipt` already exists — same double-vote guard as
+    /// `vote_gauge`; replay and manual vote for the same pool are mutually exclusive.
+    ///
+    /// The 30% anti-whale cap applies identically to `vote_gauge`.
+    pub fn replay_vote(ctx: Context<ReplayVote>, epoch: u64) -> Result<()> {
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        let clock = Clock::get()?;
+        require!(
+            epoch == current_epoch(clock.unix_timestamp),
+            SoladromeError::WrongEpoch
+        );
+        require!(
+            ctx.accounts.vote_config.auto_replay,
+            SoladromeError::VoteConfigDisabled
+        );
+
+        // Locate pool_id in config
+        let pool_key = ctx.accounts.pool_id.key();
+        let n = ctx.accounts.vote_config.n_pools as usize;
+        let pool_idx = ctx.accounts.vote_config.pools[..n]
+            .iter()
+            .position(|p| p == &pool_key)
+            .ok_or(SoladromeError::PoolNotInConfig)?;
+        let pool_bps = ctx.accounts.vote_config.bps[pool_idx] as u128;
+
+        // Compute voting power — same formula as vote_gauge
+        let hi_sola_balance = ctx.accounts.user_hi_sola.amount;
+        let ve_power = ve::try_load_ve_power(
+            &ctx.accounts.lock_position,
+            &ctx.accounts.user.key(),
+            clock.unix_timestamp,
+        );
+        let total_power = hi_sola_balance.saturating_add(ve_power);
+
+        // Init UserEpochVotes on first vote this epoch (snapshot total_power)
+        if ctx.accounts.user_epoch_votes.epoch == 0 {
+            ctx.accounts.user_epoch_votes.epoch = epoch;
+            ctx.accounts.user_epoch_votes.total_power_snapshot = total_power;
+            ctx.accounts.user_epoch_votes.bump = ctx.bumps.user_epoch_votes;
+        }
+
+        // Apply 30% per-address cap on hiSOLA portion (oSOLA bonus stays uncapped)
+        let snapshot = ctx.accounts.user_epoch_votes.total_power_snapshot;
+        let o_sola_bonus = ctx.accounts.user_epoch_votes.o_sola_bonus;
+        let global_cap = ctx
+            .accounts
+            .protocol_state
+            .total_hi_sola
+            .saturating_mul(VOTE_WEIGHT_CAP_BPS)
+            / 10_000;
+        let effective_snapshot = snapshot.min(global_cap);
+        let power_cap = effective_snapshot.saturating_add(o_sola_bonus);
+
+        // Votes for this pool = effective_snapshot × bps / 10 000
+        let votes = (effective_snapshot as u128)
+            .checked_mul(pool_bps)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)? as u64;
+        require!(votes > 0, SoladromeError::InvalidAmount);
+
+        // Overflow / cap check
+        let already_allocated = ctx.accounts.user_epoch_votes.allocated;
+        let new_total = already_allocated
+            .checked_add(votes)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(new_total <= power_cap, SoladromeError::VoteOverflow);
+
+        // Init GaugeState if first vote for this pool this epoch
+        if ctx.accounts.gauge_state.pool_id == Pubkey::default() {
+            ctx.accounts.gauge_state.pool_id = pool_key;
+            ctx.accounts.gauge_state.epoch = epoch;
+            ctx.accounts.gauge_state.bump = ctx.bumps.gauge_state;
+        }
+        ctx.accounts.gauge_state.total_votes = ctx
+            .accounts
+            .gauge_state
+            .total_votes
+            .checked_add(votes)
+            .ok_or(SoladromeError::Overflow)?;
+
+        // Write UserVoteReceipt (init = replay-proof, one per pool per epoch)
+        ctx.accounts.user_vote_receipt.user = ctx.accounts.user.key();
+        ctx.accounts.user_vote_receipt.pool_id = pool_key;
+        ctx.accounts.user_vote_receipt.epoch = epoch;
+        ctx.accounts.user_vote_receipt.votes = votes;
+        ctx.accounts.user_vote_receipt.bump = ctx.bumps.user_vote_receipt;
+
+        ctx.accounts.user_epoch_votes.allocated = new_total;
+
+        // Init / update GlobalEpochVotes
+        if ctx.accounts.global_epoch_votes.epoch == 0 {
+            ctx.accounts.global_epoch_votes.epoch = epoch;
+            ctx.accounts.global_epoch_votes.bump = ctx.bumps.global_epoch_votes;
+        }
+        ctx.accounts.global_epoch_votes.total_votes = ctx
+            .accounts
+            .global_epoch_votes
             .total_votes
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
@@ -1747,7 +2126,18 @@ pub mod soladrome {
         require!(total_votes > 0, SoladromeError::NoVotes);
         require!(pool_votes > 0, SoladromeError::NoVotes);
 
-        pool_accum.osola_allocated = (LP_EMISSION_PER_EPOCH as u128)
+        // Compute decayed epoch emission for this specific epoch.
+        let elapsed = epoch.saturating_sub(
+            ctx.accounts.protocol_state.osola_emission_start_epoch,
+        );
+        let epoch_total = math::decayed_emission(
+            ctx.accounts.protocol_state.osola_emission_initial,
+            ctx.accounts.protocol_state.osola_emission_decay_bps,
+            elapsed,
+            ctx.accounts.protocol_state.osola_emission_floor_bps,
+        );
+
+        pool_accum.osola_allocated = (epoch_total as u128)
             .checked_mul(pool_votes)
             .ok_or(SoladromeError::Overflow)?
             .checked_div(total_votes)
@@ -3718,4 +4108,234 @@ pub struct ContributorBorrowUsdc<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+}
+
+// ── Protocol Partner allocation ───────────────────────────────────────────────
+
+/// Authority-only: register a protocol partner allocation.
+/// Creates a PartnerAllocation PDA keyed on the partner's wallet.
+/// The partner must later call `claim_partner_allocation` to lock their hiSOLA.
+#[derive(Accounts)]
+pub struct RegisterPartner<'info> {
+    #[account(
+        mut,
+        address = protocol_state.authority @ SoladromeError::Unauthorized,
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    /// CHECK: The partner's beneficiary wallet — identity enforced by PDA seeds.
+    pub partner_wallet: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + PartnerAllocation::LEN,
+        seeds = [PARTNER_SEED, partner_wallet.key().as_ref()],
+        bump,
+    )]
+    pub partner_allocation: Account<'info, PartnerAllocation>,
+
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+/// Partner claims their one-time hiSOLA allocation.
+/// hiSOLA is minted directly to ve_lock_vault — wallet never receives hiSOLA.
+/// VeLockPosition is created; UserPosition.fees_debt is snapshotted.
+#[derive(Accounts)]
+pub struct ClaimPartnerAllocation<'info> {
+    #[account(mut)]
+    pub partner: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(mut, address = protocol_state.sola_mint)]
+    pub sola_mint: Box<Account<'info, Mint>>,
+
+    #[account(mut, address = protocol_state.hi_sola_mint)]
+    pub hi_sola_mint: Box<Account<'info, Mint>>,
+
+    /// Locked SOLA backing — 1 SOLA minted here per hiSOLA allocated.
+    #[account(mut, address = protocol_state.sola_vault)]
+    pub sola_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Read-only snapshot for the fee accumulator advance.
+    #[account(address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Partner's allocation PDA — verified by seeds + owner constraint.
+    #[account(
+        mut,
+        seeds = [PARTNER_SEED, partner.key().as_ref()],
+        bump = partner_allocation.bump,
+        constraint = partner_allocation.partner == partner.key() @ SoladromeError::Unauthorized,
+    )]
+    pub partner_allocation: Box<Account<'info, PartnerAllocation>>,
+
+    /// Ve lock metadata — created on first claim.
+    #[account(
+        init_if_needed,
+        payer = partner,
+        space = 8 + VeLockPosition::LEN,
+        seeds = [VELOCK_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub lock_position: Box<Account<'info, VeLockPosition>>,
+
+    /// Token vault holding locked hiSOLA.
+    /// hiSOLA is minted directly here — wallet balance stays 0, blocking borrow.
+    #[account(
+        init_if_needed,
+        payer = partner,
+        token::mint      = hi_sola_mint,
+        token::authority = lock_position,
+        seeds = [VE_VAULT_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub ve_lock_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Fee-share position — fees_debt snapshotted at claim so the partner starts
+    /// earning fees only from `unlock_hi_sola` forward (not during the lock).
+    #[account(
+        init_if_needed,
+        payer = partner,
+        space = 8 + UserPosition::LEN,
+        seeds = [POSITION_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub partner_position: Box<Account<'info, UserPosition>>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+
+// ── Vote carry-over ───────────────────────────────────────────────────────────
+
+/// Owner creates or updates their persistent vote allocation.
+/// Called once to set up carry-over; update any time preferences change.
+#[derive(Accounts)]
+pub struct SetVoteConfig<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + UserVoteConfig::LEN,
+        seeds = [VOTE_CONFIG_SEED, user.key().as_ref()],
+        bump,
+    )]
+    pub vote_config: Account<'info, UserVoteConfig>,
+
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+/// Permissionless carry-over: any caller replays one pool vote for the owner.
+/// Caller pays rent; vote weight is derived from the owner's live hiSOLA position.
+#[derive(Accounts)]
+#[instruction(epoch: u64)]
+pub struct ReplayVote<'info> {
+    /// Keeper, partner bot, or the owner themselves — pays rent for new PDAs.
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    /// CHECK: The hiSOLA holder whose config is being replayed.
+    pub user: UncheckedAccount<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(address = protocol_state.hi_sola_mint)]
+    pub hi_sola_mint: Box<Account<'info, Mint>>,
+
+    /// Owner's hiSOLA ATA — read-only, authority = user.
+    #[account(
+        constraint = user_hi_sola.mint == hi_sola_mint.key()
+                  && user_hi_sola.owner == user.key()
+    )]
+    pub user_hi_sola: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: Optional VeLockPosition [b"velock", user].
+    /// Pass SystemProgram when owner has no lock.
+    pub lock_position: UncheckedAccount<'info>,
+
+    /// Owner's persistent vote config — must have auto_replay = true.
+    #[account(
+        seeds = [VOTE_CONFIG_SEED, user.key().as_ref()],
+        bump = vote_config.bump,
+    )]
+    pub vote_config: Box<Account<'info, UserVoteConfig>>,
+
+    /// CHECK: Pool being voted for — validated against config in instruction body.
+    pub pool_id: UncheckedAccount<'info>,
+
+    /// Aggregate votes for this pool this epoch.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + GaugeState::LEN,
+        seeds = [b"gauge", pool_id.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub gauge_state: Box<Account<'info, GaugeState>>,
+
+    /// One receipt per (user, pool, epoch) — init fails on double-vote.
+    /// Mutually exclusive with a manual vote_gauge for the same pool/epoch.
+    #[account(
+        init,
+        payer = caller,
+        space = 8 + UserVoteReceipt::LEN,
+        seeds = [b"vote", user.key().as_ref(), pool_id.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub user_vote_receipt: Box<Account<'info, UserVoteReceipt>>,
+
+    /// Cumulative allocation tracker for the owner this epoch.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + UserEpochVotes::LEN,
+        seeds = [b"uev", user.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub user_epoch_votes: Box<Account<'info, UserEpochVotes>>,
+
+    /// Global vote total — denominator for LP emission splits.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + GlobalEpochVotes::LEN,
+        seeds = [b"epoch_votes", epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub global_epoch_votes: Box<Account<'info, GlobalEpochVotes>>,
+
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+// ── Emission decay configuration ──────────────────────────────────────────────
+
+/// Authority-only: update the epoch oSOLA emission decay curve parameters.
+/// Resets the decay clock to the current epoch.
+#[derive(Accounts)]
+pub struct ConfigureEmissions<'info> {
+    #[account(
+        mut,
+        address = protocol_state.authority @ SoladromeError::Unauthorized,
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
 }

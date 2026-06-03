@@ -109,12 +109,26 @@ pub struct ProtocolState {
     /// Exit paths (sell_sola, unstake, repay, remove_liquidity, claim_*, unlock)
     /// are intentionally excluded so users can always withdraw their funds.
     pub paused: bool,
+
+    // ── Epoch oSOLA emission decay ────────────────────────────────────────────
+    /// Starting emission for the epoch-based gauge system (oSOLA per epoch).
+    /// Set at `initialize`; overridable via `configure_emissions`.
+    pub osola_emission_initial: u64,
+    /// Decay factor applied each epoch (basis points, 10 000 = no decay).
+    /// Default: 9 900 (−1 %/epoch ≈ −40 %/year).
+    pub osola_emission_decay_bps: u16,
+    /// Minimum emission as % of initial (basis points).
+    /// Default: 1 000 (10 % floor — emissions never reach zero).
+    pub osola_emission_floor_bps: u16,
+    /// Epoch at which the decay clock started (reset by `configure_emissions`).
+    pub osola_emission_start_epoch: u64,
 }
 
 impl ProtocolState {
     // Total account space INCLUDING the 8-byte Anchor discriminator.
-    // Fields: 8×Pubkey(256) + 6×u64(48) + 2×u128(32) + u8(1) + 3×bool(3) + u64×2(16) = 356 bytes
-    // + 8 discriminator = 364 bytes used; 36 bytes spare to 400.
+    // Base:     8×Pubkey(256) + u64×6(48) + u128×2(32) + u8(1) + bool×3(3) + u64×2(16) = 356
+    // Emission: u64(8) + u16(2) + u16(2) + u64(8) = 20
+    // Total: 376 data + 8 discriminator = 384 bytes; 16 spare to 400.
     // ⚠️ Update this value whenever a field is added or removed.
     pub const LEN: usize = 400;
 }
@@ -353,6 +367,70 @@ pub struct FounderVesting {
 }
 impl FounderVesting {
     pub const LEN: usize = 8 + 8 + 8 + 1 + 7; // = 32 bytes with padding
+}
+
+// ── Persistent vote config (carry-over) ──────────────────────────────────────
+
+/// Persistent gauge vote allocation for a hiSOLA holder.
+///
+/// Once set with `auto_replay = true`, any caller (keeper, partner, cron bot)
+/// can invoke `replay_vote` each epoch to carry forward these preferences
+/// without requiring the owner to sign — enabling fully passive participation,
+/// identical to Beradrome / Velodrome auto-rolling vote behaviour.
+///
+/// The vote weight is recalculated from the owner's **current** hiSOLA balance
+/// + ve-power each epoch, so the allocation scales correctly as positions change.
+/// The 30% per-address anti-whale cap applies on every replay, same as `vote_gauge`.
+///
+/// PDA: [b"vote_config", user]
+#[account]
+pub struct UserVoteConfig {
+    /// Pools to vote for — unused slots hold Pubkey::default().
+    pub pools: [Pubkey; 5],
+    /// Basis points per pool (active entries must sum to exactly 10 000).
+    pub bps: [u16; 5],
+    /// Number of active entries (1–5).
+    pub n_pools: u8,
+    /// When true, `replay_vote` is allowed by any caller.
+    /// When false, the owner must call `vote_gauge` manually each epoch.
+    pub auto_replay: bool,
+    pub bump: u8,
+}
+impl UserVoteConfig {
+    pub const MAX_POOLS: usize = 5;
+    // 5×32 + 5×2 + 1 + 1 + 1 = 173 bytes used; 19 spare
+    pub const LEN: usize = 192;
+}
+
+// ── Protocol Partner allocation ───────────────────────────────────────────────
+
+/// One-time locked hiSOLA allocation for a protocol partner (Jito, Marinade, Solayer…).
+///
+/// Unlike the contributor system (cliff + linear vesting), the partner receives their
+/// full allocation in a single `claim_partner_allocation` call — but hiSOLA is minted
+/// DIRECTLY into their ve_lock_vault, bypassing the wallet entirely.
+///
+/// Consequences:
+/// - Voting power is immediate via VeLockPosition (up to 4× ve multiplier).
+/// - Borrow is naturally blocked: wallet hiSOLA balance = 0 during the lock
+///   (`borrow_usdc` guard: `new_borrowed <= hi_sola_balance` always fails).
+/// - `total_hi_sola` is NOT incremented — locked hiSOLA is excluded from the
+///   fee accumulator denominator (same semantics as `lock_hi_sola`).
+/// - After lock expiry: `unlock_hi_sola` → hiSOLA back to wallet → standard rules.
+///
+/// PDA: [b"partner", partner_wallet]
+#[account]
+pub struct PartnerAllocation {
+    pub partner: Pubkey,         // beneficiary wallet (immutable after init)
+    pub hi_sola_amount: u64,     // total hiSOLA to mint at claim time
+    pub lock_duration_secs: u64, // lock duration (validated ≤ MAX_LOCK_DURATION at register)
+    pub claimed: bool,           // true after claim_partner_allocation is called (one-shot)
+    pub start_ts: i64,           // unix timestamp when register_partner was executed
+    pub bump: u8,
+}
+impl PartnerAllocation {
+    // 32 + 8 + 8 + 1 + 8 + 1 = 58 bytes used; 38 spare
+    pub const LEN: usize = 96;
 }
 
 // ── Protocol-Owned Liquidity ──────────────────────────────────────────────────

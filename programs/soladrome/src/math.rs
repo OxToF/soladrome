@@ -49,6 +49,51 @@ pub fn pending_fees(fees_per_hi_sola: u128, fees_debt: u128, hi_sola_balance: u6
     ((delta * hi_sola_balance as u128) / PRECISION) as u64
 }
 
+/// Epoch oSOLA emission after applying exponential decay.
+///
+/// Formula : emission = initial × (decay_bps / 10_000) ^ elapsed
+/// Floor   : max(emission, initial × floor_bps / 10_000)
+///
+/// Uses fixed-point exponentiation-by-squaring (O(log elapsed)) so it stays
+/// within compute budget even after hundreds of epochs.
+///
+/// Special cases:
+/// - elapsed = 0       → initial (no decay yet)
+/// - decay_bps = 10_000 → initial forever (identity, no decay configured)
+pub fn decayed_emission(
+    initial: u64,
+    decay_bps: u16,  // e.g. 9_900 = 99 % = −1 % per epoch
+    elapsed: u64,    // epochs since osola_emission_start_epoch
+    floor_bps: u16,  // e.g. 1_000 = 10 % of initial as minimum
+) -> u64 {
+    if elapsed == 0 || decay_bps >= 10_000 {
+        return initial;
+    }
+
+    // Fixed-point precision: PREC = 1e12.
+    // base = decay_bps / 10_000  expressed as a fixed-point integer.
+    // PREC / 10_000 = 1e8, so base = decay_bps × 1e8.
+    // Maximum intermediate: base^2 / PREC ≤ (1e12)^2 / 1e12 = 1e12 — fits u128.
+    const PREC: u128 = 1_000_000_000_000;
+    let base: u128 = (decay_bps as u128).saturating_mul(PREC / 10_000);
+
+    let mut result: u128 = PREC; // 1.0
+    let mut b: u128 = base;
+    let mut n: u64 = elapsed;
+
+    while n > 0 {
+        if n & 1 == 1 {
+            result = result.saturating_mul(b) / PREC;
+        }
+        b = b.saturating_mul(b) / PREC;
+        n >>= 1;
+    }
+
+    let decayed = ((initial as u128).saturating_mul(result) / PREC) as u64;
+    let floor = ((initial as u128).saturating_mul(floor_bps as u128) / 10_000) as u64;
+    decayed.max(floor)
+}
+
 /// Ve voting power for a lock position at `current_ts`.
 /// Decays linearly from `amount_locked × MAX_VE_MULTIPLIER` at full lock to 0 at expiry.
 /// Returns 0 if the lock is expired or empty.

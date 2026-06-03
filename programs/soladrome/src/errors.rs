@@ -76,4 +76,14 @@ pub enum SoladromeError {
     // ── Bribe rollover ────────────────────────────────────────────────────────
     #[msg("Rollover too early — epoch had votes, wait ROLLOVER_DELAY_EPOCHS before recycling remainder")]
     RolloverTooEarly,
+    // ── Partner allocation ────────────────────────────────────────────────────
+    #[msg("Partner allocation already claimed — each partner may only claim once")]
+    PartnerAlreadyClaimed,
+    // ── Vote carry-over ───────────────────────────────────────────────────────
+    #[msg("Pool not found in user vote config — update config with set_vote_config")]
+    PoolNotInConfig,
+    #[msg("Vote config auto-replay is disabled — owner must call vote_gauge manually")]
+    VoteConfigDisabled,
+    #[msg("Invalid vote config: n_pools out of range or bps do not sum to 10 000")]
+    InvalidVoteConfig,
 }
