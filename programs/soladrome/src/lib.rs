@@ -38,6 +38,22 @@ pub const LP_DEAD_PUBKEY: Pubkey = anchor_lang::system_program::ID;
 
 declare_id!("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
 
+// ── Security contact (https://github.com/neodyme-labs/solana-security-txt) ────
+// Published on-chain so security researchers can find our contact info.
+// Displayed on Solana Explorer → Program → Security.txt tab.
+#[cfg(not(feature = "no-entrypoint"))]
+use solana_security_txt::security_txt;
+#[cfg(not(feature = "no-entrypoint"))]
+security_txt! {
+    name:                "Soladrome",
+    project_url:         "https://soladrome.finance",
+    contacts:            "email:info@soladrome.finance",
+    policy:              "https://github.com/OxToF/soladrome/blob/main/SECURITY.md",
+    preferred_languages: "en,fr",
+    source_code:         "https://github.com/OxToF/soladrome",
+    auditors:            "None"
+}
+
 pub const STATE_SEED: &[u8] = b"state";
 pub const POSITION_SEED: &[u8] = b"position";
 pub const FLOOR_VAULT_SEED: &[u8] = b"floor_vault";

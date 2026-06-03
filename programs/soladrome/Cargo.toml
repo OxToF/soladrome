@@ -26,6 +26,7 @@ custom-panic = []
 [dependencies]
 anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
 anchor-spl = { version = "0.32.1", features = ["token", "associated_token", "idl-build"] }
+solana-security-txt = "1.1.1"
 
 
 [lints.rust]
