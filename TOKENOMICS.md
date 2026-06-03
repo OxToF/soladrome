@@ -188,18 +188,18 @@ oSOLA is not pre-minted (except contributor/partner/founder vesting tranches). I
   - Floor: `osola_emission_floor_bps` % of initial — default 10 % (emissions never reach zero)
 - Authority can reset the curve at any time via `configure_emissions` (Squads multisig)
 
-**Default emission schedule (10,000 oSOLA launch, −1 %/epoch, 10 % floor):**
+**Emission schedule (800,000 oSOLA launch, −1 %/epoch, floor 150,000):**
 
-| Epoch | Timeline | oSOLA / epoch | Per pool (5 pools, equal votes) |
-|---|---|---|---|
-| 0 | Launch | 10,000 | 2,000 |
-| 13 | 3 months | 8,775 | 1,755 |
-| 26 | 6 months | 7,699 | 1,540 |
-| 52 | 1 year | 5,930 | 1,186 |
-| 104 | 2 years | 3,516 | 703 |
-| ~230 | ~4.4 years | 1,000 (floor) | 200 |
+| Epoch | Timeline | oSOLA / epoch | Per pool (5 pools, equal votes) | APR equiv. ($5M TVL, oSOLA $0.10) |
+|---|---|---|---|---|
+| 0 | Launch | 800,000 | 160,000 | ~8.3% |
+| 13 | 3 months | 701,000 | 140,000 | ~7.3% |
+| 26 | 6 months | 616,000 | 123,000 | ~6.4% |
+| 52 | 1 year | 474,000 | 95,000 | ~4.9% |
+| 104 | 2 years | 351,000 | 70,000 | ~3.6% |
+| ~166 | ~3.2 years | 150,000 (floor) | 30,000 | ~1.6% |
 
-Early LPs capture the highest yield. The floor guarantees perpetual incentives.
+Early LPs capture the highest yield. The floor of 150,000 oSOLA/epoch guarantees perpetual incentives. Override via `configure_emissions` (Squads multisig) at any time.
 
 ---
 

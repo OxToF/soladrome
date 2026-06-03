@@ -531,9 +531,9 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 | `BORROW_FEE_BPS` | 200 | 2% origination fee |
 | `FOUNDER_BORROW_CAP_BPS` | 1,000 | 10% borrow cap on founder |
 | `ROLLOVER_DELAY_EPOCHS` | 2 | 14-day rollover grace period |
-| `osola_emission_initial` | 10,000 oSOLA | Starting epoch LP rewards (decay applies from epoch 0) |
-| `osola_emission_decay_bps` | 9,900 | −1 % per epoch decay factor |
-| `osola_emission_floor_bps` | 1,000 | 10 % floor — minimum emission forever |
+| `osola_emission_initial` | 800,000 oSOLA | Starting epoch LP rewards — calibrated for ~8% APR on $5M TVL pool |
+| `osola_emission_decay_bps` | 9,900 | −1 % per epoch (≈ −40 %/year) |
+| `osola_emission_floor_bps` | 1,875 | Floor = 150,000 oSOLA/epoch (18.75 % of initial, reached ~epoch 166) |
 | `MINIMUM_LIQUIDITY` | 1,000 | Locked LP tokens on first deposit |
 | `PRECISION` | 1e12 | Accumulator precision |
 

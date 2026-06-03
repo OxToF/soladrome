@@ -127,11 +127,12 @@ pub mod soladrome {
         s.virtual_sola = INIT_VIRTUAL_SOLA;
         s.k = INIT_VIRTUAL_USDC as u128 * INIT_VIRTUAL_SOLA as u128;
         s.bump = ctx.bumps.protocol_state;
-        // Epoch emission decay — default: 10 000 oSOLA/epoch, −1%/epoch, 10% floor.
-        // Override before launch with `configure_emissions` if needed.
-        s.osola_emission_initial = LP_EMISSION_PER_EPOCH;
-        s.osola_emission_decay_bps = 9_900;
-        s.osola_emission_floor_bps = 1_000;
+        // Epoch emission decay — 800 000 oSOLA/epoch at launch, −1%/epoch, floor 150 000.
+        // Timeline: ~616k at 6 months, ~474k at 1 year, ~150k floor at ~3.2 years.
+        // Override at any time via `configure_emissions` (Squads multisig).
+        s.osola_emission_initial = 800_000_000_000; // 800 000 oSOLA (6 dec)
+        s.osola_emission_decay_bps = 9_900;         // −1 % per epoch
+        s.osola_emission_floor_bps = 1_875;         // floor = 150 000 oSOLA (18.75 %)
         s.osola_emission_start_epoch = current_epoch(clock.unix_timestamp);
         Ok(())
     }
