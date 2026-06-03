@@ -2805,6 +2805,204 @@
       "args": []
     },
     {
+      "name": "claim_partner_allocation",
+      "docs": [
+        "Partner claims their one-time hiSOLA allocation.",
+        "",
+        "hiSOLA is minted DIRECTLY into the partner's ve_lock_vault — the wallet",
+        "receives nothing.  This means:",
+        "- Voting power is available immediately via VeLockPosition (up to 4× at max lock).",
+        "- `borrow_usdc` is naturally blocked (wallet hiSOLA balance = 0).",
+        "- `total_hi_sola` is NOT incremented: locked hiSOLA is excluded from the fee",
+        "accumulator denominator, so existing stakers are not diluted during the lock.",
+        "- `UserPosition.fees_debt` is snapshotted at the current accumulator so the",
+        "partner earns staking fees only from their eventual `unlock_hi_sola` forward.",
+        "",
+        "After lock expiry: call `unlock_hi_sola` → hiSOLA returns to wallet → standard",
+        "rules apply (fee share, borrow up to 75 % floor buffer, re-lock for more ve)."
+      ],
+      "discriminator": [
+        112,
+        123,
+        72,
+        151,
+        252,
+        31,
+        86,
+        128
+      ],
+      "accounts": [
+        {
+          "name": "partner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "sola_mint",
+          "writable": true
+        },
+        {
+          "name": "hi_sola_mint",
+          "writable": true
+        },
+        {
+          "name": "sola_vault",
+          "docs": [
+            "Locked SOLA backing — 1 SOLA minted here per hiSOLA allocated."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read-only snapshot for the fee accumulator advance."
+          ]
+        },
+        {
+          "name": "partner_allocation",
+          "docs": [
+            "Partner's allocation PDA — verified by seeds + owner constraint."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lock_position",
+          "docs": [
+            "Ve lock metadata — created on first claim."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "ve_lock_vault",
+          "docs": [
+            "Token vault holding locked hiSOLA.",
+            "hiSOLA is minted directly here — wallet balance stays 0, blocking borrow."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_position",
+          "docs": [
+            "Fee-share position — fees_debt snapshotted at claim so the partner starts",
+            "earning fees only from `unlock_hi_sola` forward (not during the lock)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "collect_to_pol",
       "docs": [
         "Redirect a portion of market_vault fees to pol_usdc_vault. Authority-only."
@@ -2901,6 +3099,75 @@
         {
           "name": "amount",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "configure_emissions",
+      "docs": [
+        "Authority-only: reconfigure the epoch oSOLA emission decay curve.",
+        "",
+        "Resets the decay clock to the current epoch — the new `initial` becomes",
+        "the emission for epoch 0 of the new schedule.  Use this to:",
+        "- Boost emissions at launch (high `initial`, soft `decay_bps`)",
+        "- Reduce emissions once pools are deep (lower `initial`)",
+        "- Adjust the floor to keep a minimum incentive long-term",
+        "",
+        "`decay_bps` in [1, 10_000]:",
+        "10 000 = no decay (flat forever)",
+        "9 900 = −1 %/epoch  (−40 %/year)",
+        "9 800 = −2 %/epoch  (−65 %/year)",
+        "",
+        "`floor_bps` in [0, 10_000]: minimum emission as % of `initial`.",
+        "1 000 = 10 % floor (recommended — never reaches zero)."
+      ],
+      "discriminator": [
+        80,
+        131,
+        28,
+        180,
+        106,
+        161,
+        66,
+        134
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "initial",
+          "type": "u64"
+        },
+        {
+          "name": "decay_bps",
+          "type": "u16"
+        },
+        {
+          "name": "floor_bps",
+          "type": "u16"
         }
       ]
     },
@@ -5914,6 +6181,99 @@
       ]
     },
     {
+      "name": "register_partner",
+      "docs": [
+        "Authority-only: register a protocol partner with a one-time locked hiSOLA allocation.",
+        "",
+        "Unlike contributors (cliff + linear vesting), the partner claims the full amount",
+        "once via `claim_partner_allocation` — hiSOLA is minted directly to their",
+        "ve_lock_vault (never touches the wallet), giving immediate voting power while",
+        "borrow remains blocked for the entire lock duration.",
+        "",
+        "`lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].",
+        "Suggested mainnet value: 52 × 604 800 = 31 449 600 s (≈ 12 months)."
+      ],
+      "discriminator": [
+        126,
+        105,
+        229,
+        224,
+        136,
+        11,
+        184,
+        137
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_wallet"
+        },
+        {
+          "name": "partner_allocation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "hi_sola_amount",
+          "type": "u64"
+        },
+        {
+          "name": "lock_duration_secs",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "remove_liquidity",
       "discriminator": [
         80,
@@ -6256,6 +6616,246 @@
       ]
     },
     {
+      "name": "replay_vote",
+      "docs": [
+        "Permissionless epoch vote carry-over for one pool entry.",
+        "",
+        "Reproduces a single `vote_gauge` call using the owner's saved config.",
+        "The CALLER signs and pays rent; the OWNER's hiSOLA balance and ve-power",
+        "determine the actual vote weight — the owner need not be online.",
+        "",
+        "Call once per pool entry per epoch (up to `config.n_pools` times).",
+        "Fails if `auto_replay = false` (`VoteConfigDisabled`).",
+        "Fails if `pool_id` not found in config (`PoolNotInConfig`).",
+        "Fails if `UserVoteReceipt` already exists — same double-vote guard as",
+        "`vote_gauge`; replay and manual vote for the same pool are mutually exclusive.",
+        "",
+        "The 30% anti-whale cap applies identically to `vote_gauge`."
+      ],
+      "discriminator": [
+        127,
+        188,
+        215,
+        170,
+        134,
+        66,
+        178,
+        166
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Keeper, partner bot, or the owner themselves — pays rent for new PDAs."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "user"
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "hi_sola_mint"
+        },
+        {
+          "name": "user_hi_sola",
+          "docs": [
+            "Owner's hiSOLA ATA — read-only, authority = user."
+          ]
+        },
+        {
+          "name": "lock_position",
+          "docs": [
+            "Pass SystemProgram when owner has no lock."
+          ]
+        },
+        {
+          "name": "vote_config",
+          "docs": [
+            "Owner's persistent vote config — must have auto_replay = true."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  116,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_id"
+        },
+        {
+          "name": "gauge_state",
+          "docs": [
+            "Aggregate votes for this pool this epoch."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  117,
+                  103,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_vote_receipt",
+          "docs": [
+            "One receipt per (user, pool, epoch) — init fails on double-vote.",
+            "Mutually exclusive with a manual vote_gauge for the same pool/epoch."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_epoch_votes",
+          "docs": [
+            "Cumulative allocation tracker for the owner this epoch."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  101,
+                  118
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "global_epoch_votes",
+          "docs": [
+            "Global vote total — denominator for LP emission splits."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  118,
+                  111,
+                  116,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "epoch",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "rollover_bribe",
       "docs": [
         "Move remaining (unclaimed) bribe tokens from a past epoch into the current epoch vault.",
@@ -6537,6 +7137,119 @@
         {
           "name": "sola_amount",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_vote_config",
+      "docs": [
+        "Save or update the caller's persistent gauge vote allocation.",
+        "",
+        "Once `auto_replay = true`, any external caller (keeper, cron bot, partner)",
+        "can invoke `replay_vote` each epoch without the owner signing — enabling",
+        "fully passive bribe collection, identical to Beradrome/Velodrome behaviour.",
+        "",
+        "Constraints:",
+        "- `n_pools` in [1, 5]",
+        "- `bps[0..n_pools]` must sum to exactly 10 000 (100 %)",
+        "- Unused slots: `pools[i] = Pubkey::default()`, `bps[i] = 0`"
+      ],
+      "discriminator": [
+        64,
+        246,
+        138,
+        80,
+        122,
+        163,
+        235,
+        183
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vote_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  116,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "pools",
+          "type": {
+            "array": [
+              "pubkey",
+              5
+            ]
+          }
+        },
+        {
+          "name": "bps",
+          "type": {
+            "array": [
+              "u16",
+              5
+            ]
+          }
+        },
+        {
+          "name": "n_pools",
+          "type": "u8"
+        },
+        {
+          "name": "auto_replay",
+          "type": "bool"
         }
       ]
     },
@@ -7698,6 +8411,19 @@
       ]
     },
     {
+      "name": "PartnerAllocation",
+      "discriminator": [
+        245,
+        13,
+        205,
+        182,
+        72,
+        79,
+        239,
+        25
+      ]
+    },
+    {
       "name": "PolState",
       "discriminator": [
         213,
@@ -7760,6 +8486,19 @@
         234,
         17,
         27
+      ]
+    },
+    {
+      "name": "UserVoteConfig",
+      "discriminator": [
+        226,
+        234,
+        67,
+        177,
+        46,
+        0,
+        65,
+        195
       ]
     },
     {
@@ -7934,6 +8673,26 @@
       "code": 6028,
       "name": "RolloverTooEarly",
       "msg": "Rollover too early — epoch had votes, wait ROLLOVER_DELAY_EPOCHS before recycling remainder"
+    },
+    {
+      "code": 6029,
+      "name": "PartnerAlreadyClaimed",
+      "msg": "Partner allocation already claimed — each partner may only claim once"
+    },
+    {
+      "code": 6030,
+      "name": "PoolNotInConfig",
+      "msg": "Pool not found in user vote config — update config with set_vote_config"
+    },
+    {
+      "code": 6031,
+      "name": "VoteConfigDisabled",
+      "msg": "Vote config auto-replay is disabled — owner must call vote_gauge manually"
+    },
+    {
+      "code": 6032,
+      "name": "InvalidVoteConfig",
+      "msg": "Invalid vote config: n_pools out of range or bps do not sum to 10 000"
     }
   ],
   "types": [
@@ -8327,6 +9086,55 @@
       }
     },
     {
+      "name": "PartnerAllocation",
+      "docs": [
+        "One-time locked hiSOLA allocation for a protocol partner (Jito, Marinade, Solayer…).",
+        "",
+        "Unlike the contributor system (cliff + linear vesting), the partner receives their",
+        "full allocation in a single `claim_partner_allocation` call — but hiSOLA is minted",
+        "DIRECTLY into their ve_lock_vault, bypassing the wallet entirely.",
+        "",
+        "Consequences:",
+        "- Voting power is immediate via VeLockPosition (up to 4× ve multiplier).",
+        "- Borrow is naturally blocked: wallet hiSOLA balance = 0 during the lock",
+        "(`borrow_usdc` guard: `new_borrowed <= hi_sola_balance` always fails).",
+        "- `total_hi_sola` is NOT incremented — locked hiSOLA is excluded from the",
+        "fee accumulator denominator (same semantics as `lock_hi_sola`).",
+        "- After lock expiry: `unlock_hi_sola` → hiSOLA back to wallet → standard rules.",
+        "",
+        "PDA: [b\"partner\", partner_wallet]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "partner",
+            "type": "pubkey"
+          },
+          {
+            "name": "hi_sola_amount",
+            "type": "u64"
+          },
+          {
+            "name": "lock_duration_secs",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "type": "bool"
+          },
+          {
+            "name": "start_ts",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "PolState",
       "docs": [
         "Singleton PDA controlling protocol-owned liquidity.",
@@ -8476,6 +9284,37 @@
               "are intentionally excluded so users can always withdraw their funds."
             ],
             "type": "bool"
+          },
+          {
+            "name": "osola_emission_initial",
+            "docs": [
+              "Starting emission for the epoch-based gauge system (oSOLA per epoch).",
+              "Set at `initialize`; overridable via `configure_emissions`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "osola_emission_decay_bps",
+            "docs": [
+              "Decay factor applied each epoch (basis points, 10 000 = no decay).",
+              "Default: 9 900 (−1 %/epoch ≈ −40 %/year)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "osola_emission_floor_bps",
+            "docs": [
+              "Minimum emission as % of initial (basis points).",
+              "Default: 1 000 (10 % floor — emissions never reach zero)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "osola_emission_start_epoch",
+            "docs": [
+              "Epoch at which the decay clock started (reset by `configure_emissions`)."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -8569,6 +9408,71 @@
               "flash-borrow attacks where USDC is borrowed and repaid atomically."
             ],
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UserVoteConfig",
+      "docs": [
+        "Persistent gauge vote allocation for a hiSOLA holder.",
+        "",
+        "Once set with `auto_replay = true`, any caller (keeper, partner, cron bot)",
+        "can invoke `replay_vote` each epoch to carry forward these preferences",
+        "without requiring the owner to sign — enabling fully passive participation,",
+        "identical to Beradrome / Velodrome auto-rolling vote behaviour.",
+        "",
+        "The vote weight is recalculated from the owner's **current** hiSOLA balance",
+        "+ ve-power each epoch, so the allocation scales correctly as positions change.",
+        "The 30% per-address anti-whale cap applies on every replay, same as `vote_gauge`.",
+        "",
+        "PDA: [b\"vote_config\", user]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pools",
+            "docs": [
+              "Pools to vote for — unused slots hold Pubkey::default()."
+            ],
+            "type": {
+              "array": [
+                "pubkey",
+                5
+              ]
+            }
+          },
+          {
+            "name": "bps",
+            "docs": [
+              "Basis points per pool (active entries must sum to exactly 10 000)."
+            ],
+            "type": {
+              "array": [
+                "u16",
+                5
+              ]
+            }
+          },
+          {
+            "name": "n_pools",
+            "docs": [
+              "Number of active entries (1–5)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "auto_replay",
+            "docs": [
+              "When true, `replay_vote` is allowed by any caller.",
+              "When false, the owner must call `vote_gauge` manually each epoch."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }

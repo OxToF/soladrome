@@ -1,5 +1,5 @@
 # Soladrome — White Paper
-**Version 1.0 — 2026-06-02T21:10:14Z**
+**Version 1.2 — 2026-06-03T00:00:00Z**
 *Prior art disclosure. All rights reserved. Licensed under BUSL-1.1.*
 
 ---
@@ -28,13 +28,15 @@ Soladrome uses three native tokens, all with 6 decimals, all as SPL tokens on So
 The base protocol token. Minted exclusively via the bonding curve (`buy_sola`) or as collateral backing (`exercise_o_sola`). Every SOLA in existence has exactly 1 USDC of floor backing in the `floor_vault`. Burned irreversibly when redeemed at floor price via `sell_sola`.
 
 ### 2.2 hiSOLA (Staked SOLA)
-Minted 1:1 when SOLA is staked. Represents:
+Minted 1:1 when SOLA is staked, or allocated via the founder/contributor/partner vesting systems. Represents:
 - **Governance rights** — voting power in the gauge system
 - **Fee share** — pro-rata claim on `market_vault` fees from bonding curve activity and AMM swaps
 - **Borrow rights** — collateral for borrowing USDC from `floor_vault` (1:1, no interest, no liquidation)
 - **ve-locking eligibility** — lock hiSOLA to amplify governance power up to 4×
 
 hiSOLA is a standard SPL token. It is economically irrational to transfer (unstaking returns SOLA at 1:1), but technically transferable.
+
+**Note on locked hiSOLA:** When hiSOLA is in a `ve_lock_vault` (via `lock_hi_sola` or partner auto-lock), it is excluded from the fee accumulator denominator (`total_hi_sola` is not incremented). Existing stakers are not diluted during lock periods. The locked hiSOLA re-enters the fee pool only after `unlock_hi_sola` is called.
 
 ### 2.3 oSOLA (Option SOLA)
 A call-option token distributed to liquidity providers and, progressively, to the founder. Exercising oSOLA requires burning it and paying 1 USDC to `floor_vault`, receiving 1 SOLA in return. Each exercise:
@@ -165,7 +167,53 @@ Locked hiSOLA is **removed** from the fee accumulator denominator (`total_hi_sol
 
 ---
 
-## 7. Gauge and Bribe System
+## 7. Strategic Allocations
+
+Soladrome distinguishes between three types of non-user token allocations, each with a different on-chain enforcement mechanism:
+
+### 7.1 Founder Allocation (`mint_founder_allocation`)
+
+One-time instruction creating two progressive vesting schedules:
+- **7M hiSOLA:** 6-month cliff → 24-month linear vest via `claim_founder_hi_sola`. Each claim mints SOLA to `sola_vault` (permanent backing) and hiSOLA 1:1 to the founder. Borrow capped at 10% of cumulative claimed hiSOLA (`founder_borrow_usdc`) — ensures the founder cannot deplete the floor vault before organic users arrive.
+- **5M oSOLA:** same schedule via `claim_founder_vesting`. Each exercise adds 1 USDC to `floor_vault`.
+- **250k SOLA:** immediate liquid at launch for operational expenses (KOL rewards, community managers, contest prizes).
+
+### 7.2 Protocol Partner Allocations (`register_partner` / `claim_partner_allocation`)
+
+A dedicated allocation system for major ecosystem protocols (Jito, Marinade, Solayer, and others). Unlike contributors, partners receive their full allocation in a **single atomic claim** — but with a mandatory lock.
+
+**Mechanism:**
+When `claim_partner_allocation` is called, hiSOLA is minted **directly into the partner's `ve_lock_vault`** (bypassing their wallet entirely). This produces three simultaneous guarantees:
+
+1. **Immediate voting power** — A `VeLockPosition` is created on-chain; ve-power is available in the same transaction. A 100k hiSOLA allocation locked for 12 months yields `100k × (52/104) × 4 = 200,000 ve-power` at the moment of claim.
+2. **No borrow during lock** — Since wallet hiSOLA balance = 0, the `borrow_usdc` guard (`new_borrowed ≤ hi_sola_balance`) naturally blocks all borrowing for the entire lock duration. This is a protocol-level guarantee, not a social promise.
+3. **No fee dilution** — `total_hi_sola` is NOT incremented at claim time (locked hiSOLA is excluded from the fee accumulator denominator, mirroring the semantics of `lock_hi_sola`). Existing stakers retain their full fee share throughout the lock.
+
+After lock expiry: `unlock_hi_sola` → hiSOLA returns to wallet → standard rules apply (fee share, borrow subject to 75% floor buffer, re-lock for renewed ve-power).
+
+**Voting power growth flywheel:**
+Protocol partners earn oSOLA via LP emissions on their native pools (JitoSOL/SOLA, mSOL/SOLA, etc.). This oSOLA can be burned during `vote_gauge` calls, adding `o_sola_bonus` — uncapped extra voting power for that epoch. Each burn is permanent and floor-positive. Partners who actively participate in the ecosystem progressively increase their governance influence without any additional allocation from the protocol.
+
+### 7.3 Contributor / Service Provider Allocation (`register_contributor`)
+
+For long-term service providers (developers, designers, ongoing contributors) who receive governance tokens as compensation. Each contributor gets a dual allocation:
+- **hiSOLA:** 1-month cliff → 12-month linear vest. Borrow capped at 10% of claimed.
+- **oSOLA:** same schedule. Exercisable at floor price.
+
+This system is used sparingly — only for individuals with ongoing, meaningful roles in the protocol. Small one-time rewards (KOLs, contest winners) are handled via direct SPL transfers from the founder's liquid SOLA tranche.
+
+### 7.4 Ecosystem / Airdrop Allocation (`mint_ecosystem_allocation`)
+
+1,750,000 SOLA minted once at launch to the authority wallet. Distributed as liquid SOLA via direct transfers, in three phases:
+- **~500k SOLA:** Community airdrop, claim-based at TGE
+- **~500k SOLA:** LP incentive reserve, distributed progressively post-launch
+- **~750k SOLA:** Marketing reserve for future partnerships and campaigns
+
+None of these allocations enter `total_purchased_sola`, so they carry no floor-redemption rights and cannot deplete the floor vault.
+
+---
+
+## 8. Gauge and Bribe System
 
 ### 7.1 Epoch Structure
 
@@ -183,11 +231,19 @@ hiSOLA holders allocate voting power across AMM pools per epoch. Constraints:
 - One vote receipt per pool per epoch (replay-proof via `init` PDA)
 - Per-address vote cap: 30% of total epoch votes (anti-whale)
 
-### 7.3 Bribe Deposits (`deposit_bribe`)
+### 7.3 Passive Vote Carry-Over (`set_vote_config` / `replay_vote`)
+
+hiSOLA holders set a persistent vote allocation once via `set_vote_config`, specifying up to 5 pools and their respective basis-point weights. With `auto_replay = true`, any external caller — a keeper bot, a partner protocol, or the holder themselves — can invoke `replay_vote` each epoch without requiring the owner's signature.
+
+`replay_vote` is functionally identical to `vote_gauge`: it creates the standard `UserVoteReceipt` and `UserEpochVotes` PDAs, applies the 30% anti-whale cap, and updates `GaugeState` and `GlobalEpochVotes`. The vote weight is recalculated from the owner's **live** hiSOLA balance + ve-power at replay time — it scales automatically as positions change.
+
+This mirrors the behaviour of Beradrome and Velodrome v2, where passive veToken holders earn bribe rewards without weekly re-signing. The `UserVoteReceipt` `init` guard ensures replay and manual `vote_gauge` for the same pool in the same epoch are mutually exclusive.
+
+### 7.4 Bribe Deposits (`deposit_bribe`)
 
 Any external protocol or individual can deposit arbitrary SPL tokens as a bribe for a specific pool and epoch. Bribes are locked in a PDA vault until the epoch ends.
 
-### 7.4 Bribe Claims (`claim_bribe`)
+### 7.5 Bribe Claims (`claim_bribe`)
 
 After an epoch ends, voters claim pro-rata bribes:
 ```
@@ -196,7 +252,7 @@ claimable = total_bribed × user_votes / total_votes
 
 Anti-double-claim: `UserBribeClaim` PDA is created with `init` on first claim (idempotent replay protection).
 
-### 7.5 Rollover (`rollover_bribe`)
+### 7.6 Rollover (`rollover_bribe`)
 
 Unclaimed bribes from ended epochs can be rolled over to the next epoch:
 - **Zero-vote pools**: immediate rollover after epoch ends
@@ -206,7 +262,7 @@ Rollover is permissionless — anyone can call it.
 
 ---
 
-## 8. Permissionless AMM
+## 9. Permissionless AMM
 
 ### 8.1 Pool Creation
 
@@ -228,11 +284,18 @@ First deposit locks `MINIMUM_LIQUIDITY = 1,000` LP tokens to the System Program 
 
 **Masterchef-style (continuous):** Per-second accumulator in `AmmPool`. `OSOLA_EMISSION_PER_SEC` oSOLA distributed to LP stakers proportionally to their share. Updated lazily on every interaction.
 
-**Epoch-based (legacy):** `checkpoint_lp` → `emit_pool_rewards` → `claim_lp_emissions`. Time-weighted LP balances per epoch, `LP_EMISSION_PER_EPOCH = 10,000 oSOLA` split across pools by vote weight.
+**Epoch-based (decaying, governance-weighted):** `checkpoint_lp` → `emit_pool_rewards` → `claim_lp_emissions`. Time-weighted LP balances per epoch; oSOLA allocation per epoch follows an exponential decay curve stored in `ProtocolState`:
+
+```
+epoch_emission = osola_emission_initial × (osola_emission_decay_bps / 10_000) ^ elapsed_epochs
+                 capped below by osola_emission_floor_bps % of initial
+```
+
+This creates early-LP urgency while guaranteeing perpetual incentives above the floor. The `configure_emissions` instruction (authority-only, Squads multisig) resets the curve at any time.
 
 ---
 
-## 9. Protocol-Owned Liquidity (POL)
+## 10. Protocol-Owned Liquidity (POL)
 
 ### 9.1 Collection (`collect_to_pol`)
 
@@ -248,7 +311,7 @@ POL LP tokens are never redeemable — they are protocol-owned forever, providin
 
 ---
 
-## 10. Flash Arbitrage
+## 11. Flash Arbitrage
 
 `flash_arbitrage` atomically exploits price divergence between the AMM and the bonding curve:
 
@@ -264,44 +327,46 @@ This creates a permissionless arbitrage mechanism that self-corrects AMM prices 
 
 ---
 
-## 11. Tokenomics
+## 12. Tokenomics
 
-*See also: `TOKENOMICS.md` in this repository.*
+*See also: `TOKENOMICS.md` in this repository for full allocation tables and gauge economics.*
 
-### 11.1 Supply
+### 12.1 Supply
 
-| Tranche | Amount | Mechanism |
-|---|---|---|
-| User purchases | Unlimited (curve-bound) | `buy_sola` |
-| Founder hiSOLA | 7,000,000 SOLA | Progressive vesting, 6-month cliff, 24-month linear |
-| Founder oSOLA | 5,000,000 oSOLA | Progressive vesting, 6-month cliff, 24-month linear |
-| Founder liquid | 250,000 SOLA | Immediate at launch (`mint_ecosystem_allocation`) |
-| Ecosystem / marketing | 1,750,000 SOLA | One-time (`mint_ecosystem_allocation`) |
+| Tranche | Amount | Mechanism | Floor backing |
+|---|---|---|---|
+| User purchases | Unlimited (curve-bound) | `buy_sola` | ✅ 1:1 |
+| Founder hiSOLA | 7,000,000 | 6-month cliff, 24-month linear vest | ❌ locked |
+| Founder oSOLA | 5,000,000 | 6-month cliff, 24-month linear vest | ✅ on exercise |
+| Founder liquid | 250,000 SOLA | Immediate | ❌ |
+| Protocol partners | 300,000 hiSOLA | Auto-locked 12 months, one-shot claim | ❌ locked |
+| Contributors | TBD | 1-month cliff, 12-month vest | ❌ locked |
+| Ecosystem / airdrop | 1,750,000 SOLA | One-time (`mint_ecosystem_allocation`) | ❌ |
 
-**There is no pre-mine, no ICO, no presale.** All SOLA purchased by users is individually floor-backed at 1:1. The founder's 7M hiSOLA vesting mints SOLA to `sola_vault` (not `floor_vault`) and does not create selling pressure against the floor.
+**All SOLA purchased by users is individually floor-backed at 1:1.** Non-purchased allocations (founder, partner, ecosystem) are excluded from `total_purchased_sola` and carry no floor-redemption rights — they cannot deplete the floor vault via `sell_sola`.
 
-### 11.2 Inflation
+### 12.2 Inflation
 
 The only new SOLA entering circulation is:
-- User `buy_sola` activity (each unit is 100% floor-backed)
-- Founder vesting claims (minted to `sola_vault`, locked as hiSOLA)
-- oSOLA exercises (each unit adds 1 USDC to `floor_vault` — net neutral)
+- User `buy_sola` activity (each unit 100% floor-backed)
+- Vesting claims — founder, contributor, partner (minted to `sola_vault`, locked as hiSOLA)
+- oSOLA exercises (each unit adds 1 USDC to `floor_vault` — net positive)
 
 There is no protocol-controlled inflation. oSOLA is the primary incentive token; its value is derived from the right to acquire SOLA at floor price.
 
-### 11.3 Revenue Model
+### 12.3 Revenue Model
 
 Protocol revenue flows to `market_vault`:
-- **Bonding curve premium** — the spread between user purchase price and floor price
+- **Bonding curve premium** — spread between purchase price and floor price
 - **AMM protocol fees** — `protocol_fee_share_bps` of each swap
-- **Borrow origination fees** — 2% of each `borrow_usdc` call
+- **Borrow origination fees** — 2% of each `borrow_usdc` / `founder_borrow_usdc` / `contributor_borrow_usdc`
 - **Flash arbitrage** — 90% of arb profit
 
 All `market_vault` revenue is distributed pro-rata to hiSOLA stakers via the reward-per-token accumulator.
 
 ---
 
-## 12. Security Model
+## 13. Security Model
 
 ### 12.1 On-Chain Authority
 
@@ -342,7 +407,7 @@ Prior to mainnet:
 
 ---
 
-## 13. PDA Architecture
+## 14. PDA Architecture
 
 All on-chain state is held in program-derived accounts. No mutable authority accounts. Every PDA is deterministically derived from fixed seeds:
 
@@ -372,32 +437,74 @@ All on-chain state is held in program-derived accounts. No mutable authority acc
 | pol_usdc_vault | `[b"pol_usdc_vault"]` |
 | LpUserInfo | `[b"lp_user", pool, user]` |
 | LpUserCheckpoint | `[b"lp_ckpt", pool, user]` |
+| FounderHiSolaVesting | `[b"founder_hi_vesting"]` |
+| FounderVesting | `[b"founder_vesting"]` |
+| ContributorVesting | `[b"contributor", contributor_wallet]` |
+| **PartnerAllocation** | `[b"partner", partner_wallet]` |
+| **UserVoteConfig** | `[b"vote_config", user]` |
 
 ---
 
-## 14. Instruction Set
+## 15. Instruction Set
 
 Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd`):
 
-`initialize` · `buy_sola` · `sell_sola` · `stake_sola` · `unstake_hi_sola` · `borrow_usdc` · `repay_usdc` · `exercise_o_sola` · `claim_fees` · `mint_founder_allocation` · `mint_ecosystem_allocation` · `claim_founder_hi_sola` · `claim_founder_vesting` · `deposit_bribe` · `vote_gauge` · `checkpoint_lp` · `emit_pool_rewards` · `claim_lp_emissions` · `claim_bribe` · `rollover_bribe` · `create_pool` · `add_liquidity` · `remove_liquidity` · `claim_lp_rewards` · `amm_swap` · `distribute_o_sola` · `initialize_pol` · `collect_to_pol` · `deploy_pol` · `lock_hi_sola` · `unlock_hi_sola` · `flash_arbitrage` · `pause` · `unpause` · `transfer_authority`
+**Core bonding curve:** `initialize` · `buy_sola` · `sell_sola`
+
+**Staking & fees:** `stake_sola` · `unstake_hi_sola` · `claim_fees`
+
+**Borrowing:** `borrow_usdc` · `repay_usdc` · `founder_borrow_usdc` · `contributor_borrow_usdc`
+
+**oSOLA:** `exercise_o_sola` · `distribute_o_sola`
+
+**Founder vesting:** `mint_founder_allocation` · `claim_founder_hi_sola` · `claim_founder_vesting`
+
+**Ecosystem:** `mint_ecosystem_allocation`
+
+**Contributor vesting:** `register_contributor` · `claim_contributor_hi_sola` · `claim_contributor_vesting`
+
+**Protocol partners:** `register_partner` · `claim_partner_allocation`
+
+**Gauge & bribes:** `deposit_bribe` · `vote_gauge` · `claim_bribe` · `rollover_bribe`
+
+**Vote carry-over:** `set_vote_config` · `replay_vote`
+
+**Emission control:** `configure_emissions`
+
+**LP emissions:** `checkpoint_lp` · `emit_pool_rewards` · `claim_lp_emissions` · `claim_lp_rewards`
+
+**AMM:** `create_pool` · `add_liquidity` · `remove_liquidity` · `amm_swap`
+
+**Protocol-Owned Liquidity:** `initialize_pol` · `collect_to_pol` · `deploy_pol`
+
+**veSOLA:** `lock_hi_sola` · `unlock_hi_sola`
+
+**Flash arbitrage:** `flash_arbitrage`
+
+**Admin:** `pause` · `unpause` · `transfer_authority` · `migrate_user_position`
 
 ---
 
-## 15. Roadmap
+## 16. Roadmap
 
 | Phase | Status | Description |
 |---|---|---|
 | Devnet | ✅ Complete | Full protocol deployed and tested |
-| Security review | ✅ Complete | Code review + Trident fuzzing |
-| Squads multisig | ✅ Complete | 1-of-2 Ledger multisig created |
+| Security review | ✅ Complete | Code review + Trident fuzzing (200k calls, 0 violations) |
+| Squads multisig | ✅ Complete | 1-of-2 Ledger multisig (`BxYTiKyDxWpK4hPDZEiYVW9qBj8YpzhSHEBCWpaZbWQ4`) |
+| Strategic allocations | ✅ Complete | Founder vesting, contributor system, partner auto-lock system |
 | Mainnet deploy | Upcoming | `anchor build --no-default-features && anchor deploy` |
+| Partner onboarding | Upcoming | `register_partner` for Jito, Marinade, Solayer — 100k hiSOLA each, 12-month lock |
+| Community airdrop | Upcoming | Claim-based, ~500k SOLA from ecosystem allocation |
 | Audit | Post-launch | Independent security audit |
 | Jito partnership | In progress | JitoSOL/SOL pool + gauge integration |
+| Marinade partnership | Planned | mSOL/SOLA pool + bribe program |
+| Solayer partnership | Planned | sSOL/SOLA pool + gauge integration |
 | Solana Foundation Grant | Submitted | $35,000 grant application |
 
 ---
 
-## 16. Related Work
+## 17. Related Work
 
 - **Velodrome / Aerodrome** — ve(3,3) gauge-bribe architecture (inspiration for the gauge system)
 - **Uniswap v2** — constant-product AMM (inspiration for pool mechanics)
@@ -409,7 +516,7 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 
 ---
 
-## Appendix — Key Constants (Mainnet)
+## Appendix A — Key Constants (Mainnet)
 
 | Constant | Value | Description |
 |---|---|---|
@@ -424,9 +531,30 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 | `BORROW_FEE_BPS` | 200 | 2% origination fee |
 | `FOUNDER_BORROW_CAP_BPS` | 1,000 | 10% borrow cap on founder |
 | `ROLLOVER_DELAY_EPOCHS` | 2 | 14-day rollover grace period |
-| `LP_EMISSION_PER_EPOCH` | 10,000 oSOLA | Epoch LP rewards |
+| `osola_emission_initial` | 10,000 oSOLA | Starting epoch LP rewards (decay applies from epoch 0) |
+| `osola_emission_decay_bps` | 9,900 | −1 % per epoch decay factor |
+| `osola_emission_floor_bps` | 1,000 | 10 % floor — minimum emission forever |
 | `MINIMUM_LIQUIDITY` | 1,000 | Locked LP tokens on first deposit |
 | `PRECISION` | 1e12 | Accumulator precision |
+
+---
+
+## Appendix B — Strategic Allocation Summary
+
+| Beneficiary | Token | Amount | Cliff | Vesting / Lock | Borrow rights | On-chain mechanism |
+|---|---|---|---|---|---|---|
+| Founder | hiSOLA | 7,000,000 | 6 months | 24 months linear | 10% of claimed | `claim_founder_hi_sola` |
+| Founder | oSOLA | 5,000,000 | 6 months | 24 months linear | None | `claim_founder_vesting` |
+| Founder | SOLA | 250,000 | None | Immediate | None | `mint_ecosystem_allocation` |
+| Jito | hiSOLA | 100,000 | None | 12-month lock | ❌ blocked during lock | `claim_partner_allocation` |
+| Marinade | hiSOLA | 100,000 | None | 12-month lock | ❌ blocked during lock | `claim_partner_allocation` |
+| Solayer | hiSOLA | 100,000 | None | 12-month lock | ❌ blocked during lock | `claim_partner_allocation` |
+| Contributors (TBD) | hiSOLA + oSOLA | TBD | 1 month | 12 months linear | 10% of claimed | `claim_contributor_hi_sola` |
+| Community airdrop | SOLA | ~500,000 | None | Immediate (claim) | None | Direct SPL transfer |
+| LP incentive reserve | SOLA | ~500,000 | None | Progressive | None | Direct SPL transfer |
+| Marketing reserve | SOLA | ~750,000 | None | Held in reserve | None | Direct SPL transfer |
+
+*All hiSOLA allocations mint SOLA to `sola_vault` as 1:1 backing. None enter `total_purchased_sola` — the floor vault is exclusively funded by user `buy_sola` and oSOLA exercise activity.*
 
 ---
 
