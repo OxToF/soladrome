@@ -2968,7 +2968,7 @@ pub struct UnstakeHiSola<'info> {
     pub hi_sola_mint: Account<'info, Mint>,
 
     #[account(mut, token::mint = hi_sola_mint, token::authority = user)]
-    pub user_hi_sola: Account<'info, TokenAccount>,
+    pub user_hi_sola: Box<Account<'info, TokenAccount>>,
 
     #[account(
         init_if_needed,
@@ -2976,18 +2976,18 @@ pub struct UnstakeHiSola<'info> {
         associated_token::mint = sola_mint,
         associated_token::authority = user,
     )]
-    pub user_sola: Account<'info, TokenAccount>,
+    pub user_sola: Box<Account<'info, TokenAccount>>,
 
     #[account(mut, address = protocol_state.sola_vault)]
-    pub sola_vault: Account<'info, TokenAccount>,
+    pub sola_vault: Box<Account<'info, TokenAccount>>,
 
     /// Source of pending fee payouts. Mutable so fees can be transferred out.
     #[account(mut, address = protocol_state.market_vault)]
-    pub market_vault: Account<'info, TokenAccount>,
+    pub market_vault: Box<Account<'info, TokenAccount>>,
 
     /// USDC mint — needed to init user_usdc ATA on first unstake if absent.
     #[account(address = protocol_state.usdc_mint)]
-    pub usdc_mint: Account<'info, Mint>,
+    pub usdc_mint: Box<Account<'info, Mint>>,
 
     /// User's USDC ATA — receives any pending fees auto-paid on unstake.
     /// Created if it doesn't exist yet.
@@ -2997,7 +2997,7 @@ pub struct UnstakeHiSola<'info> {
         associated_token::mint      = usdc_mint,
         associated_token::authority = user,
     )]
-    pub user_usdc: Account<'info, TokenAccount>,
+    pub user_usdc: Box<Account<'info, TokenAccount>>,
 
     #[account(
         init_if_needed,
@@ -3006,7 +3006,7 @@ pub struct UnstakeHiSola<'info> {
         seeds = [POSITION_SEED, user.key().as_ref()],
         bump,
     )]
-    pub user_position: Account<'info, UserPosition>,
+    pub user_position: Box<Account<'info, UserPosition>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
