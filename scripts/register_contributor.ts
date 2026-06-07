@@ -7,13 +7,13 @@
  * Usage:
  *   ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
  *   ANCHOR_WALLET=~/.config/solana/id.json \
- *   yarn run ts-mocha -p ./tsconfig.json -t 60000 scripts/register_contributor.ts \
- *     -- <wallet_address> <hi_sola_amount_ui> <o_sola_amount_ui>
+ *   CONTRIBUTOR=<wallet_address> HI=<hi_sola_ui> OSOLA=<o_sola_ui> \
+ *   yarn run ts-mocha -p ./tsconfig.json -t 60000 scripts/register_contributor.ts
  *
  * Examples:
- *   # Register CM1 with 120 000 hiSOLA + 80 000 oSOLA
- *   yarn run ts-mocha -p ./tsconfig.json -t 60000 scripts/register_contributor.ts \
- *     -- 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU 120000 80000
+ *   # Register with 120 000 hiSOLA + 80 000 oSOLA
+ *   CONTRIBUTOR=JAfXUr5WNpj4wTeWAQ9KXmj9zRjBESTdgviAo1LLNrFn HI=120000 OSOLA=80000 \
+ *   yarn run ts-mocha -p ./tsconfig.json -t 60000 scripts/register_contributor.ts
  *
  *   # Re-running for an already-registered wallet will skip (guard check) or fail with ConstraintSeeds.
  *   # That's expected — each wallet can only be registered once.
@@ -42,17 +42,13 @@ describe("register_contributor (one-shot)", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  // ── Parse args passed after "--" ────────────────────────────────────────────
-  // When run via ts-mocha the extra args are in process.argv after "--"
-  const rawArgs = process.argv.slice(process.argv.indexOf("--") + 1).filter(Boolean);
-  const contributorStr   = rawArgs[0];
-  const hiSolaUi         = parseFloat(rawArgs[1]);
-  const oSolaUi          = parseFloat(rawArgs[2]);
+  const contributorStr = process.env.CONTRIBUTOR ?? "";
+  const hiSolaUi       = parseFloat(process.env.HI    ?? "0");
+  const oSolaUi        = parseFloat(process.env.OSOLA ?? "0");
 
   before(function () {
     if (!contributorStr || isNaN(hiSolaUi) || hiSolaUi <= 0 || isNaN(oSolaUi) || oSolaUi < 0) {
-      console.error("Usage: scripts/register_contributor.ts -- <wallet_address> <hi_sola_amount_ui> <o_sola_amount_ui>");
-      console.error("Example: ... -- 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU 120000 80000");
+      console.error("Usage: CONTRIBUTOR=<wallet> HI=<hi_sola_ui> OSOLA=<o_sola_ui> yarn ts-mocha ... register_contributor.ts");
       this.skip();
     }
   });

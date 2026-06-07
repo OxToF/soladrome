@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 import {
   getProgram, statePda, solaM, hiSolaM, oSolaM,
   solaVaultAddr, marketVault, floorVault,
@@ -224,6 +224,16 @@ export function FounderPanel() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
       const founder  = wallet.publicKey;
+
+      // Auto-migrate if UserPosition is on old 128-byte layout
+      const posInfo = await connection.getAccountInfo(positionPda(founder));
+      if (posInfo && posInfo.data.length < 136) {
+        setStatus("⚙️ Migrating position account…");
+        await program.methods.migrateUserPosition()
+          .accounts({ user: founder, userPosition: positionPda(founder), systemProgram: SystemProgram.programId } as any)
+          .rpc();
+      }
+
       const tx = await program.methods
         .claimFounderHiSola()
         .accounts({
