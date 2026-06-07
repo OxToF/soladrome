@@ -276,7 +276,7 @@
         <div class="mt-16">
             <div class="text-center mb-10">
                 <div class="inline-block px-4 py-1.5 mb-4 rounded-full border border-white/20 bg-white/5 text-gray-400 text-xs font-bold uppercase tracking-widest">
-                    On-Chain · Fully Deferred · Zero Supply at Launch
+                    On-Chain · Fully Deferred · Unstake Lock Enforced
                 </div>
                 <h3 class="text-2xl md:text-3xl font-bold">Founder <span class="gradient-text">Allocation</span> &amp; Vesting</h3>
                 <p class="text-gray-500 text-sm mt-3 max-w-xl mx-auto">12,000,000 SOLA (12% of reference supply) — split into two progressive tranches. <strong class="text-white">Zero tokens enter circulation at launch.</strong> All minting is deferred to on-chain claim instructions, giving the protocol time to build its floor reserve from real user activity.</p>
@@ -299,8 +299,12 @@
                         <div class="flex justify-between"><span class="text-gray-500">Liquidity path</span><span class="text-white font-semibold">founder_borrow_usdc</span></div>
                         <div class="flex justify-between"><span class="text-gray-500">Borrow cap</span><span class="text-[#14F195] font-semibold">Max 10% of claimed hiSOLA (~29k USDC/mo)</span></div>
                         <div class="flex justify-between"><span class="text-gray-500">No-interest, no liquidation</span><span class="text-white font-semibold">Floor-guaranteed</span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Unstake lock</span><span class="text-[#14F195] font-semibold">On-chain · FounderVestingLocked</span></div>
                     </div>
-                    <p class="text-gray-500 text-xs mt-3 leading-relaxed">The founder leads by example — all hiSOLA is staked, never sold. The 10% monthly borrow cap is enforced on-chain, preventing any single actor from draining the floor vault before organic users arrive.</p>
+                    <div class="mt-3 bg-[#9945FF]/10 border border-[#9945FF]/30 rounded-xl p-3">
+                        <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest mb-1">Programmatic Guarantee</p>
+                        <p class="text-gray-300 text-xs leading-relaxed">Converting hiSOLA back to SOLA is blocked on-chain if it would exceed the vesting-unlocked amount. The program itself enforces this via <code class="text-gray-400">FounderVestingLocked</code> — not a social promise, not a multisig policy. The founder cannot exit the stake faster than the vesting schedule allows.</p>
+                    </div>
                 </div>
                 <!-- 5M oSOLA progressive -->
                 <div class="bg-black/30 rounded-2xl p-7 border border-yellow-500/20">
@@ -544,7 +548,7 @@
                         Solana Grants Applied
                     </span>
                 </div>
-                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing (2% fee → stakers) · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · 2M $SOLA ecosystem allocation deployed on-chain · <strong class="text-white">On-chain founder vesting</strong> (7M hiSOLA progressive + 5M oSOLA progressive · 6-month cliff · 24-month linear · PDA-enforced) · <strong class="text-white">Founder borrow cap</strong> (10% of claimed hiSOLA/month · on-chain enforced · floor protection) · <strong class="text-white">On-chain contributor vesting</strong> (dual hiSOLA + oSOLA tranche · per-wallet PDA · 1-month cliff · 12-month linear · 10% monthly borrow cap · on-chain enforced) · Wallet collection active (airdrop eligibility) · <span class="text-[#9945FF]">Solana Foundation Grants application submitted</span></p>
+                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing (2% fee → stakers) · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · 2M $SOLA ecosystem allocation deployed on-chain · <strong class="text-white">On-chain founder vesting</strong> (7M hiSOLA progressive + 5M oSOLA progressive · 6-month cliff · 24-month linear · PDA-enforced) · <strong class="text-white">Founder borrow cap</strong> (10% of claimed hiSOLA/month · on-chain enforced · floor protection) · <strong class="text-white">Founder unstake lock</strong> (<code class="text-gray-300">FounderVestingLocked</code> · programmatic · cannot unstake faster than vesting unlocks) · <strong class="text-white">On-chain contributor vesting</strong> (dual hiSOLA + oSOLA tranche · per-wallet PDA · 1-month cliff · 12-month linear · 10% monthly borrow cap · on-chain enforced) · Wallet collection active (airdrop eligibility) · <span class="text-[#9945FF]">Solana Foundation Grants application submitted</span></p>
             </div>
             <div class="bg-solana p-8 rounded-2xl border border-[#9945FF]/30">
                 <div class="flex items-center gap-3 mb-2">
