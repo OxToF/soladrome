@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
+import { SystemProgram } from "@solana/web3.js";
 import {
   getProgram, statePda, hiSolaM, marketVault,
   positionPda, userAta, toUi,
@@ -73,6 +74,15 @@ export function ClaimFees() {
       const userHiSola = userAta(hiSolaM, wallet.publicKey);
       const userUsdc   = userAta(usdcMintPk, wallet.publicKey);
       const position   = positionPda(wallet.publicKey);
+
+      // Auto-migrate UserPosition if on old 128-byte layout
+      const posInfo = await connection.getAccountInfo(position);
+      if (posInfo && posInfo.data.length === 128) {
+        setStatus("Migrating account layout…");
+        await program.methods.migrateUserPosition()
+          .accounts({ user: wallet.publicKey, userPosition: position, systemProgram: SystemProgram.programId } as any)
+          .rpc();
+      }
 
       const tx = await program.methods
         .claimFees()

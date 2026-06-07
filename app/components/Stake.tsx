@@ -139,6 +139,20 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
         setStatus(`✅ Staked → hiSOLA — tx: ${tx.slice(0, 16)}…`);
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
+        // Auto-migrate user_position if it exists with the old 128-byte layout
+        const posInfo = await connection.getAccountInfo(position);
+        if (posInfo && posInfo.data.length === 128) {
+          setStatus("Migrating account layout…");
+          await program.methods
+            .migrateUserPosition()
+            .accounts({
+              user: wallet.publicKey,
+              userPosition: position,
+              systemProgram: SystemProgram.programId,
+            } as any)
+            .rpc();
+        }
+
         const userUsdc = usdcMint ? userAta(usdcMint, wallet.publicKey) : null;
         const tx = await program.methods
           .unstakeHiSola(fromUi(+amount))
