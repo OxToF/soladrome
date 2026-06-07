@@ -3,7 +3,8 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import fs from "fs";
 
 const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
-const TARGET_EPOCH = 494541;
+const EPOCH_DURATION = 7 * 24 * 60 * 60; // 604 800 s — matches state.rs
+const TARGET_EPOCH = Math.floor(Date.now() / 1000 / EPOCH_DURATION); // current epoch
 
 function epochBuf(epoch: number): Buffer {
   const b = Buffer.alloc(8);

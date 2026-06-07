@@ -21,22 +21,24 @@ import { Portfolio }    from "@/components/Portfolio";
 import { FlashArb }     from "@/components/FlashArb";
 import { FounderPanel }      from "@/components/FounderPanel";
 import { ContributorPanel, contributorVestingPda } from "@/components/ContributorPanel";
+import { PartnerPanel, partnerAllocationPda }      from "@/components/PartnerPanel";
 import { useConnection }   from "@solana/wallet-adapter-react";
 
 // Founder wallet — must match FOUNDER_WALLET in programs/soladrome/src/lib.rs
 const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
-type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "founder" | "contributor";
+type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "founder" | "contributor" | "partner";
 
-const NAV: { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean }[] = [
+const NAV: { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean; partnerOnly?: boolean }[] = [
   { id: "home",        label: "Home"        },
   { id: "pools",       label: "Pools"       },
   { id: "vote",        label: "Vote"        },
   { id: "bribe",       label: "Bribe"       },
   { id: "claim",       label: "Claim"       },
   { id: "arb",         label: "⚡ Arb"      },
-  { id: "founder",     label: "👑 Founder",     founderOnly: true      },
+  { id: "founder",     label: "👑 Founder",      founderOnly: true   },
   { id: "contributor", label: "🤝 My Allocation", contributorOnly: true },
+  { id: "partner",     label: "🤝 Partner",       partnerOnly: true   },
 ];
 
 // Legacy page ids that used to be standalone tabs — redirect them to home
@@ -53,22 +55,31 @@ export default function Home() {
   const { connection } = useConnection();
   const [page, setPage]           = useState<Page>("home");
   const [isContributor, setIsContributor] = useState(false);
+  const [isPartner,     setIsPartner]     = useState(false);
 
   const isFounder = wallet?.publicKey.toBase58() === FOUNDER_WALLET;
 
-  // Detect if connected wallet has a ContributorVesting PDA
+  // Detect ContributorVesting PDA
   useEffect(() => {
     if (!wallet) { setIsContributor(false); return; }
-    const pda = contributorVestingPda(wallet.publicKey);
-    connection.getAccountInfo(pda)
+    connection.getAccountInfo(contributorVestingPda(wallet.publicKey))
       .then((info) => setIsContributor(info !== null))
       .catch(() => setIsContributor(false));
   }, [wallet?.publicKey.toBase58(), connection]);
 
-  // Visible nav: hide founderOnly / contributorOnly entries unless applicable
+  // Detect PartnerAllocation PDA
+  useEffect(() => {
+    if (!wallet) { setIsPartner(false); return; }
+    connection.getAccountInfo(partnerAllocationPda(wallet.publicKey))
+      .then((info) => setIsPartner(info !== null))
+      .catch(() => setIsPartner(false));
+  }, [wallet?.publicKey.toBase58(), connection]);
+
+  // Visible nav: hide role-specific entries unless applicable
   const visibleNav = NAV.filter((n) => {
-    if (n.founderOnly) return isFounder;
+    if (n.founderOnly)     return isFounder;
     if (n.contributorOnly) return isContributor;
+    if (n.partnerOnly)     return isPartner;
     return true;
   });
 
@@ -298,6 +309,7 @@ export default function Home() {
           )}
           {page === "founder"     && <FounderPanel />}
           {page === "contributor" && <ContributorPanel />}
+          {page === "partner"     && <PartnerPanel />}
         </main>
       )}
 
