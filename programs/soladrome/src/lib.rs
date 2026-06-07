@@ -459,6 +459,34 @@ pub mod soladrome {
             SoladromeError::OutstandingDebt
         );
 
+        // ── Founder vesting lock (mainnet only) ──────────────────────────────
+        // Prevents the founder from unstaking more hiSOLA than the vesting
+        // schedule has unlocked. Devnet skips this check for testing convenience.
+        #[cfg(not(feature = "devnet"))]
+        if ctx.accounts.user.key() == FOUNDER_WALLET.parse::<Pubkey>().unwrap() {
+            let vesting_data = ctx.accounts.founder_hi_vesting.try_borrow_data()?;
+            let vesting = FounderHiSolaVesting::try_deserialize(&mut &vesting_data[..])?;
+            let clock = Clock::get()?;
+            let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
+            let max_unlocked = if elapsed >= VESTING_DURATION_SECS {
+                vesting.total_amount
+            } else {
+                (vesting.total_amount as u128)
+                    .checked_mul(elapsed as u128)
+                    .ok_or(SoladromeError::Overflow)?
+                    .checked_div(VESTING_DURATION_SECS as u128)
+                    .ok_or(SoladromeError::Overflow)? as u64
+            };
+            // After unstaking, the remaining hiSOLA (balance - amount) must
+            // not exceed what the vesting schedule allows at this moment.
+            // Equivalently: amount ≤ balance - (claimed - max_unlocked).
+            let locked = vesting.claimed.saturating_sub(max_unlocked);
+            require!(
+                balance.saturating_sub(hi_sola_amount) >= locked,
+                SoladromeError::FounderVestingLocked
+            );
+        }
+
         // ── Auto-pay pending fees (Masterchef pattern) ───────────────────────
         // Compute on the FULL pre-unstake balance so the staker captures every
         // fee earned up to this moment — then set fees_debt = acc so future
@@ -3007,6 +3035,12 @@ pub struct UnstakeHiSola<'info> {
         bump,
     )]
     pub user_position: Box<Account<'info, UserPosition>>,
+
+    /// Founder vesting schedule — required when caller is FOUNDER_WALLET to
+    /// enforce the hiSOLA vesting lock on mainnet. Non-founder callers must
+    /// pass the SystemProgram pubkey; the check is skipped for them.
+    /// CHECK: validated only when caller == FOUNDER_WALLET (mainnet).
+    pub founder_hi_vesting: UncheckedAccount<'info>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
