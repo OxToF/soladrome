@@ -174,9 +174,11 @@ Soladrome distinguishes between three types of non-user token allocations, each 
 ### 7.1 Founder Allocation (`mint_founder_allocation`)
 
 One-time instruction creating two progressive vesting schedules:
-- **7M hiSOLA:** 6-month cliff → 24-month linear vest via `claim_founder_hi_sola`. Each claim mints SOLA to `sola_vault` (permanent backing) and hiSOLA 1:1 to the founder. Borrow capped at 10% of cumulative claimed hiSOLA (`founder_borrow_usdc`) — ensures the founder cannot deplete the floor vault before organic users arrive.
+- **7M hiSOLA:** 6-month cliff → 24-month linear vest via `claim_founder_hi_sola`. Each claim mints SOLA to `sola_vault` (permanent backing) and hiSOLA 1:1 to the founder. Two independent on-chain guarantees enforce the vesting intent:
+  1. **Borrow cap** — `founder_borrow_usdc` limits cumulative debt to 10% of claimed hiSOLA (~29k USDC/month at full vest). Prevents floor vault drain before organic users arrive.
+  2. **Unstake lock** — `unstake_hi_sola` rejects any conversion of hiSOLA back to SOLA that would exceed the vesting-unlocked amount at the time of the call. Computed as `max_unlocked = total_amount × elapsed / VESTING_DURATION_SECS`. If `claimed − amount_to_unstake > max_unlocked`, the instruction fails with `FounderVestingLocked`. This is a **programmatic guarantee enforced by the program itself** — not a social promise or a multisig policy.
 - **5M oSOLA:** same schedule via `claim_founder_vesting`. Each exercise adds 1 USDC to `floor_vault`.
-- **250k SOLA:** immediate liquid at launch for operational expenses (KOL rewards, community managers, contest prizes).
+- **250k SOLA:** immediate liquid at launch for operational expenses (KOL rewards, community managers, contest prizes). This tranche is explicitly documented and does not affect `total_purchased_sola`.
 
 ### 7.2 Protocol Partner Allocations (`register_partner` / `claim_partner_allocation`)
 
@@ -336,7 +338,7 @@ This creates a permissionless arbitrage mechanism that self-corrects AMM prices 
 | Tranche | Amount | Mechanism | Floor backing |
 |---|---|---|---|
 | User purchases | Unlimited (curve-bound) | `buy_sola` | ✅ 1:1 |
-| Founder hiSOLA | 7,000,000 | 6-month cliff, 24-month linear vest | ❌ locked |
+| Founder hiSOLA | 7,000,000 | 6-month cliff, 24-month linear vest · unstake lock enforced on-chain | ❌ locked |
 | Founder oSOLA | 5,000,000 | 6-month cliff, 24-month linear vest | ✅ on exercise |
 | Founder liquid | 250,000 SOLA | Immediate | ❌ |
 | Protocol partners | 300,000 hiSOLA | Auto-locked 12 months, one-shot claim | ❌ locked |
