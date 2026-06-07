@@ -154,6 +154,14 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
         }
 
         const userUsdc = usdcMint ? userAta(usdcMint, wallet.publicKey) : null;
+
+        // Founder vesting lock: pass the vesting PDA when caller is founder,
+        // SystemProgram otherwise (program ignores it for non-founder callers).
+        const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
+        const founderHiVesting = wallet.publicKey.toBase58() === FOUNDER_WALLET
+          ? PublicKey.findProgramAddressSync([Buffer.from("founder_hi_vesting")], PROGRAM_ID)[0]
+          : SystemProgram.programId;
+
         const tx = await program.methods
           .unstakeHiSola(fromUi(+amount))
           .accounts({
@@ -168,6 +176,7 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
             usdcMint: usdcMint ?? PublicKey.default,
             userUsdc: userUsdc ?? PublicKey.default,
             userPosition: position,
+            founderHiVesting,
             ...commonAccounts,
           } as any)
           .rpc();

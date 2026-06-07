@@ -86,4 +86,7 @@ pub enum SoladromeError {
     VoteConfigDisabled,
     #[msg("Invalid vote config: n_pools out of range or bps do not sum to 10 000")]
     InvalidVoteConfig,
+    // ── Founder vesting lock ──────────────────────────────────────────────────
+    #[msg("Founder hiSOLA is vesting-locked — amount exceeds unlocked allocation")]
+    FounderVestingLocked,
 }
