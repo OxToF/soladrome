@@ -3,131 +3,102 @@
 "use client";
 import { useState } from "react";
 
-// ── LP Pairs — exist on multiple protocols ────────────────────────────────────
+// ── Data ──────────────────────────────────────────────────────────────────────
+
+const PROTOCOLS = {
+  soladrome: { id: "soladrome", label: "Soladrome", chain: "solana",   chainLabel: "Solana",   color: "#9945FF", url: "soladrome.finance"    },
+  aerodrome: { id: "aerodrome", label: "Aerodrome", chain: "base",     chainLabel: "Base",     color: "#0052FF", url: "aerodrome.finance"    },
+  velodrome: { id: "velodrome", label: "Velodrome", chain: "optimism", chainLabel: "Optimism", color: "#FF0420", url: "velodrome.finance"    },
+} as const;
+type ProtocolId = keyof typeof PROTOCOLS;
+
+// Bribe tokens when target is Soladrome (EVM partners bridge their tokens in)
+const EVM_BRIBE_TOKENS = [
+  { id: "fbomb", label: "fBOMB", icon: "💣" },
+  { id: "aero",  label: "AERO",  icon: "✈️"  },
+  { id: "velo",  label: "VELO",  icon: "🌀"  },
+  { id: "usdc",  label: "USDC",  icon: "💵"  },
+  { id: "eth",   label: "ETH",   icon: "Ξ"   },
+];
+
+// Bribe tokens when target is Aerodrome/Velodrome (Soladrome exercises oSOLA → wSOLA)
+const WSOLA_BRIBE_TOKENS = [
+  { id: "wsola", label: "wSOLA", icon: "◎" },
+  { id: "usdc",  label: "USDC",  icon: "💵" },
+];
+
+// LP pairs — each entry lists which protocols host this gauge
 const LP_PAIRS = [
   {
-    id: "sola-fbomb", label: "SOLA / fBOMB", icon: "◎💣",
-    bribeTokens: [
-      { id: "fbomb", label: "fBOMB", icon: "💣" },
-      { id: "sola",  label: "SOLA",  icon: "◎"  },
-      { id: "usdc",  label: "USDC",  icon: "💵" },
-    ],
-    protocols: [
-      { id: "soladrome", label: "Soladrome", chain: "solana",   chainLabel: "Solana",   color: "#9945FF" },
-      { id: "aerodrome", label: "Aerodrome", chain: "base",     chainLabel: "Base",     color: "#0052FF" },
-    ],
+    id: "sola-fbomb", label: "SOLA / fBOMB",
+    tokenA: "SOLA", tokenB: "fBOMB",
+    protocols: ["soladrome", "aerodrome"] as ProtocolId[],
   },
   {
-    id: "sola-aero", label: "SOLA / AERO", icon: "◎✈️",
-    bribeTokens: [
-      { id: "aero", label: "AERO", icon: "✈️" },
-      { id: "sola", label: "SOLA", icon: "◎"  },
-      { id: "usdc", label: "USDC", icon: "💵" },
-    ],
-    protocols: [
-      { id: "soladrome", label: "Soladrome", chain: "solana", chainLabel: "Solana", color: "#9945FF" },
-      { id: "aerodrome", label: "Aerodrome", chain: "base",   chainLabel: "Base",   color: "#0052FF" },
-    ],
+    id: "sola-aero", label: "SOLA / AERO",
+    tokenA: "SOLA", tokenB: "AERO",
+    protocols: ["soladrome", "aerodrome"] as ProtocolId[],
   },
   {
-    id: "sola-velo", label: "SOLA / VELO", icon: "◎🚀",
-    bribeTokens: [
-      { id: "velo", label: "VELO", icon: "🚀" },
-      { id: "sola", label: "SOLA", icon: "◎"  },
-      { id: "usdc", label: "USDC", icon: "💵" },
-    ],
-    protocols: [
-      { id: "soladrome", label: "Soladrome", chain: "solana",   chainLabel: "Solana",   color: "#9945FF" },
-      { id: "velodrome", label: "Velodrome", chain: "optimism", chainLabel: "Optimism", color: "#FF0420" },
-    ],
+    id: "sola-velo", label: "SOLA / VELO",
+    tokenA: "SOLA", tokenB: "VELO",
+    protocols: ["soladrome", "velodrome"] as ProtocolId[],
   },
   {
-    id: "fbomb-aero", label: "fBOMB / AERO", icon: "💣✈️",
-    bribeTokens: [
-      { id: "fbomb", label: "fBOMB", icon: "💣" },
-      { id: "aero",  label: "AERO",  icon: "✈️" },
-      { id: "usdc",  label: "USDC",  icon: "💵" },
-    ],
-    protocols: [
-      { id: "soladrome", label: "Soladrome", chain: "solana", chainLabel: "Solana", color: "#9945FF" },
-      { id: "aerodrome", label: "Aerodrome", chain: "base",   chainLabel: "Base",   color: "#0052FF" },
-    ],
+    id: "fbomb-aero", label: "fBOMB / AERO",
+    tokenA: "fBOMB", tokenB: "AERO",
+    protocols: ["soladrome", "aerodrome"] as ProtocolId[],
   },
   {
-    id: "fbomb-velo", label: "fBOMB / VELO", icon: "💣🚀",
-    bribeTokens: [
-      { id: "fbomb", label: "fBOMB", icon: "💣" },
-      { id: "velo",  label: "VELO",  icon: "🚀" },
-      { id: "usdc",  label: "USDC",  icon: "💵" },
-    ],
-    protocols: [
-      { id: "soladrome", label: "Soladrome", chain: "solana",   chainLabel: "Solana",   color: "#9945FF" },
-      { id: "velodrome", label: "Velodrome", chain: "optimism", chainLabel: "Optimism", color: "#FF0420" },
-    ],
-  },
-  // Soladrome native
-  {
-    id: "sola-usdc", label: "SOLA / USDC", icon: "◎💵",
-    bribeTokens: [
-      { id: "usdc", label: "USDC", icon: "💵" },
-      { id: "sola", label: "SOLA", icon: "◎"  },
-    ],
-    protocols: [
-      { id: "soladrome", label: "Soladrome", chain: "solana", chainLabel: "Solana", color: "#9945FF" },
-    ],
+    id: "fbomb-velo", label: "fBOMB / VELO",
+    tokenA: "fBOMB", tokenB: "VELO",
+    protocols: ["soladrome", "velodrome"] as ProtocolId[],
   },
   {
-    id: "sola-sol", label: "SOLA / SOL", icon: "◎◎",
-    bribeTokens: [
-      { id: "usdc", label: "USDC", icon: "💵" },
-      { id: "sola", label: "SOLA", icon: "◎"  },
-    ],
-    protocols: [
-      { id: "soladrome", label: "Soladrome", chain: "solana", chainLabel: "Solana", color: "#9945FF" },
-    ],
+    id: "sola-usdc", label: "SOLA / USDC",
+    tokenA: "SOLA", tokenB: "USDC",
+    protocols: ["soladrome"] as ProtocolId[],
   },
   {
-    id: "msol-usdc", label: "mSOL / USDC", icon: "🌊💵",
-    bribeTokens: [
-      { id: "usdc", label: "USDC", icon: "💵" },
-      { id: "msol", label: "mSOL", icon: "🌊" },
-    ],
-    protocols: [
-      { id: "soladrome", label: "Soladrome", chain: "solana", chainLabel: "Solana", color: "#9945FF" },
-    ],
+    id: "sola-sol", label: "SOLA / SOL",
+    tokenA: "SOLA", tokenB: "SOL",
+    protocols: ["soladrome"] as ProtocolId[],
+  },
+  {
+    id: "msol-usdc", label: "mSOL / USDC",
+    tokenA: "mSOL", tokenB: "USDC",
+    protocols: ["soladrome"] as ProtocolId[],
   },
 ] as const;
+type LpId = typeof LP_PAIRS[number]["id"];
 
-type LpId       = typeof LP_PAIRS[number]["id"];
-type BribeToken = { id: string; label: string; icon: string };
-type Protocol   = { id: string; label: string; chain: string; chainLabel: string; color: string };
+// ── Sub-components ────────────────────────────────────────────────────────────
 
-// ── Chain logo ────────────────────────────────────────────────────────────────
 function ChainDot({ color }: { color: string }) {
-  return <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />;
+  return <span className="w-2 h-2 rounded-full shrink-0 inline-block" style={{ background: color }} />;
 }
 
 function ProtocolLogo({ chain }: { chain: string }) {
   if (chain === "solana") return (
-    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none">
+    <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" fill="none">
       <circle cx="12" cy="12" r="12" fill="#9945FF"/>
       <path fill="#fff" d="M7 15.5h8.5l1.5-1.5H8.5L7 15.5zm0-4h10l1.5-1.5H8.5L7 11.5zm2-4h8.5L16 6H9L7.5 7.5z"/>
     </svg>
   );
   if (chain === "base") return (
-    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#0052FF">
-      <circle cx="12" cy="12" r="12"/>
+    <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0">
+      <circle cx="12" cy="12" r="12" fill="#0052FF"/>
       <path fill="#fff" d="M12 5.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zm0 11a4.5 4.5 0 110-9 4.5 4.5 0 010 9z"/>
     </svg>
   );
   if (chain === "optimism") return (
-    <svg viewBox="0 0 24 24" className="w-5 h-5">
+    <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0">
       <circle cx="12" cy="12" r="12" fill="#FF0420"/>
-      <path fill="#fff" d="M8 9.5c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2v5c0 1.1-.9 2-2 2h-4c-1.1 0-2-.9-2-2v-5z"/>
+      <path fill="#fff" d="M8.5 9.5c0-.83.67-1.5 1.5-1.5h4c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5h-4c-.83 0-1.5-.67-1.5-1.5v-5z"/>
     </svg>
   );
   return (
-    <svg viewBox="0 0 24 24" className="w-5 h-5">
+    <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0">
       <circle cx="12" cy="12" r="12" fill="#627EEA"/>
       <path fill="rgba(255,255,255,.6)" d="M12 4v6.5l5.5 2.5L12 4z"/>
       <path fill="#fff" d="M12 4L6.5 13l5.5-2.5V4z"/>
@@ -135,41 +106,57 @@ function ProtocolLogo({ chain }: { chain: string }) {
   );
 }
 
-// ── Bridge route label ────────────────────────────────────────────────────────
-function routeLabel(srcChain: string, dstChain: string): string {
-  if (srcChain === dstChain) return "On-chain (no bridge needed)";
-  return `${srcChain.charAt(0).toUpperCase() + srcChain.slice(1)} → ${dstChain.charAt(0).toUpperCase() + dstChain.slice(1)} via LayerZero V2`;
+// Token pill
+function TokenPill({ label, icon }: { label: string; icon: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/5 border border-brand-border text-xs font-semibold text-white">
+      <span>{icon}</span>{label}
+    </span>
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
+
 export function Bridge() {
   const [lpId,       setLpId]       = useState<LpId>("sola-fbomb");
-  const [protocolId, setProtocolId] = useState<string>("soladrome");
+  const [protocolId, setProtocolId] = useState<ProtocolId>("soladrome");
   const [tokenId,    setTokenId]    = useState<string>("fbomb");
   const [amount,     setAmount]     = useState("");
   const [showTokens, setShowTokens] = useState(false);
   const [showModal,  setShowModal]  = useState(false);
 
-  const lp         = LP_PAIRS.find(p => p.id === lpId)!;
-  const protocol   = (lp.protocols as readonly Protocol[]).find(p => p.id === protocolId)
-                     ?? lp.protocols[0];
-  const token      = (lp.bribeTokens as readonly BribeToken[]).find(t => t.id === tokenId)
-                     ?? lp.bribeTokens[0];
-  const hasAmount  = !!amount && parseFloat(amount) > 0;
+  const lp       = LP_PAIRS.find(p => p.id === lpId)!;
+  const protocol = PROTOCOLS[protocolId];
 
-  // When LP changes, reset protocol + token
+  // When LP changes, keep protocol if still valid, else reset to first available
   const handleLpChange = (id: LpId) => {
     const newLp = LP_PAIRS.find(p => p.id === id)!;
+    const keepProtocol = (newLp.protocols as readonly string[]).includes(protocolId);
+    const nextProtocol = keepProtocol ? protocolId : newLp.protocols[0];
     setLpId(id);
-    setProtocolId(newLp.protocols[0].id);
-    setTokenId(newLp.bribeTokens[0].id);
+    setProtocolId(nextProtocol);
+    const tokens = nextProtocol === "soladrome" ? EVM_BRIBE_TOKENS : WSOLA_BRIBE_TOKENS;
+    setTokenId(tokens[0].id);
+    setAmount("");
   };
 
-  // Determine bridge route: user is "on Solana" by default
-  // If destination is EVM → bridge needed. If Soladrome → no bridge.
-  const needsBridge   = protocol.chain !== "solana";
-  const userChain     = needsBridge ? "solana" : protocol.chain;
-  const route         = routeLabel(userChain, protocol.chain);
+  const handleProtocolChange = (pid: ProtocolId) => {
+    setProtocolId(pid);
+    const tokens = pid === "soladrome" ? EVM_BRIBE_TOKENS : WSOLA_BRIBE_TOKENS;
+    setTokenId(tokens[0].id);
+    setAmount("");
+  };
+
+  // Bribe tokens depend on direction
+  const isEVM    = protocolId !== "soladrome";
+  const tokens   = isEVM ? WSOLA_BRIBE_TOKENS : EVM_BRIBE_TOKENS;
+  const token    = tokens.find(t => t.id === tokenId) ?? tokens[0];
+  const hasAmt   = !!amount && parseFloat(amount) > 0;
+
+  // Route description
+  const route = isEVM
+    ? `Solana → ${protocol.chainLabel} via LayerZero V2`
+    : `${protocol.chainLabel} → Solana via LayerZero V2`;
 
   return (
     <div className="max-w-lg mx-auto flex flex-col gap-5">
@@ -179,108 +166,155 @@ export function Bridge() {
         <div>
           <h2 className="text-lg font-bold text-white tracking-tight">Cross-Chain Bribe Bridge</h2>
           <p className="text-sm text-brand-muted mt-0.5">
-            Bribe any LP on Soladrome or EVM protocols — bidirectional
+            Bribe any LP gauge on Soladrome or EVM protocols
           </p>
         </div>
         <span className="badge-yellow shrink-0 mt-0.5">Mainnet soon</span>
       </div>
 
-      {/* Powered by */}
       <div className="flex items-center gap-2 text-xs text-brand-muted">
         <span>Powered by</span>
-        <span className="badge-muted">
-          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="12" cy="12" r="10" fillOpacity="0.3"/>
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
-          </svg>
-          LayerZero V2
-        </span>
+        <span className="badge-muted">LayerZero V2</span>
         <span className="badge-muted">⚡ Astralane</span>
       </div>
 
       <div className="card glow flex flex-col gap-6">
 
-        {/* ── Step 1 : LP Pair ──────────────────────────────────────────── */}
-        <div className="flex flex-col gap-3">
+        {/* ── Step 1 : LP Pair ─────────────────────────────────────────── */}
+        <section className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <span className="w-5 h-5 rounded-full bg-brand-green/15 text-brand-green text-xs font-bold flex items-center justify-center shrink-0">1</span>
-            <label className="stat-label">Select LP Pair</label>
+            <span className="stat-label">Select LP Pair</span>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            {LP_PAIRS.map(p => (
-              <button
-                key={p.id}
-                onClick={() => handleLpChange(p.id)}
-                className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all duration-150 text-left ${
-                  lpId === p.id
-                    ? "border-brand-green bg-brand-green/8 text-brand-green"
-                    : "border-brand-border text-brand-muted hover:border-white/20 hover:text-white"
-                }`}
-              >
-                <span className="text-base shrink-0">{p.icon.slice(0, 2)}</span>
-                <span className="truncate">{p.label}</span>
-                {(p.protocols as readonly Protocol[]).length > 1 && (
-                  <span className="ml-auto text-[10px] font-bold text-brand-muted shrink-0">×{p.protocols.length}</span>
-                )}
-              </button>
-            ))}
+            {LP_PAIRS.map(p => {
+              const multi = p.protocols.length > 1;
+              const active = lpId === p.id;
+              return (
+                <button key={p.id} onClick={() => handleLpChange(p.id)}
+                  className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all duration-150 text-left ${
+                    active ? "border-brand-green bg-brand-green/8 text-brand-green"
+                           : "border-brand-border text-brand-muted hover:border-white/20 hover:text-white"
+                  }`}
+                >
+                  <span className="truncate">{p.label}</span>
+                  {multi && (
+                    <span className={`text-[10px] font-bold shrink-0 ${active ? "text-brand-green/60" : "text-brand-muted/60"}`}>
+                      ×{p.protocols.length}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
-        </div>
+        </section>
 
         <div className="h-px bg-brand-border" />
 
-        {/* ── Step 2 : Protocol ────────────────────────────────────────── */}
-        <div className="flex flex-col gap-3">
+        {/* ── Step 2 : Target Protocol ─────────────────────────────────── */}
+        <section className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <span className="w-5 h-5 rounded-full bg-brand-green/15 text-brand-green text-xs font-bold flex items-center justify-center shrink-0">2</span>
-            <label className="stat-label">Target Protocol</label>
+            <span className="stat-label">Target Protocol — where to bribe</span>
           </div>
           <div className="flex flex-col gap-2">
-            {(lp.protocols as readonly Protocol[]).map(p => (
-              <button
-                key={p.id}
-                onClick={() => setProtocolId(p.id)}
-                className={`flex items-center gap-3 px-4 py-3 rounded-xl border transition-all duration-150 ${
-                  protocolId === p.id
-                    ? "border-brand-green bg-brand-green/8"
-                    : "border-brand-border hover:border-white/20"
-                }`}
-              >
-                <ProtocolLogo chain={p.chain} />
-                <div className="flex flex-col items-start">
-                  <span className={`text-sm font-semibold ${protocolId === p.id ? "text-brand-green" : "text-white"}`}>
-                    {p.label}
-                  </span>
-                  <span className="text-xs text-brand-muted flex items-center gap-1.5">
-                    <ChainDot color={p.color} />
-                    {p.chainLabel}
-                    {p.chain !== "solana" && (
-                      <span className="text-yellow-500/70 ml-1">· bridge required</span>
-                    )}
-                  </span>
-                </div>
-                {protocolId === p.id && (
-                  <span className="ml-auto text-brand-green text-lg">✓</span>
-                )}
-              </button>
-            ))}
+            {(lp.protocols as readonly ProtocolId[]).map(pid => {
+              const p      = PROTOCOLS[pid];
+              const active = protocolId === pid;
+              const evm    = pid !== "soladrome";
+              return (
+                <button key={pid} onClick={() => handleProtocolChange(pid)}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl border transition-all duration-150 ${
+                    active ? "border-brand-green bg-brand-green/8"
+                           : "border-brand-border hover:border-white/20"
+                  }`}
+                >
+                  <ProtocolLogo chain={p.chain} />
+                  <div className="flex flex-col items-start flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-semibold ${active ? "text-brand-green" : "text-white"}`}>
+                        {p.label}
+                      </span>
+                      {/* LP pair on this protocol */}
+                      <span className="text-xs text-brand-muted font-medium">
+                        {lp.label} gauge
+                      </span>
+                    </div>
+                    <span className="text-xs text-brand-muted flex items-center gap-1.5 mt-0.5">
+                      <ChainDot color={p.color} />
+                      {p.chainLabel}
+                      {evm
+                        ? <span className="text-yellow-500/70 ml-1">· Solana → {p.chainLabel}</span>
+                        : <span className="text-purple-400/60 ml-1">· {p.chainLabel} → Solana</span>
+                      }
+                    </span>
+                  </div>
+                  {/* Bribe token hint */}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {evm
+                      ? <TokenPill label="wSOLA" icon="◎" />
+                      : <span className="text-xs text-brand-muted">fBOMB / AERO…</span>
+                    }
+                  </div>
+                  {active && <span className="text-brand-green text-base shrink-0">✓</span>}
+                </button>
+              );
+            })}
           </div>
-        </div>
+
+          {/* Direction + LP recap banner */}
+          <div className={`rounded-xl px-4 py-3 flex items-center gap-3 text-xs ${
+            isEVM
+              ? "bg-yellow-500/5 border border-yellow-500/15"
+              : "bg-purple-500/5 border border-purple-500/15"
+          }`}>
+            <span className="text-lg">{isEVM ? "⚡" : "🔗"}</span>
+            <div className="flex flex-col gap-0.5">
+              {isEVM ? (
+                <>
+                  <span className="text-white font-medium">
+                    Bribing <span className="text-brand-green">{lp.label}</span> gauge on {protocol.label}
+                  </span>
+                  <span className="text-brand-muted">
+                    Soladrome exercises oSOLA → bridges wSOLA (backed 1:1) · {protocol.chainLabel}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="text-white font-medium">
+                    Bribing <span className="text-brand-green">{lp.label}</span> gauge on Soladrome
+                  </span>
+                  <span className="text-brand-muted">
+                    Bridge your EVM tokens from {lp.protocols.filter(p => p !== "soladrome").map(p => PROTOCOLS[p].chainLabel).join("/")} · Solana
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        </section>
 
         <div className="h-px bg-brand-border" />
 
         {/* ── Step 3 : Token + Amount ───────────────────────────────────── */}
-        <div className="flex flex-col gap-3">
+        <section className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <span className="w-5 h-5 rounded-full bg-brand-green/15 text-brand-green text-xs font-bold flex items-center justify-center shrink-0">3</span>
-            <label className="stat-label">Bribe Token & Amount</label>
+            <span className="stat-label">Bribe Token & Amount</span>
           </div>
+
+          {isEVM && (
+            <p className="text-xs text-brand-muted bg-brand-dark/60 rounded-lg px-3 py-2 border border-brand-border">
+              Soladrome treasury exercises oSOLA on-chain and bridges the resulting{" "}
+              <span className="text-white font-medium">wSOLA (1:1 floor-backed)</span> to {protocol.label}.
+              Select USDC to bribe directly instead.
+            </p>
+          )}
+
           <div className="flex gap-2">
+            {/* Token selector */}
             <div className="relative">
-              <button
-                onClick={() => setShowTokens(!showTokens)}
-                className="flex items-center gap-2 h-full px-3 py-2.5 rounded-xl border border-brand-border bg-brand-dark text-sm text-white hover:border-white/20 transition-all duration-150 shrink-0"
-              >
+              <button onClick={() => setShowTokens(!showTokens)}
+                className="flex items-center gap-2 h-full px-3 py-2.5 rounded-xl border border-brand-border bg-brand-dark text-sm text-white hover:border-white/20 transition-all duration-150 shrink-0">
                 <span>{token.icon}</span>
                 <span className="font-medium">{token.label}</span>
                 <svg className={`w-3 h-3 text-brand-muted transition-transform duration-150 ${showTokens ? "rotate-180" : ""}`}
@@ -289,8 +323,8 @@ export function Bridge() {
                 </svg>
               </button>
               {showTokens && (
-                <div className="absolute top-full left-0 mt-1 z-20 bg-brand-elevated border border-brand-border rounded-xl shadow-card-hover min-w-[140px] overflow-hidden">
-                  {(lp.bribeTokens as readonly BribeToken[]).map(t => (
+                <div className="absolute top-full left-0 mt-1 z-20 bg-brand-elevated border border-brand-border rounded-xl shadow-card-hover min-w-[150px] overflow-hidden">
+                  {tokens.map(t => (
                     <button key={t.id}
                       onClick={() => { setTokenId(t.id); setShowTokens(false); }}
                       className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm transition-colors hover:bg-white/5 ${
@@ -299,24 +333,25 @@ export function Bridge() {
                     >
                       <span>{t.icon}</span>
                       <span className="font-medium">{t.label}</span>
+                      {t.id === "wsola" && (
+                        <span className="ml-auto text-[10px] text-brand-muted">1:1 backed</span>
+                      )}
                     </button>
                   ))}
                 </div>
               )}
             </div>
-            <input
-              type="number" min="0" placeholder="0.00" value={amount}
+            <input type="number" min="0" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)}
-              className="input flex-1"
-            />
+              className="input flex-1" />
           </div>
-        </div>
+        </section>
 
         {/* ── Summary ──────────────────────────────────────────────────── */}
-        {hasAmount && (
-          <div className="rounded-xl border border-brand-border bg-brand-dark/60 p-4 flex flex-col gap-2.5 text-sm">
+        {hasAmt && (
+          <div className="rounded-xl border border-brand-border bg-brand-dark/60 p-4 flex flex-col gap-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-brand-muted">LP</span>
+              <span className="text-brand-muted">LP gauge</span>
               <span className="text-white font-medium">{lp.label}</span>
             </div>
             <div className="flex justify-between">
@@ -328,22 +363,22 @@ export function Bridge() {
             </div>
             <div className="flex justify-between">
               <span className="text-brand-muted">Route</span>
-              <span className={needsBridge ? "text-yellow-400" : "text-brand-green"}>
-                {needsBridge ? "⚡ " + route : "✓ " + route}
-              </span>
+              <span className="text-yellow-400 text-xs">⚡ {route}</span>
             </div>
-            {needsBridge && (
+            {isEVM && (
               <div className="flex justify-between">
-                <span className="text-brand-muted">Bridge fee</span>
-                <span className="text-white">~$0.10 (LayerZero)</span>
+                <span className="text-brand-muted">Mechanism</span>
+                <span className="text-brand-green text-xs">oSOLA exercised → wSOLA bridged</span>
               </div>
             )}
-            {needsBridge && (
-              <div className="flex justify-between">
-                <span className="text-brand-muted">Execution</span>
-                <span className="text-brand-green font-medium">⚡ Sub-slot · Astralane</span>
-              </div>
-            )}
+            <div className="flex justify-between">
+              <span className="text-brand-muted">Bridge fee</span>
+              <span className="text-white">~$0.10 (LayerZero)</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-brand-muted">Execution</span>
+              <span className="text-brand-green font-medium">⚡ Sub-slot · Astralane</span>
+            </div>
             <div className="h-px bg-brand-border" />
             <div className="flex justify-between font-semibold">
               <span className="text-brand-muted">Total bribe</span>
@@ -355,15 +390,14 @@ export function Bridge() {
         )}
 
         {/* CTA */}
-        <button
-          onClick={() => hasAmount && setShowModal(true)}
+        <button onClick={() => hasAmt && setShowModal(true)}
           className={`w-full py-3 rounded-xl font-semibold text-sm transition-all duration-200 ${
-            hasAmount
+            hasAmt
               ? "btn-primary justify-center"
               : "bg-brand-green/10 text-brand-green/40 border border-brand-green/10 cursor-not-allowed"
           }`}
         >
-          {needsBridge ? "Bridge & Bribe →" : "Bribe →"}
+          {isEVM ? "Bridge & Bribe →" : "Bribe →"}
         </button>
       </div>
 
@@ -371,10 +405,11 @@ export function Bridge() {
       <div className="card-flat flex gap-3 text-sm text-brand-muted">
         <span className="text-brand-green shrink-0 mt-0.5">ℹ</span>
         <p>
-          Each LP pair exists on <span className="text-white font-medium">Soladrome (Solana)</span> and
-          its native EVM protocol. Bribe either side — voters on that protocol direct emissions
-          to the pair. Cross-chain bribes route via{" "}
-          <span className="text-white font-medium">LayerZero V2 + Astralane</span>.
+          LP pairs exist on <span className="text-white font-medium">Soladrome (Solana)</span> and
+          their native EVM protocol. Bribe either gauge to direct emissions.
+          Cross-chain wSOLA bribes are{" "}
+          <span className="text-white font-medium">floor-backed 1:1</span> — Soladrome exercises
+          oSOLA on-chain before bridging, preserving the floor price invariant.
         </p>
       </div>
 
@@ -387,11 +422,11 @@ export function Bridge() {
             <div className="text-3xl">🌉</div>
             <h3 className="text-lg font-bold text-white">Mainnet Launch Soon</h3>
             <p className="text-sm text-brand-muted leading-relaxed">
-              Bridge deployed on testnet. Mainnet pending final audit + Astralane sign-off.
+              Bridge infrastructure deployed. Mainnet pending final audit + Astralane sign-off.
             </p>
             <div className="rounded-xl border border-brand-border bg-brand-dark/60 p-3 text-left text-sm flex flex-col gap-2">
               <div className="flex justify-between">
-                <span className="text-brand-muted">LP</span>
+                <span className="text-brand-muted">LP gauge</span>
                 <span className="text-white font-medium">{lp.label}</span>
               </div>
               <div className="flex justify-between">
@@ -402,6 +437,12 @@ export function Bridge() {
                 <span className="text-brand-muted">Bribe</span>
                 <span className="text-brand-green font-semibold">{amount} {token.label}</span>
               </div>
+              {isEVM && (
+                <div className="flex justify-between">
+                  <span className="text-brand-muted">Backing</span>
+                  <span className="text-brand-green text-xs">wSOLA · 1:1 floor-backed</span>
+                </div>
+              )}
             </div>
             <button onClick={() => setShowModal(false)} className="btn-secondary w-full justify-center">Close</button>
           </div>
