@@ -4,37 +4,195 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Base ────────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 body {
-  background-color: #0a0e1a;
-  color: #e5e7eb;
+  background-color: #09090f;
+  color: #e2e4ec;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  letter-spacing: -0.01em;
+}
+
+/* Refined scrollbar */
+::-webkit-scrollbar              { width: 6px; height: 6px; }
+::-webkit-scrollbar-track        { background: transparent; }
+::-webkit-scrollbar-thumb        { background: #1e2130; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover  { background: #2a2f45; }
+
+/* ── Design tokens ───────────────────────────────────────────────────── */
+.card {
+  @apply bg-brand-surface border border-brand-border rounded-2xl p-5;
+  background-image: linear-gradient(145deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0) 100%);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5), 0 1px 3px rgba(0,0,0,0.4);
+  border-color: #272b3d;
+}
+
+.card-flat {
+  @apply bg-brand-surface border border-brand-border rounded-xl p-4;
 }
 
 .glow {
-  box-shadow: 0 0 20px rgba(0, 255, 135, 0.15);
+  box-shadow: 0 0 24px rgba(0, 232, 135, 0.12);
 }
 
-.card {
-  @apply bg-[#111827] border border-[#1f2937] rounded-2xl p-6;
+.glow:hover {
+  box-shadow: 0 0 32px rgba(0, 232, 135, 0.18);
 }
 
+/* ── Buttons ─────────────────────────────────────────────────────────── */
 .btn-primary {
-  @apply bg-brand-green text-black font-bold px-6 py-3 rounded-xl
-         hover:bg-brand-teal transition-all duration-200 disabled:opacity-40
-         disabled:cursor-not-allowed;
+  @apply inline-flex items-center justify-center gap-2;
+  @apply bg-brand-green text-black font-semibold text-sm px-5 py-2.5 rounded-xl;
+  @apply transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed;
+  letter-spacing: -0.01em;
+}
+
+.btn-primary:not(:disabled):hover {
+  background-color: #00f598;
+  box-shadow: 0 0 20px rgba(0, 232, 135, 0.35);
+  transform: translateY(-1px);
+}
+
+.btn-primary:not(:disabled):active {
+  transform: translateY(0);
 }
 
 .btn-secondary {
-  @apply border border-brand-green text-brand-green font-semibold px-6 py-3
-         rounded-xl hover:bg-brand-green hover:text-black transition-all
-         duration-200 disabled:opacity-40 disabled:cursor-not-allowed;
+  @apply inline-flex items-center justify-center gap-2;
+  @apply border border-brand-border text-gray-300 font-medium text-sm px-5 py-2.5 rounded-xl;
+  @apply transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed;
+  background: rgba(255,255,255,0.03);
+  letter-spacing: -0.01em;
 }
 
+.btn-secondary:not(:disabled):hover {
+  @apply border-brand-green text-brand-green;
+  background: rgba(0, 232, 135, 0.06);
+}
+
+/* ── Input ───────────────────────────────────────────────────────────── */
 .input {
-  @apply w-full bg-[#0a0e1a] border border-[#1f2937] rounded-xl px-4 py-3
-         text-white placeholder-gray-500 focus:outline-none focus:border-brand-green
-         transition-colors;
+  @apply w-full rounded-xl px-4 py-2.5 text-sm text-white;
+  @apply transition-all duration-200;
+  @apply placeholder-brand-muted;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid #1e2130;
+  outline: none;
 }
 
+.input:focus {
+  border-color: rgba(0, 232, 135, 0.5);
+  box-shadow: 0 0 0 3px rgba(0, 232, 135, 0.08);
+}
+
+/* ── Tab indicator ───────────────────────────────────────────────────── */
 .tab-active {
-  @apply border-b-2 border-brand-green text-brand-green;
+  @apply text-brand-green;
+  position: relative;
+}
+
+.tab-active::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0; right: 0;
+  height: 2px;
+  background: #00e887;
+  border-radius: 2px 2px 0 0;
+}
+
+/* ── Stat card ───────────────────────────────────────────────────────── */
+.stat-value {
+  @apply text-sm font-semibold text-white tabular-nums;
+}
+
+.stat-label {
+  @apply text-[11px] font-medium text-brand-muted uppercase tracking-wider;
+}
+
+/* ── Badge ───────────────────────────────────────────────────────────── */
+.badge {
+  @apply inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-widest;
+  @apply px-2 py-0.5 rounded-md;
+}
+
+.badge-green {
+  @apply badge text-brand-green;
+  background: rgba(0, 232, 135, 0.1);
+  border: 1px solid rgba(0, 232, 135, 0.2);
+}
+
+.badge-yellow {
+  @apply badge text-yellow-400;
+  background: rgba(250, 204, 21, 0.1);
+  border: 1px solid rgba(250, 204, 21, 0.2);
+}
+
+.badge-muted {
+  @apply badge text-brand-muted;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid #1e2130;
+}
+
+/* ── Wallet adapter overrides ────────────────────────────────────────── */
+.wallet-adapter-button {
+  font-family: var(--font-inter), Inter, system-ui, sans-serif !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+  border-radius: 12px !important;
+  padding: 8px 16px !important;
+  height: auto !important;
+  background: #00e887 !important;
+  color: #000 !important;
+  transition: all 0.2s ease !important;
+}
+
+.wallet-adapter-button:not([disabled]):hover {
+  background: #00f598 !important;
+  box-shadow: 0 0 20px rgba(0, 232, 135, 0.35) !important;
+  transform: translateY(-1px) !important;
+}
+
+.wallet-adapter-modal-wrapper {
+  background: #0e1018 !important;
+  border: 1px solid #1e2130 !important;
+  border-radius: 20px !important;
+}
+
+/* ── Utilities ───────────────────────────────────────────────────────── */
+.text-gradient-green {
+  background: linear-gradient(135deg, #00e887 0%, #00c9a7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.divider {
+  @apply w-full h-px bg-brand-border;
+}
+
+/* Select */
+select {
+  @apply input cursor-pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%234b5270'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  padding-right: 36px;
 }

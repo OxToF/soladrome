@@ -36,11 +36,11 @@ const NAV: { id: Page; label: string; founderOnly?: boolean; contributorOnly?: b
   { id: "vote",        label: "Vote"        },
   { id: "bribe",       label: "Bribe"       },
   { id: "claim",       label: "Claim"       },
-  { id: "arb",         label: "⚡ Arb"      },
-  { id: "bridge",      label: "🌉 Bridge"   },
-  { id: "founder",     label: "👑 Founder",      founderOnly: true   },
-  { id: "contributor", label: "🤝 My Allocation", contributorOnly: true },
-  { id: "partner",     label: "🤝 Partner",       partnerOnly: true   },
+  { id: "arb",         label: "Arb"          },
+  { id: "bridge",      label: "Bridge"       },
+  { id: "founder",     label: "Founder",     founderOnly: true      },
+  { id: "contributor", label: "Allocation",  contributorOnly: true  },
+  { id: "partner",     label: "Partner",     partnerOnly: true      },
 ];
 
 // Legacy page ids that used to be standalone tabs — redirect them to home
@@ -111,39 +111,39 @@ export default function Home() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* ── Header ─────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-50 border-b border-brand-border bg-brand-dark/90 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-50 border-b border-brand-border/60 bg-brand-dark/80 backdrop-blur-xl">
+        <div className="max-w-7xl mx-auto px-5 h-15 flex items-center justify-between gap-4" style={{height:"60px"}}>
           {/* Logo */}
           <div className="flex items-center gap-3 shrink-0">
-            <span className="text-2xl font-black tracking-tight">
-              <span className="text-white">SOLA</span>
-              <span className="text-brand-green">DROME</span>
+            <span className="text-xl font-black tracking-tight">
+              <span className="text-white">SOLA</span><span className="text-brand-green">DROME</span>
             </span>
-            <span className="text-[10px] text-brand-green border border-brand-green/40 rounded px-1.5 py-0.5 uppercase tracking-widest">
-              Devnet ✓
-            </span>
+            <span className="badge-green">Devnet</span>
           </div>
 
           {/* Nav */}
-          <nav className="hidden md:flex items-center gap-1">
-            {visibleNav.map(({ id, label }) => (
+          <nav className="hidden md:flex items-center gap-0.5">
+            {visibleNav.map(({ id, label, founderOnly, partnerOnly, contributorOnly }) => (
               <button
                 key={id}
                 onClick={() => setPage(id)}
-                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`relative px-3.5 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${
                   page === id
-                    ? "bg-brand-green/10 text-brand-green"
-                    : "text-gray-400 hover:text-white"
+                    ? "text-brand-green bg-brand-green/8"
+                    : "text-brand-muted hover:text-gray-200 hover:bg-white/4"
                 }`}
               >
                 {label}
+                {(founderOnly || partnerOnly || contributorOnly) && (
+                  <span className="absolute top-1.5 right-1.5 w-1 h-1 rounded-full bg-brand-green opacity-70" />
+                )}
               </button>
             ))}
             <a
               href={DOCS_URL}
               target="_blank"
               rel="noreferrer"
-              className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+              className="px-3.5 py-2 rounded-lg text-sm font-medium text-brand-muted hover:text-gray-200 transition-all duration-150 hover:bg-white/4 flex items-center gap-1"
             >
               Docs
               <svg className="w-3 h-3 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -155,7 +155,7 @@ export default function Home() {
               href={DISCORD_URL}
               target="_blank"
               rel="noreferrer"
-              className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-[#5865F2] transition-colors flex items-center gap-1.5"
+              className="px-3.5 py-2 rounded-lg text-sm font-medium text-brand-muted hover:text-[#5865F2] transition-all duration-150 hover:bg-white/4 flex items-center gap-1.5"
               title="Soladrome Labs Discord"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -167,7 +167,7 @@ export default function Home() {
               href={X_URL}
               target="_blank"
               rel="noreferrer"
-              className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors flex items-center gap-1.5"
+              className="px-3.5 py-2 rounded-lg text-sm font-medium text-brand-muted hover:text-white transition-all duration-150 hover:bg-white/4 flex items-center gap-1.5"
               title="Soladrome on X"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -179,7 +179,7 @@ export default function Home() {
               href={TELEGRAM_URL}
               target="_blank"
               rel="noreferrer"
-              className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-[#2AABEE] transition-colors flex items-center gap-1.5"
+              className="px-3.5 py-2 rounded-lg text-sm font-medium text-brand-muted hover:text-[#2AABEE] transition-all duration-150 hover:bg-white/4 flex items-center gap-1.5"
               title="Soladrome Telegram"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -258,15 +258,15 @@ export default function Home() {
           <Stats />
 
           {/* Mobile nav */}
-          <div className="flex md:hidden gap-2 mb-6 overflow-x-auto pb-1">
+          <div className="flex md:hidden gap-1.5 mb-6 overflow-x-auto pb-1 scrollbar-none">
             {visibleNav.map(({ id, label }) => (
               <button
                 key={id}
                 onClick={() => setPage(id)}
-                className={`shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${
                   page === id
-                    ? "bg-brand-green/10 text-brand-green border border-brand-green/30"
-                    : "text-gray-400 border border-brand-border"
+                    ? "bg-brand-green/10 text-brand-green border border-brand-green/25"
+                    : "text-brand-muted border border-brand-border hover:text-gray-200"
                 }`}
               >
                 {label}
