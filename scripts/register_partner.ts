@@ -21,6 +21,14 @@
 import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 
+// Known protocol partners — use PARTNER=<key> or set PARTNER=marinade etc.
+// Addresses sourced from official docs / on-chain verification (Arkham confirmed).
+const KNOWN_PARTNERS: Record<string, string> = {
+  // Marinade Finance — DAO Treasury (Realms-controlled, mainnet)
+  // Source: https://docs.marinade.finance  |  Arkham: B56RWQ…
+  marinade: "B56RWQGf9RFw7t8gxPzrRvk5VRmB5DoF94aLoJ25YtvG",
+};
+
 const PROGRAM_ID     = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
 const PARTNER_SEED   = Buffer.from("partner");
 const EPOCH_DURATION = 7 * 24 * 60 * 60; // 604 800 s — mirrors state.rs EPOCH_DURATION
@@ -30,7 +38,8 @@ describe("register_partner (one-shot)", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const partnerStr = process.env.PARTNER ?? "";
+  const partnerRaw = process.env.PARTNER ?? "";
+  const partnerStr = KNOWN_PARTNERS[partnerRaw.toLowerCase()] ?? partnerRaw;
   const hiSolaUi   = parseFloat(process.env.AMOUNT ?? "0");
   const lockEpochs = parseInt(process.env.EPOCHS  ?? "1", 10);
 

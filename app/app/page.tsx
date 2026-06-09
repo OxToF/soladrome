@@ -22,12 +22,13 @@ import { FlashArb }     from "@/components/FlashArb";
 import { FounderPanel }      from "@/components/FounderPanel";
 import { ContributorPanel, contributorVestingPda } from "@/components/ContributorPanel";
 import { PartnerPanel, partnerAllocationPda }      from "@/components/PartnerPanel";
+import { Bridge }          from "@/components/Bridge";
 import { useConnection }   from "@solana/wallet-adapter-react";
 
 // Founder wallet — must match FOUNDER_WALLET in programs/soladrome/src/lib.rs
 const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
-type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "founder" | "contributor" | "partner";
+type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "founder" | "contributor" | "partner";
 
 const NAV: { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean; partnerOnly?: boolean }[] = [
   { id: "home",        label: "Home"        },
@@ -36,6 +37,7 @@ const NAV: { id: Page; label: string; founderOnly?: boolean; contributorOnly?: b
   { id: "bribe",       label: "Bribe"       },
   { id: "claim",       label: "Claim"       },
   { id: "arb",         label: "⚡ Arb"      },
+  { id: "bridge",      label: "🌉 Bridge"   },
   { id: "founder",     label: "👑 Founder",      founderOnly: true   },
   { id: "contributor", label: "🤝 My Allocation", contributorOnly: true },
   { id: "partner",     label: "🤝 Partner",       partnerOnly: true   },
@@ -307,6 +309,7 @@ export default function Home() {
               <ClaimBribe />
             </div>
           )}
+          {page === "bridge"      && <div className="max-w-xl mx-auto"><Bridge /></div>}
           {page === "founder"     && <FounderPanel />}
           {page === "contributor" && <ContributorPanel />}
           {page === "partner"     && <PartnerPanel />}
