@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
   getProgram, statePda, solaM, hiSolaM, oSolaM,
   solaVaultAddr, marketVault, floorVault,
@@ -15,6 +15,17 @@ import { PROGRAM_ID } from "@/lib/program";
 
 // ── Hardcoded founder wallet (must match FOUNDER_WALLET in lib.rs) ────────────
 const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
+
+// ── Partner registration ──────────────────────────────────────────────────────
+const PARTNER_SEED        = Buffer.from("partner");
+const EPOCH_DURATION_SECS = 604_800; // 7 days mainnet (= 3 600 s on devnet — script-only concern)
+
+function partnerAllocPda(partnerWallet: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [PARTNER_SEED, partnerWallet.toBuffer()],
+    PROGRAM_ID
+  )[0];
+}
 
 // ── Vesting constants (devnet — must match state.rs) ─────────────────────────
 // Mainnet: cliff = 180 days, duration = 720 days — flip these before launch
@@ -154,6 +165,13 @@ export function FounderPanel() {
   const [borrowTab,  setBorrowTab]  = useState<"borrow" | "repay">("borrow");
   const [borrowAmt,  setBorrowAmt]  = useState("");
   const [status,     setStatus]     = useState("");
+
+  // ── Register partner form ───────────────────────────────────────────────────
+  const [regWallet,    setRegWallet]    = useState("");
+  const [regAmount,    setRegAmount]    = useState("100000");
+  const [regEpochs,    setRegEpochs]    = useState("52");
+  const [loadingReg,   setLoadingReg]   = useState(false);
+  const [statusReg,    setStatusReg]    = useState("");
 
   // ── Fetch all vesting + position data ───────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -357,6 +375,48 @@ export function FounderPanel() {
     }
   }
 
+  // ── Register partner (authority-only) ────────────────────────────────────
+
+  async function registerPartner() {
+    if (!wallet) return;
+    setLoadingReg(true); setStatusReg("");
+    try {
+      const partnerKey = new PublicKey(regWallet.trim());
+      const hiSolaBN   = new BN(Math.floor(parseFloat(regAmount) * 1_000_000));
+      const lockBN     = new BN(parseInt(regEpochs, 10) * EPOCH_DURATION_SECS);
+      const allocPda   = partnerAllocPda(partnerKey);
+
+      // Guard: already registered?
+      const existing = await connection.getAccountInfo(allocPda);
+      if (existing) {
+        setStatusReg(`⚠️ ${regWallet.slice(0, 8)}… is already registered.`);
+        return;
+      }
+
+      const provider = new AnchorProvider(connection, wallet, {});
+      const program  = getProgram(provider);
+
+      const tx = await program.methods
+        .registerPartner(hiSolaBN, lockBN)
+        .accounts({
+          authority:         wallet.publicKey,
+          protocolState:     statePda,
+          partnerWallet:     partnerKey,
+          partnerAllocation: allocPda,
+          systemProgram:     SystemProgram.programId,
+          rent:              SYSVAR_RENT_PUBKEY,
+        } as any)
+        .rpc();
+
+      setStatusReg(`✅ Partner registered — tx: ${tx.slice(0, 16)}…`);
+      setRegWallet("");
+    } catch (e: any) {
+      setStatusReg(`❌ ${e?.message ?? e}`);
+    } finally {
+      setLoadingReg(false);
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (!wallet) {
@@ -547,6 +607,86 @@ export function FounderPanel() {
           </div>
         </>
       )}
+
+      {/* ── Register Partner ────────────────────────────────── */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-2xl">🤝</span>
+          <div>
+            <h3 className="text-base font-bold text-white">Register Protocol Partner</h3>
+            <p className="text-xs text-gray-500">Authority-only · hiSOLA locked directly in governance vault</p>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          {/* Partner wallet */}
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+              Partner wallet
+            </label>
+            <input
+              className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+              type="text"
+              placeholder="Solana wallet address"
+              value={regWallet}
+              onChange={(e) => setRegWallet(e.target.value)}
+            />
+          </div>
+
+          {/* Amount + Epochs row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+                hiSOLA amount
+              </label>
+              <input
+                className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+                type="text"
+                inputMode="decimal"
+                placeholder="100000"
+                value={regAmount}
+                onChange={(e) => {
+                  if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
+                    setRegAmount(e.target.value);
+                }}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+                Lock (epochs)
+              </label>
+              <input
+                className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+                type="text"
+                inputMode="numeric"
+                placeholder="52"
+                value={regEpochs}
+                onChange={(e) => {
+                  if (e.target.value === "" || /^\d+$/.test(e.target.value))
+                    setRegEpochs(e.target.value);
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Info line */}
+          <p className="text-[10px] text-gray-500">
+            1 epoch = 7 days mainnet · 52 epochs ≈ 12 months · max 104 epochs
+          </p>
+
+          <button
+            className="btn-primary w-full"
+            onClick={registerPartner}
+            disabled={loadingReg || !regWallet.trim() || !regAmount || !regEpochs}
+          >
+            {loadingReg ? "Processing…" : "Register Partner"}
+          </button>
+
+          {statusReg && (
+            <p className="text-xs text-gray-400 break-all">{statusReg}</p>
+          )}
+        </div>
+      </div>
 
       {/* ── Status ──────────────────────────────────────────── */}
       {status && (

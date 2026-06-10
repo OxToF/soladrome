@@ -1,0 +1,1 @@
+{"version":3,"file":"Item.d.ts","sourceRoot":"","sources":["../../../../../../src/views/v3/TxHistory/Widget/Item.tsx"],"names":[],"mappings":"AAAA,OAAO,KAMN,MAAM,OAAO,CAAC;AAiCf,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,cAAc,CAAC;AAErD,KAAK,KAAK,GAAG;IACX,IAAI,EAAE,gBAAgB,CAAC;IACvB,QAAQ,EAAE,OAAO,CAAC;CACnB,CAAC;AAEF,QAAA,MAAM,UAAU,GAAI,OAAO,KAAK,sBAmS/B,CAAC;AAEF,eAAe,UAAU,CAAC"}

@@ -8,6 +8,9 @@
 *.key
 id.json
 wallet.json
+**/.env.attest
+**/.claude/
+*.tsbuildinfo
 keypair.json
 *-keypair.json
 *_keypair.json

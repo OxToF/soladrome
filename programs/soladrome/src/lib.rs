@@ -26,8 +26,8 @@ use state::{
     current_epoch, BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting,
     GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint,
     PartnerAllocation, ProtocolState, UserBribeClaim, UserEpochVotes, UserPosition,
-    UserVoteConfig, UserVoteReceipt, VeLockPosition, CONTRIBUTOR_CLIFF_SECS,
-    CONTRIBUTOR_DURATION_SECS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION,
+    UserVoteConfig, UserVoteReceipt, VeLockPosition, CONTRIBUTOR_DURATION_SECS,
+    CONTRIBUTOR_TGE_BPS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION,
     MIN_LOCK_DURATION, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
 };
 #[allow(ambiguous_glob_reexports)]
@@ -1219,7 +1219,7 @@ pub mod soladrome {
         Ok(())
     }
 
-    /// Contributor-only: claim linearly-vested hiSOLA after the cliff.
+    /// Contributor-only: claim vested hiSOLA (25 % TGE + 75 % linear over 6 months).
     /// Mints SOLA to sola_vault (locked backing) + hiSOLA to contributor wallet 1:1.
     /// Also snapshots the fee accumulator so the contributor earns fees from day one.
     pub fn claim_contributor_hi_sola(ctx: Context<ClaimContributorHiSola>) -> Result<()> {
@@ -1228,22 +1228,27 @@ pub mod soladrome {
         let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
 
         require!(
-            elapsed >= CONTRIBUTOR_CLIFF_SECS,
-            SoladromeError::VestingCliffNotReached
-        );
-        require!(
             vesting.hi_sola_claimed < vesting.hi_sola_amount,
             SoladromeError::VestingFullyClaimed
         );
 
+        // 25 % unlocked immediately at TGE; remaining 75 % vests linearly over 6 months.
+        let tge_amount = (vesting.hi_sola_amount as u128)
+            .checked_mul(CONTRIBUTOR_TGE_BPS as u128)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)? as u64;
+        let remaining = vesting.hi_sola_amount.saturating_sub(tge_amount);
+
         let vested_amount = if elapsed >= CONTRIBUTOR_DURATION_SECS {
             vesting.hi_sola_amount
         } else {
-            (vesting.hi_sola_amount as u128)
+            let linear = (remaining as u128)
                 .checked_mul(elapsed as u128)
                 .ok_or(SoladromeError::Overflow)?
                 .checked_div(CONTRIBUTOR_DURATION_SECS as u128)
-                .ok_or(SoladromeError::Overflow)? as u64
+                .ok_or(SoladromeError::Overflow)? as u64;
+            tge_amount.saturating_add(linear)
         };
 
         let claimable = vested_amount
@@ -1319,7 +1324,7 @@ pub mod soladrome {
         Ok(())
     }
 
-    /// Contributor-only: claim linearly-vested oSOLA after the cliff.
+    /// Contributor-only: claim vested oSOLA (25 % TGE + 75 % linear over 6 months).
     /// Mints oSOLA to contributor wallet — floor-neutral until exercised.
     pub fn claim_contributor_vesting(ctx: Context<ClaimContributorVesting>) -> Result<()> {
         let clock = Clock::get()?;
@@ -1327,22 +1332,27 @@ pub mod soladrome {
         let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
 
         require!(
-            elapsed >= CONTRIBUTOR_CLIFF_SECS,
-            SoladromeError::VestingCliffNotReached
-        );
-        require!(
             vesting.o_sola_claimed < vesting.o_sola_amount,
             SoladromeError::VestingFullyClaimed
         );
 
+        // 25 % unlocked immediately at TGE; remaining 75 % vests linearly over 6 months.
+        let tge_amount = (vesting.o_sola_amount as u128)
+            .checked_mul(CONTRIBUTOR_TGE_BPS as u128)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)? as u64;
+        let remaining = vesting.o_sola_amount.saturating_sub(tge_amount);
+
         let vested_amount = if elapsed >= CONTRIBUTOR_DURATION_SECS {
             vesting.o_sola_amount
         } else {
-            (vesting.o_sola_amount as u128)
+            let linear = (remaining as u128)
                 .checked_mul(elapsed as u128)
                 .ok_or(SoladromeError::Overflow)?
                 .checked_div(CONTRIBUTOR_DURATION_SECS as u128)
-                .ok_or(SoladromeError::Overflow)? as u64
+                .ok_or(SoladromeError::Overflow)? as u64;
+            tge_amount.saturating_add(linear)
         };
 
         let claimable = vested_amount

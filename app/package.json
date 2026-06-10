@@ -16,6 +16,7 @@
     "@solana/wallet-adapter-wallets": "^0.19.32",
     "@solana/web3.js": "^1.95.3",
     "@supabase/supabase-js": "^2.106.2",
+    "@wormhole-foundation/wormhole-connect": "^6.0.0",
     "bn.js": "^5.2.1",
     "next": "14.2.5",
     "react": "^18",
