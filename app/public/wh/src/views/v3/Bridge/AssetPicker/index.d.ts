@@ -1,0 +1,34 @@
+import { default as React } from 'react';
+import { Chain, routes } from '@wormhole-foundation/sdk';
+import { ChainConfig } from '../../../../config/types';
+import { WalletData } from '../../../../store/wallet';
+import { Balances } from '../../../../utils/wallet/types';
+import { Token } from '../../../../config/tokens';
+import { AmountValidationResult } from '../../../../hooks/useAmountValidation';
+type Props = {
+    chain?: Chain | undefined;
+    chainList: Array<ChainConfig>;
+    token?: Token;
+    sourceToken?: Token;
+    destToken?: Token;
+    tokenList?: Array<Token> | undefined;
+    isFetchingQuotes?: boolean;
+    isFetchingTokens?: boolean;
+    setToken: (value: Token) => void;
+    setChain: (value: Chain) => void;
+    wallet: WalletData;
+    isSameChainSwap: boolean;
+    isSource: boolean;
+    isTransactionInProgress: boolean;
+    dataTestId?: string;
+    balances: Balances;
+    isFetchingBalances: boolean;
+    isConnectingWallet?: boolean;
+    amountValidation?: AmountValidationResult;
+    quote?: routes.Quote<routes.Options> | undefined;
+    anchorEl: HTMLElement | null;
+};
+declare function AssetPicker(props: Props): React.JSX.Element;
+declare const _default: React.MemoExoticComponent<typeof AssetPicker>;
+export default _default;
+//# sourceMappingURL=index.d.ts.map

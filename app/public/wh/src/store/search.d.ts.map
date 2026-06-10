@@ -1,0 +1,1 @@
+{"version":3,"file":"search.d.ts","sourceRoot":"","sources":["../../../src/store/search.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,EAAE,KAAK,EAAE,MAAM,0BAA0B,CAAC;AAEtD,KAAK,WAAW,GAAG;IACjB,MAAM,CAAC,EAAE,MAAM,CAAC;IAChB,KAAK,CAAC,EAAE,KAAK,CAAC;CACf,CAAC;AA4BF,eAAO,MAAQ,SAAS;YAdR,MAAM;WACP,KAAK;wBAaM,WAAW,8EAAwB,CAAC;;AAC9D,wBAAmC"}

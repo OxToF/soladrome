@@ -1,0 +1,1 @@
+import{dK as r,dL as s,k as n,cD as u,dM as i,dN as m,dO as y}from"../main.mjs";function t(e){return[...i,m(e)]}function p(e,o){const[d,c]=r(e),a=s(t(e),o);return{protocolName:d,payloadName:c,payloadLiteral:e,...s(y,o),...a,hash:n(u(t(e),a))}}export{p as c};

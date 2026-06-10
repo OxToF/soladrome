@@ -1,0 +1,32 @@
+import { Chain, Network } from '@wormhole-foundation/sdk-base';
+import { TransferWallet } from '.';
+import { WormholeConnectWalletProvider, WalletProviderEvents } from './types';
+import { Wallet } from '@wormhole-labs/wallet-aggregator-core';
+import { UnsignedTransaction } from '@wormhole-foundation/sdk-definitions';
+declare function connectWallet(chain: Chain, type: TransferWallet, autoConnect?: boolean): Promise<Wallet | null>;
+declare function disconnectWallet(chain: Chain, type: TransferWallet): void;
+declare function getWallet(chain: Chain, type: TransferWallet): Wallet | null;
+declare function signAndSendTransactionInternal(chain: Chain, wallet: Wallet, transaction: UnsignedTransaction<Network, Chain>): Promise<string>;
+declare function swapWallets(): void;
+declare function on<T extends keyof WalletProviderEvents>(_event: T, _handler: WalletProviderEvents[T]): void;
+declare function off<T extends keyof WalletProviderEvents>(_event: T, _handler: WalletProviderEvents[T]): void;
+declare function onWalletSelected(wallet: Wallet, chain: Chain, type: TransferWallet): Promise<void>;
+declare function onWalletSelectCancelled(): void;
+declare function clearWallets(): void;
+export declare const internalWalletProvider: {
+    isInternal: true;
+    connectWallet: typeof connectWallet;
+    disconnectWallet: typeof disconnectWallet;
+    clearWallets: typeof clearWallets;
+    getWallet: typeof getWallet;
+    signAndSendTransaction: typeof signAndSendTransactionInternal;
+    swapWallets: typeof swapWallets;
+    on: typeof on;
+    off: typeof off;
+    onWalletSelected: typeof onWalletSelected;
+    onWalletSelectCancelled: typeof onWalletSelectCancelled;
+};
+export type InternalWalletProvider = typeof internalWalletProvider;
+export declare function isInternalProvider(provider: WormholeConnectWalletProvider): provider is InternalWalletProvider;
+export {};
+//# sourceMappingURL=InternalWalletProvider.d.ts.map

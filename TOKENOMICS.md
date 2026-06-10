@@ -236,7 +236,37 @@ This decays linearly to 0 at lock expiry. Partners replenish by unlocking → re
 
 ---
 
-## 7. Protocol-Owned Liquidity
+## 7. External Bribe Tokens
+
+The Wormhole Token Bridge and cross-chain bribe bridge expand the set of tokens that can enter Soladrome bribe vaults beyond native Solana assets.
+
+### 7.1 Wormhole-Wrapped Tokens
+
+| Token | Origin | SPL mint | Status |
+|---|---|---|---|
+| wAERO | Base (AERO) | `AXYvFSKMPwt9adL1eBZhrDNCvT29HXnhNQuPxNwDZin` | ✅ Live |
+| wVELO | Optimism (VELO) | `GaLBL77CzH9XSzStkNPmCkWhuXwkDU38du2ainTGrEMN` | ✅ Live |
+
+Both mints were attested on Wormhole before launch. They are standard SPL tokens and are accepted by `deposit_bribe` with no special handling. Bribe depositors bridge their AERO or VELO to Solana via the Token Bridge page, then deposit the resulting wAERO or wVELO into the target gauge.
+
+### 7.2 Cross-Chain Bridge Tokens (LayerZero V2)
+
+Once the cross-chain bribe bridge is live, EVM-native tokens can enter bribe vaults without the depositor ever touching Solana directly. The `bridge-receiver` Anchor program performs the `deposit_bribe` CPI on behalf of the EVM sender. Any ERC-20 token supported by the `SoladromeBribeRouter.sol` contract can flow through this path.
+
+**First confirmed token: fBOMB** — the MLCB DAO treasury token. MLCB DAO holds ~$35M in fBOMB spread across Base, Optimism, and other EVM chains. As the first external protocol partner, MLCB will deploy fBOMB bribes each epoch via the cross-chain bridge, with no manual asset migration to Solana required.
+
+### 7.3 Effect on Bribe Economy
+
+Accepting wAERO, wVELO, and future cross-chain tokens:
+- Increases total weekly bribe value available to hiSOLA voters
+- Attracts EVM protocols (particularly veAERO/veVELO whales) that already operate in the Aerodrome/Velodrome gauge ecosystem
+- Creates a direct on-chain link between Base/Optimism governance power and Solana liquidity direction
+
+hiSOLA voters receive these tokens at epoch end via `claim_bribe`, exactly as with any other bribe token. No changes to the on-chain program are required — `deposit_bribe` accepts any valid SPL token mint.
+
+---
+
+## 8. Protocol-Owned Liquidity
 
 POL is funded by diverting a fraction of `market_vault` fees. Once deployed, POL LP tokens are **permanently locked** — they cannot be withdrawn by any address, including the protocol authority. This creates:
 
@@ -248,7 +278,7 @@ POL accumulates over time as the protocol generates fee revenue.
 
 ---
 
-## 8. Governance
+## 9. Governance
 
 Governance in Soladrome is intentionally minimal at launch:
 
@@ -268,7 +298,7 @@ There is no general governance voting on protocol parameters. Constants are comp
 
 ---
 
-## 9. Competitive Differentiation
+## 10. Competitive Differentiation
 
 | Feature | Soladrome | Typical ve(3,3) | Typical bonding curve |
 |---|---|---|---|

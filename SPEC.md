@@ -43,6 +43,8 @@ All tokens use **6 decimals**. The floor price invariant is always 1:1 in base u
 | oSOLA | `[b"o_sola_mint"]` | LP call-option — exercise at floor price |
 | LP-XY | `[b"lp_mint", pool]` | Per-pool AMM LP token |
 
+**External bribe tokens:** `deposit_bribe` accepts any valid SPL token mint as a bribe. This includes Wormhole-wrapped tokens bridged from EVM chains: wAERO (SPL mint `AXYvFSKMPwt9adL1eBZhrDNCvT29HXnhNQuPxNwDZin`, attested from Base) and wVELO (SPL mint `GaLBL77CzH9XSzStkNPmCkWhuXwkDU38du2ainTGrEMN`, attested from Optimism). No program changes are required — the instruction is token-mint-agnostic by design.
+
 ---
 
 ## 3. Bonding Curve

@@ -1,0 +1,1 @@
+{"version":3,"file":"useExternalSearch.d.ts","sourceRoot":"","sources":["../../../src/hooks/useExternalSearch.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,KAAK,EAAE,MAAM,0BAA0B,CAAC;AAOtD,KAAK,cAAc,GAAG;IACpB,iBAAiB,CAAC,EAAE,OAAO,CAAC;IAC5B,MAAM,CAAC,EAAE,MAAM,CAAC;IAChB,KAAK,CAAC,EAAE,KAAK,CAAC;IACd,KAAK,EAAE,MAAM,IAAI,CAAC;CACnB,CAAC;AAEF,wBAAgB,iBAAiB,IAAI,cAAc,CAkClD"}

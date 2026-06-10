@@ -1,453 +1,473 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Christophe Hertecant
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useAnchorWallet } from "@solana/wallet-adapter-react";
 
-// ── Data ──────────────────────────────────────────────────────────────────────
+declare global {
+  interface Window {
+    __CONNECT_CONFIG?: unknown;
+    __CONNECT_THEME?:  unknown;
+  }
+}
 
-const PROTOCOLS = {
-  soladrome: { id: "soladrome", label: "Soladrome", chain: "solana",   chainLabel: "Solana",   color: "#9945FF", url: "soladrome.finance"    },
-  aerodrome: { id: "aerodrome", label: "Aerodrome", chain: "base",     chainLabel: "Base",     color: "#0052FF", url: "aerodrome.finance"    },
-  velodrome: { id: "velodrome", label: "Velodrome", chain: "optimism", chainLabel: "Optimism", color: "#FF0420", url: "velodrome.finance"    },
-} as const;
-type ProtocolId = keyof typeof PROTOCOLS;
+// ── Env ───────────────────────────────────────────────────────────────────────
 
-// Bribe tokens when target is Soladrome (EVM partners bridge their tokens in)
-const EVM_BRIBE_TOKENS = [
-  { id: "fbomb", label: "fBOMB", icon: "💣" },
-  { id: "aero",  label: "AERO",  icon: "✈️"  },
-  { id: "velo",  label: "VELO",  icon: "🌀"  },
-  { id: "usdc",  label: "USDC",  icon: "💵"  },
-  { id: "eth",   label: "ETH",   icon: "Ξ"   },
+const IS_TESTNET     = process.env.NEXT_PUBLIC_WH_NETWORK === "Testnet";
+const WC_PROJECT_ID  = process.env.NEXT_PUBLIC_WC_PROJECT_ID ?? "";
+const MOCK_AERO_ADDR = process.env.NEXT_PUBLIC_MOCK_AERO_ADDRESS ?? "";
+
+// ── UI token cards ────────────────────────────────────────────────────────────
+// Each card shows: native token sent → wrapped token received on destination.
+// Wormhole handles wrapping automatically — we list only native tokens in the config.
+
+// "attest" = deployed on Solana mainnet but not yet attested on EVM via Wormhole
+const MAINNET_CARDS = [
+  { id: "aero", label: "AERO",  recv: "wAERO", from: "Base",      fromColor: "#0052FF", to: "Solana", icon: "✈️", live: true,   attest: false },
+  { id: "velo", label: "VELO",  recv: "wVELO", from: "Optimism",  fromColor: "#FF0420", to: "Solana", icon: "🌀", live: true,   attest: false },
+  { id: "sola", label: "SOLA",  recv: "wSOLA", from: "Solana",    fromColor: "#14F195", to: "Base",   icon: "◈",  live: false,  attest: true  },
+  { id: "sol",  label: "SOL",   recv: "wSOL",  from: "Solana",    fromColor: "#9945FF", to: "Base",   icon: "◎",  live: true,   attest: false },
+  { id: "bero", label: "BERO",  recv: "wBERO", from: "Berachain", fromColor: "#F5A524", to: "Solana", icon: "🐻", live: false,  attest: false },
 ];
 
-// Bribe tokens when target is Aerodrome/Velodrome (Soladrome exercises oSOLA → wSOLA)
-const WSOLA_BRIBE_TOKENS = [
-  { id: "wsola", label: "wSOLA", icon: "◎" },
-  { id: "usdc",  label: "USDC",  icon: "💵" },
+const TESTNET_CARDS = [
+  { id: "mock-aero", label: "AERO", recv: "wAERO", from: "Base Sepolia", fromColor: "#0052FF", to: "Solana devnet", icon: "✈️", live: true, attest: false },
 ];
 
-// LP pairs — each entry lists which protocols host this gauge
-const LP_PAIRS = [
-  {
-    id: "sola-fbomb", label: "SOLA / fBOMB",
-    tokenA: "SOLA", tokenB: "fBOMB",
-    protocols: ["soladrome", "aerodrome"] as ProtocolId[],
-  },
-  {
-    id: "sola-aero", label: "SOLA / AERO",
-    tokenA: "SOLA", tokenB: "AERO",
-    protocols: ["soladrome", "aerodrome"] as ProtocolId[],
-  },
-  {
-    id: "sola-velo", label: "SOLA / VELO",
-    tokenA: "SOLA", tokenB: "VELO",
-    protocols: ["soladrome", "velodrome"] as ProtocolId[],
-  },
-  {
-    id: "fbomb-aero", label: "fBOMB / AERO",
-    tokenA: "fBOMB", tokenB: "AERO",
-    protocols: ["soladrome", "aerodrome"] as ProtocolId[],
-  },
-  {
-    id: "fbomb-velo", label: "fBOMB / VELO",
-    tokenA: "fBOMB", tokenB: "VELO",
-    protocols: ["soladrome", "velodrome"] as ProtocolId[],
-  },
-  {
-    id: "sola-usdc", label: "SOLA / USDC",
-    tokenA: "SOLA", tokenB: "USDC",
-    protocols: ["soladrome"] as ProtocolId[],
-  },
-  {
-    id: "sola-sol", label: "SOLA / SOL",
-    tokenA: "SOLA", tokenB: "SOL",
-    protocols: ["soladrome"] as ProtocolId[],
-  },
-  {
-    id: "msol-usdc", label: "mSOL / USDC",
-    tokenA: "mSOL", tokenB: "USDC",
-    protocols: ["soladrome"] as ProtocolId[],
-  },
-] as const;
-type LpId = typeof LP_PAIRS[number]["id"];
+const CARDS = IS_TESTNET ? TESTNET_CARDS : MAINNET_CARDS;
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Wormhole Connect config ───────────────────────────────────────────────────
+// List native tokens only. Wormhole creates wrapped versions automatically on
+// attestation — no need to declare wAERO, wVELO, wSOLA, wSOL separately.
+
+const WH_CONFIG_MAINNET = {
+  network: "Mainnet" as const,
+  chains:  ["Solana", "Base", "Optimism"] as const,
+  tokens:  ["AERO", "VELO", "SOL", "ETH", "USDC"],
+  rpcs: {
+    Optimism: "https://mainnet.optimism.io",
+    Base:     "https://mainnet.base.org",
+    Solana:   "https://solana-rpc.publicnode.com",
+  },
+  tokensConfig: {
+    AERO: {
+      symbol:   "AERO",
+      name:     "AERO",
+      decimals: 18,
+      icon:     "https://assets.coingecko.com/coins/images/31745/standard/token.png",
+      tokenId:  { chain: "Base" as const, address: "0x940181a94A35A4569E4529A3CDfB74e38FD98631" },
+    },
+    VELO: {
+      symbol:   "VELO",
+      name:     "Velodrome",
+      decimals: 18,
+      icon:     "https://assets.coingecko.com/coins/images/25783/standard/velo.png",
+      tokenId:  { chain: "Optimism" as const, address: "0x9560e827aF36c94D2Ac33a39bCE1Fe78631088Db" },
+    },
+  },
+  ui: {
+    defaultInputs: {
+      source:      { chain: "Base" as const, token: "AERO" },
+      destination: { chain: "Solana" as const },
+    },
+    tokenNameOverrides: {
+      // EVM-side names
+      Base:     { "0x940181a94A35A4569E4529A3CDfB74e38FD98631": "AERO" },
+      Optimism: { "0x9560e827aF36c94D2Ac33a39bCE1Fe78631088Db": "VELO" },
+      // Solana-side wrapped names (SPL mints derived from Wormhole Token Bridge PDA)
+      Solana: {
+        "AXYvFSKMPwt9adL1eBZhrDNCvT29HXnhNQuPxNwDZin": "wAERO",
+        "GaLBL77CzH9XSzStkNPmCkWhuXwkDU38du2ainTGrEMN": "wVELO",
+      },
+    } as Record<string, Record<string, string>>,
+    showFooter:  false,
+    hideHistory: true,
+    ...(WC_PROJECT_ID ? { walletConnectProjectId: WC_PROJECT_ID } : {}),
+  },
+};
+
+const WH_CONFIG_TESTNET = {
+  network: "Testnet" as const,
+  chains:  ["Solana", "BaseSepolia"] as const,
+  tokens:  MOCK_AERO_ADDR ? ["MOCK_AERO", "ETH"] : ["ETH"],
+  tokensConfig: MOCK_AERO_ADDR ? {
+    MOCK_AERO: {
+      symbol:   "AERO",
+      name:     "AERO",
+      decimals: 18,
+      icon:     "https://assets.coingecko.com/coins/images/31745/standard/token.png",
+      tokenId:  { chain: "BaseSepolia" as const, address: MOCK_AERO_ADDR },
+    },
+  } : {},
+  ui: {
+    defaultInputs: {
+      fromChain: "BaseSepolia" as const,
+      toChain:   "Solana"      as const,
+    },
+    ...(MOCK_AERO_ADDR ? {
+      tokenNameOverrides: { BaseSepolia: { [MOCK_AERO_ADDR]: "AERO" } } as Record<string, Record<string, string>>,
+    } : {}),
+    showFooter:  false,
+    hideHistory: true,
+    ...(WC_PROJECT_ID ? { walletConnectProjectId: WC_PROJECT_ID } : {}),
+  },
+};
+
+const WH_CONFIG = IS_TESTNET ? WH_CONFIG_TESTNET : WH_CONFIG_MAINNET;
+
+const WH_THEME = {
+  mode:       "dark"  as const,
+  primary:    "#14F195",
+  secondary:  "#9945FF",
+  background: "#0D0D0D",
+  font:       "Inter, ui-sans-serif, sans-serif",
+};
+
+// ── Widget (local dist, zero webpack chunk) ───────────────────────────────────
+
+const WH_JS  = "/wh/main.mjs";
+const WH_CSS = "/wh/main.css";
+
+function WormholeWidget({ config, theme }: { config: unknown; theme: unknown }) {
+  const ref             = useRef<HTMLDivElement>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!ref.current || ref.current.querySelector("#wormhole-connect")) return;
+
+    if (!document.querySelector("link[data-wh-css]")) {
+      const link         = document.createElement("link");
+      link.rel           = "stylesheet";
+      link.href          = WH_CSS;
+      link.dataset.whCss = "1";
+      document.head.appendChild(link);
+    }
+
+    // Clear stale WC sessions so the widget never auto-connects a wrong wallet.
+    Object.keys(localStorage)
+      .filter(k => k.startsWith("wormhole-connect") || k.startsWith("wc@") || k.startsWith("WALLETCONNECT"))
+      .forEach(k => localStorage.removeItem(k));
+
+    window.__CONNECT_CONFIG = config;
+    window.__CONNECT_THEME  = theme;
+
+    const div     = document.createElement("div");
+    div.id        = "wormhole-connect";
+    const script  = document.createElement("script");
+    script.src    = WH_JS;
+    script.type   = "module";
+    script.onload = () => setReady(true);
+
+    ref.current.appendChild(div);
+    ref.current.appendChild(script);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div ref={ref}>
+      {!ready && (
+        <div className="flex items-center justify-center h-48 rounded-2xl bg-brand-dark/40">
+          <span className="text-brand-muted text-sm animate-pulse">Loading bridge…</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Bridge history ────────────────────────────────────────────────────────────
 
 function ChainDot({ color }: { color: string }) {
-  return <span className="w-2 h-2 rounded-full shrink-0 inline-block" style={{ background: color }} />;
+  return <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />;
 }
 
-function ProtocolLogo({ chain }: { chain: string }) {
-  if (chain === "solana") return (
-    <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" fill="none">
-      <circle cx="12" cy="12" r="12" fill="#9945FF"/>
-      <path fill="#fff" d="M7 15.5h8.5l1.5-1.5H8.5L7 15.5zm0-4h10l1.5-1.5H8.5L7 11.5zm2-4h8.5L16 6H9L7.5 7.5z"/>
-    </svg>
-  );
-  if (chain === "base") return (
-    <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0">
-      <circle cx="12" cy="12" r="12" fill="#0052FF"/>
-      <path fill="#fff" d="M12 5.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zm0 11a4.5 4.5 0 110-9 4.5 4.5 0 010 9z"/>
-    </svg>
-  );
-  if (chain === "optimism") return (
-    <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0">
-      <circle cx="12" cy="12" r="12" fill="#FF0420"/>
-      <path fill="#fff" d="M8.5 9.5c0-.83.67-1.5 1.5-1.5h4c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5h-4c-.83 0-1.5-.67-1.5-1.5v-5z"/>
-    </svg>
-  );
+const WH_CHAIN_NAMES: Record<number, string> = { 1: "Solana", 24: "Optimism", 30: "Base" };
+const WH_CHAIN_COLORS: Record<number, string> = { 1: "#14F195", 24: "#FF0420", 30: "#0052FF" };
+// EVM addresses are lowercased hex; Solana addresses are base58 (case-sensitive — do NOT lowercase).
+// Lookup tries lowercase first (EVM), then exact case (Solana), then falls back to API tokenSymbol.
+const WH_TOKEN_NAMES: Record<string, string> = {
+  // EVM (lowercase hex)
+  "0x9560e827af36c94d2ac33a39bce1fe78631088db": "VELO",  // Optimism
+  "0x940181a94a35a4569e4529a3cdfb74e38fd98631": "AERO",  // Base
+  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",  // Base
+  "0x0b2c639c533813f4aa9d7837caf62653d097ff85": "USDC",  // Optimism
+  // Solana (exact base58 — no lowercasing)
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+  "So11111111111111111111111111111111111111112":   "SOL",
+};
+
+interface WHTx {
+  id:        string;
+  fromChain: number;
+  toChain:   number;
+  token:     string;
+  amount:    string;
+  status:    string;
+  sourceTx?: string;
+}
+
+function parseTx(op: Record<string, unknown>): WHTx | null {
+  try {
+    const sp  = (op.content as Record<string, unknown>)?.standarizedProperties as Record<string, unknown>;
+    const src = op.sourceChain as Record<string, unknown>;
+    const tgt = op.targetChain as Record<string, unknown>;
+    if (!sp) return null;
+
+    const fromChain = sp.fromChain as number;
+    const toChain   = sp.toChain   as number;
+    if (!WH_CHAIN_NAMES[fromChain] || !WH_CHAIN_NAMES[toChain]) return null;
+
+    // Try lowercase (EVM) then exact case (Solana base58), then API symbol, then "?"
+    const rawAddr = sp.tokenAddress as string ?? "";
+    const token   = WH_TOKEN_NAMES[rawAddr.toLowerCase()]
+                 ?? WH_TOKEN_NAMES[rawAddr]
+                 ?? (sp.tokenSymbol as string | undefined)
+                 ?? "?";
+
+    // Wormhole normalizes all amounts to 8 decimals in the VAA — divide by 1e8
+    const amount   = (Number(sp.amount as string ?? "0") / 1e8).toFixed(4);
+    const status   = (tgt as Record<string, unknown>)?.status as string ?? "pending";
+    const sourceTx = ((src?.transaction as Record<string, unknown>)?.txHash as string) ?? undefined;
+
+    return { id: op.id as string, fromChain, toChain, token, amount, status, sourceTx };
+  } catch { return null; }
+}
+
+function BridgeHistory() {
+  const wallet = useAnchorWallet();
+  const [txs,     setTxs]     = useState<WHTx[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchHistory = useCallback(async (addr: string, signal: AbortSignal) => {
+    setLoading(true);
+    try {
+      const url = `https://api.wormholescan.io/api/v1/operations?address=${addr}&pageSize=10&page=0`;
+      const res = await fetch(url, { signal });
+      if (!res.ok) return;
+      const data = await res.json();
+      const ops  = (data.operations ?? []) as Record<string, unknown>[];
+      setTxs(ops.map(parseTx).filter(Boolean) as WHTx[]);
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Use .toBase58() string as dependency — object identity of publicKey is unstable
+  const addrStr = wallet?.publicKey?.toBase58();
+
+  useEffect(() => {
+    if (!addrStr) return;
+    const ctrl = new AbortController();
+    fetchHistory(addrStr, ctrl.signal);
+    return () => ctrl.abort();
+  }, [addrStr, fetchHistory]);
+
+  if (!wallet?.publicKey) return null;
+
   return (
-    <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0">
-      <circle cx="12" cy="12" r="12" fill="#627EEA"/>
-      <path fill="rgba(255,255,255,.6)" d="M12 4v6.5l5.5 2.5L12 4z"/>
-      <path fill="#fff" d="M12 4L6.5 13l5.5-2.5V4z"/>
-    </svg>
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">Bridge history</h3>
+        <button
+          onClick={() => { if (addrStr) { const c = new AbortController(); fetchHistory(addrStr, c.signal); } }}
+          className="text-[11px] text-brand-muted hover:text-white transition-colors"
+        >
+          {loading ? "Loading…" : "↺ Refresh"}
+        </button>
+      </div>
+
+      {loading && txs.length === 0 ? (
+        <p className="text-xs text-brand-muted animate-pulse">Fetching transactions…</p>
+      ) : txs.length === 0 ? (
+        <p className="text-xs text-brand-muted">No bridge transactions found for this wallet.</p>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {txs.map(tx => (
+            <div
+              key={tx.id}
+              className="flex items-center justify-between p-2.5 rounded-xl border border-brand-border bg-brand-dark/40 text-xs"
+            >
+              {/* Route */}
+              <div className="flex items-center gap-1.5 min-w-0">
+                <ChainDot color={WH_CHAIN_COLORS[tx.fromChain] ?? "#888"} />
+                <span className="text-brand-muted truncate">{WH_CHAIN_NAMES[tx.fromChain]}</span>
+                <span className="text-brand-muted/50">→</span>
+                <ChainDot color={WH_CHAIN_COLORS[tx.toChain] ?? "#888"} />
+                <span className="text-brand-muted truncate">{WH_CHAIN_NAMES[tx.toChain]}</span>
+              </div>
+
+              {/* Amount + token */}
+              <div className="flex items-center gap-2 shrink-0 ml-2">
+                <span className="text-white font-medium">{tx.amount} {tx.token}</span>
+                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase ${
+                  tx.status === "completed" ? "bg-brand-green/20 text-brand-green" :
+                  tx.status === "failed"    ? "bg-red-500/20 text-red-400" :
+                                             "bg-yellow-500/20 text-yellow-400"
+                }`}>
+                  {tx.status}
+                </span>
+                {tx.sourceTx && (
+                  <a
+                    href={`https://wormholescan.io/#/tx/${tx.sourceTx}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-brand-muted/50 hover:text-brand-green transition-colors"
+                    title="View on Wormholescan"
+                  >
+                    ↗
+                  </a>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-// Token pill
-function TokenPill({ label, icon }: { label: string; icon: string }) {
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/5 border border-brand-border text-xs font-semibold text-white">
-      <span>{icon}</span>{label}
-    </span>
-  );
-}
-
-// ── Main component ────────────────────────────────────────────────────────────
+// ── Bridge page ───────────────────────────────────────────────────────────────
 
 export function Bridge() {
-  const [lpId,       setLpId]       = useState<LpId>("sola-fbomb");
-  const [protocolId, setProtocolId] = useState<ProtocolId>("soladrome");
-  const [tokenId,    setTokenId]    = useState<string>("fbomb");
-  const [amount,     setAmount]     = useState("");
-  const [showTokens, setShowTokens] = useState(false);
-  const [showModal,  setShowModal]  = useState(false);
-
-  const lp       = LP_PAIRS.find(p => p.id === lpId)!;
-  const protocol = PROTOCOLS[protocolId];
-
-  // When LP changes, keep protocol if still valid, else reset to first available
-  const handleLpChange = (id: LpId) => {
-    const newLp = LP_PAIRS.find(p => p.id === id)!;
-    const keepProtocol = (newLp.protocols as readonly string[]).includes(protocolId);
-    const nextProtocol = keepProtocol ? protocolId : newLp.protocols[0];
-    setLpId(id);
-    setProtocolId(nextProtocol);
-    const tokens = nextProtocol === "soladrome" ? EVM_BRIBE_TOKENS : WSOLA_BRIBE_TOKENS;
-    setTokenId(tokens[0].id);
-    setAmount("");
-  };
-
-  const handleProtocolChange = (pid: ProtocolId) => {
-    setProtocolId(pid);
-    const tokens = pid === "soladrome" ? EVM_BRIBE_TOKENS : WSOLA_BRIBE_TOKENS;
-    setTokenId(tokens[0].id);
-    setAmount("");
-  };
-
-  // Bribe tokens depend on direction
-  const isEVM    = protocolId !== "soladrome";
-  const tokens   = isEVM ? WSOLA_BRIBE_TOKENS : EVM_BRIBE_TOKENS;
-  const token    = tokens.find(t => t.id === tokenId) ?? tokens[0];
-  const hasAmt   = !!amount && parseFloat(amount) > 0;
-
-  // Route description
-  const route = isEVM
-    ? `Solana → ${protocol.chainLabel} via LayerZero V2`
-    : `${protocol.chainLabel} → Solana via LayerZero V2`;
-
   return (
     <div className="max-w-lg mx-auto flex flex-col gap-5">
 
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-lg font-bold text-white tracking-tight">Cross-Chain Bribe Bridge</h2>
+          <h2 className="text-lg font-bold text-white tracking-tight">Token Bridge</h2>
           <p className="text-sm text-brand-muted mt-0.5">
-            Bribe any LP gauge on Soladrome or EVM protocols
+            Bridge tokens between Solana, Base &amp; Optimism · both directions
           </p>
         </div>
-        <span className="badge-yellow shrink-0 mt-0.5">Mainnet soon</span>
+        <div className="flex items-center gap-2 shrink-0 mt-0.5">
+          {IS_TESTNET && <span className="badge-yellow">Testnet</span>}
+          <span className="badge-muted">Wormhole</span>
+        </div>
       </div>
 
-      <div className="flex items-center gap-2 text-xs text-brand-muted">
-        <span>Powered by</span>
-        <span className="badge-muted">LayerZero V2</span>
-        <span className="badge-muted">⚡ Astralane</span>
+      {/* Token cards — send X, receive wX on destination */}
+      <div className="grid grid-cols-5 gap-2">
+        {CARDS.map(t => (
+          <div
+            key={t.id}
+            className={`flex flex-col gap-1.5 p-2.5 rounded-xl border transition-all ${
+              t.live
+                ? "border-brand-border bg-brand-dark/40"
+                : t.attest
+                ? "border-brand-green/20 bg-brand-green/5"
+                : "border-dashed border-brand-border/50 opacity-50"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-base">{t.icon}</span>
+              {t.attest
+                ? <span className="text-[8px] text-brand-green/70 font-semibold uppercase tracking-wide">Attest</span>
+                : !t.live
+                ? <span className="text-[8px] text-yellow-500/80 font-semibold uppercase tracking-wide">Soon</span>
+                : null
+              }
+            </div>
+            <div className="text-[11px] font-bold text-white leading-tight">{t.label}</div>
+            <div className={`text-[10px] leading-tight ${t.attest ? "text-brand-green/50" : "text-brand-green/80"}`}>
+              → {t.recv}
+            </div>
+            <span className="flex items-center gap-1 text-[9px] text-brand-muted/70 leading-tight">
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: t.fromColor }} />
+              {t.from}
+            </span>
+          </div>
+        ))}
       </div>
 
-      <div className="card glow flex flex-col gap-6">
-
-        {/* ── Step 1 : LP Pair ─────────────────────────────────────────── */}
-        <section className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <span className="w-5 h-5 rounded-full bg-brand-green/15 text-brand-green text-xs font-bold flex items-center justify-center shrink-0">1</span>
-            <span className="stat-label">Select LP Pair</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {LP_PAIRS.map(p => {
-              const multi = p.protocols.length > 1;
-              const active = lpId === p.id;
-              return (
-                <button key={p.id} onClick={() => handleLpChange(p.id)}
-                  className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all duration-150 text-left ${
-                    active ? "border-brand-green bg-brand-green/8 text-brand-green"
-                           : "border-brand-border text-brand-muted hover:border-white/20 hover:text-white"
-                  }`}
-                >
-                  <span className="truncate">{p.label}</span>
-                  {multi && (
-                    <span className={`text-[10px] font-bold shrink-0 ${active ? "text-brand-green/60" : "text-brand-muted/60"}`}>
-                      ×{p.protocols.length}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <div className="h-px bg-brand-border" />
-
-        {/* ── Step 2 : Target Protocol ─────────────────────────────────── */}
-        <section className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <span className="w-5 h-5 rounded-full bg-brand-green/15 text-brand-green text-xs font-bold flex items-center justify-center shrink-0">2</span>
-            <span className="stat-label">Target Protocol — where to bribe</span>
-          </div>
-          <div className="flex flex-col gap-2">
-            {(lp.protocols as readonly ProtocolId[]).map(pid => {
-              const p      = PROTOCOLS[pid];
-              const active = protocolId === pid;
-              const evm    = pid !== "soladrome";
-              return (
-                <button key={pid} onClick={() => handleProtocolChange(pid)}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl border transition-all duration-150 ${
-                    active ? "border-brand-green bg-brand-green/8"
-                           : "border-brand-border hover:border-white/20"
-                  }`}
-                >
-                  <ProtocolLogo chain={p.chain} />
-                  <div className="flex flex-col items-start flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-sm font-semibold ${active ? "text-brand-green" : "text-white"}`}>
-                        {p.label}
-                      </span>
-                      {/* LP pair on this protocol */}
-                      <span className="text-xs text-brand-muted font-medium">
-                        {lp.label} gauge
-                      </span>
-                    </div>
-                    <span className="text-xs text-brand-muted flex items-center gap-1.5 mt-0.5">
-                      <ChainDot color={p.color} />
-                      {p.chainLabel}
-                      {evm
-                        ? <span className="text-yellow-500/70 ml-1">· Solana → {p.chainLabel}</span>
-                        : <span className="text-purple-400/60 ml-1">· {p.chainLabel} → Solana</span>
-                      }
-                    </span>
-                  </div>
-                  {/* Bribe token hint */}
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {evm
-                      ? <TokenPill label="wSOLA" icon="◎" />
-                      : <span className="text-xs text-brand-muted">fBOMB / AERO…</span>
-                    }
-                  </div>
-                  {active && <span className="text-brand-green text-base shrink-0">✓</span>}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Direction + LP recap banner */}
-          <div className={`rounded-xl px-4 py-3 flex items-center gap-3 text-xs ${
-            isEVM
-              ? "bg-yellow-500/5 border border-yellow-500/15"
-              : "bg-purple-500/5 border border-purple-500/15"
-          }`}>
-            <span className="text-lg">{isEVM ? "⚡" : "🔗"}</span>
-            <div className="flex flex-col gap-0.5">
-              {isEVM ? (
-                <>
-                  <span className="text-white font-medium">
-                    Bribing <span className="text-brand-green">{lp.label}</span> gauge on {protocol.label}
-                  </span>
-                  <span className="text-brand-muted">
-                    Soladrome exercises oSOLA → bridges wSOLA (backed 1:1) · {protocol.chainLabel}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span className="text-white font-medium">
-                    Bribing <span className="text-brand-green">{lp.label}</span> gauge on Soladrome
-                  </span>
-                  <span className="text-brand-muted">
-                    Bridge your EVM tokens from {lp.protocols.filter(p => p !== "soladrome").map(p => PROTOCOLS[p].chainLabel).join("/")} · Solana
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
-        </section>
-
-        <div className="h-px bg-brand-border" />
-
-        {/* ── Step 3 : Token + Amount ───────────────────────────────────── */}
-        <section className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <span className="w-5 h-5 rounded-full bg-brand-green/15 text-brand-green text-xs font-bold flex items-center justify-center shrink-0">3</span>
-            <span className="stat-label">Bribe Token & Amount</span>
-          </div>
-
-          {isEVM && (
-            <p className="text-xs text-brand-muted bg-brand-dark/60 rounded-lg px-3 py-2 border border-brand-border">
-              Soladrome treasury exercises oSOLA on-chain and bridges the resulting{" "}
-              <span className="text-white font-medium">wSOLA (1:1 floor-backed)</span> to {protocol.label}.
-              Select USDC to bribe directly instead.
-            </p>
-          )}
-
-          <div className="flex gap-2">
-            {/* Token selector */}
-            <div className="relative">
-              <button onClick={() => setShowTokens(!showTokens)}
-                className="flex items-center gap-2 h-full px-3 py-2.5 rounded-xl border border-brand-border bg-brand-dark text-sm text-white hover:border-white/20 transition-all duration-150 shrink-0">
-                <span>{token.icon}</span>
-                <span className="font-medium">{token.label}</span>
-                <svg className={`w-3 h-3 text-brand-muted transition-transform duration-150 ${showTokens ? "rotate-180" : ""}`}
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/>
-                </svg>
-              </button>
-              {showTokens && (
-                <div className="absolute top-full left-0 mt-1 z-20 bg-brand-elevated border border-brand-border rounded-xl shadow-card-hover min-w-[150px] overflow-hidden">
-                  {tokens.map(t => (
-                    <button key={t.id}
-                      onClick={() => { setTokenId(t.id); setShowTokens(false); }}
-                      className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm transition-colors hover:bg-white/5 ${
-                        tokenId === t.id ? "text-brand-green bg-brand-green/8" : "text-white"
-                      }`}
-                    >
-                      <span>{t.icon}</span>
-                      <span className="font-medium">{t.label}</span>
-                      {t.id === "wsola" && (
-                        <span className="ml-auto text-[10px] text-brand-muted">1:1 backed</span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <input type="number" min="0" placeholder="0.00" value={amount}
-              onChange={e => setAmount(e.target.value)}
-              className="input flex-1" />
-          </div>
-        </section>
-
-        {/* ── Summary ──────────────────────────────────────────────────── */}
-        {hasAmt && (
-          <div className="rounded-xl border border-brand-border bg-brand-dark/60 p-4 flex flex-col gap-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-brand-muted">LP gauge</span>
-              <span className="text-white font-medium">{lp.label}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-brand-muted">Protocol</span>
-              <span className="text-white flex items-center gap-1.5">
-                <ChainDot color={protocol.color} />
-                {protocol.label} · {protocol.chainLabel}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-brand-muted">Route</span>
-              <span className="text-yellow-400 text-xs">⚡ {route}</span>
-            </div>
-            {isEVM && (
-              <div className="flex justify-between">
-                <span className="text-brand-muted">Mechanism</span>
-                <span className="text-brand-green text-xs">oSOLA exercised → wSOLA bridged</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <span className="text-brand-muted">Bridge fee</span>
-              <span className="text-white">~$0.10 (LayerZero)</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-brand-muted">Execution</span>
-              <span className="text-brand-green font-medium">⚡ Sub-slot · Astralane</span>
-            </div>
-            <div className="h-px bg-brand-border" />
-            <div className="flex justify-between font-semibold">
-              <span className="text-brand-muted">Total bribe</span>
-              <span className="text-brand-green">
-                {parseFloat(amount).toLocaleString()} {token.label}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* CTA */}
-        <button onClick={() => hasAmt && setShowModal(true)}
-          className={`w-full py-3 rounded-xl font-semibold text-sm transition-all duration-200 ${
-            hasAmt
-              ? "btn-primary justify-center"
-              : "bg-brand-green/10 text-brand-green/40 border border-brand-green/10 cursor-not-allowed"
-          }`}
-        >
-          {isEVM ? "Bridge & Bribe →" : "Bribe →"}
-        </button>
-      </div>
-
-      {/* Info */}
-      <div className="card-flat flex gap-3 text-sm text-brand-muted">
-        <span className="text-brand-green shrink-0 mt-0.5">ℹ</span>
-        <p>
-          LP pairs exist on <span className="text-white font-medium">Soladrome (Solana)</span> and
-          their native EVM protocol. Bribe either gauge to direct emissions.
-          Cross-chain wSOLA bribes are{" "}
-          <span className="text-white font-medium">floor-backed 1:1</span> — Soladrome exercises
-          oSOLA on-chain before bridging, preserving the floor price invariant.
-        </p>
-      </div>
-
-      {/* Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-          onClick={() => setShowModal(false)}>
-          <div className="card max-w-sm w-full flex flex-col gap-4 text-center shadow-glow-lg"
-            onClick={e => e.stopPropagation()}>
-            <div className="text-3xl">🌉</div>
-            <h3 className="text-lg font-bold text-white">Mainnet Launch Soon</h3>
-            <p className="text-sm text-brand-muted leading-relaxed">
-              Bridge infrastructure deployed. Mainnet pending final audit + Astralane sign-off.
-            </p>
-            <div className="rounded-xl border border-brand-border bg-brand-dark/60 p-3 text-left text-sm flex flex-col gap-2">
-              <div className="flex justify-between">
-                <span className="text-brand-muted">LP gauge</span>
-                <span className="text-white font-medium">{lp.label}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-brand-muted">Protocol</span>
-                <span className="text-white">{protocol.label} · {protocol.chainLabel}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-brand-muted">Bribe</span>
-                <span className="text-brand-green font-semibold">{amount} {token.label}</span>
-              </div>
-              {isEVM && (
-                <div className="flex justify-between">
-                  <span className="text-brand-muted">Backing</span>
-                  <span className="text-brand-green text-xs">wSOLA · 1:1 floor-backed</span>
-                </div>
-              )}
-            </div>
-            <button onClick={() => setShowModal(false)} className="btn-secondary w-full justify-center">Close</button>
+      {/* SOLA attestation notice */}
+      {!IS_TESTNET && (
+        <div className="flex gap-2.5 p-3 rounded-xl border border-brand-green/20 bg-brand-green/5 text-xs text-brand-muted">
+          <span className="shrink-0 text-brand-green mt-0.5">◈</span>
+          <div className="flex flex-col gap-1">
+            <span><span className="text-white font-medium">SOLA → wSOLA</span> requires a one-time Wormhole attestation on Base before the bridge route opens.</span>
+            <span className="text-brand-muted/60">
+              Steps: (1) attest SOLA mint on Base via Wormhole Token Bridge · (2) relay VAA → <code className="bg-brand-dark/60 px-1 rounded">createWrapped</code> on Base · (3) add wSOLA address here. Scheduled for mainnet launch.
+            </span>
           </div>
         </div>
       )}
+
+      {/* fBOMB notice */}
+      {!IS_TESTNET && (
+        <div className="flex gap-2.5 p-3 rounded-xl border border-yellow-500/20 bg-yellow-500/5 text-xs text-brand-muted">
+          <span className="shrink-0 text-xl">💣</span>
+          <div className="flex flex-col gap-1.5">
+            <div>
+              <span className="text-yellow-400 font-semibold">fBOMB cannot be bridged via Wormhole.</span>
+              {" "}fBOMB is a <span className="text-white font-medium">LayerZero OFT</span> — burn/mint mechanics
+              are baked in. Wormhole&apos;s lock-and-mint model is incompatible.
+            </div>
+            <div>
+              Requires a native <span className="text-white font-medium">LZ OFT program on Solana</span> (EID 30168),{" "}
+              <code className="text-brand-green/80 bg-brand-dark/60 px-1 rounded">setPeer</code> on each EVM contract,
+              and DVN + executor config. Under negotiation with <span className="text-white font-medium">MLCB DAO</span>.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Testnet helper */}
+      {IS_TESTNET && (
+        <div className="flex gap-2.5 p-3 rounded-xl border border-brand-green/20 bg-brand-green/5 text-xs text-brand-muted">
+          <span className="text-brand-green shrink-0">⚗️</span>
+          <div>
+            <span className="text-brand-green font-semibold">Testnet mode.</span>
+            {" "}Mint MockAERO:{" "}
+            <code className="text-brand-green/80 bg-brand-dark/60 px-1 rounded">npm run deploy:mock-aero</code>
+            {" "}in <code className="text-brand-green/80 bg-brand-dark/60 px-1 rounded">soladrome-bridge/evm</code>.
+          </div>
+        </div>
+      )}
+
+      {/* Wormhole widget */}
+      <div className="rounded-2xl overflow-hidden border border-brand-border">
+        <WormholeWidget config={WH_CONFIG} theme={WH_THEME} />
+      </div>
+
+      {/* Bridge history */}
+      {!IS_TESTNET && (
+        <div className="card-flat">
+          <BridgeHistory />
+        </div>
+      )}
+
+      {/* Footer */}
+      <div className="card-flat flex gap-2.5 text-sm text-brand-muted">
+        <span className="text-brand-green shrink-0 mt-0.5">ℹ</span>
+        <p>
+          Bridged tokens arrive as wrapped assets (wAERO, wVELO on Solana · wSOLA on Base/Optimism).
+          Use them to{" "}
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "pools" }))}
+            className="text-brand-green hover:underline font-medium"
+          >
+            provide liquidity
+          </button>{" "}
+          or{" "}
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "bribe" }))}
+            className="text-brand-green hover:underline font-medium"
+          >
+            bribe gauges
+          </button>{" "}
+          on Soladrome.{" "}
+          If your transaction gets stuck after source-chain confirmation, recover it at{" "}
+          <a
+            href="https://portalbridge.com/advanced-tools/#/redeem"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-brand-green hover:underline font-medium"
+          >
+            Portal Bridge recovery
+          </a>.
+        </p>
+      </div>
     </div>
   );
 }

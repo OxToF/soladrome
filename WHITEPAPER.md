@@ -215,9 +215,77 @@ None of these allocations enter `total_purchased_sola`, so they carry no floor-r
 
 ---
 
-## 8. Gauge and Bribe System
+## 8. Cross-Chain Infrastructure
 
-### 7.1 Epoch Structure
+### 8.1 Wormhole Token Bridge (LIVE)
+
+Soladrome integrates the Wormhole Token Bridge to bring external DeFi liquidity into the Solana ecosystem. The bridge is accessible via the **Token Bridge** page in the frontend.
+
+**Supported routes (live at mainnet):**
+
+| Origin token | Origin chain | Wormhole-wrapped SPL | SPL mint address |
+|---|---|---|---|
+| AERO | Base | wAERO | `AXYvFSKMPwt9adL1eBZhrDNCvT29HXnhNQuPxNwDZin` |
+| VELO | Optimism | wVELO | `GaLBL77CzH9XSzStkNPmCkWhuXwkDU38du2ainTGrEMN` |
+| SOL | Solana | wSOL → Base | (canonical wSOL, bridged out) |
+
+Both wAERO and wVELO were attested on Wormhole before going live. Attestation anchors the SPL mint address permanently — any AERO locked on Base releases wAERO on Solana at the attested mint, and vice versa. wSOL follows the same mechanism in the Base-bound direction.
+
+**Use within Soladrome:** wAERO and wVELO are valid SPL tokens and can be deposited as bribe tokens in Soladrome gauges via `deposit_bribe`. This extends the bribe economy to include yield-bearing governance tokens from Base and Optimism without requiring custodians or synthetic wrappers.
+
+---
+
+### 8.2 Cross-Chain Bribe Bridge — LayerZero V2 (Mainnet Soon)
+
+The cross-chain bribe bridge removes the requirement for external protocols to hold assets on Solana before bribing. Any EVM-native protocol can submit a bribe from their home chain; the bridge delivers it to the correct Soladrome gauge atomically.
+
+**Repository:** https://github.com/OxToF/soladrome-bridge
+
+**Architecture:**
+
+```
+EVM chain (Base / Optimism / Arbitrum / …)
+  │
+  │  SoladromeBribeRouter.sol   (LayerZero V2 OApp)
+  │    ├── takes ERC-20 bribe token + pool/epoch params
+  │    ├── encodes message + calls LayerZero endpoint
+  │    └── emits BribeSent event
+  │
+  ▼  LayerZero V2 cross-chain message
+  │
+Solana
+  │  bridge-receiver (Anchor program)
+  │    ├── receives LZ message via LayerZero DVN relayers
+  │    ├── verifies pool, epoch, and token parameters
+  │    ├── calls deposit_bribe CPI → BribeVault PDA
+  │    └── Astralane sub-slot execution for <1-slot finality
+  │
+  ▼  Soladrome gauge (on-chain)
+     └── bribe available for hiSOLA voters at epoch end
+```
+
+**Execution layer:** The bridge-receiver is integrated with **Astralane** sub-slot transaction execution, which targets landing transactions within a specific slot range. This eliminates front-running of bribe deposits and ensures predictable epoch-slot alignment for the receiving CPI.
+
+**SDK:** A TypeScript SDK is published alongside the bridge repository. External protocols import `SoladromeBribeSDK` to construct and submit cross-chain bribe transactions in two calls: `approveBribeToken()` and `sendBribe(poolId, epochOffset, amount)`.
+
+---
+
+### 8.3 MLCB DAO — First External Briber
+
+**MLCB DAO** is the first external protocol committed to bribing Soladrome gauges via the cross-chain bridge. Key facts:
+
+- **Treasury:** fBOMB token, ~$35M TVL across multiple EVM chains (Base, Optimism, and others)
+- **Existing positions:** Significant veAERO and veVELO holdings on Base and Optimism respectively — deep familiarity with gauge-bribe mechanics
+- **Bridge usage:** MLCB will deploy fBOMB from their EVM treasury through `SoladromeBribeRouter.sol` without moving assets to Solana manually
+- **Alignment:** Bribe flow → hiSOLA voters direct emissions toward MLCB-preferred pools → MLCB earns deeper liquidity for their protocol → cycle repeats each epoch
+
+This partnership validates the cross-chain bribe bridge as a production path for EVM protocols to access Solana-native liquidity through Soladrome's gauge system.
+
+---
+
+## 9. Gauge and Bribe System
+
+### 9.1 Epoch Structure
 
 `EPOCH_DURATION = 604,800 s` (7 days). The current epoch is:
 ```
@@ -226,14 +294,14 @@ current_epoch = unix_timestamp / EPOCH_DURATION
 
 All gauges, bribes, votes, and claims are keyed to epoch numbers stored as 8-byte little-endian seeds in PDAs.
 
-### 7.2 Voting (`vote_gauge`)
+### 9.2 Voting (`vote_gauge`)
 
 hiSOLA holders allocate voting power across AMM pools per epoch. Constraints:
 - Cumulative votes across pools ≤ `hi_sola_balance`
 - One vote receipt per pool per epoch (replay-proof via `init` PDA)
 - Per-address vote cap: 30% of total epoch votes (anti-whale)
 
-### 7.3 Passive Vote Carry-Over (`set_vote_config` / `replay_vote`)
+### 9.3 Passive Vote Carry-Over (`set_vote_config` / `replay_vote`)
 
 hiSOLA holders set a persistent vote allocation once via `set_vote_config`, specifying up to 5 pools and their respective basis-point weights. With `auto_replay = true`, any external caller — a keeper bot, a partner protocol, or the holder themselves — can invoke `replay_vote` each epoch without requiring the owner's signature.
 
@@ -241,11 +309,11 @@ hiSOLA holders set a persistent vote allocation once via `set_vote_config`, spec
 
 This mirrors the behaviour of Beradrome and Velodrome v2, where passive veToken holders earn bribe rewards without weekly re-signing. The `UserVoteReceipt` `init` guard ensures replay and manual `vote_gauge` for the same pool in the same epoch are mutually exclusive.
 
-### 7.4 Bribe Deposits (`deposit_bribe`)
+### 9.4 Bribe Deposits (`deposit_bribe`)
 
-Any external protocol or individual can deposit arbitrary SPL tokens as a bribe for a specific pool and epoch. Bribes are locked in a PDA vault until the epoch ends.
+Any external protocol or individual can deposit arbitrary SPL tokens as a bribe for a specific pool and epoch. Bribes are locked in a PDA vault until the epoch ends. Accepted bribe tokens include native Solana SPL tokens as well as Wormhole-wrapped tokens (wAERO, wVELO) bridged from EVM chains, and tokens delivered via the cross-chain bribe bridge (LayerZero V2).
 
-### 7.5 Bribe Claims (`claim_bribe`)
+### 9.5 Bribe Claims (`claim_bribe`)
 
 After an epoch ends, voters claim pro-rata bribes:
 ```
@@ -254,7 +322,7 @@ claimable = total_bribed × user_votes / total_votes
 
 Anti-double-claim: `UserBribeClaim` PDA is created with `init` on first claim (idempotent replay protection).
 
-### 7.6 Rollover (`rollover_bribe`)
+### 9.6 Rollover (`rollover_bribe`)
 
 Unclaimed bribes from ended epochs can be rolled over to the next epoch:
 - **Zero-vote pools**: immediate rollover after epoch ends
@@ -264,9 +332,9 @@ Rollover is permissionless — anyone can call it.
 
 ---
 
-## 9. Permissionless AMM
+## 10. Permissionless AMM
 
-### 8.1 Pool Creation
+### 10.1 Pool Creation
 
 Any two distinct SPL token mints can be paired. Mints are sorted lexicographically before PDA derivation, ensuring (A,B) and (B,A) map to the same pool regardless of input order.
 
@@ -278,11 +346,11 @@ Pool parameters set at creation:
 - `swap_fee_bps` (max 1000 = 10%)
 - `protocol_fee_share_bps` (max 5000 = 50% of swap fee → `market_vault`)
 
-### 8.2 Liquidity (xy=k)
+### 10.2 Liquidity (xy=k)
 
 First deposit locks `MINIMUM_LIQUIDITY = 1,000` LP tokens to the System Program (dead address), permanently removing them from circulation. Subsequent deposits rebalance to the limiting token side via `lp_for_deposit()`.
 
-### 8.3 Emissions (Two Systems)
+### 10.3 Emissions (Two Systems)
 
 **Masterchef-style (continuous):** Per-second accumulator in `AmmPool`. `OSOLA_EMISSION_PER_SEC` oSOLA distributed to LP stakers proportionally to their share. Updated lazily on every interaction.
 
@@ -297,13 +365,13 @@ This creates early-LP urgency while guaranteeing perpetual incentives above the 
 
 ---
 
-## 10. Protocol-Owned Liquidity (POL)
+## 11. Protocol-Owned Liquidity (POL)
 
-### 9.1 Collection (`collect_to_pol`)
+### 11.1 Collection (`collect_to_pol`)
 
 A configurable fraction (`pol_split_bps`, max 50%) of `market_vault` fees is diverted to `pol_usdc_vault`.
 
-### 9.2 Deployment (`deploy_pol`)
+### 11.2 Deployment (`deploy_pol`)
 
 Two-phase atomic operation:
 1. Buy SOLA via bonding curve using POL USDC → SOLA lands in `pol_sola_ata`
@@ -313,7 +381,7 @@ POL LP tokens are never redeemable — they are protocol-owned forever, providin
 
 ---
 
-## 11. Flash Arbitrage
+## 12. Flash Arbitrage
 
 `flash_arbitrage` atomically exploits price divergence between the AMM and the bonding curve:
 
@@ -329,11 +397,11 @@ This creates a permissionless arbitrage mechanism that self-corrects AMM prices 
 
 ---
 
-## 12. Tokenomics
+## 13. Tokenomics
 
 *See also: `TOKENOMICS.md` in this repository for full allocation tables and gauge economics.*
 
-### 12.1 Supply
+### 13.1 Supply
 
 | Tranche | Amount | Mechanism | Floor backing |
 |---|---|---|---|
@@ -347,7 +415,7 @@ This creates a permissionless arbitrage mechanism that self-corrects AMM prices 
 
 **All SOLA purchased by users is individually floor-backed at 1:1.** Non-purchased allocations (founder, partner, ecosystem) are excluded from `total_purchased_sola` and carry no floor-redemption rights — they cannot deplete the floor vault via `sell_sola`.
 
-### 12.2 Inflation
+### 13.2 Inflation
 
 The only new SOLA entering circulation is:
 - User `buy_sola` activity (each unit 100% floor-backed)
@@ -356,7 +424,7 @@ The only new SOLA entering circulation is:
 
 There is no protocol-controlled inflation. oSOLA is the primary incentive token; its value is derived from the right to acquire SOLA at floor price.
 
-### 12.3 Revenue Model
+### 13.3 Revenue Model
 
 Protocol revenue flows to `market_vault`:
 - **Bonding curve premium** — spread between purchase price and floor price
@@ -368,13 +436,13 @@ All `market_vault` revenue is distributed pro-rata to hiSOLA stakers via the rew
 
 ---
 
-## 13. Security Model
+## 14. Security Model
 
-### 12.1 On-Chain Authority
+### 14.1 On-Chain Authority
 
 At launch, the protocol authority is the deployer wallet. Post-launch, authority is transferred to a Squads v4 multisig vault (1-of-2) with two distinct Ledger hardware wallets. All admin instructions (`pause`, `unpause`, `initialize_pol`, `transfer_authority`) require multisig approval after this transfer.
 
-### 12.2 Emergency Pause
+### 14.2 Emergency Pause
 
 `pause` / `unpause` freeze all entry instructions while preserving all exit paths:
 
@@ -384,7 +452,7 @@ At launch, the protocol authority is the deployer wallet. Post-launch, authority
 
 Users can never be trapped. The worst case in a pause scenario is that entry is blocked; all exits remain open.
 
-### 12.3 Floor Invariant
+### 14.3 Floor Invariant
 
 The core invariant checked after every `sell_sola`:
 ```
@@ -393,7 +461,7 @@ floor_vault_post + total_usdc_borrowed >= total_purchased_sola
 
 This invariant is enforced on-chain and cannot be bypassed. If violated, the instruction reverts with `InsufficientFloorReserve`.
 
-### 12.4 Hardcoded Addresses
+### 14.4 Hardcoded Addresses
 
 Critical addresses are compile-time constants:
 - `FOUNDER_WALLET` — Ledger Nano S, immutable in bytecode
@@ -401,7 +469,7 @@ Critical addresses are compile-time constants:
 
 Neither can be changed without a program upgrade. Program upgrade authority is held by the Squads multisig after deploy.
 
-### 12.5 Security Testing
+### 14.5 Security Testing
 
 Prior to mainnet:
 - Manual code review (10 findings, all resolved)
@@ -409,7 +477,7 @@ Prior to mainnet:
 
 ---
 
-## 14. PDA Architecture
+## 15. PDA Architecture
 
 All on-chain state is held in program-derived accounts. No mutable authority accounts. Every PDA is deterministically derived from fixed seeds:
 
@@ -447,7 +515,7 @@ All on-chain state is held in program-derived accounts. No mutable authority acc
 
 ---
 
-## 15. Instruction Set
+## 16. Instruction Set
 
 Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd`):
 
@@ -487,7 +555,7 @@ Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM58
 
 ---
 
-## 16. Roadmap
+## 17. Roadmap
 
 | Phase | Status | Description |
 |---|---|---|
@@ -495,7 +563,10 @@ Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM58
 | Security review | ✅ Complete | Code review + Trident fuzzing (200k calls, 0 violations) |
 | Squads multisig | ✅ Complete | 1-of-2 Ledger multisig (`BxYTiKyDxWpK4hPDZEiYVW9qBj8YpzhSHEBCWpaZbWQ4`) |
 | Strategic allocations | ✅ Complete | Founder vesting, contributor system, partner auto-lock system |
+| Wormhole Token Bridge | ✅ Live | wAERO (Base→Solana), wVELO (Optimism→Solana), wSOL (Solana→Base) |
+| MLCB DAO partnership | ✅ Live | fBOMB treasury committed as first external briber |
 | Mainnet deploy | Upcoming | `anchor build --no-default-features && anchor deploy` |
+| Cross-chain bribe bridge | Mainnet soon | LayerZero V2 EVM→Solana bribe routing (soladrome-bridge repo) |
 | Partner onboarding | Upcoming | `register_partner` for Jito, Marinade, Solayer — 100k hiSOLA each, 12-month lock |
 | Community airdrop | Upcoming | Claim-based, ~500k SOLA from ecosystem allocation |
 | Audit | Post-launch | Independent security audit |
@@ -506,7 +577,7 @@ Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM58
 
 ---
 
-## 17. Related Work
+## 18. Related Work
 
 - **Velodrome / Aerodrome** — ve(3,3) gauge-bribe architecture (inspiration for the gauge system)
 - **Uniswap v2** — constant-product AMM (inspiration for pool mechanics)

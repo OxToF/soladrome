@@ -1,0 +1,1 @@
+{"version":3,"file":"AppRouter.d.ts","sourceRoot":"","sources":["../../src/AppRouter.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAqD,MAAM,OAAO,CAAC;AAI1E,OAAO,WAAW,CAAC;AAKnB,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,gBAAgB,CAAC;AA0E5D,UAAU,KAAK;IACb,MAAM,CAAC,EAAE,qBAAqB,CAAC;CAChC;AAGD,iBAAS,SAAS,CAAC,KAAK,EAAE,KAAK,qBA+C9B;AAED,eAAe,SAAS,CAAC"}

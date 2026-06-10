@@ -37,19 +37,16 @@ pub const VESTING_DURATION_SECS: u64 = 720 * 24 * 3_600;
 
 // ── Contributor vesting schedule ──────────────────────────────────────────────
 
-/// Cliff before contributor tokens unlock.
-/// devnet: 1 h  |  mainnet: 1 month
-#[cfg(feature = "devnet")]
-pub const CONTRIBUTOR_CLIFF_SECS: u64 = 3_600;
-#[cfg(not(feature = "devnet"))]
-pub const CONTRIBUTOR_CLIFF_SECS: u64 = 30 * 24 * 3_600;
+/// Fraction of contributor allocation unlocked immediately at TGE (25%).
+/// Remaining 75 % vests linearly over CONTRIBUTOR_DURATION_SECS.
+pub const CONTRIBUTOR_TGE_BPS: u64 = 2_500;
 
-/// Linear vesting window for contributors (oSOLA released monthly over 12 months).
-/// devnet: 12 h  |  mainnet: 12 months
+/// Linear vesting window for the remaining 75 % of contributor allocation.
+/// devnet: 6 h  |  mainnet: 6 months
 #[cfg(feature = "devnet")]
-pub const CONTRIBUTOR_DURATION_SECS: u64 = 12 * 3_600;
+pub const CONTRIBUTOR_DURATION_SECS: u64 = 6 * 3_600;
 #[cfg(not(feature = "devnet"))]
-pub const CONTRIBUTOR_DURATION_SECS: u64 = 12 * 30 * 24 * 3_600;
+pub const CONTRIBUTOR_DURATION_SECS: u64 = 6 * 30 * 24 * 3_600;
 
 // ── Ve-layer constants ────────────────────────────────────────────────────────
 /// Minimum lock duration: 1 epoch.

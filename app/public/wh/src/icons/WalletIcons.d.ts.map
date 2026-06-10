@@ -1,0 +1,1 @@
+{"version":3,"file":"WalletIcons.d.ts","sourceRoot":"","sources":["../../../src/icons/WalletIcons.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAkB,MAAM,OAAO,CAAC;AAIvC,KAAK,KAAK,GAAG;IACX,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,IAAI,CAAC,EAAE,MAAM,CAAC;CACf,CAAC;AAEF,iBAAS,UAAU,CAAC,KAAK,EAAE,KAAK,qBAyB/B;AAED,eAAe,UAAU,CAAC"}
