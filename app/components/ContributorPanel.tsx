@@ -202,6 +202,8 @@ export function ContributorPanel() {
           .accounts({
             contributor:            wallet.publicKey,
             protocolState:          statePda,
+            hiSolaMint:             hiSolaM,
+            contributorHiSola:      userAta(hiSolaM, wallet.publicKey),
             floorVault,
             marketVault,
             usdcMint:               usdcMint,
