@@ -3213,6 +3213,16 @@
           }
         },
         {
+          "name": "hi_sola_mint"
+        },
+        {
+          "name": "contributor_hi_sola",
+          "docs": [
+            "Contributor's hiSOLA balance — collateral ceiling for the borrow.",
+            "Mirrors founder_borrow_usdc: borrow cannot exceed real on-chain hiSOLA held."
+          ]
+        },
+        {
           "name": "floor_vault",
           "writable": true
         },

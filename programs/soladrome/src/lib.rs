@@ -1480,6 +1480,16 @@ pub mod soladrome {
             new_borrowed <= max_borrow,
             SoladromeError::ContributorBorrowCapExceeded
         );
+        // ── Collateral check: borrow cannot exceed real on-chain hiSOLA held ──
+        // Without this, a contributor could claim hiSOLA, sell/transfer ALL of it,
+        // then still borrow up to 10% of their *claimed* allocation against zero
+        // collateral — debt with no backing. Mirrors founder_borrow_usdc and the
+        // standard borrow_usdc 1:1 collateral ceiling.
+        let hi_sola_balance = ctx.accounts.contributor_hi_sola.amount;
+        require!(
+            new_borrowed <= hi_sola_balance,
+            SoladromeError::BorrowLimitExceeded
+        );
         require!(
             ctx.accounts.floor_vault.amount >= usdc_amount,
             SoladromeError::InsufficientFloorReserve
@@ -4199,6 +4209,14 @@ pub struct ContributorBorrowUsdc<'info> {
 
     #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
     pub protocol_state: Account<'info, ProtocolState>,
+
+    #[account(address = protocol_state.hi_sola_mint)]
+    pub hi_sola_mint: Account<'info, Mint>,
+
+    /// Contributor's hiSOLA balance — collateral ceiling for the borrow.
+    /// Mirrors founder_borrow_usdc: borrow cannot exceed real on-chain hiSOLA held.
+    #[account(token::mint = hi_sola_mint, token::authority = contributor)]
+    pub contributor_hi_sola: Account<'info, TokenAccount>,
 
     #[account(mut, address = protocol_state.floor_vault)]
     pub floor_vault: Account<'info, TokenAccount>,
