@@ -1416,7 +1416,7 @@
     {
       "name": "claim_contributor_hi_sola",
       "docs": [
-        "Contributor-only: claim linearly-vested hiSOLA after the cliff.",
+        "Contributor-only: claim vested hiSOLA (25 % TGE + 75 % linear over 6 months).",
         "Mints SOLA to sola_vault (locked backing) + hiSOLA to contributor wallet 1:1.",
         "Also snapshots the fee accumulator so the contributor earns fees from day one."
       ],
@@ -1639,7 +1639,7 @@
     {
       "name": "claim_contributor_vesting",
       "docs": [
-        "Contributor-only: claim linearly-vested oSOLA after the cliff.",
+        "Contributor-only: claim vested oSOLA (25 % TGE + 75 % linear over 6 months).",
         "Mints oSOLA to contributor wallet — floor-neutral until exercised."
       ],
       "discriminator": [
@@ -7398,8 +7398,109 @@
         {
           "name": "market_vault",
           "docs": [
-            "Market vault needed to snapshot the accumulator on stake entry."
+            "Market vault — snapshots the accumulator AND is the source of any pending",
+            "fees auto-paid to an existing staker who adds more SOLA. Must be mutable."
+          ],
+          "writable": true
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint — needed to init user_usdc ATA on first stake if absent."
           ]
+        },
+        {
+          "name": "user_usdc",
+          "docs": [
+            "User's USDC ATA — receives auto-harvested fees on stake. Created if absent."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         },
         {
           "name": "user_position",

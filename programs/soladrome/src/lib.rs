@@ -378,6 +378,11 @@ pub mod soladrome {
 
         let bump = ctx.accounts.protocol_state.bump;
 
+        // Pre-mint hiSOLA balance — basis for harvesting fees already accrued on
+        // the user's EXISTING stake. Anchor does not reload the cached token
+        // account after the mint CPI below, so this stays the pre-mint balance.
+        let old_balance = ctx.accounts.user_hi_sola.amount;
+
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -404,18 +409,49 @@ pub mod soladrome {
             sola_amount,
         )?;
 
-        // Init position if first interaction
-        let position = &mut ctx.accounts.user_position;
-        if position.owner == Pubkey::default() {
-            position.owner = ctx.accounts.user.key();
-            position.bump = ctx.bumps.user_position;
+        // ── Auto-harvest pending fees BEFORE moving fees_debt forward ─────────
+        // Without this, an existing staker who adds more SOLA would silently
+        // forfeit the fees already accrued on `old_balance` (they would be
+        // redistributed to other stakers when fees_debt jumps to `acc`). This
+        // mirrors the Masterchef pattern already used by unstake_hi_sola and
+        // lock_hi_sola. A freshly-created position has no accrued fees.
+        let pending = {
+            let position = &mut ctx.accounts.user_position;
+            let is_new = position.owner == Pubkey::default();
+            if is_new {
+                position.owner = ctx.accounts.user.key();
+                position.bump = ctx.bumps.user_position;
+            }
+            let pending = if is_new {
+                0
+            } else {
+                math::pending_fees(acc, position.fees_debt, old_balance)
+            };
+            // Entry/exit point: debt = current accumulator (no retroactive claim).
+            position.fees_debt = acc;
+            pending
+        };
+
+        if pending > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.market_vault.to_account_info(),
+                        to: ctx.accounts.user_usdc.to_account_info(),
+                        authority: ctx.accounts.protocol_state.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                pending,
+            )?;
         }
-        // Anchor entry point: debt = current accumulator (no retroactive claim)
-        position.fees_debt = acc;
 
         let s = &mut ctx.accounts.protocol_state;
         s.fees_per_hi_sola = acc;
-        s.last_market_vault_balance = market_balance;
+        // Subtract any auto-paid fees so they are not double-credited to the
+        // remaining stakers on the next accumulator advance (same as unstake).
+        s.last_market_vault_balance = market_balance.saturating_sub(pending);
         s.total_hi_sola = s
             .total_hi_sola
             .checked_add(sola_amount)
@@ -464,6 +500,27 @@ pub mod soladrome {
         // schedule has unlocked. Devnet skips this check for testing convenience.
         #[cfg(not(feature = "devnet"))]
         if ctx.accounts.user.key() == FOUNDER_WALLET.parse::<Pubkey>().unwrap() {
+            // SECURITY: `founder_hi_vesting` is an UncheckedAccount, so its data
+            // is NOT validated by Anchor. A manual `try_deserialize` only checks
+            // the discriminator — NOT the account owner — so without the two
+            // guards below the founder could pass a forged account (owned by any
+            // program, e.g. one they deploy) carrying the FounderHiSolaVesting
+            // discriminator with `claimed = 0`. That makes `locked = 0` and
+            // bypasses the vesting lock entirely → founder unstakes early, sells
+            // unfinanced SOLA, and drains floor_vault USDC ahead of real buyers.
+            // We therefore pin the account to the canonical PDA and require it be
+            // owned by this program before trusting its `claimed` value.
+            let (expected_vesting, _) =
+                Pubkey::find_program_address(&[FOUNDER_HI_VESTING_SEED], &crate::ID);
+            require_keys_eq!(
+                ctx.accounts.founder_hi_vesting.key(),
+                expected_vesting,
+                SoladromeError::Unauthorized
+            );
+            require!(
+                ctx.accounts.founder_hi_vesting.owner == &crate::ID,
+                SoladromeError::Unauthorized
+            );
             let vesting_data = ctx.accounts.founder_hi_vesting.try_borrow_data()?;
             let vesting = FounderHiSolaVesting::try_deserialize(&mut &vesting_data[..])?;
             let clock = Clock::get()?;
@@ -2973,9 +3030,23 @@ pub struct StakeSola<'info> {
     #[account(mut, address = protocol_state.sola_vault)]
     pub sola_vault: Box<Account<'info, TokenAccount>>,
 
-    /// Market vault needed to snapshot the accumulator on stake entry.
-    #[account(address = protocol_state.market_vault)]
+    /// Market vault — snapshots the accumulator AND is the source of any pending
+    /// fees auto-paid to an existing staker who adds more SOLA. Must be mutable.
+    #[account(mut, address = protocol_state.market_vault)]
     pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    /// USDC mint — needed to init user_usdc ATA on first stake if absent.
+    #[account(address = protocol_state.usdc_mint)]
+    pub usdc_mint: Box<Account<'info, Mint>>,
+
+    /// User's USDC ATA — receives auto-harvested fees on stake. Created if absent.
+    #[account(
+        init_if_needed,
+        payer = user,
+        associated_token::mint      = usdc_mint,
+        associated_token::authority = user,
+    )]
+    pub user_usdc: Box<Account<'info, TokenAccount>>,
 
     #[account(
         init_if_needed,

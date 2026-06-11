@@ -121,6 +121,10 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
             .rpc();
         }
 
+        // user_usdc receives any pending fees auto-harvested when adding to an
+        // existing stake (mirrors unstake). usdcMint comes from on-chain state.
+        const stakeUserUsdc = usdcMint ? userAta(usdcMint, wallet.publicKey) : null;
+
         const tx = await program.methods
           .stakeSola(fromUi(+amount))
           .accounts({
@@ -132,6 +136,8 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
             userHiSola,
             solaVault: solaVaultAddr,
             marketVault,
+            usdcMint,
+            userUsdc: stakeUserUsdc,
             userPosition: position,
             ...commonAccounts,
           } as any)
