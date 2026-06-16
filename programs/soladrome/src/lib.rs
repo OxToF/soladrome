@@ -2406,9 +2406,16 @@ pub mod soladrome {
             SoladromeError::Unauthorized
         );
 
-        // Check whether the old gauge recorded any votes
+        // Check whether the old gauge recorded any votes.
+        // Ownership must be verified first: the canonical PDA address can be
+        // pre-occupied by a third-party program, and only an account actually
+        // owned by THIS program holds real GaugeState vote data. A foreign or
+        // uninitialized account ⇒ no real votes ⇒ rollover is allowed immediately
+        // (prevents a forged account from faking votes to force the grace period).
+        let owned_by_program = ctx.accounts.old_gauge_state.owner == ctx.program_id;
         let gauge_data = ctx.accounts.old_gauge_state.try_borrow_data()?;
-        let has_votes = gauge_data.len() >= 56
+        let has_votes = owned_by_program
+            && gauge_data.len() >= 56
             && u64::from_le_bytes(gauge_data[48..56].try_into().unwrap()) > 0;
         drop(gauge_data);
 

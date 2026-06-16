@@ -103,8 +103,12 @@ pub fn ve_power(amount_locked: u64, lock_end_ts: i64, current_ts: i64) -> u64 {
     }
     let remaining = (lock_end_ts - current_ts) as u64;
     // power = amount * remaining * MAX_MULTIPLIER / MAX_DURATION  (saturating u128 muldiv)
+    // Clamp to u64::MAX instead of truncating: a `as u64` cast on an out-of-range
+    // u128 would silently wrap and *understate* a whale's voting power. Saturating
+    // is defense-in-depth; the bonding curve makes such a balance unreachable today.
     ((amount_locked as u128)
         .saturating_mul(remaining as u128)
         .saturating_mul(MAX_VE_MULTIPLIER as u128)
-        / MAX_LOCK_DURATION as u128) as u64
+        / MAX_LOCK_DURATION as u128)
+        .min(u64::MAX as u128) as u64
 }
