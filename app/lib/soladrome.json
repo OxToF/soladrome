@@ -6059,6 +6059,186 @@
       "args": []
     },
     {
+      "name": "partner_deposit_bribe",
+      "docs": [
+        "Partner deposits a bribe in their committed `bribe_mint` AND gets credited",
+        "toward their streaming hiSOLA allocation. The tokens flow into the SAME bribe",
+        "vault as `deposit_bribe` (voters benefit identically); the partner's",
+        "`total_bribed_credited` is incremented atomically with the real transfer, so",
+        "allocation can never be credited without genuinely bribing. Only the committed",
+        "`bribe_mint` credits — any other token is rejected."
+      ],
+      "discriminator": [
+        82,
+        194,
+        24,
+        115,
+        184,
+        240,
+        160,
+        196
+      ],
+      "accounts": [
+        {
+          "name": "partner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Read-only — used only for the pause check."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_allocation",
+          "docs": [
+            "Partner allocation PDA — credited here. Verified by seeds + owner."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_id"
+        },
+        {
+          "name": "reward_mint"
+        },
+        {
+          "name": "partner_token",
+          "writable": true
+        },
+        {
+          "name": "bribe_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bribe_token_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "epoch",
+          "type": "u64"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "pause",
       "discriminator": [
         211,
@@ -6201,7 +6381,8 @@
         "borrow remains blocked for the entire lock duration.",
         "",
         "`lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].",
-        "Suggested mainnet value: 52 × 604 800 = 31 449 600 s (≈ 12 months)."
+        "Suggested mainnet value for strategic partners: 104 × 604 800 = 62 899 200 s",
+        "(≈ 24 months — the maximum lock, granting full 4× ve-power)."
       ],
       "discriminator": [
         126,
@@ -6274,7 +6455,19 @@
       ],
       "args": [
         {
-          "name": "hi_sola_amount",
+          "name": "bribe_mint",
+          "type": "pubkey"
+        },
+        {
+          "name": "rate_num",
+          "type": "u64"
+        },
+        {
+          "name": "rate_den",
+          "type": "u64"
+        },
+        {
+          "name": "cap_hi_sola",
           "type": "u64"
         },
         {
@@ -8800,21 +8993,31 @@
     },
     {
       "code": 6030,
+      "name": "InvalidRate",
+      "msg": "Invalid conversion rate: rate_num and rate_den must both be > 0"
+    },
+    {
+      "code": 6031,
+      "name": "BribeMintMismatch",
+      "msg": "Bribe token does not match the partner's committed bribe_mint"
+    },
+    {
+      "code": 6032,
       "name": "PoolNotInConfig",
       "msg": "Pool not found in user vote config — update config with set_vote_config"
     },
     {
-      "code": 6031,
+      "code": 6033,
       "name": "VoteConfigDisabled",
       "msg": "Vote config auto-replay is disabled — owner must call vote_gauge manually"
     },
     {
-      "code": 6032,
+      "code": 6034,
       "name": "InvalidVoteConfig",
       "msg": "Invalid vote config: n_pools out of range or bps do not sum to 10 000"
     },
     {
-      "code": 6033,
+      "code": 6035,
       "name": "FounderVestingLocked",
       "msg": "Founder hiSOLA is vesting-locked — amount exceeds unlocked allocation"
     }
@@ -9236,16 +9439,32 @@
             "type": "pubkey"
           },
           {
-            "name": "hi_sola_amount",
+            "name": "bribe_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "rate_num",
+            "type": "u64"
+          },
+          {
+            "name": "rate_den",
+            "type": "u64"
+          },
+          {
+            "name": "cap_hi_sola",
+            "type": "u64"
+          },
+          {
+            "name": "total_bribed_credited",
+            "type": "u64"
+          },
+          {
+            "name": "hi_sola_claimed",
             "type": "u64"
           },
           {
             "name": "lock_duration_secs",
             "type": "u64"
-          },
-          {
-            "name": "claimed",
-            "type": "bool"
           },
           {
             "name": "start_ts",

@@ -50,17 +50,24 @@ describe("claim_partner_allocation", () => {
     const state = await (program.account as any).protocolState.fetch(statePda);
     const alloc = await (program.account as any).partnerAllocation.fetch(partnerAllocation);
 
-    if (alloc.claimed) {
-      console.log("⚠️  Already claimed — skipping.");
-      return;
-    }
-
     const hiSolaMint = state.hiSolaMint as PublicKey;
     const solaMint   = state.solaMint as PublicKey;
 
-    const amountUi = Number(alloc.hiSolaAmount) / 1e6;
+    // Streaming model: claimable = min(cap, credited × rate) − already claimed.
+    const credited  = Number(alloc.totalBribedCredited);
+    const entitled  = Math.min(
+      Number(alloc.capHiSola),
+      Math.floor((credited * Number(alloc.rateNum)) / Number(alloc.rateDen)),
+    );
+    const claimable = entitled - Number(alloc.hiSolaClaimed);
+    if (claimable <= 0) {
+      console.log("⚠️  Nothing to claim yet — deposit bribes first via partner_deposit_bribe.ts.");
+      return;
+    }
+
+    const amountUi = claimable / 1e6;
     const lockSecs = Number(alloc.lockDurationSecs);
-    console.log(`\nClaiming ${amountUi.toLocaleString()} hiSOLA → ve_lock_vault (${(lockSecs/3600).toFixed(1)}h lock)`);
+    console.log(`\nClaiming ${amountUi.toLocaleString()} hiSOLA (earned tranche) → ve_lock_vault (${(lockSecs/3600).toFixed(1)}h lock)`);
 
     const tx = await program.methods
       .claimPartnerAllocation()

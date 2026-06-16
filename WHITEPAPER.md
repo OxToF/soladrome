@@ -36,7 +36,7 @@ Minted 1:1 when SOLA is staked, or allocated via the founder/contributor/partner
 
 hiSOLA is a standard SPL token. It is economically irrational to transfer (unstaking returns SOLA at 1:1), but technically transferable.
 
-**Note on locked hiSOLA:** When hiSOLA is in a `ve_lock_vault` (via `lock_hi_sola` or partner auto-lock), it is excluded from the fee accumulator denominator (`total_hi_sola` is not incremented). Existing stakers are not diluted during lock periods. The locked hiSOLA re-enters the fee pool only after `unlock_hi_sola` is called.
+**Note on locked hiSOLA:** When hiSOLA is in a `ve_lock_vault` (via `lock_hi_sola` or a partner allocation claim), it is excluded from the fee accumulator denominator (`total_hi_sola` is not incremented). Existing stakers are not diluted during lock periods. The locked hiSOLA re-enters the fee pool only after `unlock_hi_sola` is called.
 
 ### 2.3 oSOLA (Option SOLA)
 A call-option token distributed to liquidity providers and, progressively, to the founder. Exercising oSOLA requires burning it and paying 1 USDC to `floor_vault`, receiving 1 SOLA in return. Each exercise:
@@ -180,16 +180,24 @@ One-time instruction creating two progressive vesting schedules:
 - **5M oSOLA:** same schedule via `claim_founder_vesting`. Each exercise adds 1 USDC to `floor_vault`.
 - **250k SOLA:** immediate liquid at launch for operational expenses (KOL rewards, community managers, contest prizes). This tranche is explicitly documented and does not affect `total_purchased_sola`.
 
-### 7.2 Protocol Partner Allocations (`register_partner` / `claim_partner_allocation`)
+### 7.2 Protocol Partner Allocations (`register_partner` / `partner_deposit_bribe` / `claim_partner_allocation`)
 
-A dedicated allocation system for major ecosystem protocols (Jito, Marinade, Solayer, and others). Unlike contributors, partners receive their full allocation in a **single atomic claim** — but with a mandatory lock.
+A dedicated allocation system for major ecosystem protocols (Jito, Marinade, Solayer, and others). Unlike contributors, a partner does **not** receive a lump allocation. They **earn** locked hiSOLA in proportion to the bribes they actually deposit, bounded by a negotiated cap — the Beradrome "Real Deal" (commit $X bribes → receive $X locked governance) made structural and enforced on-chain.
+
+```
+entitled  = min(cap_hi_sola, total_bribed_credited × rate_num / rate_den)
+claimable = entitled − hi_sola_claimed
+```
 
 **Mechanism:**
-When `claim_partner_allocation` is called, hiSOLA is minted **directly into the partner's `ve_lock_vault`** (bypassing their wallet entirely). This produces three simultaneous guarantees:
+1. `register_partner` (authority-only) sets the partner's `bribe_mint`, conversion `rate`, `cap_hi_sola` and lock duration. No tokens are minted at this step.
+2. `partner_deposit_bribe` (partner) deposits the committed `bribe_mint` into the normal bribe vault — **voters of that gauge claim it exactly as with `deposit_bribe`** — while `total_bribed_credited` is incremented atomically with the transfer. Only the committed mint credits.
+3. `claim_partner_allocation` (partner, callable repeatedly) mints the newly-earned tranche **directly into the partner's `ve_lock_vault`** (bypassing their wallet) and locks it. This produces:
 
-1. **Immediate voting power** — A `VeLockPosition` is created on-chain; ve-power is available in the same transaction. A 100k hiSOLA allocation locked for 12 months yields `100k × (52/104) × 4 = 200,000 ve-power` at the moment of claim.
-2. **No borrow during lock** — Since wallet hiSOLA balance = 0, the `borrow_usdc` guard (`new_borrowed ≤ hi_sola_balance`) naturally blocks all borrowing for the entire lock duration. This is a protocol-level guarantee, not a social promise.
-3. **No fee dilution** — `total_hi_sola` is NOT incremented at claim time (locked hiSOLA is excluded from the fee accumulator denominator, mirroring the semantics of `lock_hi_sola`). Existing stakers retain their full fee share throughout the lock.
+   - **Voting power that scales with commitment** — ve-power grows only as bribes are deposited, up to the cap. At the cap, a 100k hiSOLA allocation locked for 24 months (the maximum) yields `100k × (104/104) × 4 = 400,000 ve-power`. No bribe → no allocation → no voting power.
+   - **No borrow during lock** — wallet hiSOLA balance = 0, so the `borrow_usdc` guard (`new_borrowed ≤ hi_sola_balance`) blocks all borrowing for the lock duration. A protocol-level guarantee, not a social promise.
+   - **No fee dilution** — `total_hi_sola` is NOT incremented (locked hiSOLA excluded from the fee accumulator denominator, mirroring `lock_hi_sola`). Existing stakers retain their full fee share throughout.
+   - **Self-aligning** — if a partner stops bribing, they simply stop accruing; what they earned stays locked and decays naturally via ve-decay. The protocol never gives away governance against an unenforced promise.
 
 After lock expiry: `unlock_hi_sola` → hiSOLA returns to wallet → standard rules apply (fee share, borrow subject to 75% floor buffer, re-lock for renewed ve-power).
 
@@ -216,6 +224,13 @@ None of these allocations enter `total_purchased_sola`, so they carry no floor-r
 ---
 
 ## 8. Cross-Chain Infrastructure
+
+**Why this is Soladrome's core advantage.** ve(3,3) liquidity today is fragmented — Aerodrome on Base, Velodrome on Optimism, Beradrome on Berachain, fBOMB across ten EVM chains, and a growing set of Solana venues — each an island with its own gauges, bribes and mercenary capital. Soladrome's bridges turn it into the **interoperability layer that unifies ve(3,3) liquidity across chains**:
+
+- **Inbound** — any ve(3,3) protocol, on any chain, can route its governance token and bribes into Soladrome gauges (Wormhole Token Bridge for assets, LayerZero V2 for bribes), reaching Solana-native liquidity without migrating a treasury.
+- **Outbound** — SOLA itself, floor-backed, can be bridged to EVM as wSOLA to seed pairs on those same ve(3,3) venues, exporting Soladrome's guaranteed-floor liquidity outward.
+
+The result is a two-way clearing hub: bribes and liquidity from every ve(3,3) ecosystem can converge on Soladrome, and Soladrome's floor-backed liquidity can flow back out to them. **The bridges are not a feature — they are the moat.** The rest of this section details the rails.
 
 ### 8.1 Wormhole Token Bridge (LIVE)
 
@@ -280,6 +295,20 @@ Solana
 - **Alignment:** Bribe flow → hiSOLA voters direct emissions toward MLCB-preferred pools → MLCB earns deeper liquidity for their protocol → cycle repeats each epoch
 
 This partnership validates the cross-chain bribe bridge as a production path for EVM protocols to access Solana-native liquidity through Soladrome's gauge system.
+
+---
+
+### 8.4 wSOLA — Exporting Floor-Backed Liquidity to Other ve(3,3)s (Roadmap)
+
+Interoperability runs both ways. **wSOLA** is SOLA bridged to EVM as an ERC-20, backed 1:1 by the same floor reserve. Because every wSOLA is redeemable against the floor, it carries Soladrome's defining property — bounded downside — onto chains where ve(3,3) already has deep liquidity.
+
+This unlocks SOLA pairs on external ve(3,3) venues — e.g. a wSOLA/AERO pool on Aerodrome or wSOLA/VELO on Velodrome — letting Soladrome:
+
+- **Normalise bribes EVM-side** — protocols can bribe wSOLA-paired gauges on their home chain, and that value routes back through the bridge into the Soladrome economy.
+- **Extend the flywheel outward** — Soladrome's gauge/bribe loop and floor protection become reachable from Aerodrome/Velodrome liquidity, not only from Solana.
+- **Preserve the floor** — oSOLA is exercised (paying floor USDC) before bridging out, so wSOLA in circulation is always fully floor-backed; the floor reserve is never weakened by the outbound leg.
+
+Combined with §8.1–8.3, this makes Soladrome a hub that any ve(3,3) protocol can plug into **from either direction** — the foundation of cross-chain ve(3,3) liquidity interoperability.
 
 ---
 
@@ -409,7 +438,7 @@ This creates a permissionless arbitrage mechanism that self-corrects AMM prices 
 | Founder hiSOLA | 7,000,000 | 6-month cliff, 24-month linear vest · unstake lock enforced on-chain | ❌ locked |
 | Founder oSOLA | 5,000,000 | 6-month cliff, 24-month linear vest | ✅ on exercise |
 | Founder liquid | 250,000 SOLA | Immediate | ❌ |
-| Protocol partners | 300,000 hiSOLA | Auto-locked 12 months, one-shot claim | ❌ locked |
+| Protocol partners | up to 300,000 hiSOLA (caps) | Streamed vs bribes, locked 24 months | ❌ locked |
 | Contributors | TBD | 1-month cliff, 12-month vest | ❌ locked |
 | Ecosystem / airdrop | 1,750,000 SOLA | One-time (`mint_ecosystem_allocation`) | ❌ |
 
@@ -533,7 +562,7 @@ Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM58
 
 **Contributor vesting:** `register_contributor` · `claim_contributor_hi_sola` · `claim_contributor_vesting`
 
-**Protocol partners:** `register_partner` · `claim_partner_allocation`
+**Protocol partners:** `register_partner` · `partner_deposit_bribe` · `claim_partner_allocation`
 
 **Gauge & bribes:** `deposit_bribe` · `vote_gauge` · `claim_bribe` · `rollover_bribe`
 
@@ -567,7 +596,8 @@ Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM58
 | MLCB DAO partnership | ✅ Live | fBOMB treasury committed as first external briber |
 | Mainnet deploy | Upcoming | `anchor build --no-default-features && anchor deploy` |
 | Cross-chain bribe bridge | Mainnet soon | LayerZero V2 EVM→Solana bribe routing (soladrome-bridge repo) |
-| Partner onboarding | Upcoming | `register_partner` for Jito, Marinade, Solayer — 100k hiSOLA each, 12-month lock |
+| wSOLA outbound | Roadmap | SOLA → EVM (floor-backed) → wSOLA pairs on Aerodrome / Velodrome (§8.4) |
+| Partner onboarding | Upcoming | `register_partner` for Jito, Marinade, Solayer — 100k hiSOLA cap each, bribe-indexed, 24-month lock |
 | Community airdrop | Upcoming | Claim-based, ~500k SOLA from ecosystem allocation |
 | Audit | Post-launch | Independent security audit |
 | Jito partnership | In progress | JitoSOL/SOL pool + gauge integration |
@@ -619,9 +649,9 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 | Founder | hiSOLA | 7,000,000 | 6 months | 24 months linear | 10% of claimed | `claim_founder_hi_sola` |
 | Founder | oSOLA | 5,000,000 | 6 months | 24 months linear | None | `claim_founder_vesting` |
 | Founder | SOLA | 250,000 | None | Immediate | None | `mint_ecosystem_allocation` |
-| Jito | hiSOLA | 100,000 | None | 12-month lock | ❌ blocked during lock | `claim_partner_allocation` |
-| Marinade | hiSOLA | 100,000 | None | 12-month lock | ❌ blocked during lock | `claim_partner_allocation` |
-| Solayer | hiSOLA | 100,000 | None | 12-month lock | ❌ blocked during lock | `claim_partner_allocation` |
+| Jito | hiSOLA | 100,000 | None | 24-month lock | ❌ blocked during lock | `claim_partner_allocation` |
+| Marinade | hiSOLA | 100,000 | None | 24-month lock | ❌ blocked during lock | `claim_partner_allocation` |
+| Solayer | hiSOLA | 100,000 | None | 24-month lock | ❌ blocked during lock | `claim_partner_allocation` |
 | Contributors (TBD) | hiSOLA + oSOLA | TBD | 1 month | 12 months linear | 10% of claimed | `claim_contributor_hi_sola` |
 | Community airdrop | SOLA | ~500,000 | None | Immediate (claim) | None | Direct SPL transfer |
 | LP incentive reserve | SOLA | ~500,000 | None | Progressive | None | Direct SPL transfer |

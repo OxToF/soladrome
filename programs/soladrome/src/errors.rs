@@ -79,6 +79,10 @@ pub enum SoladromeError {
     // ── Partner allocation ────────────────────────────────────────────────────
     #[msg("Partner allocation already claimed — each partner may only claim once")]
     PartnerAlreadyClaimed,
+    #[msg("Invalid conversion rate: rate_num and rate_den must both be > 0")]
+    InvalidRate,
+    #[msg("Bribe token does not match the partner's committed bribe_mint")]
+    BribeMintMismatch,
     // ── Vote carry-over ───────────────────────────────────────────────────────
     #[msg("Pool not found in user vote config — update config with set_vote_config")]
     PoolNotInConfig,

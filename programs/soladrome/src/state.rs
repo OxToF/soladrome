@@ -418,16 +418,20 @@ impl UserVoteConfig {
 /// PDA: [b"partner", partner_wallet]
 #[account]
 pub struct PartnerAllocation {
-    pub partner: Pubkey,         // beneficiary wallet (immutable after init)
-    pub hi_sola_amount: u64,     // total hiSOLA to mint at claim time
-    pub lock_duration_secs: u64, // lock duration (validated ≤ MAX_LOCK_DURATION at register)
-    pub claimed: bool,           // true after claim_partner_allocation is called (one-shot)
-    pub start_ts: i64,           // unix timestamp when register_partner was executed
+    pub partner: Pubkey,             // beneficiary wallet (immutable after init)
+    pub bribe_mint: Pubkey,          // committed bribe token — only this mint credits the allocation
+    pub rate_num: u64,               // hiSOLA earned per bribe unit = rate_num / rate_den
+    pub rate_den: u64,               // (1:1 = rate_num == rate_den)
+    pub cap_hi_sola: u64,            // hard cap on total hiSOLA earnable (= negotiated commitment)
+    pub total_bribed_credited: u64,  // cumulative bribe (bribe_mint base units) deposited via partner_deposit_bribe
+    pub hi_sola_claimed: u64,        // cumulative hiSOLA already minted + locked (monotonic)
+    pub lock_duration_secs: u64,     // lock duration per claim (validated in [MIN, MAX] at register)
+    pub start_ts: i64,               // unix timestamp when register_partner was executed
     pub bump: u8,
 }
 impl PartnerAllocation {
-    // 32 + 8 + 8 + 1 + 8 + 1 = 58 bytes used; 38 spare
-    pub const LEN: usize = 96;
+    // 32 + 32 + 8*6 + 8 + 1 = 121 bytes used; 39 spare
+    pub const LEN: usize = 160;
 }
 
 // ── Protocol-Owned Liquidity ──────────────────────────────────────────────────

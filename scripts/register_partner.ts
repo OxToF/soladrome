@@ -1,22 +1,23 @@
 /**
  * register_partner.ts
- * Authority-only: register a protocol partner with a one-time locked hiSOLA allocation.
- * Unlike contributors (cliff + linear), the partner claims the full amount at once —
- * hiSOLA goes directly to ve_lock_vault (wallet never receives it → borrow blocked during lock).
+ * Authority-only: register a protocol partner for a STREAMING, bribe-indexed allocation.
+ * The partner earns locked hiSOLA proportionally to the bribes they actually deposit
+ * (via partner_deposit_bribe.ts), bounded by a cap:  entitled = min(cap, bribed × rate).
+ * No bribe → no allocation → no voting power. They then run claim_partner.ts to mint the
+ * earned tranche into ve_lock_vault (wallet never receives it → borrow blocked during lock).
  *
  * Usage:
  *   ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
  *   ANCHOR_WALLET=~/.config/solana/id.json \
- *   PARTNER=<wallet_address> AMOUNT=<hi_sola_ui> EPOCHS=<lock_epochs> \
+ *   PARTNER=<wallet> BRIBE_MINT=<mint> AMOUNT=<cap_hi_sola_ui> EPOCHS=<lock_epochs> \
+ *   [RATE_NUM=1 RATE_DEN=1] \
  *   yarn run ts-mocha -p ./tsconfig.json -t 60000 scripts/register_partner.ts
  *
- * Examples (devnet — EPOCH_DURATION = 3 600 s / 1 h):
- *   PARTNER=HMY1hCg2aVpKLmXGiiEqVFDMTstPfcxji7zNf8UPRvtb AMOUNT=500000 EPOCHS=1 \
- *   yarn run ts-mocha -p ./tsconfig.json -t 60000 scripts/register_partner.ts
+ * Example (USDC bribe, 1:1 "Real Deal", cap 500k hiSOLA, 104-epoch / ~24-month lock):
+ *   PARTNER=<wallet> BRIBE_MINT=EPjFWdd5...USDC AMOUNT=500000 EPOCHS=104
  *
- * Lock duration:
- *   <lock_epochs> × EPOCH_DURATION  (min: 1, max: 104)
- *   1 epoch = 604 800 s (7 days)
+ *   rate = RATE_NUM/RATE_DEN  hiSOLA per bribe base-unit (1:1 default).
+ *   Lock = <lock_epochs> × EPOCH_DURATION  (min 1, max 104 epochs; 1 epoch = 604 800 s).
  */
 import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
@@ -40,24 +41,28 @@ describe("register_partner (one-shot)", () => {
 
   const partnerRaw = process.env.PARTNER ?? "";
   const partnerStr = KNOWN_PARTNERS[partnerRaw.toLowerCase()] ?? partnerRaw;
-  const hiSolaUi   = parseFloat(process.env.AMOUNT ?? "0");
-  const lockEpochs = parseInt(process.env.EPOCHS  ?? "1", 10);
+  const hiSolaUi     = parseFloat(process.env.AMOUNT ?? "0"); // cap = max hiSOLA earnable
+  const lockEpochs   = parseInt(process.env.EPOCHS  ?? "1", 10);
+  const bribeMintStr = process.env.BRIBE_MINT ?? "";              // committed bribe token (e.g. USDC mint)
+  const rateNum      = parseInt(process.env.RATE_NUM ?? "1", 10); // rate = RATE_NUM/RATE_DEN (1:1 default)
+  const rateDen      = parseInt(process.env.RATE_DEN ?? "1", 10);
 
   before(function () {
-    if (!partnerStr || isNaN(hiSolaUi) || hiSolaUi <= 0 || isNaN(lockEpochs) || lockEpochs < 1) {
-      console.error("Usage: PARTNER=<wallet> AMOUNT=<hi_sola_ui> EPOCHS=<lock_epochs> yarn ts-mocha ... register_partner.ts");
+    if (!partnerStr || !bribeMintStr || isNaN(hiSolaUi) || hiSolaUi <= 0 || isNaN(lockEpochs) || lockEpochs < 1 || rateNum < 1 || rateDen < 1) {
+      console.error("Usage: PARTNER=<wallet> BRIBE_MINT=<mint> AMOUNT=<cap_hi_sola_ui> EPOCHS=<lock_epochs> [RATE_NUM=1 RATE_DEN=1] yarn ts-mocha ... register_partner.ts");
       this.skip();
     }
   });
 
   it("registers the partner on-chain", async function () {
-    if (!partnerStr || isNaN(hiSolaUi) || hiSolaUi <= 0) this.skip();
+    if (!partnerStr || !bribeMintStr || isNaN(hiSolaUi) || hiSolaUi <= 0) this.skip();
 
     const program = anchor.workspace.Soladrome
       ?? new anchor.Program(require("../target/idl/soladrome.json"), provider);
 
     const partnerWallet   = new PublicKey(partnerStr);
-    const hiSolaAmount    = new anchor.BN(Math.floor(hiSolaUi * 10 ** DECIMALS));
+    const bribeMint       = new PublicKey(bribeMintStr);
+    const capHiSola       = new anchor.BN(Math.floor(hiSolaUi * 10 ** DECIMALS));
     const lockDurationSecs = new anchor.BN(lockEpochs * EPOCH_DURATION);
 
     const [statePda]         = PublicKey.findProgramAddressSync([Buffer.from("state")], PROGRAM_ID);
@@ -74,7 +79,7 @@ describe("register_partner (one-shot)", () => {
     }
 
     const tx = await program.methods
-      .registerPartner(hiSolaAmount, lockDurationSecs)
+      .registerPartner(bribeMint, new anchor.BN(rateNum), new anchor.BN(rateDen), capHiSola, lockDurationSecs)
       .accounts({
         authority:        provider.wallet.publicKey,
         protocolState:    statePda,

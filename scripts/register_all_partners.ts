@@ -2,11 +2,12 @@
  * register_all_partners.ts
  * Authority-only: register Jito, Marinade and Solayer as Soladrome protocol partners.
  *
- * Each partner gets:
- *   - 100 000 hiSOLA locked for 52 epochs (≈ 12 months on mainnet, 52 h on devnet)
- *   - hiSOLA minted directly to ve_lock_vault — wallet never receives it → borrow blocked during lock
- *   - VeLockPosition created → voting power active immediately
- *   - Fees only accrue after unlock (fees_debt snapshotted at claim time)
+ * Each partner gets a STREAMING, bribe-indexed allocation:
+ *   - earns locked hiSOLA = min(cap, bribed × rate) as they deposit bribes (partner_deposit_bribe.ts)
+ *   - cap + bribe_mint + rate are negotiated per partner (see PARTNERS config below)
+ *   - lock = 104 epochs (≈ 24 months mainnet) — the max lock, full 4× ve-power
+ *   - hiSOLA minted directly to ve_lock_vault on claim → wallet never receives it → borrow blocked
+ *   - no bribe → no allocation → no voting power (self-aligning)
  *
  * The partner must then run scripts/claim_partner.ts (signed by their own wallet) to execute
  * the actual on-chain lock.
@@ -49,27 +50,43 @@ const DECIMALS       = 6;
 
 const EPOCH_DURATION_MAINNET = 604_800; // 7 days in seconds
 const EPOCH_DURATION_DEVNET  =   3_600; // 1 hour in seconds
-const LOCK_EPOCHS            = 52;      // ≈ 12 months on mainnet
+const LOCK_EPOCHS            = 104;     // ≈ 24 months on mainnet (= MAX_LOCK_DURATION, full 4× ve-power)
 
 // ── Partners ─────────────────────────────────────────────────────────────────
 // ⚠️  Confirm each wallet address with the protocol team before running.
 //     The wallet listed here is the one that must sign claim_partner_allocation.
 
-const PARTNERS: { name: string; wallet: string; hiSolaUi: number }[] = [
+// capHiSolaUi = max hiSOLA earnable (= negotiated commitment / cap).
+// bribeMint   = token the partner commits to bribe with — ONLY this mint credits.
+// rateNum/rateDen = hiSOLA per bribe base-unit (1/1 = 1:1 "Real Deal").
+const PARTNERS: {
+  name: string;
+  wallet: string;
+  bribeMint: string;
+  capHiSolaUi: number;
+  rateNum: number;
+  rateDen: number;
+}[] = [
   {
-    name:      "Jito",
-    wallet:    "TODO_JITO_WALLET",   // ← replace with Jito team multisig / contact wallet
-    hiSolaUi: 100_000,
+    name:        "Jito",
+    wallet:      "TODO_JITO_WALLET",        // ← Jito team multisig / contact wallet
+    bribeMint:   "TODO_JITO_BRIBE_MINT",    // ← e.g. JTO mint, or a USDC mint
+    capHiSolaUi: 100_000,
+    rateNum: 1, rateDen: 1,
   },
   {
-    name:      "Marinade",
-    wallet:    "TODO_MARINADE_WALLET", // ← replace with Marinade team / DAO wallet
-    hiSolaUi: 100_000,
+    name:        "Marinade",
+    wallet:      "TODO_MARINADE_WALLET",
+    bribeMint:   "TODO_MARINADE_BRIBE_MINT", // ← e.g. MNDE mint, or a USDC mint
+    capHiSolaUi: 100_000,
+    rateNum: 1, rateDen: 1,
   },
   {
-    name:      "Solayer",
-    wallet:    "TODO_SOLAYER_WALLET",  // ← replace with Solayer team wallet
-    hiSolaUi: 100_000,
+    name:        "Solayer",
+    wallet:      "TODO_SOLAYER_WALLET",
+    bribeMint:   "TODO_SOLAYER_BRIBE_MINT",
+    capHiSolaUi: 100_000,
+    rateNum: 1, rateDen: 1,
   },
 ];
 
@@ -77,7 +94,7 @@ const PARTNERS: { name: string; wallet: string; hiSolaUi: number }[] = [
 
 async function main() {
   // Validate partner addresses before doing anything
-  const todos = PARTNERS.filter(p => p.wallet.startsWith("TODO_"));
+  const todos = PARTNERS.filter(p => p.wallet.startsWith("TODO_") || p.bribeMint.startsWith("TODO_"));
   if (todos.length > 0) {
     console.error("\n❌  Missing wallet addresses for:");
     todos.forEach(p => console.error(`   ${p.name}: ${p.wallet}`));
@@ -103,20 +120,21 @@ async function main() {
 
   const lockLabel = isDevnet
     ? `${LOCK_EPOCHS} epochs = ${LOCK_EPOCHS}h (devnet)`
-    : `${LOCK_EPOCHS} epochs = ~12 months (mainnet)`;
+    : `${LOCK_EPOCHS} epochs = ~24 months (mainnet)`;
 
   console.log("\n🤝  Soladrome — Register protocol partners");
   console.log("   Authority :", kp.publicKey.toBase58());
   console.log("   Network   :", isDevnet ? "devnet" : "mainnet-beta");
   console.log("   Lock      :", lockLabel);
-  console.log("   Allocation: 100,000 hiSOLA each\n");
+  console.log("   Model     : streaming — earn locked hiSOLA = min(cap, bribed × rate)\n");
 
   let registered = 0;
   let skipped    = 0;
 
   for (const partner of PARTNERS) {
     const partnerWallet = new PublicKey(partner.wallet);
-    const hiSolaAmount  = new anchor.BN(Math.floor(partner.hiSolaUi * 10 ** DECIMALS));
+    const bribeMint     = new PublicKey(partner.bribeMint);
+    const capHiSola     = new anchor.BN(Math.floor(partner.capHiSolaUi * 10 ** DECIMALS));
 
     const [partnerAllocation] = PublicKey.findProgramAddressSync(
       [PARTNER_SEED, partnerWallet.toBuffer()],
@@ -133,7 +151,7 @@ async function main() {
 
     try {
       const tx = await program.methods
-        .registerPartner(hiSolaAmount, lockDurationSecs)
+        .registerPartner(bribeMint, new anchor.BN(partner.rateNum), new anchor.BN(partner.rateDen), capHiSola, lockDurationSecs)
         .accounts({
           authority:        kp.publicKey,
           protocolState:    statePda,
@@ -161,11 +179,11 @@ async function main() {
   if (skipped > 0) console.log(`   Skipped    : ${skipped} (already on-chain)`);
   console.log("");
   if (registered > 0) {
-    console.log("📋  Next steps:");
-    console.log("    1. Share scripts/claim_partner.ts with each partner team.");
-    console.log("    2. They run it signed by their own wallet.");
-    console.log("    3. hiSOLA goes straight into ve_lock_vault — voting power is live.");
-    console.log("    4. Borrow stays blocked until unlock_hi_sola after lock expires.\n");
+    console.log("📋  Next steps (streaming flow):");
+    console.log("    1. Partner deposits bribes via scripts/partner_deposit_bribe.ts (signed by them).");
+    console.log("    2. Partner runs scripts/claim_partner.ts → mints the EARNED tranche of locked hiSOLA.");
+    console.log("    3. Repeat: more bribes → more claimable hiSOLA, up to the cap.");
+    console.log("    4. Borrow stays blocked while locked; unlock_hi_sola after lock expiry.\n");
   }
 }
 

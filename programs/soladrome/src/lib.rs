@@ -1580,13 +1580,22 @@ pub mod soladrome {
     /// borrow remains blocked for the entire lock duration.
     ///
     /// `lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].
-    /// Suggested mainnet value: 52 × 604 800 = 31 449 600 s (≈ 12 months).
+    /// Suggested mainnet value for strategic partners: 104 × 604 800 = 62 899 200 s
+    /// (≈ 24 months — the maximum lock, granting full 4× ve-power).
     pub fn register_partner(
         ctx: Context<RegisterPartner>,
-        hi_sola_amount: u64,
+        bribe_mint: Pubkey,
+        rate_num: u64,
+        rate_den: u64,
+        cap_hi_sola: u64,
         lock_duration_secs: u64,
     ) -> Result<()> {
-        require!(hi_sola_amount > 0, SoladromeError::InvalidAmount);
+        require!(cap_hi_sola > 0, SoladromeError::InvalidAmount);
+        require!(bribe_mint != Pubkey::default(), SoladromeError::InvalidAmount);
+        require!(
+            rate_num > 0 && rate_den > 0,
+            SoladromeError::InvalidRate
+        );
         require!(
             lock_duration_secs >= MIN_LOCK_DURATION,
             SoladromeError::InvalidAmount
@@ -1598,16 +1607,23 @@ pub mod soladrome {
 
         let pa = &mut ctx.accounts.partner_allocation;
         pa.partner = ctx.accounts.partner_wallet.key();
-        pa.hi_sola_amount = hi_sola_amount;
+        pa.bribe_mint = bribe_mint;
+        pa.rate_num = rate_num;
+        pa.rate_den = rate_den;
+        pa.cap_hi_sola = cap_hi_sola;
+        pa.total_bribed_credited = 0;
+        pa.hi_sola_claimed = 0;
         pa.lock_duration_secs = lock_duration_secs;
-        pa.claimed = false;
         pa.start_ts = Clock::get()?.unix_timestamp;
         pa.bump = ctx.bumps.partner_allocation;
 
         msg!(
-            "Partner registered: {} | {} hiSOLA | lock={}s",
+            "Partner registered: {} | bribe_mint={} | rate={}/{} | cap={} hiSOLA | lock={}s",
             pa.partner,
-            pa.hi_sola_amount,
+            pa.bribe_mint,
+            pa.rate_num,
+            pa.rate_den,
+            pa.cap_hi_sola,
             pa.lock_duration_secs,
         );
         Ok(())
@@ -1631,13 +1647,21 @@ pub mod soladrome {
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
         );
-        require!(
-            !ctx.accounts.partner_allocation.claimed,
-            SoladromeError::PartnerAlreadyClaimed
-        );
-
-        let amount = ctx.accounts.partner_allocation.hi_sola_amount;
-        let lock_duration = ctx.accounts.partner_allocation.lock_duration_secs;
+        // Multi-claim: the entitlement grows with bribes actually deposited
+        // (via partner_deposit_bribe), bounded by the negotiated cap.
+        //   entitled = min(cap_hi_sola, total_bribed_credited × rate_num / rate_den)
+        // rate_den is guaranteed > 0 at register_partner, so the division is safe.
+        let pa = &ctx.accounts.partner_allocation;
+        let entitled = (pa.total_bribed_credited as u128)
+            .checked_mul(pa.rate_num as u128)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(pa.rate_den as u128)
+            .ok_or(SoladromeError::Overflow)?
+            .min(pa.cap_hi_sola as u128) as u64;
+        // This call mints only the newly-earned tranche (entitled − already claimed).
+        let amount = entitled.saturating_sub(pa.hi_sola_claimed);
+        let lock_duration = pa.lock_duration_secs;
+        require!(amount > 0, SoladromeError::NothingToClaim);
 
         // Snapshot accumulator BEFORE any hiSOLA supply change (same invariant as stake_sola).
         let market_balance = ctx.accounts.market_vault.amount;
@@ -1723,13 +1747,19 @@ pub mod soladrome {
             .checked_add(amount)
             .ok_or(SoladromeError::Overflow)?;
 
-        ctx.accounts.partner_allocation.claimed = true;
+        ctx.accounts.partner_allocation.hi_sola_claimed = ctx
+            .accounts
+            .partner_allocation
+            .hi_sola_claimed
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
 
         msg!(
-            "Partner allocation claimed: {} | {} hiSOLA locked until {}",
+            "Partner allocation claimed: {} | +{} hiSOLA locked until {} | total claimed {}",
             ctx.accounts.partner.key(),
             amount,
             lock_end_ts,
+            ctx.accounts.partner_allocation.hi_sola_claimed,
         );
         Ok(())
     }
@@ -1776,6 +1806,79 @@ pub mod soladrome {
             .total_bribed
             .checked_add(amount)
             .ok_or(SoladromeError::Overflow)?;
+        Ok(())
+    }
+
+    /// Partner deposits a bribe in their committed `bribe_mint` AND gets credited
+    /// toward their streaming hiSOLA allocation. The tokens flow into the SAME bribe
+    /// vault as `deposit_bribe` (voters benefit identically); the partner's
+    /// `total_bribed_credited` is incremented atomically with the real transfer, so
+    /// allocation can never be credited without genuinely bribing. Only the committed
+    /// `bribe_mint` credits — any other token is rejected.
+    pub fn partner_deposit_bribe(
+        ctx: Context<PartnerDepositBribe>,
+        epoch: u64,
+        amount: u64,
+    ) -> Result<()> {
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        require!(amount > 0, SoladromeError::InvalidAmount);
+        let clock = Clock::get()?;
+        require!(
+            epoch == current_epoch(clock.unix_timestamp),
+            SoladromeError::WrongEpoch
+        );
+        require_keys_eq!(
+            ctx.accounts.reward_mint.key(),
+            ctx.accounts.partner_allocation.bribe_mint,
+            SoladromeError::BribeMintMismatch
+        );
+
+        // First-time vault init (mirror of deposit_bribe).
+        if ctx.accounts.bribe_vault.pool_id == Pubkey::default() {
+            ctx.accounts.bribe_vault.pool_id = ctx.accounts.pool_id.key();
+            ctx.accounts.bribe_vault.reward_mint = ctx.accounts.reward_mint.key();
+            ctx.accounts.bribe_vault.epoch = epoch;
+            ctx.accounts.bribe_vault.bump = ctx.bumps.bribe_vault;
+        }
+
+        // Real transfer into the bribe vault → voters receive it exactly as usual.
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.partner_token.to_account_info(),
+                    to: ctx.accounts.bribe_token_vault.to_account_info(),
+                    authority: ctx.accounts.partner.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
+
+        ctx.accounts.bribe_vault.total_bribed = ctx
+            .accounts
+            .bribe_vault
+            .total_bribed
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
+
+        // Credit the partner's streaming allocation — atomic with the transfer above.
+        ctx.accounts.partner_allocation.total_bribed_credited = ctx
+            .accounts
+            .partner_allocation
+            .total_bribed_credited
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
+
+        msg!(
+            "Partner bribe: {} | +{} (mint {}) | credited total {}",
+            ctx.accounts.partner.key(),
+            amount,
+            ctx.accounts.reward_mint.key(),
+            ctx.accounts.partner_allocation.total_bribed_credited,
+        );
         Ok(())
     }
 
@@ -3602,6 +3705,60 @@ pub struct DepositBribe<'info> {
     #[account(
         init_if_needed,
         payer = depositor,
+        token::mint = reward_mint,
+        token::authority = bribe_vault,
+        seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub bribe_token_vault: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+/// Partner bribes in their committed token and is credited toward the streaming
+/// allocation. Bribe vaults use the SAME seeds as DepositBribe → partner bribes
+/// and ordinary bribes share one vault per (pool, mint, epoch); voters claim normally.
+#[derive(Accounts)]
+#[instruction(epoch: u64)]
+pub struct PartnerDepositBribe<'info> {
+    #[account(mut)]
+    pub partner: Signer<'info>,
+
+    /// Read-only — used only for the pause check.
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    /// Partner allocation PDA — credited here. Verified by seeds + owner.
+    #[account(
+        mut,
+        seeds = [PARTNER_SEED, partner.key().as_ref()],
+        bump = partner_allocation.bump,
+        constraint = partner_allocation.partner == partner.key() @ SoladromeError::Unauthorized,
+    )]
+    pub partner_allocation: Box<Account<'info, PartnerAllocation>>,
+
+    /// CHECK: External pool address used as bribe label — validation by seeds only.
+    pub pool_id: UncheckedAccount<'info>,
+
+    pub reward_mint: Box<Account<'info, Mint>>,
+
+    #[account(mut, token::mint = reward_mint, token::authority = partner)]
+    pub partner_token: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        init_if_needed,
+        payer = partner,
+        space = 8 + BribeVault::LEN,
+        seeds = [b"bribe_vault", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub bribe_vault: Box<Account<'info, BribeVault>>,
+
+    #[account(
+        init_if_needed,
+        payer = partner,
         token::mint = reward_mint,
         token::authority = bribe_vault,
         seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],

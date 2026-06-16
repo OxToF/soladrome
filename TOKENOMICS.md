@@ -63,22 +63,32 @@ Provides operational income (KOL rewards, community managers, contest prizes) du
 
 ### 2.2 Protocol Partner Allocations
 
-On-chain instruction: `register_partner` (authority-only) + `claim_partner_allocation` (partner-called).
+On-chain instructions: `register_partner` (authority-only) + `partner_deposit_bribe` (partner) + `claim_partner_allocation` (partner).
 PDA: `[b"partner", partner_wallet]`
 
-| Partner | hiSOLA | Lock duration | ve-power at claim | Borrow during lock |
-|---|---|---|---|---|
-| Jito | 100,000 | 12 months (52 epochs) | ~200,000 (2×) | ❌ blocked |
-| Marinade | 100,000 | 12 months | ~200,000 | ❌ blocked |
-| Solayer | 100,000 | 12 months | ~200,000 | ❌ blocked |
-| **Total** | **300,000** | — | **~600,000 ve-power** | — |
+**Streaming, bribe-indexed model.** A partner does not receive a lump allocation. They *earn* locked hiSOLA in proportion to the bribes they actually deposit, bounded by a negotiated cap:
+
+```
+entitled  = min(cap_hi_sola, total_bribed_credited × rate_num / rate_den)
+claimable = entitled − hi_sola_claimed
+```
+
+No bribe → no allocation → no voting power. If a partner stops bribing, they stop accruing (self-aligning). This is the Beradrome "Real Deal" (commit $X bribes → receive $X locked governance) made structural and enforced on-chain.
+
+| Partner | bribe_mint | rate | cap (hiSOLA) | Lock | ve-power at cap | Borrow during lock |
+|---|---|---|---|---|---|---|
+| Jito | negotiated | 1:1 | 100,000 | 24 months (104 epochs) | ~400,000 (4×) | ❌ blocked |
+| Marinade | negotiated | 1:1 | 100,000 | 24 months | ~400,000 | ❌ blocked |
+| Solayer | negotiated | 1:1 | 100,000 | 24 months | ~400,000 | ❌ blocked |
+| **Total (caps)** | — | — | **300,000** | — | **~1,200,000** | — |
 
 **Mechanism:**
-hiSOLA is minted **directly into the partner's `ve_lock_vault`** — the wallet never receives it. This means:
-- **Voting power is immediate** (full ve-multiplier from day one of the lock).
-- **No dump risk**: wallet hiSOLA balance = 0 throughout the lock; `borrow_usdc` check (`new_borrowed ≤ hi_sola_balance`) naturally blocks borrowing.
-- **No fee dilution**: `total_hi_sola` is NOT incremented (locked hiSOLA excluded from fee pool, matching `lock_hi_sola` semantics). Existing stakers retain their full fee share during the lock period.
-- **After lock expiry**: `unlock_hi_sola` → hiSOLA back to wallet → standard rules apply (fee share, standard borrow with 75% floor buffer).
+- `partner_deposit_bribe` — the partner deposits their committed `bribe_mint` into the normal bribe vault (voters of that gauge claim it as usual) **and** `total_bribed_credited` is incremented atomically with the transfer. Only the committed mint credits.
+- `claim_partner_allocation` — mints the newly-earned tranche **directly into `ve_lock_vault`** (wallet never receives it), callable repeatedly as more is earned. This means:
+  - **Voting power scales with commitment** — grows only as bribes are deposited, up to the cap.
+  - **No dump risk**: wallet hiSOLA balance = 0 throughout the lock; `borrow_usdc` (`new_borrowed ≤ hi_sola_balance`) naturally blocks borrowing.
+  - **No fee dilution**: `total_hi_sola` is NOT incremented (locked hiSOLA excluded from fee pool, matching `lock_hi_sola`). Existing stakers retain their full fee share.
+  - **After lock expiry**: `unlock_hi_sola` → hiSOLA back to wallet → standard rules apply (fee share, standard borrow with 75% floor buffer).
 
 **Voting power growth via rewards flywheel:**
 Partners earn oSOLA through LP emissions on their pools (JitoSOL/SOLA, mSOL/SOLA, etc.). They can burn oSOLA during `vote_gauge` calls to earn uncapped `o_sola_bonus` voting power on top of their ve-locked allocation. Each oSOLA burned also strengthens the floor vault — an aligned incentive structure.
@@ -118,7 +128,7 @@ The contributor allocation is used sparingly — only for individuals with ongoi
 | Founder governance | — | 7,000,000 | — | 6m cliff / 24m vest |
 | Founder options | — | — | 5,000,000 | 6m cliff / 24m vest |
 | Ecosystem / airdrop | 1,750,000 | — | — | Direct distribution |
-| Protocol partners | — | 300,000 | — | Auto-locked 12m |
+| Protocol partners | — | 300,000 (caps) | — | Streamed vs bribes, locked 24m |
 | Contributors | — | TBD | TBD | 1m cliff / 12m vest |
 | LP emissions (oSOLA) | — | — | Ongoing | Masterchef + epoch |
 
@@ -227,9 +237,9 @@ External protocol wants liquidity on Soladrome
 **Passive vote carry-over (`set_vote_config` + `replay_vote`):**
 hiSOLA holders set a persistent allocation once. Any keeper (or the holder themselves) calls `replay_vote` each epoch — votes are re-cast automatically at the current balance, with no owner signature required. This mirrors Beradrome/Velodrome behaviour: passive holders continue earning bribes without weekly re-voting.
 
-**Partner ve-power at claim (100k hiSOLA, 12-month lock):**
+**Partner ve-power once the cap is reached (100k hiSOLA earned, 24-month lock = maximum):**
 ```
-ve_power = 100,000 × (52 epochs / 104 max) × 4 = 200,000 per partner
+ve_power = 100,000 × (104 epochs / 104 max) × 4 = 400,000 per partner
 ```
 
 This decays linearly to 0 at lock expiry. Partners replenish by unlocking → re-locking (with oSOLA-earned hiSOLA added) or by burning oSOLA for uncapped epoch bonus.
@@ -238,7 +248,7 @@ This decays linearly to 0 at lock expiry. Partners replenish by unlocking → re
 
 ## 7. External Bribe Tokens
 
-The Wormhole Token Bridge and cross-chain bribe bridge expand the set of tokens that can enter Soladrome bribe vaults beyond native Solana assets.
+**Soladrome's bridges make it an interoperability hub for ve(3,3) liquidity across chains — its core strategic advantage.** Any ve(3,3) protocol (Aerodrome, Velodrome, Beradrome, fBOMB, …) can route bribes in from its home chain, and SOLA can flow outward as floor-backed wSOLA to seed pairs on those same venues (see WHITEPAPER §8). The Wormhole Token Bridge and cross-chain bribe bridge expand the set of tokens that can enter Soladrome bribe vaults far beyond native Solana assets.
 
 ### 7.1 Wormhole-Wrapped Tokens
 
@@ -311,7 +321,7 @@ There is no general governance voting on protocol parameters. Constants are comp
 | Permissionless AMM | ✅ | ✅ | ❌ |
 | No oracle dependency | ✅ | Partial | ✅ |
 | No liquidation risk | ✅ | ❌ | ❌ |
-| Partner auto-lock (voting from day 1) | ✅ | ❌ | ❌ |
+| Partner streaming alloc (bribe-indexed, locked) | ✅ | ❌ | ❌ |
 
 ---
 
