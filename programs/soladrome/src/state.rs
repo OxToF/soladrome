@@ -35,6 +35,16 @@ pub const VESTING_DURATION_SECS: u64 = 24 * 3_600;
 #[cfg(not(feature = "devnet"))]
 pub const VESTING_DURATION_SECS: u64 = 720 * 24 * 3_600;
 
+// ── Partner welcome-bag streaming window ──────────────────────────────────────
+/// The one-time partner welcome bag streams linearly over the first 6 months
+/// from `register_partner` (no cliff). Mirrors the founder cliff window so partner
+/// governance ramps in step with the founder's, not instantly on day 1.
+/// devnet: 6 h  |  mainnet: 6 months
+#[cfg(feature = "devnet")]
+pub const BASE_BAG_VEST_SECS: u64 = 6 * 3_600;
+#[cfg(not(feature = "devnet"))]
+pub const BASE_BAG_VEST_SECS: u64 = 180 * 24 * 3_600;
+
 // ── Contributor vesting schedule ──────────────────────────────────────────────
 
 /// Fraction of contributor allocation unlocked immediately at TGE (25%).
@@ -51,8 +61,8 @@ pub const CONTRIBUTOR_DURATION_SECS: u64 = 6 * 30 * 24 * 3_600;
 // ── Ve-layer constants ────────────────────────────────────────────────────────
 /// Minimum lock duration: 1 epoch.
 pub const MIN_LOCK_DURATION: u64 = EPOCH_DURATION;
-/// Maximum lock duration: 104 epochs.
-pub const MAX_LOCK_DURATION: u64 = 104 * EPOCH_DURATION;
+/// Maximum lock duration: 208 epochs (4 years) → full 4× ve-power at max lock.
+pub const MAX_LOCK_DURATION: u64 = 208 * EPOCH_DURATION;
 /// Voting power multiplier at maximum lock (4× raw hiSOLA).
 pub const MAX_VE_MULTIPLIER: u64 = 4;
 
@@ -119,6 +129,12 @@ pub struct ProtocolState {
     pub osola_emission_floor_bps: u16,
     /// Epoch at which the decay clock started (reset by `configure_emissions`).
     pub osola_emission_start_epoch: u64,
+
+    /// Founder break-glass voting switch. Default `false`: the hardcoded founder
+    /// wallet cannot vote on gauges — its 7M hiSOLA is a dormant anti-capture
+    /// reserve, not routine governance power. Authority may flip it to `true` via
+    /// `set_founder_voting` ONLY to counter a detected takeover (sybil capture).
+    pub founder_voting_enabled: bool,
 }
 
 impl ProtocolState {
@@ -409,8 +425,8 @@ impl UserVoteConfig {
 ///
 /// Consequences:
 /// - Voting power is immediate via VeLockPosition (up to 4× ve multiplier).
-/// - Borrow is naturally blocked: wallet hiSOLA balance = 0 during the lock
-///   (`borrow_usdc` guard: `new_borrowed <= hi_sola_balance` always fails).
+/// - `borrow_usdc` (wallet path) is blocked (wallet balance = 0); liquidity comes
+///   from `borrow_against_locked` instead — up to 20% of the locked position.
 /// - `total_hi_sola` is NOT incremented — locked hiSOLA is excluded from the
 ///   fee accumulator denominator (same semantics as `lock_hi_sola`).
 /// - After lock expiry: `unlock_hi_sola` → hiSOLA back to wallet → standard rules.
@@ -422,15 +438,16 @@ pub struct PartnerAllocation {
     pub bribe_mint: Pubkey,          // committed bribe token — only this mint credits the allocation
     pub rate_num: u64,               // hiSOLA earned per bribe unit = rate_num / rate_den
     pub rate_den: u64,               // (1:1 = rate_num == rate_den)
-    pub cap_hi_sola: u64,            // hard cap on total hiSOLA earnable (= negotiated commitment)
+    pub cap_hi_sola: u64,            // hard cap on bribe-EARNED hiSOLA (= negotiated commitment); excludes base bag
     pub total_bribed_credited: u64,  // cumulative bribe (bribe_mint base units) deposited via partner_deposit_bribe
-    pub hi_sola_claimed: u64,        // cumulative hiSOLA already minted + locked (monotonic)
+    pub hi_sola_claimed: u64,        // cumulative hiSOLA already minted + locked (base + bribe, monotonic)
     pub lock_duration_secs: u64,     // lock duration per claim (validated in [MIN, MAX] at register)
     pub start_ts: i64,               // unix timestamp when register_partner was executed
     pub bump: u8,
+    pub base_hi_sola: u64,           // one-time welcome bag (streams over BASE_BAG_VEST_SECS); appended last for backward-compatible upgrades
 }
 impl PartnerAllocation {
-    // 32 + 32 + 8*6 + 8 + 1 = 121 bytes used; 39 spare
+    // 32 + 32 + 8*7 + 8 + 1 = 129 bytes used; 31 spare
     pub const LEN: usize = 160;
 }
 

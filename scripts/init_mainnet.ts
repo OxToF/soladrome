@@ -34,6 +34,8 @@ import idl from "../app/lib/soladrome.json";
 const PROGRAM_ID     = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
 const USDC_MINT      = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"); // mainnet USDC
 const FOUNDER_WALLET = new PublicKey("46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4");
+// Separate ops wallet that receives the 250k liquid SOLA (votes as an ordinary user).
+const FOUNDER_OPS_WALLET = new PublicKey("CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3");
 const SQUADS_VAULT   = new PublicKey("BxYTiKyDxWpK4hPDZEiYVW9qBj8YpzhSHEBCWpaZbWQ4");
 
 // ── PDAs ──────────────────────────────────────────────────────────────────────
@@ -124,7 +126,7 @@ async function main() {
 
     // ATAs computed client-side (init_if_needed on-chain handles creation)
     const authoritySola = getAssociatedTokenAddressSync(solaMint, kp.publicKey);
-    const founderSola   = getAssociatedTokenAddressSync(solaMint, FOUNDER_WALLET);
+    const founderOpsSola = getAssociatedTokenAddressSync(solaMint, FOUNDER_OPS_WALLET);
 
     const tx = await program.methods
       .mintEcosystemAllocation()
@@ -133,8 +135,8 @@ async function main() {
         protocolState:          statePda,
         solaMint,
         authoritySola,
-        founder:                FOUNDER_WALLET,
-        founderSola,
+        founderOps:             FOUNDER_OPS_WALLET,
+        founderOpsSola,
         tokenProgram:           TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram:          SystemProgram.programId,
@@ -143,7 +145,7 @@ async function main() {
       .rpc();
     console.log("   ✅ mint_ecosystem_allocation — tx:", tx);
     console.log("   → Authority wallet : 1 750 000 SOLA (marketing + airdrop)");
-    console.log("   → Founder wallet   :   250 000 SOLA (immediate income)");
+    console.log("   → Founder ops wallet:  250 000 SOLA (immediate income, votes as user)");
   } else {
     console.log("\nStep 3/3 — mint_ecosystem_allocation: already done, skipping.");
   }

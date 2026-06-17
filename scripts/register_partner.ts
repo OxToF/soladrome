@@ -46,6 +46,7 @@ describe("register_partner (one-shot)", () => {
   const bribeMintStr = process.env.BRIBE_MINT ?? "";              // committed bribe token (e.g. USDC mint)
   const rateNum      = parseInt(process.env.RATE_NUM ?? "1", 10); // rate = RATE_NUM/RATE_DEN (1:1 default)
   const rateDen      = parseInt(process.env.RATE_DEN ?? "1", 10);
+  const baseUi       = parseFloat(process.env.BASE ?? "0");       // welcome bag (hiSOLA), streamed over 6 months
 
   before(function () {
     if (!partnerStr || !bribeMintStr || isNaN(hiSolaUi) || hiSolaUi <= 0 || isNaN(lockEpochs) || lockEpochs < 1 || rateNum < 1 || rateDen < 1) {
@@ -63,6 +64,7 @@ describe("register_partner (one-shot)", () => {
     const partnerWallet   = new PublicKey(partnerStr);
     const bribeMint       = new PublicKey(bribeMintStr);
     const capHiSola       = new anchor.BN(Math.floor(hiSolaUi * 10 ** DECIMALS));
+    const baseHiSola      = new anchor.BN(Math.floor(baseUi * 10 ** DECIMALS));
     const lockDurationSecs = new anchor.BN(lockEpochs * EPOCH_DURATION);
 
     const [statePda]         = PublicKey.findProgramAddressSync([Buffer.from("state")], PROGRAM_ID);
@@ -79,7 +81,7 @@ describe("register_partner (one-shot)", () => {
     }
 
     const tx = await program.methods
-      .registerPartner(bribeMint, new anchor.BN(rateNum), new anchor.BN(rateDen), capHiSola, lockDurationSecs)
+      .registerPartner(bribeMint, new anchor.BN(rateNum), new anchor.BN(rateDen), capHiSola, baseHiSola, lockDurationSecs)
       .accounts({
         authority:        provider.wallet.publicKey,
         protocolState:    statePda,

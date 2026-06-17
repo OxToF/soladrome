@@ -564,6 +564,226 @@
       ]
     },
     {
+      "name": "borrow_against_locked",
+      "docs": [
+        "Borrow USDC against a vote-locked hiSOLA position (the partner liquidity valve).",
+        "",
+        "Partner hiSOLA lives in the ve_lock_vault (wallet balance = 0), so the normal",
+        "`borrow_usdc` path is unavailable. This draws USDC from the floor reserve using",
+        "the LOCKED position (`VeLockPosition.amount_locked`) as collateral, capped at",
+        "`PARTNER_BORROW_CAP_BPS` (20%). Repay via the standard `repay_usdc` (same",
+        "UserPosition PDA). 2% origination fee → market_vault, 75% floor buffer, no",
+        "interest, no liquidation. Available to any ve-locker, not just partners."
+      ],
+      "discriminator": [
+        174,
+        91,
+        74,
+        145,
+        72,
+        1,
+        114,
+        146
+      ],
+      "accounts": [
+        {
+          "name": "partner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "lock_position",
+          "docs": [
+            "The vote-locked position used as collateral (collateral ceiling = amount_locked)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "floor_vault",
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "writable": true
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "partner_usdc",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "partner"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "partner_position",
+          "docs": [
+            "Tracks cumulative borrow (same PDA as UserPosition → repay via repay_usdc)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usdc_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "borrow_usdc",
       "discriminator": [
         31,
@@ -5823,19 +6043,22 @@
           }
         },
         {
-          "name": "founder"
+          "name": "founder_ops",
+          "docs": [
+            "Separate from FOUNDER_WALLET so this tranche can vote as an ordinary user."
+          ]
         },
         {
-          "name": "founder_sola",
+          "name": "founder_ops_sola",
           "docs": [
-            "Founder's SOLA ATA — created here if it doesn't exist yet."
+            "Founder ops wallet's SOLA ATA — created here if it doesn't exist yet."
           ],
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "account",
-                "path": "founder"
+                "path": "founder_ops"
               },
               {
                 "kind": "const",
@@ -6380,9 +6603,13 @@
         "ve_lock_vault (never touches the wallet), giving immediate voting power while",
         "borrow remains blocked for the entire lock duration.",
         "",
+        "`base_hi_sola` is the one-time welcome bag (Founding Partner tier): it streams",
+        "linearly into the partner's vote-locked position over the first 6 months",
+        "(`BASE_BAG_VEST_SECS`) from registration — independent of bribes.",
+        "",
         "`lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].",
-        "Suggested mainnet value for strategic partners: 104 × 604 800 = 62 899 200 s",
-        "(≈ 24 months — the maximum lock, granting full 4× ve-power)."
+        "Suggested mainnet value for strategic partners: 208 × 604 800 = 125 798 400 s",
+        "(≈ 4 years — the maximum lock, granting full 4× ve-power)."
       ],
       "discriminator": [
         126,
@@ -6468,6 +6695,10 @@
         },
         {
           "name": "cap_hi_sola",
+          "type": "u64"
+        },
+        {
+          "name": "base_hi_sola",
           "type": "u64"
         },
         {
@@ -7340,6 +7571,57 @@
         {
           "name": "sola_amount",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_founder_voting",
+      "docs": [
+        "Authority-only break-glass: enable/disable founder gauge voting.",
+        "Default is disabled — the founder's 7M hiSOLA is a dormant anti-capture",
+        "reserve. Flip to `true` only to counter a detected governance takeover."
+      ],
+      "discriminator": [
+        249,
+        101,
+        234,
+        101,
+        246,
+        99,
+        63,
+        87
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
         }
       ]
     },
@@ -9020,6 +9302,11 @@
       "code": 6035,
       "name": "FounderVestingLocked",
       "msg": "Founder hiSOLA is vesting-locked — amount exceeds unlocked allocation"
+    },
+    {
+      "code": 6036,
+      "name": "FounderVotingDisabled",
+      "msg": "Founder voting is disabled — the founder stake is a dormant anti-capture reserve"
     }
   ],
   "types": [
@@ -9423,8 +9710,8 @@
         "",
         "Consequences:",
         "- Voting power is immediate via VeLockPosition (up to 4× ve multiplier).",
-        "- Borrow is naturally blocked: wallet hiSOLA balance = 0 during the lock",
-        "(`borrow_usdc` guard: `new_borrowed <= hi_sola_balance` always fails).",
+        "- `borrow_usdc` (wallet path) is blocked (wallet balance = 0); liquidity comes",
+        "from `borrow_against_locked` instead — up to 20% of the locked position.",
         "- `total_hi_sola` is NOT incremented — locked hiSOLA is excluded from the",
         "fee accumulator denominator (same semantics as `lock_hi_sola`).",
         "- After lock expiry: `unlock_hi_sola` → hiSOLA back to wallet → standard rules.",
@@ -9473,6 +9760,10 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "base_hi_sola",
+            "type": "u64"
           }
         ]
       }
@@ -9658,6 +9949,16 @@
               "Epoch at which the decay clock started (reset by `configure_emissions`)."
             ],
             "type": "u64"
+          },
+          {
+            "name": "founder_voting_enabled",
+            "docs": [
+              "Founder break-glass voting switch. Default `false`: the hardcoded founder",
+              "wallet cannot vote on gauges — its 7M hiSOLA is a dormant anti-capture",
+              "reserve, not routine governance power. Authority may flip it to `true` via",
+              "`set_founder_voting` ONLY to counter a detected takeover (sybil capture)."
+            ],
+            "type": "bool"
           }
         ]
       }

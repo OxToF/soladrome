@@ -153,7 +153,7 @@ The 75% buffer ensures that even under maximum borrow utilization, 75% of all ou
 
 ### 6.1 Mechanics
 
-hiSOLA can be locked for a duration `[1 epoch, 104 epochs]` (1 week to 2 years with `EPOCH_DURATION = 604,800 s`). Locking yields veSOLA voting power:
+hiSOLA can be locked for a duration `[1 epoch, 208 epochs]` (1 week to 4 years with `EPOCH_DURATION = 604,800 s`). Locking yields veSOLA voting power:
 
 ```
 ve_power = amount × remaining_lock / max_lock × MAX_VE_MULTIPLIER
@@ -175,31 +175,34 @@ Soladrome distinguishes between three types of non-user token allocations, each 
 
 One-time instruction creating two progressive vesting schedules:
 - **7M hiSOLA:** 6-month cliff → 24-month linear vest via `claim_founder_hi_sola`. Each claim mints SOLA to `sola_vault` (permanent backing) and hiSOLA 1:1 to the founder. Two independent on-chain guarantees enforce the vesting intent:
-  1. **Borrow cap** — `founder_borrow_usdc` limits cumulative debt to 10% of claimed hiSOLA (~29k USDC/month at full vest). Prevents floor vault drain before organic users arrive.
+  1. **Borrow cap** — `founder_borrow_usdc` limits cumulative debt to 20% of claimed hiSOLA. Borrowing (not selling) is the founder's liquidity path; the 75% floor buffer still bounds total drawdown.
   2. **Unstake lock** — `unstake_hi_sola` rejects any conversion of hiSOLA back to SOLA that would exceed the vesting-unlocked amount at the time of the call. Computed as `max_unlocked = total_amount × elapsed / VESTING_DURATION_SECS`. If `claimed − amount_to_unstake > max_unlocked`, the instruction fails with `FounderVestingLocked`. This is a **programmatic guarantee enforced by the program itself** — not a social promise or a multisig policy.
+  3. **No routine voting** — by default the founder wallet **cannot vote on gauges** (`founder_voting_enabled = false`): the 7M hiSOLA is a dormant anti-capture reserve, not governance power. `vote_gauge` and `replay_vote` reject the founder wallet unless the authority enables it via `set_founder_voting` as a break-glass measure to counter a detected takeover.
 - **5M oSOLA:** same schedule via `claim_founder_vesting`. Each exercise adds 1 USDC to `floor_vault`.
 - **250k SOLA:** immediate liquid at launch for operational expenses (KOL rewards, community managers, contest prizes). This tranche is explicitly documented and does not affect `total_purchased_sola`.
 
 ### 7.2 Protocol Partner Allocations (`register_partner` / `partner_deposit_bribe` / `claim_partner_allocation`)
 
-A dedicated allocation system for major ecosystem protocols (Jito, Marinade, Solayer, and others). Unlike contributors, a partner does **not** receive a lump allocation. They **earn** locked hiSOLA in proportion to the bribes they actually deposit, bounded by a negotiated cap — the Beradrome "Real Deal" (commit $X bribes → receive $X locked governance) made structural and enforced on-chain.
+A dedicated allocation system for ecosystem protocols (the "Flight School" anchor-partner program). A partner does **not** receive a lump allocation, and there is **no liquidity-lock requirement** — the bribe stream itself is the alignment mechanism. Qualification is a recurring **bribe commitment**. Each partner gets two things: a one-time **welcome bag** (`base_hi_sola`, by tier — 250K / 175K / 100K) that streams in over the first 6 months, and ongoing **1:1 earned** locked hiSOLA in proportion to the bribes they actually deposit, bounded by a negotiated cap. This is the Beradrome "Real Deal" (commit bribes → receive locked governance) made structural and enforced on-chain.
 
 ```
-entitled  = min(cap_hi_sola, total_bribed_credited × rate_num / rate_den)
-claimable = entitled − hi_sola_claimed
+base_vested  = base_hi_sola × min(elapsed, BASE_BAG_VEST_SECS) / BASE_BAG_VEST_SECS   // welcome bag, streams over 6 months
+bribe_earned = min(cap_hi_sola, total_bribed_credited × rate_num / rate_den)           // ongoing, 1:1
+entitled     = base_vested + bribe_earned
+claimable    = entitled − hi_sola_claimed
 ```
 
 **Mechanism:**
-1. `register_partner` (authority-only) sets the partner's `bribe_mint`, conversion `rate`, `cap_hi_sola` and lock duration. No tokens are minted at this step.
+1. `register_partner` (authority-only) sets the partner's `bribe_mint`, conversion `rate`, `cap_hi_sola`, welcome-bag `base_hi_sola`, and lock duration. No tokens are minted at this step.
 2. `partner_deposit_bribe` (partner) deposits the committed `bribe_mint` into the normal bribe vault — **voters of that gauge claim it exactly as with `deposit_bribe`** — while `total_bribed_credited` is incremented atomically with the transfer. Only the committed mint credits.
 3. `claim_partner_allocation` (partner, callable repeatedly) mints the newly-earned tranche **directly into the partner's `ve_lock_vault`** (bypassing their wallet) and locks it. This produces:
 
-   - **Voting power that scales with commitment** — ve-power grows only as bribes are deposited, up to the cap. At the cap, a 100k hiSOLA allocation locked for 24 months (the maximum) yields `100k × (104/104) × 4 = 400,000 ve-power`. No bribe → no allocation → no voting power.
-   - **No borrow during lock** — wallet hiSOLA balance = 0, so the `borrow_usdc` guard (`new_borrowed ≤ hi_sola_balance`) blocks all borrowing for the lock duration. A protocol-level guarantee, not a social promise.
+   - **Voting power that scales with commitment** — the welcome bag streams in over 6 months and ve-power then grows as bribes are deposited, up to the cap. Locked for the maximum **4 years** (208 epochs), a position yields full `4×` ve-power: e.g. `1,000,000 × (208/208) × 4 = 4,000,000 ve-power` at a tier-1 cap. Stop bribing → the stream stops.
+   - **Liquidity without selling** — wallet hiSOLA balance = 0, so the wallet `borrow_usdc` path does not apply. Instead, `borrow_against_locked` lets the partner borrow up to **20%** (`PARTNER_BORROW_CAP_BPS = 2000`) of their locked position from `floor_vault` (2% fee, 75% floor buffer, repayable, no liquidation) — working capital without ever selling.
    - **No fee dilution** — `total_hi_sola` is NOT incremented (locked hiSOLA excluded from the fee accumulator denominator, mirroring `lock_hi_sola`). Existing stakers retain their full fee share throughout.
-   - **Self-aligning** — if a partner stops bribing, they simply stop accruing; what they earned stays locked and decays naturally via ve-decay. The protocol never gives away governance against an unenforced promise.
+   - **Self-aligning** — if a partner stops bribing, they simply stop accruing; what they earned stays locked. The protocol never gives away governance against an unenforced promise.
 
-After lock expiry: `unlock_hi_sola` → hiSOLA returns to wallet → standard rules apply (fee share, borrow subject to 75% floor buffer, re-lock for renewed ve-power).
+After lock expiry (4 years): `unlock_hi_sola` → hiSOLA returns to wallet → standard rules apply (fee share, wallet borrow subject to 75% floor buffer, re-lock for renewed ve-power).
 
 **Voting power growth flywheel:**
 Protocol partners earn oSOLA via LP emissions on their native pools (JitoSOL/SOLA, mSOL/SOLA, etc.). This oSOLA can be burned during `vote_gauge` calls, adding `o_sola_bonus` — uncapped extra voting power for that epoch. Each burn is permanent and floor-positive. Partners who actively participate in the ecosystem progressively increase their governance influence without any additional allocation from the protocol.

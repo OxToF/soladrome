@@ -50,7 +50,7 @@ const DECIMALS       = 6;
 
 const EPOCH_DURATION_MAINNET = 604_800; // 7 days in seconds
 const EPOCH_DURATION_DEVNET  =   3_600; // 1 hour in seconds
-const LOCK_EPOCHS            = 104;     // ≈ 24 months on mainnet (= MAX_LOCK_DURATION, full 4× ve-power)
+const LOCK_EPOCHS            = 208;     // ≈ 4 years on mainnet (= MAX_LOCK_DURATION, full 4× ve-power)
 
 // ── Partners ─────────────────────────────────────────────────────────────────
 // ⚠️  Confirm each wallet address with the protocol team before running.
@@ -59,10 +59,13 @@ const LOCK_EPOCHS            = 104;     // ≈ 24 months on mainnet (= MAX_LOCK_
 // capHiSolaUi = max hiSOLA earnable (= negotiated commitment / cap).
 // bribeMint   = token the partner commits to bribe with — ONLY this mint credits.
 // rateNum/rateDen = hiSOLA per bribe base-unit (1/1 = 1:1 "Real Deal").
+// Founding Partner tiers: baseHiSolaUi = welcome bag (streamed over 6 months),
+//   capHiSolaUi = bribe-earned cap (1:1). T1 250K/750K · T2 175K/500K · T3 100K/300K.
 const PARTNERS: {
   name: string;
   wallet: string;
   bribeMint: string;
+  baseHiSolaUi: number;
   capHiSolaUi: number;
   rateNum: number;
   rateDen: number;
@@ -71,21 +74,21 @@ const PARTNERS: {
     name:        "Jito",
     wallet:      "TODO_JITO_WALLET",        // ← Jito team multisig / contact wallet
     bribeMint:   "TODO_JITO_BRIBE_MINT",    // ← e.g. JTO mint, or a USDC mint
-    capHiSolaUi: 100_000,
+    baseHiSolaUi: 250_000, capHiSolaUi: 750_000,
     rateNum: 1, rateDen: 1,
   },
   {
     name:        "Marinade",
     wallet:      "TODO_MARINADE_WALLET",
     bribeMint:   "TODO_MARINADE_BRIBE_MINT", // ← e.g. MNDE mint, or a USDC mint
-    capHiSolaUi: 100_000,
+    baseHiSolaUi: 175_000, capHiSolaUi: 500_000,
     rateNum: 1, rateDen: 1,
   },
   {
     name:        "Solayer",
     wallet:      "TODO_SOLAYER_WALLET",
     bribeMint:   "TODO_SOLAYER_BRIBE_MINT",
-    capHiSolaUi: 100_000,
+    baseHiSolaUi: 100_000, capHiSolaUi: 300_000,
     rateNum: 1, rateDen: 1,
   },
 ];
@@ -120,7 +123,7 @@ async function main() {
 
   const lockLabel = isDevnet
     ? `${LOCK_EPOCHS} epochs = ${LOCK_EPOCHS}h (devnet)`
-    : `${LOCK_EPOCHS} epochs = ~24 months (mainnet)`;
+    : `${LOCK_EPOCHS} epochs = ~4 years (mainnet)`;
 
   console.log("\n🤝  Soladrome — Register protocol partners");
   console.log("   Authority :", kp.publicKey.toBase58());
@@ -135,6 +138,7 @@ async function main() {
     const partnerWallet = new PublicKey(partner.wallet);
     const bribeMint     = new PublicKey(partner.bribeMint);
     const capHiSola     = new anchor.BN(Math.floor(partner.capHiSolaUi * 10 ** DECIMALS));
+    const baseHiSola    = new anchor.BN(Math.floor(partner.baseHiSolaUi * 10 ** DECIMALS));
 
     const [partnerAllocation] = PublicKey.findProgramAddressSync(
       [PARTNER_SEED, partnerWallet.toBuffer()],
@@ -151,7 +155,7 @@ async function main() {
 
     try {
       const tx = await program.methods
-        .registerPartner(bribeMint, new anchor.BN(partner.rateNum), new anchor.BN(partner.rateDen), capHiSola, lockDurationSecs)
+        .registerPartner(bribeMint, new anchor.BN(partner.rateNum), new anchor.BN(partner.rateDen), capHiSola, baseHiSola, lockDurationSecs)
         .accounts({
           authority:        kp.publicKey,
           protocolState:    statePda,

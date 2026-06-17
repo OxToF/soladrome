@@ -93,4 +93,7 @@ pub enum SoladromeError {
     // ── Founder vesting lock ──────────────────────────────────────────────────
     #[msg("Founder hiSOLA is vesting-locked — amount exceeds unlocked allocation")]
     FounderVestingLocked,
+    // ── Founder governance ────────────────────────────────────────────────────
+    #[msg("Founder voting is disabled — the founder stake is a dormant anti-capture reserve")]
+    FounderVotingDisabled,
 }

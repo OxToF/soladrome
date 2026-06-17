@@ -26,9 +26,9 @@ use state::{
     current_epoch, BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting,
     GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint,
     PartnerAllocation, ProtocolState, UserBribeClaim, UserEpochVotes, UserPosition,
-    UserVoteConfig, UserVoteReceipt, VeLockPosition, CONTRIBUTOR_DURATION_SECS,
-    CONTRIBUTOR_TGE_BPS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION,
-    MIN_LOCK_DURATION, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
+    UserVoteConfig, UserVoteReceipt, VeLockPosition, BASE_BAG_VEST_SECS,
+    CONTRIBUTOR_DURATION_SECS, CONTRIBUTOR_TGE_BPS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS,
+    MAX_LOCK_DURATION, MIN_LOCK_DURATION, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
 };
 #[allow(ambiguous_glob_reexports)]
 pub use ve::*;
@@ -102,15 +102,21 @@ pub const ECOSYSTEM_TOTAL: u64 = 1_750_000_000_000; //  1 750 000 SOLA — marke
 pub const FOUNDER_IMMEDIATE_SOLA: u64 = 250_000_000_000; //    250 000 SOLA — liquid, no lock
 /// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
 pub const BORROW_FEE_BPS: u64 = 200; //  2 % of borrowed amount
-/// Founder borrow cap: max 10 % of total *claimed* hiSOLA ever borrowed.
-/// Ensures the founder cannot drain the floor vault before organic users arrive.
-pub const FOUNDER_BORROW_CAP_BPS: u64 = 1_000; // 10 %
+/// Founder borrow cap: max 20 % of total *claimed* hiSOLA ever borrowed.
+/// Aligned with the partner cap; the 75 % floor buffer still bounds total drawdown.
+pub const FOUNDER_BORROW_CAP_BPS: u64 = 2_000; // 20 %
 
 pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
 // ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
 // Ledger Nano S — dedicated Soladrome wallet, never used on any other chain.
+// Holds the 7M hiSOLA governance vesting + 5M oSOLA. NON-VOTING (anti-capture reserve).
 pub const FOUNDER_WALLET: &str = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
+
+// Founder operational wallet — receives the 250k liquid SOLA tranche.
+// Distinct from FOUNDER_WALLET so it can stake and vote as an ordinary user
+// (the founder-voting guard blocks only FOUNDER_WALLET, not this ops wallet).
+pub const FOUNDER_OPS_WALLET: &str = "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3";
 
 // ── Contributor / marketing allocation ────────────────────────────────────────
 pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
@@ -120,6 +126,10 @@ pub const CONTRIBUTOR_BORROW_CAP_BPS: u64 = 1_000; // 10 %
 
 // ── Protocol Partner allocation ───────────────────────────────────────────────
 pub const PARTNER_SEED: &[u8] = b"partner";
+/// Partner borrow cap: max 20 % of their vote-locked hiSOLA position.
+/// Partner positions are locked (wallet balance = 0), so they borrow against the
+/// ve_lock_vault via `borrow_against_locked`. The 75 % floor buffer still applies.
+pub const PARTNER_BORROW_CAP_BPS: u64 = 2_000; // 20 %
 
 // ── Vote carry-over ───────────────────────────────────────────────────────────
 pub const VOTE_CONFIG_SEED: &[u8] = b"vote_config";
@@ -165,6 +175,15 @@ pub mod soladrome {
 
     pub fn unpause(ctx: Context<SetPaused>) -> Result<()> {
         ctx.accounts.protocol_state.paused = false;
+        Ok(())
+    }
+
+    /// Authority-only break-glass: enable/disable founder gauge voting.
+    /// Default is disabled — the founder's 7M hiSOLA is a dormant anti-capture
+    /// reserve. Flip to `true` only to counter a detected governance takeover.
+    pub fn set_founder_voting(ctx: Context<SetPaused>, enabled: bool) -> Result<()> {
+        ctx.accounts.protocol_state.founder_voting_enabled = enabled;
+        msg!("Founder voting enabled = {}", enabled);
         Ok(())
     }
 
@@ -930,14 +949,15 @@ pub mod soladrome {
             ECOSYSTEM_TOTAL,
         )?;
 
-        // 250 000 SOLA → founder wallet, liquid, no vesting.
-        // Provides immediate income while the 7M hiSOLA vesting cliff runs (6 months).
+        // 250 000 SOLA → founder OPS wallet (separate from FOUNDER_WALLET), liquid, no vesting.
+        // Provides immediate income while the 7M hiSOLA vesting cliff runs (6 months),
+        // and can be staked + voted as an ordinary user (FOUNDER_WALLET itself is non-voting).
         token::mint_to(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
                     mint: ctx.accounts.sola_mint.to_account_info(),
-                    to: ctx.accounts.founder_sola.to_account_info(),
+                    to: ctx.accounts.founder_ops_sola.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -1579,15 +1599,20 @@ pub mod soladrome {
     /// ve_lock_vault (never touches the wallet), giving immediate voting power while
     /// borrow remains blocked for the entire lock duration.
     ///
+    /// `base_hi_sola` is the one-time welcome bag (Founding Partner tier): it streams
+    /// linearly into the partner's vote-locked position over the first 6 months
+    /// (`BASE_BAG_VEST_SECS`) from registration — independent of bribes.
+    ///
     /// `lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].
-    /// Suggested mainnet value for strategic partners: 104 × 604 800 = 62 899 200 s
-    /// (≈ 24 months — the maximum lock, granting full 4× ve-power).
+    /// Suggested mainnet value for strategic partners: 208 × 604 800 = 125 798 400 s
+    /// (≈ 4 years — the maximum lock, granting full 4× ve-power).
     pub fn register_partner(
         ctx: Context<RegisterPartner>,
         bribe_mint: Pubkey,
         rate_num: u64,
         rate_den: u64,
         cap_hi_sola: u64,
+        base_hi_sola: u64,
         lock_duration_secs: u64,
     ) -> Result<()> {
         require!(cap_hi_sola > 0, SoladromeError::InvalidAmount);
@@ -1611,6 +1636,7 @@ pub mod soladrome {
         pa.rate_num = rate_num;
         pa.rate_den = rate_den;
         pa.cap_hi_sola = cap_hi_sola;
+        pa.base_hi_sola = base_hi_sola;
         pa.total_bribed_credited = 0;
         pa.hi_sola_claimed = 0;
         pa.lock_duration_secs = lock_duration_secs;
@@ -1618,12 +1644,13 @@ pub mod soladrome {
         pa.bump = ctx.bumps.partner_allocation;
 
         msg!(
-            "Partner registered: {} | bribe_mint={} | rate={}/{} | cap={} hiSOLA | lock={}s",
+            "Partner registered: {} | bribe_mint={} | rate={}/{} | cap={} | base={} hiSOLA | lock={}s",
             pa.partner,
             pa.bribe_mint,
             pa.rate_num,
             pa.rate_den,
             pa.cap_hi_sola,
+            pa.base_hi_sola,
             pa.lock_duration_secs,
         );
         Ok(())
@@ -1647,17 +1674,29 @@ pub mod soladrome {
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
         );
-        // Multi-claim: the entitlement grows with bribes actually deposited
-        // (via partner_deposit_bribe), bounded by the negotiated cap.
-        //   entitled = min(cap_hi_sola, total_bribed_credited × rate_num / rate_den)
+        // Multi-claim entitlement = streamed welcome bag + bribe-earned hiSOLA.
+        //   base_vested  = base_hi_sola × min(elapsed, BASE_BAG_VEST_SECS) / BASE_BAG_VEST_SECS
+        //   bribe_earned = min(cap_hi_sola, total_bribed_credited × rate_num / rate_den)
+        //   entitled     = base_vested + bribe_earned   (mints entitled − hi_sola_claimed)
         // rate_den is guaranteed > 0 at register_partner, so the division is safe.
         let pa = &ctx.accounts.partner_allocation;
-        let entitled = (pa.total_bribed_credited as u128)
+        let now_ts = Clock::get()?.unix_timestamp;
+        let elapsed = now_ts.saturating_sub(pa.start_ts).max(0) as u64;
+        let base_vested = if elapsed >= BASE_BAG_VEST_SECS {
+            pa.base_hi_sola
+        } else {
+            ((pa.base_hi_sola as u128)
+                .checked_mul(elapsed as u128)
+                .ok_or(SoladromeError::Overflow)?
+                / BASE_BAG_VEST_SECS as u128) as u64
+        };
+        let bribe_earned = (pa.total_bribed_credited as u128)
             .checked_mul(pa.rate_num as u128)
             .ok_or(SoladromeError::Overflow)?
             .checked_div(pa.rate_den as u128)
             .ok_or(SoladromeError::Overflow)?
             .min(pa.cap_hi_sola as u128) as u64;
+        let entitled = base_vested.saturating_add(bribe_earned);
         // This call mints only the newly-earned tranche (entitled − already claimed).
         let amount = entitled.saturating_sub(pa.hi_sola_claimed);
         let lock_duration = pa.lock_duration_secs;
@@ -1672,8 +1711,7 @@ pub mod soladrome {
             ctx.accounts.protocol_state.total_hi_sola,
         );
 
-        let clock = Clock::get()?;
-        let lock_end_ts = (clock.unix_timestamp as u64)
+        let lock_end_ts = (now_ts as u64)
             .checked_add(lock_duration)
             .ok_or(SoladromeError::Overflow)? as i64;
 
@@ -1761,6 +1799,120 @@ pub mod soladrome {
             lock_end_ts,
             ctx.accounts.partner_allocation.hi_sola_claimed,
         );
+        Ok(())
+    }
+
+    /// Borrow USDC against a vote-locked hiSOLA position (the partner liquidity valve).
+    ///
+    /// Partner hiSOLA lives in the ve_lock_vault (wallet balance = 0), so the normal
+    /// `borrow_usdc` path is unavailable. This draws USDC from the floor reserve using
+    /// the LOCKED position (`VeLockPosition.amount_locked`) as collateral, capped at
+    /// `PARTNER_BORROW_CAP_BPS` (20%). Repay via the standard `repay_usdc` (same
+    /// UserPosition PDA). 2% origination fee → market_vault, 75% floor buffer, no
+    /// interest, no liquidation. Available to any ve-locker, not just partners.
+    pub fn borrow_against_locked(ctx: Context<BorrowAgainstLocked>, usdc_amount: u64) -> Result<()> {
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        require!(usdc_amount > 0, SoladromeError::InvalidAmount);
+        let bump = ctx.accounts.protocol_state.bump;
+
+        if ctx.accounts.partner_position.owner == Pubkey::default() {
+            ctx.accounts.partner_position.owner = ctx.accounts.partner.key();
+            ctx.accounts.partner_position.bump = ctx.bumps.partner_position;
+        }
+
+        // ── Cap: 20% of the locked hiSOLA position ──────────────────────────
+        let locked = ctx.accounts.lock_position.amount_locked;
+        let max_borrow = (locked as u128)
+            .checked_mul(PARTNER_BORROW_CAP_BPS as u128)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)? as u64;
+
+        let new_borrowed = ctx
+            .accounts
+            .partner_position
+            .usdc_borrowed
+            .checked_add(usdc_amount)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(
+            new_borrowed <= max_borrow,
+            SoladromeError::BorrowLimitExceeded
+        );
+        require!(
+            ctx.accounts.floor_vault.amount >= usdc_amount,
+            SoladromeError::InsufficientFloorReserve
+        );
+
+        // ── 75% floor buffer guardrail ──────────────────────────────────────
+        {
+            let floor_after = ctx
+                .accounts
+                .floor_vault
+                .amount
+                .checked_sub(usdc_amount)
+                .ok_or(SoladromeError::Overflow)?;
+            let min_floor = (ctx.accounts.protocol_state.total_purchased_sola as u128)
+                .checked_mul(FLOOR_RESERVE_MIN_BPS as u128)
+                .ok_or(SoladromeError::Overflow)?
+                .checked_div(10_000)
+                .ok_or(SoladromeError::Overflow)? as u64;
+            require!(
+                floor_after >= min_floor,
+                SoladromeError::BorrowExceedsFloorBuffer
+            );
+        }
+
+        // ── 2% origination fee → market_vault ───────────────────────────────
+        let fee = usdc_amount
+            .checked_mul(BORROW_FEE_BPS)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(SoladromeError::Overflow)?;
+        let user_receives = usdc_amount
+            .checked_sub(fee)
+            .ok_or(SoladromeError::Overflow)?;
+
+        let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.floor_vault.to_account_info(),
+                    to: ctx.accounts.partner_usdc.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            user_receives,
+        )?;
+
+        if fee > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.floor_vault.to_account_info(),
+                        to: ctx.accounts.market_vault.to_account_info(),
+                        authority: ctx.accounts.protocol_state.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                fee,
+            )?;
+        }
+
+        ctx.accounts.partner_position.usdc_borrowed = new_borrowed;
+        ctx.accounts.protocol_state.total_usdc_borrowed = ctx
+            .accounts
+            .protocol_state
+            .total_usdc_borrowed
+            .checked_add(usdc_amount)
+            .ok_or(SoladromeError::Overflow)?;
+        ctx.accounts.partner_position.last_borrow_slot = Clock::get()?.slot;
         Ok(())
     }
 
@@ -1895,6 +2047,14 @@ pub mod soladrome {
         require!(
             epoch == current_epoch(clock.unix_timestamp),
             SoladromeError::WrongEpoch
+        );
+
+        // Founder break-glass: the founder stake is a dormant anti-capture reserve
+        // and cannot vote unless authority has explicitly enabled it.
+        require!(
+            ctx.accounts.user.key() != FOUNDER_WALLET.parse::<Pubkey>().unwrap()
+                || ctx.accounts.protocol_state.founder_voting_enabled,
+            SoladromeError::FounderVotingDisabled
         );
 
         // Total power = unlocked hiSOLA (1×) + ve-weighted locked hiSOLA (up to 4×).
@@ -2088,6 +2248,13 @@ pub mod soladrome {
         require!(
             ctx.accounts.vote_config.auto_replay,
             SoladromeError::VoteConfigDisabled
+        );
+        // Founder break-glass guard (mirror of vote_gauge) — prevents replaying
+        // founder votes through a saved config while founder voting is disabled.
+        require!(
+            ctx.accounts.user.key() != FOUNDER_WALLET.parse::<Pubkey>().unwrap()
+                || ctx.accounts.protocol_state.founder_voting_enabled,
+            SoladromeError::FounderVotingDisabled
         );
 
         // Locate pool_id in config
@@ -3493,18 +3660,19 @@ pub struct MintEcosystemAllocation<'info> {
     )]
     pub authority_sola: Box<Account<'info, TokenAccount>>,
 
-    /// CHECK: hardcoded founder wallet — receives FOUNDER_IMMEDIATE_SOLA (250 000 SOLA).
-    #[account(address = FOUNDER_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized)]
-    pub founder: UncheckedAccount<'info>,
+    /// CHECK: hardcoded founder OPS wallet — receives FOUNDER_IMMEDIATE_SOLA (250 000 SOLA).
+    /// Separate from FOUNDER_WALLET so this tranche can vote as an ordinary user.
+    #[account(address = FOUNDER_OPS_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized)]
+    pub founder_ops: UncheckedAccount<'info>,
 
-    /// Founder's SOLA ATA — created here if it doesn't exist yet.
+    /// Founder ops wallet's SOLA ATA — created here if it doesn't exist yet.
     #[account(
         init_if_needed,
         payer = authority,
         associated_token::mint = sola_mint,
-        associated_token::authority = founder,
+        associated_token::authority = founder_ops,
     )]
-    pub founder_sola: Box<Account<'info, TokenAccount>>,
+    pub founder_ops_sola: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -4380,7 +4548,7 @@ pub struct ContributorBorrowUsdc<'info> {
     /// Contributor's hiSOLA balance — collateral ceiling for the borrow.
     /// Mirrors founder_borrow_usdc: borrow cannot exceed real on-chain hiSOLA held.
     #[account(token::mint = hi_sola_mint, token::authority = contributor)]
-    pub contributor_hi_sola: Account<'info, TokenAccount>,
+    pub contributor_hi_sola: Box<Account<'info, TokenAccount>>,
 
     #[account(mut, address = protocol_state.floor_vault)]
     pub floor_vault: Account<'info, TokenAccount>,
@@ -4399,7 +4567,7 @@ pub struct ContributorBorrowUsdc<'info> {
         associated_token::mint      = usdc_mint,
         associated_token::authority = contributor,
     )]
-    pub contributor_usdc: Account<'info, TokenAccount>,
+    pub contributor_usdc: Box<Account<'info, TokenAccount>>,
 
     /// Shared UserPosition PDA — same seed as regular users, enables repay_usdc.
     #[account(
@@ -4409,7 +4577,7 @@ pub struct ContributorBorrowUsdc<'info> {
         seeds = [POSITION_SEED, contributor.key().as_ref()],
         bump,
     )]
-    pub contributor_position: Account<'info, UserPosition>,
+    pub contributor_position: Box<Account<'info, UserPosition>>,
 
     #[account(
         mut,
@@ -4428,6 +4596,53 @@ pub struct ContributorBorrowUsdc<'info> {
 
 /// Authority-only: register a protocol partner allocation.
 /// Creates a PartnerAllocation PDA keyed on the partner's wallet.
+#[derive(Accounts)]
+pub struct BorrowAgainstLocked<'info> {
+    #[account(mut)]
+    pub partner: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    /// The vote-locked position used as collateral (collateral ceiling = amount_locked).
+    #[account(
+        seeds = [VELOCK_SEED, partner.key().as_ref()],
+        bump = lock_position.bump,
+    )]
+    pub lock_position: Box<Account<'info, VeLockPosition>>,
+
+    #[account(mut, address = protocol_state.floor_vault)]
+    pub floor_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(mut, address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(address = protocol_state.usdc_mint)]
+    pub usdc_mint: Account<'info, Mint>,
+
+    #[account(
+        init_if_needed,
+        payer = partner,
+        associated_token::mint      = usdc_mint,
+        associated_token::authority = partner,
+    )]
+    pub partner_usdc: Box<Account<'info, TokenAccount>>,
+
+    /// Tracks cumulative borrow (same PDA as UserPosition → repay via repay_usdc).
+    #[account(
+        init_if_needed,
+        payer = partner,
+        space = 8 + UserPosition::LEN,
+        seeds = [POSITION_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub partner_position: Box<Account<'info, UserPosition>>,
+
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
 /// The partner must later call `claim_partner_allocation` to lock their hiSOLA.
 #[derive(Accounts)]
 pub struct RegisterPartner<'info> {
