@@ -14,6 +14,7 @@ import {
 } from "@/lib/program";
 import { getTokenList, TokenInfo, WSOL_MINT, decimalsForMint } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { trackQuest } from "@/lib/quests";
 
 const SLIPPAGE_OPTIONS = [0.1, 0.5, 1.0] as const;
 const PCT_SHORTCUTS    = [25, 50, 75, 100] as const;
@@ -54,6 +55,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setStatus(`✅ ${data.amount} test USDC${data.solAirdropped ? " + 1 devnet SOL" : ""} added to your wallet!`);
+      trackQuest(wallet.publicKey.toBase58(), "faucet");
       fetchBalance();
     } catch (e: any) {
       setStatus(`❌ Faucet: ${e?.message ?? e}`);
@@ -186,6 +188,8 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       const sig = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, swapIx, ...postIxs]);
 
       setStatus(`✅ Swap — tx: ${sig.slice(0, 16)}…`);
+      // Airdrop mission: swap into $SOLA.
+      if (tokOut.symbol === "SOLA") trackQuest(wallet.publicKey.toBase58(), "swap");
       setAmountIn("");
       fetchPool();
       fetchBalance();

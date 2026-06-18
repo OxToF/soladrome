@@ -11,6 +11,7 @@ import {
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch } from "@/lib/epoch";
+import { trackQuest } from "@/lib/quests";
 
 type Tab = "stake" | "unstake" | "burn";
 const PCT = [25, 50, 75, 100] as const;
@@ -143,6 +144,7 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
           } as any)
           .rpc();
         setStatus(`✅ Staked → hiSOLA — tx: ${tx.slice(0, 16)}…`);
+        trackQuest(wallet.publicKey.toBase58(), "stake");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
         // Auto-migrate user_position if it exists with the old 128-byte layout

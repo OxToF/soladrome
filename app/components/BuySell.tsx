@@ -10,6 +10,7 @@ import {
   userAta, commonAccounts, fromUi, toUi,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { trackQuest } from "@/lib/quests";
 
 type Tab = "buy" | "sell";
 
@@ -36,6 +37,7 @@ export function BuySell() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setStatus(`✅ Got ${data.amount} test USDC${data.solAirdropped ? " + 1 devnet SOL" : ""}!`);
+      trackQuest(wallet.publicKey.toBase58(), "faucet");
     } catch (e: any) {
       setStatus(`❌ Faucet: ${e?.message ?? e}`);
     } finally {
@@ -69,6 +71,7 @@ export function BuySell() {
           } as any)
           .rpc();
         setStatus(`✅ Bought SOLA — tx: ${tx.slice(0, 16)}…`);
+        trackQuest(wallet.publicKey.toBase58(), "swap");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
         const tx = await program.methods

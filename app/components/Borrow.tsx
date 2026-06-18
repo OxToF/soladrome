@@ -11,6 +11,7 @@ import {
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { BN } from "@coral-xyz/anchor";
+import { trackQuest } from "@/lib/quests";
 
 type Tab = "borrow" | "repay";
 const PCT = [25, 50, 75, 100] as const;
@@ -86,6 +87,7 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
           } as any)
           .rpc();
         setStatus(`✅ Borrowed ${amount} USDC — tx: ${tx.slice(0, 16)}…`);
+        trackQuest(wallet.publicKey.toBase58(), "borrow");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
         const tx = await program.methods
@@ -100,6 +102,7 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
           } as any)
           .rpc();
         setStatus(`✅ Repaid ${amount} USDC — tx: ${tx.slice(0, 16)}…`);
+        trackQuest(wallet.publicKey.toBase58(), "repay");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       }
       setAmount("");

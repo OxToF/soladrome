@@ -19,6 +19,7 @@ import {
 } from "@/lib/program";
 import { getTokenList, symbolByMint, WSOL_MINT, decimalsForMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { trackQuest } from "@/lib/quests";
 
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
 const PCT = [25, 50, 75, 100] as const;
@@ -459,6 +460,7 @@ export function Pools() {
 
       const sig = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, addIx, ...postIxs]);
       setStatus(`✅ Liquidity added — ${sig.slice(0, 16)}…`);
+      trackQuest(wallet.publicKey.toBase58(), "liquidity");
       setAddA(""); setAddB("");
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));

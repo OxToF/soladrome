@@ -23,12 +23,13 @@ import { FounderPanel }      from "@/components/FounderPanel";
 import { ContributorPanel, contributorVestingPda } from "@/components/ContributorPanel";
 import { PartnerPanel, partnerAllocationPda }      from "@/components/PartnerPanel";
 import { Bridge }          from "@/components/Bridge";
+import { Airdrop }         from "@/components/Airdrop";
 import { useConnection }   from "@solana/wallet-adapter-react";
 
 // Founder wallet — must match FOUNDER_WALLET in programs/soladrome/src/lib.rs
 const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
-type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "founder" | "contributor" | "partner";
+type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "airdrop" | "founder" | "contributor" | "partner";
 
 const NAV: { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean; partnerOnly?: boolean }[] = [
   { id: "home",        label: "Home"        },
@@ -38,6 +39,7 @@ const NAV: { id: Page; label: string; founderOnly?: boolean; contributorOnly?: b
   { id: "claim",       label: "Claim"       },
   { id: "arb",         label: "Arb"          },
   { id: "bridge",      label: "Bridge"       },
+  { id: "airdrop",     label: "Airdrop"      },
   { id: "founder",     label: "Founder",     founderOnly: true      },
   { id: "contributor", label: "Allocation",  contributorOnly: true  },
   { id: "partner",     label: "Partner",     partnerOnly: true      },
@@ -193,8 +195,15 @@ export default function Home() {
         </div>
       </header>
 
+      {/* ── Public Airdrop page (visible without a wallet) ─────── */}
+      {page === "airdrop" && (
+        <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-8">
+          <Airdrop />
+        </main>
+      )}
+
       {/* ── Hero (not connected) ───────────────────────────────── */}
-      {!wallet && (
+      {!wallet && page !== "airdrop" && (
         <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-24">
           <h1 className="text-5xl md:text-7xl font-black mb-4 leading-tight">
             <span className="text-white">The Eternal</span>
@@ -253,7 +262,7 @@ export default function Home() {
       )}
 
       {/* ── App (connected) ───────────────────────────────────── */}
-      {wallet && (
+      {wallet && page !== "airdrop" && (
         <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-8">
           <Stats />
 

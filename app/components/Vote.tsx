@@ -9,6 +9,7 @@ import { getProgram, statePda, hiSolaM, userAta, PROGRAM_ID as PROG_ID } from "@
 import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
+import { trackQuest } from "@/lib/quests";
 
 // ── PDA helpers ───────────────────────────────────────────────────────────────
 const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
@@ -261,6 +262,7 @@ export function Vote() {
         } as any)
         .rpc();
       setStatus(`✅ Vote recorded — tx: ${tx.slice(0, 16)}…`);
+      trackQuest(wallet.publicKey.toBase58(), "vote");
       setVotes("");
       setVotedPools(prev => new Set([...prev, poolId]));
       // Optimistic update for allocated counter

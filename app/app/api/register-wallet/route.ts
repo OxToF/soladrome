@@ -25,6 +25,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    // Award the "connect" quest on first connection (idempotent server-side).
+    const { error: questErr } = await supabase.rpc("record_quest", {
+      p_wallet: wallet,
+      p_quest:  "connect",
+    });
+    if (questErr) console.error("[register-wallet] connect quest", questErr);
+
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });

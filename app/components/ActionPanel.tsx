@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Christophe Hertecant
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AmmSwap }  from "./AmmSwap";
 import { Exercise } from "./Exercise";
 import { Stake }    from "./Stake";
@@ -18,6 +18,16 @@ const TABS: { id: ActionTab; label: string; hint: string }[] = [
 
 export function ActionPanel() {
   const [tab, setTab] = useState<ActionTab>("swap");
+
+  // Let the Airdrop missions deep-link into a specific action tab.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail as ActionTab;
+      if (["swap", "options", "earn", "lend"].includes(detail)) setTab(detail);
+    };
+    window.addEventListener("action:tab", handler);
+    return () => window.removeEventListener("action:tab", handler);
+  }, []);
 
   return (
     <div className="card glow">
