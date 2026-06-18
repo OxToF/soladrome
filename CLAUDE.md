@@ -6,12 +6,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Smart contract (root)
 ```bash
-anchor build                        # compile the program
-anchor deploy                       # deploy to configured cluster (devnet)
+anchor build                        # compile + regenerate IDL (target/idl/soladrome.json)
 anchor test                         # build + localnet validator + run tests
 yarn run ts-mocha -p ./tsconfig.json -t 1000000 "tests/**/*.ts"  # tests only (no rebuild)
 yarn lint                           # check formatting (prettier)
 yarn lint:fix                       # auto-fix formatting
+```
+
+### ⚠️ Devnet deploy requires SBPFv3 — plain `anchor deploy` FAILS
+Devnet runs Agave 4.1+ with `SIMD-0500` active (deployment of SBPF v0/v1/v2 **disabled**)
+and `SIMD-0178` active (SBPFv3 **enabled**). The default `anchor build`/`anchor deploy`
+emits a too-new arch and is rejected with *"Detected sbpf_version ... not enabled"*.
+Build the `.so` explicitly as **SBPFv3** and deploy with `solana program deploy`:
+```bash
+# Toolchain must match devnet (Agave 4.1.x): agave-install init 4.1.0-beta.1
+rm -f target/{deploy,sbf-solana-solana/release}/soladrome.so   # force clean if cached
+cargo build-sbf --arch v3                                      # SBPFv3 (~1.6 MB .so)
+RPC=$(grep ^NEXT_PUBLIC_RPC_URL= app/.env.local | cut -d= -f2-)  # Helius (public RPC times out)
+solana program deploy target/deploy/soladrome.so \
+  --program-id target/deploy/soladrome-keypair.json \
+  --upgrade-authority ~/.config/solana/id.json --url "$RPC"
+# After struct/IDL changes: run `anchor build` once for the IDL, then cp target/idl/soladrome.json app/lib/
+# Failed deploys leave a buffer (~12 SOL) — reclaim: solana program close --buffers --url https://api.devnet.solana.com
 ```
 
 ### Frontend (`app/`)
