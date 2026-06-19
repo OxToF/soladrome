@@ -5,3 +5,4 @@ scripts/.env.attest
 sybil_report.json
 eligible_candidates.json
 onchain_eligible.json
+deleted_bots_backup_*.json

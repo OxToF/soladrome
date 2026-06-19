@@ -63,6 +63,11 @@ $$;
 
 -- ── 3. Public leaderboard view ──────────────────────────────────────────────
 -- Aggregated per wallet. Ties broken by who got there first (last_active asc).
+-- ANTI-SYBIL: only wallets with at least one ON-CHAIN-VERIFIED quest
+-- (stake/borrow/vote) appear. Those quests are checked against chain state at
+-- write time (app/api/track-quest), so they can't be forged — whereas
+-- connect/faucet/swap/etc. are cheap and bot-spammable. This keeps pure
+-- connect/faucet bots off the board for good, with no per-request RPC.
 create or replace view leaderboard as
   select wallet_address,
          sum(points)::int   as points,
@@ -70,6 +75,7 @@ create or replace view leaderboard as
          max(completed_at)  as last_active
   from quest_completions
   group by wallet_address
+  having bool_or(quest_id in ('stake', 'borrow', 'vote'))
   order by points desc, last_active asc;
 
 -- ── 4. Row Level Security ───────────────────────────────────────────────────

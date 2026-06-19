@@ -9,7 +9,6 @@ interface Row {
   points: number;
   quests: number;
   last_active: string;
-  verified: boolean | null; // on-chain footprint; null if verification unavailable
 }
 
 const MEDAL = ["🥇", "🥈", "🥉"];
@@ -22,18 +21,15 @@ function short(addr: string) {
 export function Leaderboard() {
   const wallet = useAnchorWallet();
   const me = wallet?.publicKey.toBase58();
-  const [rows, setRows]                 = useState<Row[]>([]);
-  const [verifiedCount, setVerifiedCnt] = useState<number | null>(null);
-  const [loading, setLoading]           = useState(true);
-  const [page, setPage]                 = useState(0);
-  const [showAll, setShowAll]           = useState(false); // default: verified only
+  const [rows, setRows]       = useState<Row[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage]       = useState(0);
 
   const refresh = useCallback(async () => {
     try {
       const res  = await fetch("/api/leaderboard");
       const data = await res.json();
       setRows(data.rows ?? []);
-      setVerifiedCnt(data.verifiedCount ?? null);
     } catch { /* keep previous */ }
     finally { setLoading(false); }
   }, []);
@@ -46,68 +42,38 @@ export function Leaderboard() {
     return () => window.removeEventListener("quests:refresh", h);
   }, [refresh]);
 
-  // If verification is unavailable (RPC down), we can't filter — show everyone.
-  const canFilter = verifiedCount !== null;
-  const verifiedOnly = canFilter && !showAll;
-
-  const displayed = useMemo(
-    () => (verifiedOnly ? rows.filter((r) => r.verified) : rows),
-    [rows, verifiedOnly],
-  );
-
-  const total     = displayed.length;
+  const total     = rows.length;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const myIndex   = useMemo(() => (me ? displayed.findIndex((r) => r.wallet_address === me) : -1), [displayed, me]);
-  const myRow     = myIndex >= 0 ? displayed[myIndex] : null;
+  const myIndex   = useMemo(() => (me ? rows.findIndex((r) => r.wallet_address === me) : -1), [rows, me]);
+  const myRow     = myIndex >= 0 ? rows[myIndex] : null;
   const myPage    = myIndex >= 0 ? Math.floor(myIndex / PAGE_SIZE) : -1;
 
   useEffect(() => { if (page > pageCount - 1) setPage(pageCount - 1); }, [pageCount, page]);
 
   const start    = page * PAGE_SIZE;
-  const pageRows = displayed.slice(start, start + PAGE_SIZE);
+  const pageRows = rows.slice(start, start + PAGE_SIZE);
 
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-1">
         <h2 className="text-lg font-bold text-white">Leaderboard</h2>
         <span className="text-xs text-gray-500">
-          {canFilter && !showAll
-            ? <><span className="text-brand-green font-semibold">{verifiedCount}</span> verified</>
-            : <>{total} contributors</>}
+          <span className="text-brand-green font-semibold">{total}</span> verified contributors
         </span>
       </div>
-
-      {/* Verified toggle */}
-      {canFilter && (
-        <div className="flex items-center gap-2 mb-4 text-[11px]">
-          <button
-            onClick={() => { setShowAll(false); setPage(0); }}
-            className={`px-2 py-0.5 rounded-md border transition-colors ${!showAll ? "border-brand-green/50 text-brand-green bg-brand-green/10" : "border-brand-border text-gray-500 hover:text-gray-300"}`}
-          >
-            ✓ Verified on-chain
-          </button>
-          <button
-            onClick={() => { setShowAll(true); setPage(0); }}
-            className={`px-2 py-0.5 rounded-md border transition-colors ${showAll ? "border-gray-500 text-gray-200" : "border-brand-border text-gray-500 hover:text-gray-300"}`}
-          >
-            Show all ({rows.length})
-          </button>
-        </div>
-      )}
+      <p className="text-[11px] text-gray-600 mb-4">On-chain verified — stake, borrow or vote to appear.</p>
 
       {loading ? (
         <p className="text-xs text-gray-600">Loading…</p>
       ) : total === 0 ? (
         <p className="text-xs text-gray-500">
-          {verifiedOnly
-            ? "No verified contributors yet. Stake, borrow and vote on-chain to appear here."
-            : "No contributors yet — complete a quest to appear."}
+          No verified contributors yet. Stake, borrow or vote on-chain to appear here.
         </p>
       ) : (
         <>
           <ul className="space-y-1">
             {pageRows.map((r, i) => (
-              <RankRow key={r.wallet_address} r={r} rank={start + i} mine={r.wallet_address === me} showBadge={showAll} />
+              <RankRow key={r.wallet_address} r={r} rank={start + i} mine={r.wallet_address === me} />
             ))}
           </ul>
 
@@ -152,9 +118,7 @@ export function Leaderboard() {
 
           {me && !myRow && (
             <p className="mt-4 pt-3 border-t border-brand-border text-xs text-center text-gray-500">
-              {verifiedOnly
-                ? "Not verified yet — stake, borrow and vote on-chain to appear here."
-                : "You're not on the board yet — complete a mission to appear."}
+              Not verified yet — stake, borrow or vote on-chain to appear here.
             </p>
           )}
         </>
@@ -163,7 +127,7 @@ export function Leaderboard() {
   );
 }
 
-function RankRow({ r, rank, mine, showBadge }: { r: Row; rank: number; mine: boolean; showBadge: boolean }) {
+function RankRow({ r, rank, mine }: { r: Row; rank: number; mine: boolean }) {
   return (
     <li className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${mine ? "bg-brand-green/10 border border-brand-green/30" : "hover:bg-white/4"}`}>
       <span className="w-7 shrink-0 text-center font-mono text-gray-500">
@@ -171,8 +135,6 @@ function RankRow({ r, rank, mine, showBadge }: { r: Row; rank: number; mine: boo
       </span>
       <span className={`font-mono flex-1 truncate ${mine ? "text-brand-green" : "text-gray-300"}`}>
         {short(r.wallet_address)}
-        {/* Show the ✓ only in "all" view (in verified-only view everyone is verified). */}
-        {showBadge && r.verified && <span className="ml-2 text-brand-green" title="Verified on-chain">✓</span>}
         {mine && <span className="ml-2 text-[10px] text-brand-green/70">you</span>}
       </span>
       <span className="text-xs text-gray-500 shrink-0">{r.quests}🎯</span>
