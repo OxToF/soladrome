@@ -50,7 +50,7 @@ async function checkOnce(quest: string, user: PublicKey): Promise<boolean> {
       } catch { return false; } // ATA doesn't exist → never staked
     }
     case "borrow": {
-      const pos: any = await program.account.userPosition.fetchNullable(positionPda(user));
+      const pos: any = await (program.account as any).userPosition.fetchNullable(positionPda(user));
       return !!pos && BigInt(pos.usdcBorrowed.toString()) > 0n;
     }
     case "vote": {
@@ -59,7 +59,7 @@ async function checkOnce(quest: string, user: PublicKey): Promise<boolean> {
       const uev = PublicKey.findProgramAddressSync(
         [Buffer.from("uev"), user.toBuffer(), epochLe], PROGRAM_ID,
       )[0];
-      const ev: any = await program.account.userEpochVotes.fetchNullable(uev);
+      const ev: any = await (program.account as any).userEpochVotes.fetchNullable(uev);
       return !!ev && BigInt(ev.allocated.toString()) > 0n;
     }
     default:
