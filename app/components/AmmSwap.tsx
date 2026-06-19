@@ -247,7 +247,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
         <div className="flex items-center gap-3">
           <select
             className="bg-transparent border border-brand-border rounded-lg px-3 py-2 text-sm text-white
-                       focus:outline-none focus:border-brand-green shrink-0 cursor-pointer"
+                       focus:outline-none focus:border-brand-green shrink-0 !w-auto cursor-pointer"
             value={idxIn}
             onChange={(e) => { setIdxIn(+e.target.value); setAmountIn(""); setEstimatedOut(null); }}
           >
@@ -295,7 +295,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
         <div className="flex items-center gap-3">
           <select
             className="bg-transparent border border-brand-border rounded-lg px-3 py-2 text-sm text-white
-                       focus:outline-none focus:border-brand-green shrink-0 cursor-pointer"
+                       focus:outline-none focus:border-brand-green shrink-0 !w-auto cursor-pointer"
             value={idxOut}
             onChange={(e) => { setIdxOut(+e.target.value); setAmountIn(""); setEstimatedOut(null); }}
           >
@@ -303,7 +303,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
               <option key={i} value={i} disabled={i === idxIn} className="bg-gray-900">{t.symbol}</option>
             ))}
           </select>
-          <div className="flex-1 text-right text-2xl font-bold text-brand-green font-mono">
+          <div className="flex-1 min-w-0 overflow-hidden text-right text-2xl font-bold text-brand-green font-mono">
             {estimatedOut !== null ? estimatedOut.toFixed(6) : "0"}
           </div>
         </div>
