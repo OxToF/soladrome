@@ -1,2 +1,6 @@
 .vercel
 scripts/.env.attest
+
+# sybil scanner artefacts (not committed)
+sybil_report.json
+eligible_candidates.json
