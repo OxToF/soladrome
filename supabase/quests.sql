@@ -46,6 +46,8 @@ begin
     when 'repay'     then 10   -- repay USDC debt
     when 'vote'      then 20   -- vote on a gauge for the current epoch
     when 'bug'       then 50   -- verified bug report (awarded manually, bonus)
+    when 'follow_x'  then 5    -- social: follow @soladrome on X (honor-system)
+    when 'repost'    then 10   -- social: repost the launch thread (honor-system)
     else 0
   end;
 

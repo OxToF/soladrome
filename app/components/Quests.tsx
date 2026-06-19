@@ -3,7 +3,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
-import { QUEST_GROUPS, groupPoints, type Quest, type QuestGroup } from "@/lib/quests";
+import { QUEST_GROUPS, groupPoints, claimableQuests, trackQuest, type Quest, type QuestGroup, type QuestId } from "@/lib/quests";
 
 // Jump to where a mission is performed (page + optional inner ActionPanel tab).
 function go(q: Quest) {
@@ -41,6 +41,13 @@ export function Quests() {
   const groups = QUEST_GROUPS;
   const group  = groups[page];
   const total  = groups.length;
+
+  // Honor-system claim: open the external action (X follow/repost) and credit it.
+  const claim = useCallback((q: Quest) => {
+    if (q.href) window.open(q.href, "_blank", "noopener,noreferrer");
+    const id = wallet?.publicKey.toBase58();
+    if (id) trackQuest(id, q.id as QuestId);
+  }, [wallet?.publicKey.toBase58()]);
 
   return (
     <div className="card">
@@ -86,7 +93,7 @@ export function Quests() {
         </div>
       )}
 
-      <GroupBody group={group} done={done} wallet={!!wallet} />
+      <GroupBody group={group} done={done} wallet={!!wallet} onClaim={claim} />
 
       {!wallet && group.live && (
         <p className="mt-4 text-xs text-gray-500 text-center">
@@ -102,18 +109,20 @@ function GroupBadge({ group, done }: { group: QuestGroup; done: Set<string> }) {
   if (!group.live) {
     return <span className="text-[10px] uppercase tracking-widest text-yellow-500/80 border border-yellow-500/30 rounded px-2 py-0.5">Soon</span>;
   }
-  const earned    = group.quests.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
-  const completed = group.quests.every((q) => done.has(q.id));
+  const claimable = claimableQuests(group);
+  const earned    = claimable.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
+  const completed = claimable.every((q) => done.has(q.id));
   return completed && group.badge
     ? <span className="badge-green">★ {group.badge}</span>
     : <span className="badge-green">{earned} / {groupPoints(group)} pts</span>;
 }
 
 // ── Group body: blurb + progress + quest rows + bonus ──────────────────────
-function GroupBody({ group, done, wallet }: { group: QuestGroup; done: Set<string>; wallet: boolean }) {
-  const earned    = group.quests.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
+function GroupBody({ group, done, wallet, onClaim }: { group: QuestGroup; done: Set<string>; wallet: boolean; onClaim: (q: Quest) => void }) {
+  const claimable = claimableQuests(group);
+  const earned    = claimable.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
   const pct       = group.live ? Math.round((earned / groupPoints(group)) * 100) : 0;
-  const completed = group.live && group.quests.every((q) => done.has(q.id));
+  const completed = group.live && claimable.every((q) => done.has(q.id));
 
   return (
     <>
@@ -132,7 +141,7 @@ function GroupBody({ group, done, wallet }: { group: QuestGroup; done: Set<strin
 
       <ul className="space-y-2">
         {group.quests.map((q, i) => (
-          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={group.live} wallet={wallet} />
+          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={group.live} wallet={wallet} onClaim={onClaim} />
         ))}
       </ul>
 
@@ -141,7 +150,7 @@ function GroupBody({ group, done, wallet }: { group: QuestGroup; done: Set<strin
           <p className="text-[11px] uppercase tracking-widest text-gray-600 mt-5 mb-2">Bonus</p>
           <ul className="space-y-2">
             {group.bonus.map((q) => (
-              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={group.live} wallet={wallet} />
+              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={group.live} wallet={wallet} onClaim={onClaim} />
             ))}
           </ul>
         </>
@@ -160,8 +169,8 @@ function GroupBody({ group, done, wallet }: { group: QuestGroup; done: Set<strin
 }
 
 // ── A single quest row ─────────────────────────────────────────────────────
-function QuestRow({ q, n, done, live, wallet }: { q: Quest; n?: number; done: boolean; live: boolean; wallet: boolean }) {
-  const dim = !live && !done;
+function QuestRow({ q, n, done, live, wallet, onClaim }: { q: Quest; n?: number; done: boolean; live: boolean; wallet: boolean; onClaim: (q: Quest) => void }) {
+  const dim = (!live || q.soon) && !done;
   return (
     <li
       className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors ${
@@ -190,8 +199,18 @@ function QuestRow({ q, n, done, live, wallet }: { q: Quest; n?: number; done: bo
       </div>
       {done ? (
         <span className="text-brand-green text-sm shrink-0">✓</span>
+      ) : q.soon ? (
+        <span className="text-[10px] text-gray-600 shrink-0">Soon</span>
       ) : !live ? (
         <span className="text-[10px] text-gray-600 shrink-0">{q.external ?? "Soon"}</span>
+      ) : q.href ? (
+        <button
+          onClick={() => onClaim(q)}
+          disabled={!wallet}
+          className="text-xs text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
+        >
+          {q.external ?? "Open"} →
+        </button>
       ) : q.external ? (
         <span className="text-[10px] text-gray-600 shrink-0">{q.external}</span>
       ) : (

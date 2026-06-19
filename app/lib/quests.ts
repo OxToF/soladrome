@@ -12,7 +12,8 @@
 // group (live: false), so they display but can't be completed.
 export type QuestId =
   | "connect" | "faucet" | "swap" | "liquidity"
-  | "stake" | "borrow" | "repay" | "vote" | "bug";
+  | "stake" | "borrow" | "repay" | "vote" | "bug"
+  | "follow_x" | "repost";
 
 export interface Quest {
   /** Server-backed ids (QuestId) are trackable; any string is allowed for teasers. */
@@ -26,8 +27,12 @@ export interface Quest {
   tab?:   "swap" | "earn" | "lend";
   /** Awarded out-of-band (e.g. verified bug report) — shown under "Bonus". */
   bonus?: boolean;
-  /** Off-app action (Discord, X…) — shows a label instead of a "Go" button. */
+  /** Off-app action (Discord, X…) — shows this label on the action button. */
   external?: string;
+  /** Honor-system claim: opens this URL in a new tab and credits the quest. */
+  href?:  string;
+  /** Not yet claimable even inside a live group — shown greyed with "Soon". */
+  soon?:  boolean;
 }
 
 // ── A quest GROUP = one campaign page in the Missions card ───────────────────
@@ -67,27 +72,37 @@ const GENESIS: QuestGroup = {
   ],
 };
 
-// ── Campaign #2 — Social (TEASER, not yet live) ──────────────────────────────
-// To activate: add these ids + point values to record_quest (supabase/quests.sql)
-// and VALID_QUESTS (app/api/track-quest/route.ts), then flip `live` to true.
+// ── Campaign #2 — Social (LIVE: follow + repost; referral deferred) ───────────
+// follow_x + repost are honor-system click-to-claim: the button opens X and
+// credits the quest. Their ids + points live in record_quest (supabase/quests.sql)
+// and VALID_QUESTS (app/api/track-quest/route.ts).
+const SOLADROME_X = "https://x.com/soladrome";
+// The pinned launch thread the "repost" quest points at.
+const LAUNCH_THREAD_URL = "https://x.com/soladrome/status/2067971567770804567";
+
 const SOCIAL: QuestGroup = {
   id:    "social",
   title: "Social Campaign",
-  blurb: "Spread the word and earn more $SOLA. These missions go live soon — get ready.",
+  blurb: "Spread the word and earn more $SOLA. Follow and repost to claim — referrals land soon.",
   badge: "Amplifier",
-  live:  false,
+  live:  true,
   quests: [
-    { id: "follow_x",  label: "Follow @Soladrome on X", desc: "Follow the official account",                 points: 5,  icon: "🐦", external: "X" },
-    { id: "repost",    label: "Repost the launch thread", desc: "Repost our genesis announcement",            points: 10, icon: "🔁", external: "X" },
-    { id: "referral",  label: "Refer a tester",         desc: "Bring a friend who completes the Genesis set", points: 25, icon: "🤝", external: "Link" },
+    { id: "follow_x", label: "Follow @soladrome on X",   desc: "Follow the official account, then claim",       points: 5,  icon: "🐦", external: "Follow", href: SOLADROME_X },
+    { id: "repost",   label: "Repost the launch thread", desc: "Repost our genesis announcement, then claim",    points: 10, icon: "🔁", external: "Repost", href: LAUNCH_THREAD_URL },
+    { id: "referral", label: "Refer a tester",           desc: "Bring a friend who completes the Genesis set",   points: 25, icon: "🤝", external: "Link", soon: true },
   ],
 };
 
 export const QUEST_GROUPS: QuestGroup[] = [GENESIS, SOCIAL];
 
-/** Sum of a group's core (non-bonus) quest points. */
+/** Claimable core quests in a group (excludes deferred "soon" teasers). */
+export function claimableQuests(g: QuestGroup): Quest[] {
+  return g.quests.filter((q) => !q.soon);
+}
+
+/** Sum of a group's claimable core quest points. */
 export function groupPoints(g: QuestGroup): number {
-  return g.quests.reduce((s, q) => s + q.points, 0);
+  return claimableQuests(g).reduce((s, q) => s + q.points, 0);
 }
 
 // ── Backward-compatible exports (genesis = the original 8 + bonus) ───────────

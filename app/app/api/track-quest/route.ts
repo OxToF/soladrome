@@ -10,6 +10,7 @@ const supabase = createClient(
 
 const VALID_QUESTS = new Set([
   "connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote", "bug",
+  "follow_x", "repost",
 ]);
 
 // Live data — never serve a cached response.
