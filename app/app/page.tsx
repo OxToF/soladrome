@@ -87,13 +87,26 @@ export default function Home() {
     return true;
   });
 
-  // Enregistre le wallet dans Supabase à chaque connexion
+  // First-touch referral capture: stash ?ref=<wallet> once, before any connect.
+  useEffect(() => {
+    try {
+      const ref = new URLSearchParams(window.location.search).get("ref");
+      if (ref && ref.length >= 32 && ref.length <= 44 && !localStorage.getItem("soladrome_ref")) {
+        localStorage.setItem("soladrome_ref", ref);
+      }
+    } catch { /* no-op */ }
+  }, []);
+
+  // Enregistre le wallet dans Supabase à chaque connexion (+ attribution referral)
   useEffect(() => {
     if (!wallet?.publicKey) return;
+    const me = wallet.publicKey.toBase58();
+    let ref: string | null = null;
+    try { ref = localStorage.getItem("soladrome_ref"); } catch { /* no-op */ }
     fetch("/api/register-wallet", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ wallet: wallet.publicKey.toBase58() }),
+      body: JSON.stringify({ wallet: me, ref: ref && ref !== me ? ref : undefined }),
     }).catch(() => {}); // silencieux — ne bloque jamais l'UX
   }, [wallet?.publicKey?.toBase58()]);
 

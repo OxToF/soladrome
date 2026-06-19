@@ -8,9 +8,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY!, // service key = écriture sans RLS
 );
 
+function isPubkey(s: unknown): s is string {
+  return typeof s === "string" && s.length >= 32 && s.length <= 44;
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { wallet } = await req.json();
+    const { wallet, ref } = await req.json();
     if (!wallet || typeof wallet !== "string") {
       return NextResponse.json({ error: "wallet required" }, { status: 400 });
     }
@@ -31,6 +35,18 @@ export async function POST(req: NextRequest) {
       p_quest:  "connect",
     });
     if (questErr) console.error("[register-wallet] connect quest", questErr);
+
+    // First-touch referral attribution. Ignored on self-referral or if this
+    // wallet already has a referrer (primary key + ignoreDuplicates).
+    if (isPubkey(ref) && ref !== wallet) {
+      const { error: refErr } = await supabase
+        .from("referrals")
+        .upsert(
+          { referred_wallet: wallet, referrer_wallet: ref },
+          { onConflict: "referred_wallet", ignoreDuplicates: true },
+        );
+      if (refErr) console.error("[register-wallet] referral", refErr);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {

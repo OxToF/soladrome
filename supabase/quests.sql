@@ -48,6 +48,9 @@ begin
     when 'bug'       then 50   -- verified bug report (awarded manually, bonus)
     when 'follow_x'  then 5    -- social: follow @soladrome on X (honor-system)
     when 'repost'    then 10   -- social: repost the launch thread (honor-system)
+    when 'referral'  then 25   -- social: awarded SERVER-SIDE only when a referred
+                               -- wallet becomes a verified on-chain Genesis Tester.
+                               -- NOT in VALID_QUESTS → can't be self-POSTed.
     else 0
   end;
 
@@ -92,3 +95,19 @@ create policy "leaderboard read"
 
 -- record_quest runs as SECURITY DEFINER (table owner), so the API service key
 -- can write through it even with RLS on. No INSERT policy is granted to anon.
+
+-- ── 5. Referrals ────────────────────────────────────────────────────────────
+-- One referrer per referred wallet, immutable (first-touch). A wallet can't
+-- refer itself. Written by the API (service key) at register time. The referrer
+-- only EARNS the +25 'referral' quest once one of their referred wallets becomes
+-- a verified on-chain Genesis Tester (has stake+borrow+vote, which are gated) —
+-- enforced in app/api/track-quest. RLS on, no anon access (service key only).
+create table if not exists referrals (
+  referred_wallet text        primary key,
+  referrer_wallet text        not null,
+  rewarded        boolean      not null default false,
+  created_at      timestamptz  not null default now(),
+  check (referred_wallet <> referrer_wallet)
+);
+create index if not exists idx_referrals_referrer on referrals (referrer_wallet);
+alter table referrals enable row level security; -- no policy → service key only

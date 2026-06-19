@@ -80,6 +80,30 @@ async function verifyOnChain(quest: string, walletStr: string): Promise<boolean>
   return false;
 }
 
+// When a wallet has completed all three GATED quests, it is a verified on-chain
+// Genesis Tester (those rows only exist after on-chain verification above). At
+// that point, credit its referrer's one-time +25 'referral' quest. The referrer
+// earns it ONCE regardless of how many it refers (unique wallet+quest), and only
+// for a genuinely on-chain referral — so referral farming doesn't pay.
+async function maybeRewardReferrer(wallet: string) {
+  try {
+    const { data: done } = await supabase
+      .from("quest_completions").select("quest_id").eq("wallet_address", wallet);
+    const have = new Set((done ?? []).map((r) => r.quest_id));
+    if (!(have.has("stake") && have.has("borrow") && have.has("vote"))) return;
+
+    const { data: ref } = await supabase
+      .from("referrals").select("referrer_wallet, rewarded")
+      .eq("referred_wallet", wallet).maybeSingle();
+    if (!ref || ref.rewarded) return;
+
+    await supabase.rpc("record_quest", { p_wallet: ref.referrer_wallet, p_quest: "referral" });
+    await supabase.from("referrals").update({ rewarded: true }).eq("referred_wallet", wallet);
+  } catch (e) {
+    console.error("[track-quest referral]", e);
+  }
+}
+
 // Live data — never serve a cached response.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -112,6 +136,11 @@ export async function POST(req: NextRequest) {
       console.error("[track-quest]", error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    // A gated quest just landed → this wallet may now be a full Genesis Tester;
+    // credit its referrer if so.
+    if (GATED.has(quest)) await maybeRewardReferrer(wallet);
+
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });

@@ -49,6 +49,15 @@ export function Quests() {
     if (id) trackQuest(id, q.id as QuestId);
   }, [wallet?.publicKey.toBase58()]);
 
+  // Referral: copy this wallet's invite link (credited server-side when a
+  // referred wallet becomes a verified on-chain Genesis Tester).
+  const copyRef = useCallback(() => {
+    const id = wallet?.publicKey.toBase58();
+    if (!id) return false;
+    try { navigator.clipboard?.writeText(`${window.location.origin}/?ref=${id}`); return true; }
+    catch { return false; }
+  }, [wallet?.publicKey.toBase58()]);
+
   return (
     <div className="card">
       {/* ── Campaign header + pager ─────────────────────────────── */}
@@ -93,7 +102,7 @@ export function Quests() {
         </div>
       )}
 
-      <GroupBody group={group} done={done} wallet={!!wallet} onClaim={claim} />
+      <GroupBody group={group} done={done} wallet={!!wallet} onClaim={claim} onCopyRef={copyRef} />
 
       {!wallet && group.live && (
         <p className="mt-4 text-xs text-gray-500 text-center">
@@ -118,7 +127,7 @@ function GroupBadge({ group, done }: { group: QuestGroup; done: Set<string> }) {
 }
 
 // ── Group body: blurb + progress + quest rows + bonus ──────────────────────
-function GroupBody({ group, done, wallet, onClaim }: { group: QuestGroup; done: Set<string>; wallet: boolean; onClaim: (q: Quest) => void }) {
+function GroupBody({ group, done, wallet, onClaim, onCopyRef }: { group: QuestGroup; done: Set<string>; wallet: boolean; onClaim: (q: Quest) => void; onCopyRef: () => boolean }) {
   const claimable = claimableQuests(group);
   const earned    = claimable.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
   const pct       = group.live ? Math.round((earned / groupPoints(group)) * 100) : 0;
@@ -141,7 +150,7 @@ function GroupBody({ group, done, wallet, onClaim }: { group: QuestGroup; done: 
 
       <ul className="space-y-2">
         {group.quests.map((q, i) => (
-          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={group.live} wallet={wallet} onClaim={onClaim} />
+          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={group.live} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} />
         ))}
       </ul>
 
@@ -150,7 +159,7 @@ function GroupBody({ group, done, wallet, onClaim }: { group: QuestGroup; done: 
           <p className="text-[11px] uppercase tracking-widest text-gray-600 mt-5 mb-2">Bonus</p>
           <ul className="space-y-2">
             {group.bonus.map((q) => (
-              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={group.live} wallet={wallet} onClaim={onClaim} />
+              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={group.live} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} />
             ))}
           </ul>
         </>
@@ -169,7 +178,8 @@ function GroupBody({ group, done, wallet, onClaim }: { group: QuestGroup; done: 
 }
 
 // ── A single quest row ─────────────────────────────────────────────────────
-function QuestRow({ q, n, done, live, wallet, onClaim }: { q: Quest; n?: number; done: boolean; live: boolean; wallet: boolean; onClaim: (q: Quest) => void }) {
+function QuestRow({ q, n, done, live, wallet, onClaim, onCopyRef }: { q: Quest; n?: number; done: boolean; live: boolean; wallet: boolean; onClaim: (q: Quest) => void; onCopyRef: () => boolean }) {
+  const [copied, setCopied] = useState(false);
   const dim = (!live || q.soon) && !done;
   return (
     <li
@@ -203,6 +213,14 @@ function QuestRow({ q, n, done, live, wallet, onClaim }: { q: Quest; n?: number;
         <span className="text-[10px] text-gray-600 shrink-0">Soon</span>
       ) : !live ? (
         <span className="text-[10px] text-gray-600 shrink-0">{q.external ?? "Soon"}</span>
+      ) : q.copyRef ? (
+        <button
+          onClick={() => { if (onCopyRef()) { setCopied(true); setTimeout(() => setCopied(false), 1500); } }}
+          disabled={!wallet}
+          className="text-xs text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
+        >
+          {copied ? "Copied ✓" : "Copy link"}
+        </button>
       ) : q.href ? (
         <button
           onClick={() => onClaim(q)}

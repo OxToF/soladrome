@@ -33,6 +33,9 @@ export interface Quest {
   href?:  string;
   /** Not yet claimable even inside a live group — shown greyed with "Soon". */
   soon?:  boolean;
+  /** Referral: shows a "Copy link" button (copies ?ref=<wallet>); earned when a
+   *  referred wallet becomes a verified on-chain Genesis Tester (server-side). */
+  copyRef?: boolean;
 }
 
 // ── A quest GROUP = one campaign page in the Missions card ───────────────────
@@ -83,13 +86,13 @@ const LAUNCH_THREAD_URL = "https://x.com/soladrome/status/2067971567770804567";
 const SOCIAL: QuestGroup = {
   id:    "social",
   title: "Social Campaign",
-  blurb: "Spread the word and earn more $SOLA. Follow and repost to claim — referrals land soon.",
+  blurb: "Spread the word and earn more $SOLA. Follow, repost, and refer real testers.",
   badge: "Amplifier",
   live:  true,
   quests: [
     { id: "follow_x", label: "Follow @soladrome on X",   desc: "Follow the official account, then claim",       points: 5,  icon: "🐦", external: "Follow", href: SOLADROME_X },
     { id: "repost",   label: "Repost the launch thread", desc: "Repost our genesis announcement, then claim",    points: 10, icon: "🔁", external: "Repost", href: LAUNCH_THREAD_URL },
-    { id: "referral", label: "Refer a tester",           desc: "Bring a friend who completes the Genesis set",   points: 25, icon: "🤝", external: "Link", soon: true },
+    { id: "referral", label: "Refer a tester",           desc: "Share your link — earn when a friend completes the Genesis set on-chain", points: 25, icon: "🤝", copyRef: true },
   ],
 };
 
