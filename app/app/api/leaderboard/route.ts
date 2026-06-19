@@ -13,20 +13,28 @@ const supabase = createClient(
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// GET → top 100 testnet contributors, ranked by points.
+// GET → full ranked leaderboard (ordered server-side; paginated on the client).
+// Capped at MAX_ROWS as a safety bound; on devnet scale (hundreds of wallets)
+// this is a few KB. If it ever grows past a few thousand, switch to
+// server-side range pagination + a rank RPC.
+const MAX_ROWS = 2000;
+
 export async function GET() {
   try {
     const { data, error } = await supabase
       .from("leaderboard")
       .select("wallet_address, points, quests, last_active")
-      .limit(100);
+      .order("points", { ascending: false })
+      .order("last_active", { ascending: true })
+      .limit(MAX_ROWS);
 
     if (error) {
       console.error("[leaderboard]", error);
-      return NextResponse.json({ rows: [], error: error.message }, { status: 500 });
+      return NextResponse.json({ rows: [], total: 0, error: error.message }, { status: 500 });
     }
-    return NextResponse.json({ rows: data ?? [] });
+    const rows = data ?? [];
+    return NextResponse.json({ rows, total: rows.length });
   } catch (e: any) {
-    return NextResponse.json({ rows: [], error: e?.message ?? String(e) }, { status: 500 });
+    return NextResponse.json({ rows: [], total: 0, error: e?.message ?? String(e) }, { status: 500 });
   }
 }
