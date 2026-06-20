@@ -42,9 +42,11 @@ export function Quests() {
   const group  = groups[page];
   const total  = groups.length;
 
-  // Honor-system claim: open the external action (X follow/repost) and credit it.
+  // Two-step honor claim: QuestRow opens the external action (X follow/repost)
+  // first, then calls this to credit. Splitting open from credit means a single
+  // stray click no longer mints points — the user has to come back and claim,
+  // which converts far more of them into real follows/reposts.
   const claim = useCallback((q: Quest) => {
-    if (q.href) window.open(q.href, "_blank", "noopener,noreferrer");
     const id = wallet?.publicKey.toBase58();
     if (id) trackQuest(id, q.id as QuestId);
   }, [wallet?.publicKey.toBase58()]);
@@ -180,6 +182,9 @@ function GroupBody({ group, done, wallet, onClaim, onCopyRef }: { group: QuestGr
 // ── A single quest row ─────────────────────────────────────────────────────
 function QuestRow({ q, n, done, live, wallet, onClaim, onCopyRef }: { q: Quest; n?: number; done: boolean; live: boolean; wallet: boolean; onClaim: (q: Quest) => void; onCopyRef: () => boolean }) {
   const [copied, setCopied] = useState(false);
+  // Two-step: first click opens the X action, second click claims. Resets on
+  // unmount, which is fine — re-opening costs nothing.
+  const [opened, setOpened] = useState(false);
   const dim = (!live || q.soon) && !done;
   return (
     <li
@@ -222,13 +227,23 @@ function QuestRow({ q, n, done, live, wallet, onClaim, onCopyRef }: { q: Quest; 
           {copied ? "Copied ✓" : "Copy link"}
         </button>
       ) : q.href ? (
-        <button
-          onClick={() => onClaim(q)}
-          disabled={!wallet}
-          className="text-xs text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
-        >
-          {q.external ?? "Open"} →
-        </button>
+        !opened ? (
+          <button
+            onClick={() => { window.open(q.href, "_blank", "noopener,noreferrer"); setOpened(true); }}
+            disabled={!wallet}
+            className="text-xs text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
+          >
+            {q.external ?? "Open"} →
+          </button>
+        ) : (
+          <button
+            onClick={() => onClaim(q)}
+            disabled={!wallet}
+            className="text-xs text-brand-green border border-brand-green/50 hover:bg-brand-green/10 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
+          >
+            Claim +{q.points}
+          </button>
+        )
       ) : q.external ? (
         <span className="text-[10px] text-gray-600 shrink-0">{q.external}</span>
       ) : (

@@ -79,7 +79,9 @@ const GENESIS: QuestGroup = {
 // follow_x + repost are honor-system click-to-claim: the button opens X and
 // credits the quest. Their ids + points live in record_quest (supabase/quests.sql)
 // and VALID_QUESTS (app/api/track-quest/route.ts).
-const SOLADROME_X = "https://x.com/soladrome";
+// intent/follow opens X with the Follow action pre-armed (one tap to follow),
+// instead of dropping the user on the profile to hunt for the button.
+const SOLADROME_X = "https://x.com/intent/follow?screen_name=soladrome";
 // The pinned launch thread the "repost" quest points at.
 const LAUNCH_THREAD_URL = "https://x.com/soladrome/status/2067971567770804567";
 
@@ -92,7 +94,7 @@ const SOCIAL: QuestGroup = {
   quests: [
     { id: "follow_x", label: "Follow @soladrome on X",   desc: "Follow the official account, then claim",       points: 5,  icon: "🐦", external: "Follow", href: SOLADROME_X },
     { id: "repost",   label: "Repost the launch thread", desc: "Repost our genesis announcement, then claim",    points: 10, icon: "🔁", external: "Repost", href: LAUNCH_THREAD_URL },
-    { id: "referral", label: "Refer a tester",           desc: "Share your link — earn when a friend completes the Genesis set on-chain", points: 25, icon: "🤝", copyRef: true },
+    { id: "referral", label: "Refer a tester",           desc: "Share your link — friends just open it, nothing to paste. Earn when they finish the Genesis set on-chain.", points: 25, icon: "🤝", copyRef: true },
   ],
 };
 
