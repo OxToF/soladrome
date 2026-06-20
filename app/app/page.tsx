@@ -88,12 +88,19 @@ export default function Home() {
   });
 
   // First-touch referral capture: stash ?ref=<wallet> once, before any connect.
+  // We also surface it (referredBy) so the invited user gets a visible "you're
+  // linked, nothing to paste" banner — otherwise the attribution is invisible
+  // and the whole referral flow feels broken even though it works.
+  const [referredBy, setReferredBy] = useState<string | null>(null);
+  const [refBannerDismissed, setRefBannerDismissed] = useState(false);
   useEffect(() => {
     try {
       const ref = new URLSearchParams(window.location.search).get("ref");
       if (ref && ref.length >= 32 && ref.length <= 44 && !localStorage.getItem("soladrome_ref")) {
         localStorage.setItem("soladrome_ref", ref);
       }
+      const stored = localStorage.getItem("soladrome_ref");
+      if (stored) setReferredBy(stored);
     } catch { /* no-op */ }
   }, []);
 
@@ -207,6 +214,26 @@ export default function Home() {
           <WalletMultiButton className="!bg-brand-green !text-black !rounded-xl !font-bold !text-sm shrink-0" />
         </div>
       </header>
+
+      {/* ── Referral confirmation banner ───────────────────────── */}
+      {referredBy && !refBannerDismissed && referredBy !== wallet?.publicKey.toBase58() && (
+        <div className="border-b border-brand-green/20 bg-brand-green/5">
+          <div className="max-w-7xl mx-auto px-5 py-2.5 flex items-center justify-between gap-3">
+            <p className="text-xs sm:text-sm text-gray-300">
+              🤝 <span className="text-brand-green font-semibold">Invited by a Genesis Tester</span>
+              {" "}({referredBy.slice(0, 4)}…{referredBy.slice(-4)}). You're already linked — nothing to paste.
+              Finish the Genesis missions and your inviter earns a reward.
+            </p>
+            <button
+              onClick={() => setRefBannerDismissed(true)}
+              aria-label="Dismiss"
+              className="text-gray-500 hover:text-gray-300 shrink-0 px-1"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Public Airdrop page (visible without a wallet) ─────── */}
       {page === "airdrop" && (
