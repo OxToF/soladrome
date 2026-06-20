@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Christophe Hertecant
+// Copyright (C) 2025 Soladrome Labs
 //
 // Genesis Testnet Airdrop — mission catalog + campaign terms (client side).
 // Point values here are for DISPLAY only — the authoritative values live in the

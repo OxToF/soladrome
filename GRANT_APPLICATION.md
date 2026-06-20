@@ -13,7 +13,7 @@
 **Live Demo:** https://soladrome.finance  
 **Telegram:** https://t.me/+SW4sVvoypbRkZTQ0  
 **Twitter/X:** https://x.com/soladrome  
-**Contact:** christophe.hertecant@gmail.com
+**Contact:** info@soladrome.finance
 
 ---
 
@@ -248,7 +248,7 @@ Soladrome is the **first native Solana implementation** of this model — and ad
 
 ## 8. Team
 
-**Founder / Lead Developer — Christophe Hertecant**
+**Founder / Lead Developer — Soladrome Labs**
 - Full-stack + Rust/Anchor development
 - Built Soladrome from scratch: 20-instruction smart contract, test suite, 9-page frontend
 - Solo founder — looking to expand team post-grant
@@ -304,7 +304,7 @@ the protocol that other protocols build on top of, not compete with.
 The codebase is **fully open source** and publicly available at https://github.com/OxToF/soladrome:
 
 - **Smart contracts:** Business Source License 1.1 (BUSL-1.1)
-  - Licensor: Christophe Hertecant
+  - Licensor: Soladrome Labs
   - Change Date: 2030-05-13 → converts to GPL v2.0 or later
   - Additional Use Grant: non-commercial use, research, personal use, and interacting with deployed instances are permitted
 - **Frontend:** GNU General Public License v3.0
@@ -323,5 +323,5 @@ The codebase is **fully open source** and publicly available at https://github.c
 
 ---
 
-*Application submitted by Christophe Hertecant — Solo founder, Soladrome Protocol.*  
-*Contact: christophe.hertecant@gmail.com*
+*Application submitted by Soladrome Labs — Solo founder, Soladrome Protocol.*  
+*Contact: info@soladrome.finance*

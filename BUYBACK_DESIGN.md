@@ -195,5 +195,5 @@ Soladrome routes 20% to make the remaining supply more valuable for everyone.
 
 ---
 
-*Design authored by Christophe Hertecant — Soladrome Protocol.*  
+*Design authored by Soladrome Labs — Soladrome Protocol.*  
 *Targeted implementation: V2, post-mainnet audit.*

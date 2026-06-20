@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Christophe Hertecant
+// Copyright (C) 2025 Soladrome Labs
 import { PublicKey } from "@solana/web3.js";
 import { PROGRAM_ID, solaM, oSolaM } from "./program";
 

@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: GPL-3.0-or-later
--- Copyright (C) 2025 Christophe Hertecant
+-- Copyright (C) 2025 Soladrome Labs
 --
 -- Soladrome devnet — Testnet Contributor quest / points system.
 -- Run this once in the Supabase SQL editor (Dashboard → SQL → New query → Run).

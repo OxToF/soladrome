@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2025 Christophe Hertecant
+// Copyright (C) 2025 Soladrome Labs
 
 use anchor_lang::prelude::*;
 

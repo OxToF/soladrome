@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Christophe Hertecant
+// Copyright (C) 2025 Soladrome Labs
 import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
 import {
   Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY,

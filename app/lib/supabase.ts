@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Christophe Hertecant
+// Copyright (C) 2025 Soladrome Labs
 import { createClient } from "@supabase/supabase-js";
 
 const url  = process.env.NEXT_PUBLIC_SUPABASE_URL!;

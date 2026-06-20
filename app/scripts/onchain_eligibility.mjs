@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Christophe Hertecant
+// Copyright (C) 2025 Soladrome Labs
 //
 // Soladrome — snapshot eligibility from ON-CHAIN footprint (ground truth).
 // The quest_completions table is forgeable (bots POST it directly). This script
