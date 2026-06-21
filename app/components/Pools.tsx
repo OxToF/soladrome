@@ -26,14 +26,31 @@ const PCT = [25, 50, 75, 100] as const;
 
 // oSOLA reward precision — must match program constant LP_REWARD_PRECISION = 1e12
 const LP_REWARD_PRECISION = BigInt("1000000000000");
-// Emission per second per pool — must match OSOLA_EMISSION_PER_SEC = 100_000
-const OSOLA_EMISSION_PER_SEC = BigInt("100000");
-// oSOLA emitted per year per pool (0.1 oSOLA/sec × 365 × 24 × 3600)
-const OSOLA_PER_YEAR = 0.1 * 365 * 24 * 3600; // 3_153_600
+// Epoch length — must match program EPOCH_DURATION (state.rs)
+const EPOCH_DURATION = 604_800; // 7 days, seconds
+const SECS_PER_YEAR  = 365 * 24 * 3600;
 
-function poolEmissionApr(tvlUsdc: number | null, osolaPrice: number | null): number | null {
+// On-chain continuous-emission config, read from ProtocolState. The rate is
+// dynamic (`continuous_rate_per_sec`, base units/sec) and the window auto-sunsets
+// at `continuous_end_epoch`. Defaults below mean "emissions off".
+interface EmissionCfg {
+  ratePerSec: number; // base units of oSOLA per second, per enabled pool
+  endEpoch:   number; // continuous_active iff current_epoch < endEpoch
+}
+const EMISSIONS_OFF: EmissionCfg = { ratePerSec: 0, endEpoch: 0 };
+
+function continuousActive(nowSec: number, endEpoch: number): boolean {
+  return Math.floor(Math.max(0, nowSec) / EPOCH_DURATION) < endEpoch;
+}
+
+// APR derived from the *live* on-chain rate, so it reads 0 when emissions are off.
+function poolEmissionApr(
+  tvlUsdc: number | null, osolaPrice: number | null, cfg: EmissionCfg, nowSec: number,
+): number | null {
   if (!tvlUsdc || tvlUsdc <= 0 || !osolaPrice || osolaPrice <= 0) return null;
-  return (OSOLA_PER_YEAR * osolaPrice / tvlUsdc) * 100;
+  if (cfg.ratePerSec <= 0 || !continuousActive(nowSec, cfg.endEpoch)) return 0;
+  const osolaPerYear = (cfg.ratePerSec / 1e6) * SECS_PER_YEAR;
+  return (osolaPerYear * osolaPrice / tvlUsdc) * 100;
 }
 
 type View = "list" | "manage" | "create";
@@ -61,6 +78,7 @@ interface PoolInfo {
   // Continuous reward fields from on-chain AmmPool
   osolaRewardPerLp: bigint;
   lastRewardTs:     number;
+  rewardsEnabled:   boolean;
 }
 
 // ── Token avatar helpers ───────────────────────────────────────────────────
@@ -110,16 +128,26 @@ function computePendingOsola(
   userRewardDebt: bigint,
   userLpRaw: bigint,
   nowSec: number,
+  cfg: EmissionCfg,
 ): number {
   if (userLpRaw === 0n || pool.totalLp <= 0) return 0;
 
-  // Advance accumulator locally
+  // Advance accumulator locally — MUST mirror the program's `update_pool_rewards`
+  // gates (amm.rs): accrue only when the pool is authority-approved, the
+  // continuous window is still open, a rate is set, and time has elapsed.
+  // Skipping these gates shows phantom "Earned" that the chain refuses to mint,
+  // making Claim revert with NothingToClaim (6007).
   let acc = pool.osolaRewardPerLp;
-  if (pool.lastRewardTs > 0) {
+  if (
+    pool.lastRewardTs > 0 &&
+    pool.rewardsEnabled &&
+    cfg.ratePerSec > 0 &&
+    continuousActive(nowSec, cfg.endEpoch)
+  ) {
     const elapsed = BigInt(Math.max(0, nowSec - pool.lastRewardTs));
-    if (elapsed > 0n && BigInt(Math.floor(pool.totalLp * 1e6)) > 0n) {
-      const totalLpRaw = BigInt(Math.floor(pool.totalLp * 1e6));
-      const newRewards = OSOLA_EMISSION_PER_SEC * elapsed;
+    const totalLpRaw = BigInt(Math.floor(pool.totalLp * 1e6));
+    if (elapsed > 0n && totalLpRaw > 0n) {
+      const newRewards = BigInt(cfg.ratePerSec) * elapsed;
       const delta = (newRewards * LP_REWARD_PRECISION) / totalLpRaw;
       acc = acc + delta;
     }
@@ -154,6 +182,7 @@ export function Pools() {
   const [pools,     setPools]     = useState<PoolInfo[]>([]);
   const [selected,  setSelected]  = useState<PoolInfo | null>(null);
   const [osolaPrice, setOsolaPrice] = useState<number | null>(null);
+  const [emissionCfg, setEmissionCfg] = useState<EmissionCfg>(EMISSIONS_OFF);
   const [loading,       setLoading]       = useState(false);
   const [status,        setStatus]        = useState("");
   const [claimAllBusy,  setClaimAllBusy]  = useState(false);
@@ -212,6 +241,7 @@ export function Pools() {
           tvlUsdc,
           osolaRewardPerLp: BigInt((p.account.osolaRewardPerLp ?? new BN(0)).toString()),
           lastRewardTs:     Number((p.account.lastRewardTs ?? new BN(0)).toString()),
+          rewardsEnabled:   !!p.account.rewardsEnabled,
         } as PoolInfo;
       });
 
@@ -231,6 +261,17 @@ export function Pools() {
       }
 
       setPools(infos);
+
+      // Live continuous-emission config from ProtocolState — the rate is dynamic
+      // and the window auto-sunsets, so the UI must read it rather than assume a
+      // constant. When off (rate 0 / window closed) no phantom rewards are shown.
+      try {
+        const st: any = await (program.account as any).protocolState.fetch(statePda);
+        setEmissionCfg({
+          ratePerSec: Number(st.continuousRatePerSec ?? 0),
+          endEpoch:   Number(st.continuousEndEpoch ?? 0),
+        });
+      } catch { setEmissionCfg(EMISSIONS_OFF); }
 
       // oSOLA spot price from oSOLA/USDC pool (used for emission APR)
       if (usdcMint) {
@@ -296,14 +337,14 @@ export function Pools() {
       for (const p of pools) {
         const userLpRaw = userLpRaws[p.address] ?? 0n;
         const debt      = userRewardDbt[p.address] ?? 0n;
-        pending[p.address] = computePendingOsola(p, debt, userLpRaw, now);
+        pending[p.address] = computePendingOsola(p, debt, userLpRaw, now, emissionCfg);
       }
       setPendingOsola(pending);
     };
     compute();
     const id = setInterval(compute, 5000);
     return () => clearInterval(id);
-  }, [pools, userLpRaws, userRewardDbt]);
+  }, [pools, userLpRaws, userRewardDbt, emissionCfg]);
 
   // ── Balance fetch for manage view ─────────────────────────────────────────
 
@@ -681,7 +722,7 @@ export function Pools() {
             <p className="text-xs text-gray-500 mb-1">oSOLA APR</p>
             <p className="font-bold text-brand-green text-sm">
               {(() => {
-                const apr = poolEmissionApr(selected.tvlUsdc, osolaPrice);
+                const apr = poolEmissionApr(selected.tvlUsdc, osolaPrice, emissionCfg, Math.floor(Date.now() / 1000));
                 return apr !== null ? `${apr.toFixed(1)}%` : "—";
               })()}
             </p>
@@ -1167,7 +1208,7 @@ export function Pools() {
 
                     <div className="hidden sm:block text-right">
                       {(() => {
-                        const apr = poolEmissionApr(p.tvlUsdc, osolaPrice);
+                        const apr = poolEmissionApr(p.tvlUsdc, osolaPrice, emissionCfg, Math.floor(Date.now() / 1000));
                         return apr !== null ? (
                           <>
                             <p className="font-bold text-brand-green text-sm">{apr.toFixed(1)}%</p>
