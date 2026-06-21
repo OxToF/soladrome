@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import {
-  getProgram, statePda, solaM, hiSolaM, oSolaM,
+  getProgram, solaM, hiSolaM, oSolaM,
   positionPda, userAta, toUi, PROGRAM_ID,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
@@ -18,7 +18,6 @@ interface PortfolioData {
   oSolaBalance:  number;
   oSolaBonus:    number;   // extra voting power from burning oSOLA this epoch
   debt:          number;
-  marketPrice:   number;
 }
 
 export function Portfolio() {
@@ -33,12 +32,11 @@ export function Portfolio() {
     const provider = new AnchorProvider(connection, wallet, {});
     const program  = getProgram(provider);
 
-    const [solaRes, hiSolaRes, oSolaRes, posRes, stateRes] = await Promise.allSettled([
+    const [solaRes, hiSolaRes, oSolaRes, posRes] = await Promise.allSettled([
       connection.getTokenAccountBalance(userAta(solaM,   wallet.publicKey)),
       connection.getTokenAccountBalance(userAta(hiSolaM, wallet.publicKey)),
       connection.getTokenAccountBalance(userAta(oSolaM,  wallet.publicKey)),
       (program.account as any).userPosition.fetch(positionPda(wallet.publicKey)),
-      (program.account as any).protocolState.fetch(statePda),
     ]);
 
     const solaBalance   = solaRes.status   === "fulfilled" ? (solaRes.value.value.uiAmount   ?? 0) : 0;
@@ -49,14 +47,6 @@ export function Portfolio() {
     let debt = 0;
     if (posRes.status === "fulfilled" && posRes.value?.usdcBorrowed) {
       debt = toUi(posRes.value.usdcBorrowed as BN);
-    }
-
-    let marketPrice = 1;
-    if (stateRes.status === "fulfilled" && stateRes.value) {
-      const s = stateRes.value as any;
-      const vUsdc = s.virtualUsdc ? toUi(s.virtualUsdc as BN) : 0;
-      const vSola = s.virtualSola ? toUi(s.virtualSola as BN) : 0;
-      if (vSola > 0) marketPrice = vUsdc / vSola;
     }
 
     // Read o_sola_bonus from UserEpochVotes for current epoch
@@ -75,7 +65,7 @@ export function Portfolio() {
       }
     } catch { /* no UEV account yet — bonus stays 0 */ }
 
-    setData({ solaBalance, hiSolaBalance, oSolaBalance, oSolaBonus, debt, marketPrice });
+    setData({ solaBalance, hiSolaBalance, oSolaBalance, oSolaBonus, debt });
   }, [connection, wallet, usdcMint]);
 
   useEffect(() => {
@@ -86,8 +76,12 @@ export function Portfolio() {
     return () => { clearInterval(id); window.removeEventListener("soladrome:refresh", onRefresh); };
   }, [load]);
 
+  // Value SOLA & hiSOLA at the $1 floor (each is floor-backed 1:1 and redeemable
+  // via sell_sola). The bonding-curve marginal price is unsuitable here: sells
+  // don't move virtual reserves, so it only ratchets up and overstates a balance
+  // you could never realise at that marginal price.
   const totalValue = data
-    ? (data.solaBalance + data.hiSolaBalance) * data.marketPrice
+    ? data.solaBalance + data.hiSolaBalance
       + data.oSolaBalance       // oSOLA floor value ≈ $1
       - data.debt
     : null;
@@ -141,7 +135,7 @@ export function Portfolio() {
           </p>
           <p className="text-xs text-gray-600">
             ≈ ${data
-              ? (data.hiSolaBalance * data.marketPrice).toLocaleString(undefined, { maximumFractionDigits: 2 })
+              ? data.hiSolaBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })
               : "0"}
           </p>
         </div>
@@ -175,7 +169,7 @@ export function Portfolio() {
           </p>
           <p className="text-xs text-gray-600">
             ≈ ${data
-              ? (data.solaBalance * data.marketPrice).toLocaleString(undefined, { maximumFractionDigits: 2 })
+              ? data.solaBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })
               : "0"}
           </p>
         </div>
