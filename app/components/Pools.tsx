@@ -557,7 +557,7 @@ export function Pools() {
           systemProgram:          SystemProgram.programId,
           rent:                   SYSVAR_RENT_PUBKEY,
         } as any)
-        .rpc();
+        .rpc({ skipPreflight: true });
       setStatus(`✅ oSOLA received — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
