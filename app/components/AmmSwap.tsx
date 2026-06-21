@@ -185,7 +185,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
         } as any)
         .instruction();
 
-      const sig = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, swapIx, ...postIxs]);
+      const sig = await sendTx(connection, wallet, [...preIxs, swapIx, ...postIxs]);
 
       setStatus(`✅ Swap — tx: ${sig.slice(0, 16)}…`);
       // Airdrop mission: swap into $SOLA.
