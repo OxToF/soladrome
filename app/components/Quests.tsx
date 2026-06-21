@@ -40,7 +40,6 @@ export function Quests() {
 
   const groups = QUEST_GROUPS;
   const group  = groups[page];
-  const total  = groups.length;
 
   // Two-step honor claim: QuestRow opens the external action (X follow/repost)
   // first, then calls this to credit. Splitting open from credit means a single
@@ -62,47 +61,24 @@ export function Quests() {
 
   return (
     <div className="card">
-      {/* ── Campaign header + pager ─────────────────────────────── */}
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-2 min-w-0">
+      {/* ── Campaign tabs ───────────────────────────────────────── */}
+      <div className="flex items-center gap-1 mb-4 border-b border-brand-border overflow-x-auto">
+        {groups.map((g, i) => (
           <button
-            onClick={() => setPage((p) => (p - 1 + total) % total)}
-            disabled={total < 2}
-            aria-label="Previous campaign"
-            className="text-gray-500 hover:text-brand-green disabled:opacity-0 disabled:cursor-default px-1 shrink-0"
+            key={g.id}
+            onClick={() => setPage(i)}
+            aria-current={i === page ? "page" : undefined}
+            className={`flex items-center gap-2 px-3 py-2 -mb-px border-b-2 text-sm font-bold whitespace-nowrap transition-colors ${
+              i === page
+                ? "text-white border-brand-green"
+                : "text-gray-500 border-transparent hover:text-gray-300"
+            }`}
           >
-            ‹
+            {g.title}
+            <TabStatus group={g} done={done} />
           </button>
-          <h2 className="text-lg font-bold text-white truncate">{group.title}</h2>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <GroupBadge group={group} done={done} />
-          <button
-            onClick={() => setPage((p) => (p + 1) % total)}
-            disabled={total < 2}
-            aria-label="Next campaign"
-            className="text-gray-500 hover:text-brand-green disabled:opacity-0 disabled:cursor-default px-1"
-          >
-            ›
-          </button>
-        </div>
+        ))}
       </div>
-
-      {/* Dots */}
-      {total > 1 && (
-        <div className="flex justify-center gap-1.5 mb-3">
-          {groups.map((g, i) => (
-            <button
-              key={g.id}
-              onClick={() => setPage(i)}
-              aria-label={`Go to ${g.title}`}
-              className={`h-1.5 rounded-full transition-all ${
-                i === page ? "w-5 bg-brand-green" : "w-1.5 bg-gray-600 hover:bg-gray-500"
-              }`}
-            />
-          ))}
-        </div>
-      )}
 
       <GroupBody group={group} done={done} wallet={!!wallet} onClaim={claim} onCopyRef={copyRef} />
 
@@ -115,17 +91,16 @@ export function Quests() {
   );
 }
 
-// ── Per-group badge (progress or completion) ───────────────────────────────
-function GroupBadge({ group, done }: { group: QuestGroup; done: Set<string> }) {
+// ── Compact per-tab status: ★ when complete, "Soon" when not live, else points ──
+function TabStatus({ group, done }: { group: QuestGroup; done: Set<string> }) {
   if (!group.live) {
-    return <span className="text-[10px] uppercase tracking-widest text-yellow-500/80 border border-yellow-500/30 rounded px-2 py-0.5">Soon</span>;
+    return <span className="text-[9px] uppercase tracking-wider text-yellow-500/70">Soon</span>;
   }
   const claimable = claimableQuests(group);
-  const earned    = claimable.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
   const completed = claimable.every((q) => done.has(q.id));
-  return completed && group.badge
-    ? <span className="badge-green">★ {group.badge}</span>
-    : <span className="badge-green">{earned} / {groupPoints(group)} pts</span>;
+  if (completed) return <span className="text-brand-green text-xs" aria-label="completed">★</span>;
+  const earned = claimable.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
+  return <span className="text-[10px] font-mono text-gray-600">{earned}/{groupPoints(group)}</span>;
 }
 
 // ── Group body: blurb + progress + quest rows + bonus ──────────────────────
