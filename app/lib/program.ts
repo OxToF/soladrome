@@ -155,7 +155,7 @@ export async function ensureAtaIx(
  */
 export async function sendTx(
   connection: Connection,
-  wallet: { publicKey: PublicKey; sendTransaction: (tx: Transaction, connection: Connection) => Promise<string> },
+  wallet: { publicKey: PublicKey; sendTransaction: (tx: Transaction, connection: Connection, options?: { skipPreflight?: boolean; maxRetries?: number }) => Promise<string> },
   ixs: TransactionInstruction[],
 ): Promise<string> {
   // Guard: catch the "no record of a prior credit" runtime error before it happens.
@@ -172,7 +172,15 @@ export async function sendTx(
   const tx = new Transaction().add(...ixs);
   tx.recentBlockhash = blockhash;
   tx.feePayer        = wallet.publicKey;
-  const sig = await wallet.sendTransaction(tx, connection);
-  await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight });
+  // skipPreflight: the dApp pre-validates these txs, and the devnet RPC's preflight
+  // simulate intermittently fails with a bare "Internal error" (-32603) under load,
+  // surfacing to the user as WalletSendTransactionError. Skipping it submits the
+  // (already-valid) tx directly; on-chain failure is still detected via the
+  // confirmation result below, so we never report a false success.
+  const sig = await wallet.sendTransaction(tx, connection, { skipPreflight: true, maxRetries: 3 });
+  const conf = await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight });
+  if (conf.value.err) {
+    throw new Error(`Transaction failed on-chain (${sig}): ${JSON.stringify(conf.value.err)}`);
+  }
   return sig;
 }
