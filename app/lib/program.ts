@@ -155,7 +155,7 @@ export async function ensureAtaIx(
  */
 export async function sendTx(
   connection: Connection,
-  wallet: { publicKey: PublicKey; sendTransaction: (tx: Transaction, connection: Connection, options?: { skipPreflight?: boolean; maxRetries?: number }) => Promise<string> },
+  wallet: { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction> },
   ixs: TransactionInstruction[],
 ): Promise<string> {
   // Guard: catch the "no record of a prior credit" runtime error before it happens.
@@ -172,12 +172,14 @@ export async function sendTx(
   const tx = new Transaction().add(...ixs);
   tx.recentBlockhash = blockhash;
   tx.feePayer        = wallet.publicKey;
-  // skipPreflight: the dApp pre-validates these txs, and the devnet RPC's preflight
-  // simulate intermittently fails with a bare "Internal error" (-32603) under load,
-  // surfacing to the user as WalletSendTransactionError. Skipping it submits the
-  // (already-valid) tx directly; on-chain failure is still detected via the
-  // confirmation result below, so we never report a false success.
-  const sig = await wallet.sendTransaction(tx, connection, { skipPreflight: true, maxRetries: 3 });
+  // Sign with the wallet, but SEND through the dApp's own (Helius) connection —
+  // NOT wallet.sendTransaction, which routes via the wallet extension's own RPC
+  // and was returning a bare -32603 "Internal error" (WalletSendTransactionError)
+  // on devnet under load. This mirrors how Anchor's .rpc() sends (sign locally →
+  // connection.sendRawTransaction) and keeps every send on the reliable RPC.
+  // skipPreflight: these txs are pre-validated; on-chain failure is caught below.
+  const signed = await wallet.signTransaction(tx);
+  const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 3 });
   const conf = await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight });
   if (conf.value.err) {
     throw new Error(`Transaction failed on-chain (${sig}): ${JSON.stringify(conf.value.err)}`);

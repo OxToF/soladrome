@@ -99,7 +99,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
       // Ensure SOLA ATA exists
       const solaAtaIx = await ensureAtaIx(connection, wallet.publicKey, solaM, wallet.publicKey);
       if (solaAtaIx) {
-        await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [solaAtaIx]);
+        await sendTx(connection, wallet, [solaAtaIx]);
       }
 
       const tx = await program.methods

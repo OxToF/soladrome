@@ -468,7 +468,7 @@ export function Pools() {
         } as any)
         .instruction();
 
-      const sig = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, addIx, ...postIxs]);
+      const sig = await sendTx(connection, wallet, [...preIxs, addIx, ...postIxs]);
       setStatus(`✅ Liquidity added — ${sig.slice(0, 16)}…`);
       trackQuest(wallet.publicKey.toBase58(), "liquidity");
       setAddA(""); setAddB("");
@@ -521,7 +521,7 @@ export function Pools() {
         } as any)
         .instruction();
 
-      const sig = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, removeIx, ...postIxs]);
+      const sig = await sendTx(connection, wallet, [...preIxs, removeIx, ...postIxs]);
       setStatus(`✅ Liquidity removed — ${sig.slice(0, 16)}…`);
       setLpAmt(""); setRetA(null); setRetB(null);
       fetchPools();
@@ -613,7 +613,7 @@ export function Pools() {
         const slice = eligible.slice(i, i + BATCH);
         const ixs   = await Promise.all(slice.map(buildClaimIx));
         const pre   = (i === 0 && oSolaAtaIx) ? [oSolaAtaIx] : [];
-        const sig   = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...pre, ...ixs]);
+        const sig   = await sendTx(connection, wallet, [...pre, ...ixs]);
         sigs.push(sig);
       }
 
