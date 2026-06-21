@@ -39,6 +39,16 @@ function poolEmissionApr(tvlUsdc: number | null, osolaPrice: number | null): num
 type View = "list" | "manage" | "create";
 type ManageTab = "add" | "remove" | "claim";
 
+// Surface the *real* cause of a failed tx. Wallet adapters wrap the underlying
+// SendTransactionError, so a bare e.message is often a useless "Internal error";
+// dig into cause/error and append the program/preflight logs when present.
+function fmtErr(e: any): string {
+  const msg  = e?.message ?? e?.error?.message ?? e?.cause?.message ?? String(e);
+  const logs = e?.logs ?? e?.cause?.logs ?? e?.error?.logs;
+  const tail = Array.isArray(logs) && logs.length ? ` — ${logs.slice(-4).join(" | ")}` : "";
+  return `${e?.name ? e.name + ": " : ""}${msg}${tail}`;
+}
+
 interface PoolInfo {
   address:  string;
   mintA:    string;
@@ -392,7 +402,7 @@ export function Pools() {
       setStatus(`✅ Pool created — ${tx.slice(0, 16)}…`);
       fetchPools(); setView("list");
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
-    } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
+    } catch (e: any) { console.error("tx failed:", e); setStatus(`❌ ${fmtErr(e)}`); }
     finally { setLoading(false); }
   }
 
@@ -464,7 +474,7 @@ export function Pools() {
       setAddA(""); setAddB("");
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
-    } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
+    } catch (e: any) { console.error("tx failed:", e); setStatus(`❌ ${fmtErr(e)}`); }
     finally { setLoading(false); }
   }
 
@@ -516,7 +526,7 @@ export function Pools() {
       setLpAmt(""); setRetA(null); setRetB(null);
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
-    } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
+    } catch (e: any) { console.error("tx failed:", e); setStatus(`❌ ${fmtErr(e)}`); }
     finally { setLoading(false); }
   }
 
@@ -551,7 +561,7 @@ export function Pools() {
       setStatus(`✅ oSOLA received — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
-    } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
+    } catch (e: any) { console.error("tx failed:", e); setStatus(`❌ ${fmtErr(e)}`); }
     finally { setLoading(false); }
   }
 
@@ -612,7 +622,8 @@ export function Pools() {
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) {
-      setClaimAllMsg(`❌ ${e?.message ?? e}`);
+      console.error("claimAll failed:", e);
+      setClaimAllMsg(`❌ ${fmtErr(e)}`);
     } finally {
       setClaimAllBusy(false);
     }
