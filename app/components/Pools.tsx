@@ -559,18 +559,17 @@ export function Pools() {
 
   async function claimAll() {
     if (!wallet) return;
-    const eligible = (wallet ? pools.filter(p => (userLpBals[p.address] ?? 0) > 0) : []);
-    if (eligible.length === 0) return;
+    // Only pools with a positive pending balance. Including a 0-pending pool would
+    // hit the program's `require!(pending > 0)` (NothingToClaim) and revert the
+    // WHOLE batch — the bug that surfaced as a generic error for some testers.
+    const eligible = pools.filter(p => (pendingOsola[p.address] ?? 0) > 0);
+    if (eligible.length === 0) { setClaimAllMsg("Nothing to claim yet."); return; }
     setClaimAllBusy(true); setClaimAllMsg("");
     try {
-      const program    = getProgram(prov());
+      const program   = getProgram(prov());
       const userOSola  = userAta(oSolaM, wallet.publicKey);
 
-      const preIxs: any[] = [];
-      const oSolaAtaIx = await ensureAtaIx(connection, wallet.publicKey, oSolaM, wallet.publicKey);
-      if (oSolaAtaIx) preIxs.push(oSolaAtaIx);
-
-      const claimIxs: any[] = await Promise.all(eligible.map(async (p) => {
+      const buildClaimIx = (p: typeof eligible[number]) => {
         const poolAddr    = new PublicKey(p.address);
         const lpMint      = lpMintPda(poolAddr);
         const userInfoPda = lpUserInfoPda(poolAddr, wallet.publicKey);
@@ -592,11 +591,24 @@ export function Pools() {
             rent:                   SYSVAR_RENT_PUBKEY,
           } as any)
           .instruction();
-      }));
+      };
 
-      const sig   = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...preIxs, ...claimIxs]);
+      // Create the oSOLA ATA once (first batch only — it exists after that).
+      const oSolaAtaIx = await ensureAtaIx(connection, wallet.publicKey, oSolaM, wallet.publicKey);
+
+      // Batch claims to stay under the 1232-byte tx size limit (~4 claims/tx is safe).
+      const BATCH = 4;
+      const sigs: string[] = [];
+      for (let i = 0; i < eligible.length; i += BATCH) {
+        const slice = eligible.slice(i, i + BATCH);
+        const ixs   = await Promise.all(slice.map(buildClaimIx));
+        const pre   = (i === 0 && oSolaAtaIx) ? [oSolaAtaIx] : [];
+        const sig   = await sendTx(connection, { publicKey: wallet.publicKey, sendTransaction }, [...pre, ...ixs]);
+        sigs.push(sig);
+      }
+
       const total = eligible.reduce((s, p) => s + (pendingOsola[p.address] ?? 0), 0);
-      setClaimAllMsg(`✅ Claimed ~${total.toFixed(4)} oSOLA from ${eligible.length} pool(s) — tx: ${sig.slice(0, 16)}…`);
+      setClaimAllMsg(`✅ Claimed ~${total.toFixed(4)} oSOLA from ${eligible.length} pool(s) — ${sigs.length} tx`);
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) {
