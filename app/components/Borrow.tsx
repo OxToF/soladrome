@@ -23,31 +23,43 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
   const [tab, setTab] = useState<Tab>("borrow");
   const [amount, setAmount] = useState("");
   const [hiSolaBal, setHiSolaBal] = useState<number | null>(null);
+  const [usdcBal, setUsdcBal] = useState<number | null>(null);
   const [borrowed, setBorrowed] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
   const available = hiSolaBal !== null ? Math.max(0, hiSolaBal - borrowed) : null;
+  // What can actually be repaid: outstanding debt, capped by wallet USDC.
+  const repayable = Math.max(0, Math.min(borrowed, usdcBal ?? 0));
 
   const fetchBalance = useCallback(async () => {
-    if (!wallet) { setHiSolaBal(null); setBorrowed(0); return; }
+    if (!wallet) { setHiSolaBal(null); setUsdcBal(null); setBorrowed(0); return; }
     try {
       const provider = new (await import("@coral-xyz/anchor")).AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
-      const [ataInfo, posResult] = await Promise.allSettled([
+      const [ataInfo, posResult, usdcInfo] = await Promise.allSettled([
         connection.getTokenAccountBalance(userAta(hiSolaM, wallet.publicKey)),
         (program.account as any).userPosition.fetch(positionPda(wallet.publicKey)),
+        usdcMint
+          ? connection.getTokenAccountBalance(userAta(usdcMint, wallet.publicKey))
+          : Promise.reject(new Error("no usdc mint")),
       ]);
       setHiSolaBal(ataInfo.status === "fulfilled" ? (ataInfo.value.value.uiAmount ?? 0) : 0);
       setBorrowed(posResult.status === "fulfilled" ? toUi(posResult.value.usdcBorrowed as BN) : 0);
-    } catch { setHiSolaBal(0); setBorrowed(0); }
-  }, [connection, wallet]);
+      setUsdcBal(usdcInfo.status === "fulfilled" ? (usdcInfo.value.value.uiAmount ?? 0) : 0);
+    } catch { setHiSolaBal(0); setUsdcBal(0); setBorrowed(0); }
+  }, [connection, wallet, usdcMint]);
 
   useEffect(() => { fetchBalance(); }, [fetchBalance]);
 
   function applyPct(pct: number) {
     if (!available || available <= 0) return;
     setAmount(((available * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
+  }
+
+  function applyRepayPct(pct: number) {
+    if (repayable <= 0) return;
+    setAmount(((repayable * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
   }
 
   async function submit() {
@@ -173,6 +185,21 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
               </button>
             </span>
           )}
+          {tab === "repay" && (
+            <span className="text-xs text-gray-500">
+              Debt:{" "}
+              <span className="text-gray-300 font-mono">
+                {borrowed.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+              </span>
+              {" · "}Wallet:{" "}
+              <button
+                className="text-gray-300 hover:text-brand-green transition-colors font-mono"
+                onClick={() => applyRepayPct(100)}
+              >
+                {(usdcBal ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} USDC
+              </button>
+            </span>
+          )}
         </div>
         <input
           className="w-full bg-transparent text-right text-2xl font-bold text-white placeholder-gray-600 focus:outline-none mb-3"
@@ -182,28 +209,31 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
           value={amount}
           onChange={(e) => { if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value)) setAmount(e.target.value); }}
         />
-        {tab === "borrow" && (
-          <div className="flex gap-2">
-            {PCT.map((pct) => (
+        <div className="flex gap-2">
+          {PCT.map((pct) => {
+            const max = tab === "borrow" ? (available ?? 0) : repayable;
+            return (
               <button
                 key={pct}
-                onClick={() => applyPct(pct)}
-                disabled={!available || available <= 0}
+                onClick={() => (tab === "borrow" ? applyPct(pct) : applyRepayPct(pct))}
+                disabled={max <= 0}
                 className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-400
                            hover:border-brand-green hover:text-brand-green transition-colors
                            disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {pct === 100 ? "Max" : `${pct}%`}
               </button>
-            ))}
-          </div>
-        )}
+            );
+          })}
+        </div>
       </div>
 
       <p className="text-xs text-gray-500 mb-4">
         {tab === "borrow"
           ? `Max = hiSOLA − already borrowed (${borrowed > 0 ? borrowed.toLocaleString(undefined, { maximumFractionDigits: 2 }) + " USDC outstanding" : "nothing borrowed"}) · No liquidation`
-          : "Repay to unlock your hiSOLA collateral"}
+          : borrowed > 0
+            ? `Max = min(debt, wallet USDC) = ${repayable.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC · Repay to unlock your hiSOLA collateral`
+            : "Nothing borrowed — no outstanding debt to repay"}
       </p>
 
       <button
