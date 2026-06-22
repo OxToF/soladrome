@@ -135,13 +135,28 @@ pub struct ProtocolState {
     /// reserve, not routine governance power. Authority may flip it to `true` via
     /// `set_founder_voting` ONLY to counter a detected takeover (sybil capture).
     pub founder_voting_enabled: bool,
+
+    // ── Continuous (Masterchef) oSOLA emission — launch bootstrap ──────────────
+    // Packed into the prior 16 spare bytes of this singleton (u32+u16 = 6 bytes;
+    // u64+u64 would overflow LEN and the singleton cannot grow without a realloc
+    // migration). Ranges are ample for a launch-bootstrap feature.
+    /// Per-pool oSOLA emission rate (6 dec base units / second) for the continuous
+    /// stream. Applies to each pool with `rewards_enabled = true`. Default 0 (off);
+    /// set by `configure_continuous_emissions`. u32 max ≈ 4 290 oSOLA/s.
+    pub continuous_rate_per_sec: u32,
+    /// Epoch at which the continuous stream stops (exclusive): emissions accrue
+    /// only while `current_epoch < continuous_end_epoch`. On-chain sunset so the
+    /// launch bootstrap auto-expires without a manual toggle. Default 0 (off).
+    /// u16 caps at epoch 65 535 (≈ year 3225) — irrelevant for a bootstrap window.
+    pub continuous_end_epoch: u16,
 }
 
 impl ProtocolState {
     // Total account space INCLUDING the 8-byte Anchor discriminator.
-    // Base:     8×Pubkey(256) + u64×6(48) + u128×2(32) + u8(1) + bool×3(3) + u64×2(16) = 356
-    // Emission: u64(8) + u16(2) + u16(2) + u64(8) = 20
-    // Total: 376 data + 8 discriminator = 384 bytes; 16 spare to 400.
+    // Base:       8×Pubkey(256) + u64×6(48) + u128×2(32) + u8(1) + bool×3(3) + u64×2(16) = 356
+    // Emission:   u64(8) + u16(2) + u16(2) + u64(8) = 20
+    // Founder:    bool(1) = 1
+    // Continuous: u32(4) + u16(2) = 6    ← carved from the prior 16 spare bytes
     // ⚠️ Update this value whenever a field is added or removed.
     pub const LEN: usize = 400;
 }

@@ -72,13 +72,10 @@ pub const LP_EMISSION_PER_EPOCH: u64 = 10_000 * 1_000_000; // 10 000 oSOLA (6 de
 /// remaining more restrictive than Aerodrome/Velodrome (which have no cap).
 pub const VOTE_WEIGHT_CAP_BPS: u64 = 3_000;
 
-/// Continuous Masterchef-style oSOLA emission per pool per second (6 decimals).
-/// devnet : 0.1 oSOLA/s  — high rate for fast visibility during testing.
-/// mainnet: 0.001 oSOLA/s ≈ 86 oSOLA/pool/day — conservative, adjust before launch.
-#[cfg(feature = "devnet")]
-pub const OSOLA_EMISSION_PER_SEC: u64 = 100_000;
-#[cfg(not(feature = "devnet"))]
-pub const OSOLA_EMISSION_PER_SEC: u64 = 1_000;
+/// Continuous Masterchef-style oSOLA emission is now authority-configured at
+/// runtime (`ProtocolState.continuous_rate_per_sec`, set via
+/// `configure_continuous_emissions`) and gated by a per-pool flag + an on-chain
+/// expiry epoch. The old compile-time `OSOLA_EMISSION_PER_SEC` const was removed.
 
 /// Precision factor for the oSOLA-per-LP accumulator.
 pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
@@ -160,6 +157,10 @@ pub mod soladrome {
         s.osola_emission_decay_bps = 9_900;         // −1 % per epoch
         s.osola_emission_floor_bps = 1_875;         // floor = 150 000 oSOLA (18.75 %)
         s.osola_emission_start_epoch = current_epoch(clock.unix_timestamp);
+        // Continuous (Masterchef) bootstrap stream OFF until the authority calls
+        // `configure_continuous_emissions`. rate 0 + end_epoch 0 => never accrues.
+        s.continuous_rate_per_sec = 0;
+        s.continuous_end_epoch = 0;
         Ok(())
     }
 
@@ -2185,6 +2186,43 @@ pub mod soladrome {
         Ok(())
     }
 
+    /// Authority-only: configure the continuous (Masterchef) oSOLA stream used to
+    /// bootstrap liquidity at launch. Sets the per-pool rate and an on-chain expiry
+    /// window of `duration_epochs` from the current epoch, after which emissions
+    /// auto-stop with no manual action. Only pools with `rewards_enabled = true`
+    /// (set via `set_pool_rewards`) actually accrue. Pass `rate_per_sec = 0` or
+    /// `duration_epochs = 0` to disable immediately.
+    pub fn configure_continuous_emissions(
+        ctx: Context<ConfigureContinuousEmissions>,
+        rate_per_sec: u64,
+        duration_epochs: u64,
+    ) -> Result<()> {
+        // Storage is u32/u16 (carved from ProtocolState spare); validate ranges.
+        require!(
+            rate_per_sec <= u32::MAX as u64,
+            SoladromeError::InvalidAmount
+        );
+        let clock = Clock::get()?;
+        let cur = current_epoch(clock.unix_timestamp);
+        let end_epoch = cur
+            .checked_add(duration_epochs)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(end_epoch <= u16::MAX as u64, SoladromeError::InvalidAmount);
+
+        let s = &mut ctx.accounts.protocol_state;
+        s.continuous_rate_per_sec = rate_per_sec as u32;
+        s.continuous_end_epoch = end_epoch as u16;
+
+        msg!(
+            "Continuous emissions: rate_per_sec={} current_epoch={} end_epoch={} ({} epochs)",
+            rate_per_sec,
+            cur,
+            end_epoch,
+            duration_epochs,
+        );
+        Ok(())
+    }
+
     // ── Vote carry-over ───────────────────────────────────────────────────────
 
     /// Save or update the caller's persistent gauge vote allocation.
@@ -2386,11 +2424,24 @@ pub mod soladrome {
             amount,
         )?;
 
+        // Snapshot governance power BEFORE mutably borrowing the tracker, mirroring
+        // vote_gauge. Without this, burning oSOLA before the first vote_gauge call
+        // would leave total_power_snapshot at 0 — zeroing the user's hiSOLA vote cap
+        // for the epoch (the vote_gauge init block is skipped once uev.epoch != 0).
+        let total_power = ctx.accounts.user_hi_sola.amount.saturating_add(
+            ve::try_load_ve_power(
+                &ctx.accounts.lock_position,
+                &ctx.accounts.user.key(),
+                clock.unix_timestamp,
+            ),
+        );
+
         // Credit voting power for this epoch only.
         let uev = &mut ctx.accounts.user_epoch_votes;
         if uev.epoch == 0 {
             uev.epoch = epoch;
             uev.bump  = ctx.bumps.user_epoch_votes;
+            uev.total_power_snapshot = total_power;
         }
         uev.o_sola_bonus = uev
             .o_sola_bonus
@@ -2760,6 +2811,13 @@ pub mod soladrome {
         amm::create_pool(ctx, fee_rate, protocol_fee_bps)
     }
 
+    /// Authority-only: approve/revoke a pool for continuous oSOLA emissions.
+    /// Pools are created permissionlessly but earn NO emissions until approved —
+    /// this bounds total oSOLA inflation to a curated set of "house" LP pools.
+    pub fn set_pool_rewards(ctx: Context<SetPoolRewards>, enabled: bool) -> Result<()> {
+        amm::set_pool_rewards(ctx, enabled)
+    }
+
     pub fn add_liquidity(
         ctx: Context<AddLiquidity>,
         amount_a_desired: u64,
@@ -3026,8 +3084,10 @@ pub mod soladrome {
         // Advancing here prevents the next add/remove/swap from retroactively
         // crediting oSOLA rewards that accrued during this arbitrage call.
         let clock_now = Clock::get()?.unix_timestamp;
+        let cont_rate = ctx.accounts.protocol_state.continuous_rate_per_sec;
+        let cont_active = amm::continuous_active(&ctx.accounts.protocol_state, clock_now);
         let pool = &mut ctx.accounts.pool;
-        amm::advance_pool_rewards(pool, clock_now);
+        amm::advance_pool_rewards(pool, clock_now, cont_rate, cont_active);
         if sola_is_a {
             pool.reserve_a = pool
                 .reserve_a
@@ -4175,6 +4235,20 @@ pub struct BurnOSolaForVotes<'info> {
     )]
     pub user_o_sola: Box<Account<'info, TokenAccount>>,
 
+    /// hiSOLA mint — needed to snapshot governance power on first init this epoch.
+    #[account(address = protocol_state.hi_sola_mint)]
+    pub hi_sola_mint: Box<Account<'info, Mint>>,
+
+    /// Caller's hiSOLA balance — snapshotted as the epoch vote cap if this is
+    /// the first instruction to init UserEpochVotes (mirrors vote_gauge).
+    #[account(constraint = user_hi_sola.mint == hi_sola_mint.key() && user_hi_sola.owner == user.key())]
+    pub user_hi_sola: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: Optional VeLockPosition [b"velock", user].
+    /// Pass any account (e.g. SystemProgram) when not using a ve lock.
+    /// If valid and unexpired, adds ve-weighted power to the snapshot.
+    pub lock_position: UncheckedAccount<'info>,
+
     /// Epoch vote tracker — created on first burn if it doesn't exist yet.
     #[account(
         init_if_needed,
@@ -4859,6 +4933,19 @@ pub struct ReplayVote<'info> {
 /// Resets the decay clock to the current epoch.
 #[derive(Accounts)]
 pub struct ConfigureEmissions<'info> {
+    #[account(
+        mut,
+        address = protocol_state.authority @ SoladromeError::Unauthorized,
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+}
+
+/// Authority-only: configure the continuous oSOLA bootstrap stream (rate + expiry).
+#[derive(Accounts)]
+pub struct ConfigureContinuousEmissions<'info> {
     #[account(
         mut,
         address = protocol_state.authority @ SoladromeError::Unauthorized,
