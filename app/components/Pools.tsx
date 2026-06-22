@@ -941,7 +941,7 @@ export function Pools() {
               <p className="text-sm text-gray-500 mt-1">oSOLA</p>
               {userLp > 0 && (
                 <p className="text-xs text-gray-600 mt-3">
-                  Emission: {(100_000 / 1e6).toFixed(1)} oSOLA/s shared across {selected.totalLp.toLocaleString(undefined, { maximumFractionDigits: 2 })} LP tokens
+                  Emission: {(emissionCfg.ratePerSec / 1e6).toLocaleString(undefined, { maximumFractionDigits: 4 })} oSOLA/s shared across {selected.totalLp.toLocaleString(undefined, { maximumFractionDigits: 2 })} LP tokens
                 </p>
               )}
             </div>

@@ -19,6 +19,12 @@ pub struct AmmPool {
     // Continuous Masterchef-style oSOLA reward accumulator (fits in old 64-byte padding)
     pub osola_reward_per_lp: u128, // accumulated oSOLA per LP × LP_REWARD_PRECISION
     pub last_reward_ts: i64,       // unix ts of last accumulator update (0 = uninit)
+    /// Whether this pool earns continuous oSOLA emissions. Authority-gated and
+    /// default false: only curated "house" pools accrue, bounding total emission
+    /// to an approved set and preventing unbounded permissionless oSOLA farming
+    /// (any pool is created permissionlessly). Carved from the trailing padding,
+    /// so existing accounts read 0 = false until the authority enables them.
+    pub rewards_enabled: bool,
 }
 
 impl AmmPool {
@@ -36,7 +42,8 @@ impl AmmPool {
         + 1    // bump
         + 16   // osola_reward_per_lp
         + 8    // last_reward_ts
-        + 40; // remaining padding
+        + 1    // rewards_enabled
+        + 39; // remaining padding
 }
 
 /// Sort two mints to guarantee a unique PDA per pair regardless of input order.

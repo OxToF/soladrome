@@ -11,7 +11,7 @@ use crate::amm_math::{self, MINIMUM_LIQUIDITY};
 use crate::amm_state::{sort_mints, AmmPool};
 use crate::errors::SoladromeError;
 use crate::state::{LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState, EPOCH_DURATION};
-use crate::{LP_REWARD_PRECISION, OSOLA_EMISSION_PER_SEC, STATE_SEED};
+use crate::{LP_REWARD_PRECISION, STATE_SEED};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 pub const AMM_POOL_SEED: &[u8] = b"amm_pool";
@@ -27,13 +27,17 @@ pub const MAX_PROTOCOL_FEE: u16 = 5_000; // 50% of fee max to protocol
 /// Advance pool's oSOLA-per-LP accumulator using elapsed seconds.
 /// Inlined to avoid borrow checker conflicts with Anchor account references.
 macro_rules! update_pool_rewards {
-    ($pool:expr, $now:expr) => {{
+    ($pool:expr, $now:expr, $rate:expr, $active:expr) => {{
         if $pool.last_reward_ts == 0 {
             $pool.last_reward_ts = $now;
         } else {
             let elapsed = ($now - $pool.last_reward_ts).max(0) as u128;
-            if elapsed > 0 && $pool.total_lp > 0 {
-                let new_rewards = (OSOLA_EMISSION_PER_SEC as u128).saturating_mul(elapsed);
+            // Accrue only when: this pool is authority-approved (`rewards_enabled`),
+            // the continuous window is still open (`$active` = current_epoch <
+            // continuous_end_epoch), and a rate is configured. The timestamp still
+            // advances otherwise so re-enabling later never back-pays.
+            if elapsed > 0 && $pool.total_lp > 0 && $pool.rewards_enabled && $active {
+                let new_rewards = ($rate as u128).saturating_mul(elapsed);
                 let delta =
                     new_rewards.saturating_mul(LP_REWARD_PRECISION) / ($pool.total_lp as u128);
                 $pool.osola_reward_per_lp = $pool.osola_reward_per_lp.saturating_add(delta);
@@ -46,18 +50,44 @@ macro_rules! update_pool_rewards {
 /// Advance the per-pool oSOLA reward accumulator.
 /// Identical to the `update_pool_rewards!` macro but callable from other modules
 /// (e.g. `flash_arbitrage` in lib.rs which manipulates pool reserves directly).
-pub fn advance_pool_rewards(pool: &mut AmmPool, now: i64) {
+/// `rate` = oSOLA base units/sec; `active` = continuous window still open.
+pub fn advance_pool_rewards(pool: &mut AmmPool, now: i64, rate: u32, active: bool) {
     if pool.last_reward_ts == 0 {
         pool.last_reward_ts = now;
     } else {
         let elapsed = (now - pool.last_reward_ts).max(0) as u128;
-        if elapsed > 0 && pool.total_lp > 0 {
-            let new_rewards = (OSOLA_EMISSION_PER_SEC as u128).saturating_mul(elapsed);
+        // Only approved pools, within the open window, with a rate set, accrue;
+        // timestamp advances regardless to avoid back-paying after a gap.
+        if elapsed > 0 && pool.total_lp > 0 && pool.rewards_enabled && active {
+            let new_rewards = (rate as u128).saturating_mul(elapsed);
             let delta = new_rewards.saturating_mul(LP_REWARD_PRECISION) / (pool.total_lp as u128);
             pool.osola_reward_per_lp = pool.osola_reward_per_lp.saturating_add(delta);
         }
         pool.last_reward_ts = now;
     }
+}
+
+/// Whether the continuous emission window is open at `now` for the given state.
+pub fn continuous_active(state: &ProtocolState, now: i64) -> bool {
+    (crate::state::current_epoch(now) as u64) < (state.continuous_end_epoch as u64)
+}
+
+/// Authority-only: approve or revoke a pool's eligibility for continuous oSOLA
+/// emissions ("house" LP pools). Settles accrual up to now under the OLD flag
+/// before flipping, so toggling never back-pays nor forfeits earned rewards.
+pub fn set_pool_rewards(ctx: Context<SetPoolRewards>, enabled: bool) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    let rate = ctx.accounts.protocol_state.continuous_rate_per_sec;
+    let active = continuous_active(&ctx.accounts.protocol_state, now);
+    let pool = &mut ctx.accounts.pool;
+    advance_pool_rewards(pool, now, rate, active);
+    pool.rewards_enabled = enabled;
+    msg!(
+        "Pool {} rewards_enabled = {}",
+        pool.key(),
+        enabled,
+    );
+    Ok(())
 }
 
 /// Compute pending oSOLA for a user given current accumulator and their debt.
@@ -107,6 +137,9 @@ pub fn create_pool(ctx: Context<CreatePool>, fee_rate: u16, protocol_fee_bps: u1
     pool.reserve_a = 0;
     pool.reserve_b = 0;
     pool.bump = ctx.bumps.pool;
+    // Permissionless pools earn NO continuous oSOLA emissions by default; the
+    // authority must explicitly approve a pool via `set_pool_rewards`.
+    pool.rewards_enabled = false;
     Ok(())
 }
 
@@ -189,9 +222,11 @@ pub fn add_liquidity(
 
     // ── Update reward accumulator (pre-mint total_lp) ─────────────────────────
     let now = Clock::get()?.unix_timestamp;
+    let cont_rate = ctx.accounts.protocol_state.continuous_rate_per_sec;
+    let cont_active = continuous_active(&ctx.accounts.protocol_state, now);
     {
         let pool = &mut ctx.accounts.pool;
-        update_pool_rewards!(pool, now);
+        update_pool_rewards!(pool, now, cont_rate, cont_active);
     }
 
     // ── Auto-harvest pending oSOLA for user's existing LP position ────────────
@@ -263,9 +298,11 @@ pub fn remove_liquidity(
 
     // ── Update reward accumulator (pre-burn total_lp) ─────────────────────────
     let now = Clock::get()?.unix_timestamp;
+    let cont_rate = ctx.accounts.protocol_state.continuous_rate_per_sec;
+    let cont_active = continuous_active(&ctx.accounts.protocol_state, now);
     {
         let pool = &mut ctx.accounts.pool;
-        update_pool_rewards!(pool, now);
+        update_pool_rewards!(pool, now, cont_rate, cont_active);
     }
 
     // ── Auto-harvest pending oSOLA ────────────────────────────────────────────
@@ -378,9 +415,11 @@ pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
 
     // Update pool accumulator
     let now = Clock::get()?.unix_timestamp;
+    let cont_rate = ctx.accounts.protocol_state.continuous_rate_per_sec;
+    let cont_active = continuous_active(&ctx.accounts.protocol_state, now);
     {
         let pool = &mut ctx.accounts.pool;
-        update_pool_rewards!(pool, now);
+        update_pool_rewards!(pool, now, cont_rate, cont_active);
     }
 
     let acc = ctx.accounts.pool.osola_reward_per_lp;
@@ -618,6 +657,25 @@ pub fn lp_auto_checkpoint(
 }
 
 // ── Account Contexts ──────────────────────────────────────────────────────────
+
+/// Authority-only toggle of a pool's continuous-emission eligibility.
+#[derive(Accounts)]
+pub struct SetPoolRewards<'info> {
+    #[account(
+        address = protocol_state.authority @ SoladromeError::Unauthorized,
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(seeds = [crate::STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, crate::state::ProtocolState>>,
+
+    #[account(
+        mut,
+        seeds = [AMM_POOL_SEED, pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Box<Account<'info, AmmPool>>,
+}
 
 #[derive(Accounts)]
 pub struct CreatePool<'info> {

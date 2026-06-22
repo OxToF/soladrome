@@ -75,6 +75,12 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
       const [userEpochVotes] = PublicKey.findProgramAddressSync(
         [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROGRAM_ID
       );
+      // Same velock PDA vote_gauge uses — try_load_ve_power returns 0 if it
+      // doesn't exist, so it's always safe to pass. Needed so burning oSOLA
+      // first snapshots hiSOLA power instead of zeroing the epoch vote cap.
+      const [lockPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("velock"), wallet.publicKey.toBuffer()], PROGRAM_ID
+      );
       const tx = await program.methods
         .burnOSolaForVotes(new BN(Math.floor(amt * 1_000_000)), new BN(ep))
         .accounts({
@@ -82,6 +88,9 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
           protocolState:  statePda,
           oSolaMint:      oSolaM,
           userOSola:      userAta(oSolaM, wallet.publicKey),
+          hiSolaMint:     hiSolaM,
+          userHiSola:     userAta(hiSolaM, wallet.publicKey),
+          lockPosition,
           userEpochVotes,
           tokenProgram:   (await import("@solana/spl-token")).TOKEN_PROGRAM_ID,
           systemProgram:  SystemProgram.programId,
