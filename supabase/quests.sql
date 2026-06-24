@@ -48,6 +48,8 @@ begin
     when 'bug'       then 50   -- verified bug report (awarded manually, bonus)
     when 'follow_x'  then 5    -- social: follow @soladrome on X (honor-system)
     when 'repost'    then 10   -- social: repost the launch thread (honor-system)
+    when 'like_video'   then 5  -- social: like the genesis video (honor-system)
+    when 'repost_video' then 10 -- social: repost the genesis video (honor-system)
     when 'referral'  then 25   -- social: awarded SERVER-SIDE only when a referred
                                -- wallet becomes a verified on-chain Genesis Tester.
                                -- NOT in VALID_QUESTS → can't be self-POSTed.

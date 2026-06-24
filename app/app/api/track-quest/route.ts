@@ -14,7 +14,7 @@ const supabase = createClient(
 
 const VALID_QUESTS = new Set([
   "connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote", "bug",
-  "follow_x", "repost",
+  "follow_x", "repost", "like_video", "repost_video",
 ]);
 
 // ── On-chain verification ────────────────────────────────────────────────────

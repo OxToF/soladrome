@@ -13,7 +13,7 @@
 export type QuestId =
   | "connect" | "faucet" | "swap" | "liquidity"
   | "stake" | "borrow" | "repay" | "vote" | "bug"
-  | "follow_x" | "repost";
+  | "follow_x" | "repost" | "like_video" | "repost_video";
 
 export interface Quest {
   /** Server-backed ids (QuestId) are trackable; any string is allowed for teasers. */
@@ -31,6 +31,9 @@ export interface Quest {
   external?: string;
   /** Honor-system claim: opens this URL in a new tab and credits the quest. */
   href?:  string;
+  /** Link-only: opens `href` in a new tab but never credits the quest (e.g. the
+   *  bug bounty, which is awarded manually). No claim button is shown. */
+  linkOnly?: boolean;
   /** Not yet claimable even inside a live group — shown greyed with "Soon". */
   soon?:  boolean;
   /** Referral: shows a "Copy link" button (copies ?ref=<wallet>); earned when a
@@ -53,6 +56,10 @@ export interface QuestGroup {
   live:  boolean;
 }
 
+// Discord server (#bugs is where verified bug reports are posted). Kept in sync
+// with DISCORD_URL in app/page.tsx.
+const DISCORD_URL = "https://discord.com/channels/1506249630218715218/1506249803451994132";
+
 // ── Campaign #1 — Genesis missions (complete all → "Genesis Tester") ─────────
 const GENESIS: QuestGroup = {
   id:    "genesis",
@@ -71,7 +78,7 @@ const GENESIS: QuestGroup = {
     { id: "vote",      label: "Vote this epoch",       desc: "Vote on a gauge for the current epoch",                points: 20, icon: "🗳️", page: "vote" },
   ],
   bonus: [
-    { id: "bug", label: "Report a bug", desc: "Find an issue → post it in Discord #bugs", points: 50, icon: "🐛", bonus: true, external: "Discord" },
+    { id: "bug", label: "Report a bug", desc: "Find an issue → post it in Discord #bugs", points: 50, icon: "🐛", bonus: true, external: "Discord", href: DISCORD_URL, linkOnly: true },
   ],
 };
 
@@ -84,6 +91,9 @@ const GENESIS: QuestGroup = {
 const SOLADROME_X = "https://x.com/intent/follow?screen_name=soladrome";
 // The pinned launch thread the "repost" quest points at.
 const LAUNCH_THREAD_URL = "https://x.com/soladrome/status/2067971567770804567";
+// The genesis-mission explainer video post the like_video / repost_video quests
+// point at — opening it is where the user likes and reposts.
+const GENESIS_VIDEO_URL = "https://x.com/soladrome/status/2069730059821175111";
 
 const SOCIAL: QuestGroup = {
   id:    "social",
@@ -94,6 +104,8 @@ const SOCIAL: QuestGroup = {
   quests: [
     { id: "follow_x", label: "Follow @soladrome on X",   desc: "Follow the official account, then claim",       points: 5,  icon: "🐦", external: "Follow", href: SOLADROME_X },
     { id: "repost",   label: "Repost the launch thread", desc: "Repost our genesis announcement, then claim",    points: 10, icon: "🔁", external: "Repost", href: LAUNCH_THREAD_URL },
+    { id: "like_video",   label: "Like the genesis video",   desc: "Like our genesis explainer video on X, then claim",   points: 5,  icon: "❤️", external: "Watch",  href: GENESIS_VIDEO_URL },
+    { id: "repost_video", label: "Repost the genesis video", desc: "Repost our genesis explainer video on X, then claim", points: 10, icon: "🎬", external: "Repost", href: GENESIS_VIDEO_URL },
     { id: "referral", label: "Refer a tester",           desc: "Share your link — friends just open it, nothing to paste. Earn when they finish the Genesis set on-chain.", points: 25, icon: "🤝", copyRef: true },
   ],
 };
