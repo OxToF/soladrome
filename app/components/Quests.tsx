@@ -201,6 +201,15 @@ function QuestRow({ q, n, done, live, wallet, onClaim, onCopyRef }: { q: Quest; 
         >
           {copied ? "Copied ✓" : "Copy link"}
         </button>
+      ) : q.linkOnly && q.href ? (
+        <a
+          href={q.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded-lg px-2.5 py-1 transition-colors shrink-0"
+        >
+          {q.external ?? "Open"} →
+        </a>
       ) : q.href ? (
         !opened ? (
           <button
