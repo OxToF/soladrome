@@ -7,7 +7,7 @@ import { AnchorProvider } from "@coral-xyz/anchor";
 import { BN } from "@coral-xyz/anchor";
 import {
   getProgram, statePda, solaM, floorVault, marketVault,
-  userAta, commonAccounts, fromUi, toUi,
+  userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { trackQuest } from "@/lib/quests";
@@ -57,7 +57,7 @@ export function BuySell() {
       const userUsdc = userAta(usdcMintPk, wallet.publicKey);
 
       if (tab === "buy") {
-        const tx = await program.methods
+        const ix = await program.methods
           .buySola(fromUi(+amount), new BN(1))
           .accounts({
             user: wallet.publicKey,
@@ -69,12 +69,13 @@ export function BuySell() {
             marketVault,
             ...commonAccounts,
           } as any)
-          .rpc();
+          .instruction();
+        const tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Bought SOLA — tx: ${tx.slice(0, 16)}…`);
         trackQuest(wallet.publicKey.toBase58(), "swap");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
-        const tx = await program.methods
+        const ix = await program.methods
           .sellSola(fromUi(+amount))
           .accounts({
             user: wallet.publicKey,
@@ -85,7 +86,8 @@ export function BuySell() {
             userUsdc,
             tokenProgram: commonAccounts.tokenProgram,
           } as any)
-          .rpc();
+          .instruction();
+        const tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Sold SOLA — tx: ${tx.slice(0, 16)}…`);
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       }

@@ -10,7 +10,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { getProgram, statePda, poolPda, solaM, oSolaM, toUi, fromUi, PROGRAM_ID } from "@/lib/program";
+import { getProgram, statePda, poolPda, solaM, oSolaM, toUi, fromUi, PROGRAM_ID, sendTx } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 const CALLER_SHARE = 0.10; // 10% to caller
@@ -119,7 +119,7 @@ export function FlashArb() {
 
       const minProfit = fromUi(Math.max(0, grossProfit * 0.95)); // 5% slippage tolerance
 
-      const tx = await program.methods
+      const ix = await program.methods
         .flashArbitrage(fromUi(amt), minProfit)
         .accounts({
           caller:                 wallet.publicKey,
@@ -140,7 +140,8 @@ export function FlashArb() {
           systemProgram:          SystemProgram.programId,
           rent:                   SYSVAR_RENT_PUBKEY,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
 
       setStatus(`✅ Flash arb executed — +${callerShare.toFixed(4)} USDC — tx: ${tx.slice(0, 16)}…`);
       setAmount("");

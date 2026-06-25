@@ -8,7 +8,7 @@ import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
   getProgram, statePda, solaM, hiSolaM, oSolaM,
   solaVaultAddr, marketVault, floorVault,
-  positionPda, userAta, commonAccounts, fromUi, toUi,
+  positionPda, userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { PROGRAM_ID } from "@/lib/program";
@@ -247,12 +247,13 @@ export function FounderPanel() {
       const posInfo = await connection.getAccountInfo(positionPda(founder));
       if (posInfo && posInfo.data.length < 136) {
         setStatus("⚙️ Migrating position account…");
-        await program.methods.migrateUserPosition()
+        const migIx = await program.methods.migrateUserPosition()
           .accounts({ user: founder, userPosition: positionPda(founder), systemProgram: SystemProgram.programId } as any)
-          .rpc();
+          .instruction();
+        await sendTx(connection, wallet, [migIx]);
       }
 
-      const tx = await program.methods
+      const ix = await program.methods
         .claimFounderHiSola()
         .accounts({
           founder,
@@ -268,7 +269,8 @@ export function FounderPanel() {
           associatedTokenProgram: commonAccounts.associatedTokenProgram,
           systemProgram:       commonAccounts.systemProgram,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setStatus(`✅ hiSOLA claimed — tx: ${tx.slice(0, 16)}…`);
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       await fetchData();
@@ -288,7 +290,7 @@ export function FounderPanel() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
       const founder  = wallet.publicKey;
-      const tx = await program.methods
+      const ix = await program.methods
         .claimFounderVesting()
         .accounts({
           founder,
@@ -300,7 +302,8 @@ export function FounderPanel() {
           associatedTokenProgram: commonAccounts.associatedTokenProgram,
           systemProgram:          commonAccounts.systemProgram,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setStatus(`✅ oSOLA claimed — tx: ${tx.slice(0, 16)}…`);
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       await fetchData();
@@ -330,7 +333,7 @@ export function FounderPanel() {
       const founder  = wallet.publicKey;
 
       if (borrowTab === "borrow") {
-        const tx = await program.methods
+        const ix = await program.methods
           .founderBorrowUsdc(fromUi(+borrowAmt))
           .accounts({
             founder,
@@ -347,11 +350,12 @@ export function FounderPanel() {
             associatedTokenProgram: commonAccounts.associatedTokenProgram,
             systemProgram:          commonAccounts.systemProgram,
           } as any)
-          .rpc();
+          .instruction();
+        const tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Borrowed ${borrowAmt} USDC — tx: ${tx.slice(0, 16)}…`);
       } else {
         // Regular repay_usdc — same PDA, no special auth check
-        const tx = await program.methods
+        const ix = await program.methods
           .repayUsdc(fromUi(+borrowAmt))
           .accounts({
             user:          founder,
@@ -361,7 +365,8 @@ export function FounderPanel() {
             userUsdc:      userAta(usdcMint, founder),
             tokenProgram:  commonAccounts.tokenProgram,
           } as any)
-          .rpc();
+          .instruction();
+        const tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Repaid ${borrowAmt} USDC — tx: ${tx.slice(0, 16)}…`);
       }
 
@@ -396,7 +401,7 @@ export function FounderPanel() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
 
-      const tx = await program.methods
+      const ix = await program.methods
         .registerPartner(hiSolaBN, lockBN)
         .accounts({
           authority:         wallet.publicKey,
@@ -406,7 +411,8 @@ export function FounderPanel() {
           systemProgram:     SystemProgram.programId,
           rent:              SYSVAR_RENT_PUBKEY,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
 
       setStatusReg(`✅ Partner registered — tx: ${tx.slice(0, 16)}…`);
       setRegWallet("");

@@ -7,7 +7,7 @@ import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
 import {
   getProgram, statePda, hiSolaM, marketVault,
-  positionPda, userAta, toUi,
+  positionPda, userAta, toUi, sendTx,
 } from "@/lib/program";
 import { TOKEN_PROGRAM_ID as SPL_TOKEN } from "@solana/spl-token";
 import { useSoladrome } from "@/lib/SoladromeContext";
@@ -79,12 +79,13 @@ export function ClaimFees() {
       const posInfo = await connection.getAccountInfo(position);
       if (posInfo && posInfo.data.length === 128) {
         setStatus("Migrating account layout…");
-        await program.methods.migrateUserPosition()
+        const migIx = await program.methods.migrateUserPosition()
           .accounts({ user: wallet.publicKey, userPosition: position, systemProgram: SystemProgram.programId } as any)
-          .rpc();
+          .instruction();
+        await sendTx(connection, wallet, [migIx]);
       }
 
-      const tx = await program.methods
+      const ix = await program.methods
         .claimFees()
         .accounts({
           user: wallet.publicKey,
@@ -96,7 +97,8 @@ export function ClaimFees() {
           userPosition: position,
           tokenProgram: SPL_TOKEN,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setStatus(`✅ Fees claimed — tx: ${tx.slice(0, 16)}…`);
     } catch (e: any) {
       setStatus(`❌ ${e?.message ?? e}`);

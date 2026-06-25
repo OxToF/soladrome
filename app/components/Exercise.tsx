@@ -102,7 +102,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
         await sendTx(connection, wallet, [solaAtaIx]);
       }
 
-      const tx = await program.methods
+      const ix = await program.methods
         .exerciseOSola(fromUi(amt))
         .accounts({
           user:                  wallet.publicKey,
@@ -115,7 +115,8 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
           userUsdc,
           ...commonAccounts,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
 
       setStatus(`✅ ${amt} oSOLA exercised → SOLA — tx: ${tx.slice(0, 16)}…`);
       setAmount("");
