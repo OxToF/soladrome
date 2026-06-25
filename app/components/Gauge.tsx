@@ -6,7 +6,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { getProgram, fromUi, toUi } from "@/lib/program";
+import { getProgram, fromUi, toUi, sendTx } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochLabel } from "@/lib/epoch";
 
@@ -164,7 +164,7 @@ export function Gauge() {
       const newBribeVault      = bribeVaultPda(pool, mint, newEp);
       const newBribeTokenVault = bribeTokensPda(pool, mint, newEp);
 
-      const tx = await program.methods
+      const ix = await program.methods
         .rolloverBribe(new BN(oldEp), new BN(newEp))
         .accounts({
           payer: wallet.publicKey, poolId: pool, rewardMint: mint,
@@ -173,7 +173,8 @@ export function Gauge() {
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
-        } as any).rpc();
+        } as any).instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setRolloverStatus(`✅ Rolled over to epoch ${newEp} — tx: ${tx.slice(0, 16)}…`);
       setRolloverEpoch(""); setRolloverPool(""); setRolloverMint("");
     } catch (e: any) {
@@ -201,7 +202,7 @@ export function Gauge() {
       const depositorToken  = getAssociatedTokenAddressSync(mint, wallet.publicKey);
       const bribeVault      = bribeVaultPda(pool, mint, ep);
       const bribeTokenVault = bribeTokensPda(pool, mint, ep);
-      const tx = await program.methods
+      const ix = await program.methods
         .depositBribe(new BN(ep), fromUi(+amount))
         .accounts({
           depositor: wallet.publicKey, poolId: pool, rewardMint: mint,
@@ -210,7 +211,8 @@ export function Gauge() {
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
-        } as any).rpc();
+        } as any).instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setStatus(`✅ Bribe deposited — tx: ${tx.slice(0, 16)}…`);
       setAmount("");
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }

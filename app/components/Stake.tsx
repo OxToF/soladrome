@@ -7,7 +7,7 @@ import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
   getProgram, statePda, solaM, hiSolaM, oSolaM, solaVaultAddr,
-  marketVault, positionPda, userAta, commonAccounts, fromUi, PROGRAM_ID,
+  marketVault, positionPda, userAta, commonAccounts, fromUi, PROGRAM_ID, sendTx,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch } from "@/lib/epoch";
@@ -96,7 +96,8 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
           systemProgram:  SystemProgram.programId,
           rent:           SYSVAR_RENT_PUBKEY,
         } as any)
-        .rpc();
+        .instruction()
+        .then((ix) => sendTx(connection, wallet!, [ix]));
       setStatus(`✅ ${amt.toFixed(4)} oSOLA brûlés → +${amt.toFixed(4)} votes — tx: ${tx.slice(0, 16)}…`);
       setAmount("");
       setOSolaBonus(prev => prev + amt);
@@ -121,21 +122,22 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
         const posInfo = await connection.getAccountInfo(position);
         if (posInfo && posInfo.data.length === 128) {
           setStatus("Migrating account layout…");
-          await program.methods
+          const migIx = await program.methods
             .migrateUserPosition()
             .accounts({
               user: wallet.publicKey,
               userPosition: position,
               systemProgram: SystemProgram.programId,
             } as any)
-            .rpc();
+            .instruction();
+          await sendTx(connection, wallet, [migIx]);
         }
 
         // user_usdc receives any pending fees auto-harvested when adding to an
         // existing stake (mirrors unstake). usdcMint comes from on-chain state.
         const stakeUserUsdc = usdcMint ? userAta(usdcMint, wallet.publicKey) : null;
 
-        const tx = await program.methods
+        const ix = await program.methods
           .stakeSola(fromUi(+amount))
           .accounts({
             user: wallet.publicKey,
@@ -146,12 +148,13 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
             userHiSola,
             solaVault: solaVaultAddr,
             marketVault,
-            usdcMint,
-            userUsdc: stakeUserUsdc,
+            usdcMint: usdcMint ?? PublicKey.default,
+            userUsdc: stakeUserUsdc ?? PublicKey.default,
             userPosition: position,
             ...commonAccounts,
           } as any)
-          .rpc();
+          .instruction();
+        const tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Staked → hiSOLA — tx: ${tx.slice(0, 16)}…`);
         trackQuest(wallet.publicKey.toBase58(), "stake");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
@@ -160,14 +163,15 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
         const posInfo = await connection.getAccountInfo(position);
         if (posInfo && posInfo.data.length === 128) {
           setStatus("Migrating account layout…");
-          await program.methods
+          const migIx = await program.methods
             .migrateUserPosition()
             .accounts({
               user: wallet.publicKey,
               userPosition: position,
               systemProgram: SystemProgram.programId,
             } as any)
-            .rpc();
+            .instruction();
+          await sendTx(connection, wallet, [migIx]);
         }
 
         const userUsdc = usdcMint ? userAta(usdcMint, wallet.publicKey) : null;
@@ -179,7 +183,7 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
           ? PublicKey.findProgramAddressSync([Buffer.from("founder_hi_vesting")], PROGRAM_ID)[0]
           : SystemProgram.programId;
 
-        const tx = await program.methods
+        const ix = await program.methods
           .unstakeHiSola(fromUi(+amount))
           .accounts({
             user: wallet.publicKey,
@@ -196,7 +200,8 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
             founderHiVesting,
             ...commonAccounts,
           } as any)
-          .rpc();
+          .instruction();
+        const tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Unstaked → SOLA — tx: ${tx.slice(0, 16)}…`);
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       }

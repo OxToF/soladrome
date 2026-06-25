@@ -8,7 +8,7 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   getProgram, statePda, solaM, hiSolaM,
-  solaVaultAddr, marketVault, positionPda, PROGRAM_ID,
+  solaVaultAddr, marketVault, positionPda, PROGRAM_ID, sendTx,
 } from "@/lib/program";
 
 const PARTNER_SEED  = Buffer.from("partner");
@@ -126,15 +126,16 @@ export function PartnerPanel() {
       const posInfo = await connection.getAccountInfo(positionPda(wallet.publicKey));
       if (posInfo && posInfo.data.length < 136) {
         setStatus("⚙️ Migrating position account…");
-        await program.methods.migrateUserPosition()
+        const migIx = await program.methods.migrateUserPosition()
           .accounts({
             user:         wallet.publicKey,
             userPosition: positionPda(wallet.publicKey),
             systemProgram: SystemProgram.programId,
-          } as any).rpc();
+          } as any).instruction();
+        await sendTx(connection, wallet, [migIx]);
       }
 
-      const tx = await program.methods.claimPartnerAllocation()
+      const ix = await program.methods.claimPartnerAllocation()
         .accounts({
           partner:          wallet.publicKey,
           protocolState:    statePda,
@@ -148,7 +149,8 @@ export function PartnerPanel() {
           partnerPosition:  positionPda(wallet.publicKey),
           tokenProgram:     TOKEN_PROGRAM_ID,
           systemProgram:    SystemProgram.programId,
-        } as any).rpc();
+        } as any).instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
 
       setStatus(`✅ Allocation claimed — tx: ${tx.slice(0, 16)}…`);
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));

@@ -7,7 +7,7 @@ import { AnchorProvider } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
 import {
   getProgram, statePda, hiSolaM, floorVault, marketVault,
-  positionPda, userAta, commonAccounts, fromUi, toUi,
+  positionPda, userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { BN } from "@coral-xyz/anchor";
@@ -77,13 +77,14 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
       const posInfo = await connection.getAccountInfo(position);
       if (posInfo && posInfo.data.length === 128) {
         setStatus("Migrating account layout…");
-        await program.methods.migrateUserPosition()
+        const migIx = await program.methods.migrateUserPosition()
           .accounts({ user: wallet.publicKey, userPosition: position, systemProgram: SystemProgram.programId } as any)
-          .rpc();
+          .instruction();
+        await sendTx(connection, wallet, [migIx]);
       }
 
       if (tab === "borrow") {
-        const tx = await program.methods
+        const ix = await program.methods
           .borrowUsdc(fromUi(+amount))
           .accounts({
             user: wallet.publicKey,
@@ -97,12 +98,13 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
             tokenProgram: commonAccounts.tokenProgram,
             systemProgram: commonAccounts.systemProgram,
           } as any)
-          .rpc();
+          .instruction();
+        const tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Borrowed ${amount} USDC — tx: ${tx.slice(0, 16)}…`);
         trackQuest(wallet.publicKey.toBase58(), "borrow");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
-        const tx = await program.methods
+        const ix = await program.methods
           .repayUsdc(fromUi(+amount))
           .accounts({
             user: wallet.publicKey,
@@ -112,7 +114,8 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
             userUsdc,
             tokenProgram: commonAccounts.tokenProgram,
           } as any)
-          .rpc();
+          .instruction();
+        const tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Repaid ${amount} USDC — tx: ${tx.slice(0, 16)}…`);
         trackQuest(wallet.publicKey.toBase58(), "repay");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));

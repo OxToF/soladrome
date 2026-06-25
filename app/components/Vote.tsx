@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import { getProgram, statePda, hiSolaM, userAta, PROGRAM_ID as PROG_ID } from "@/lib/program";
+import { getProgram, statePda, hiSolaM, userAta, PROGRAM_ID as PROG_ID, sendTx } from "@/lib/program";
 import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
@@ -132,15 +132,17 @@ export function Vote() {
     const ep = currentEpoch();
     const eb = Buffer.alloc(8);
     eb.writeBigUInt64LE(BigInt(ep));
-    const voted = new Set<string>();
-    await Promise.all(ammPools.map(async (p) => {
+    // One getMultipleAccountsInfo for all receipt PDAs instead of N getAccountInfo
+    // (existence check only) — avoids an N-request burst on rate-limited RPCs.
+    const receiptPdas = ammPools.map((p) => {
       const pool = new PublicKey(p.addr);
-      const [receiptPda] = PublicKey.findProgramAddressSync(
+      return PublicKey.findProgramAddressSync(
         [Buffer.from("vote"), wallet.publicKey.toBuffer(), pool.toBuffer(), eb], PROG_ID
-      );
-      const info = await connection.getAccountInfo(receiptPda);
-      if (info) voted.add(p.addr);
-    }));
+      )[0];
+    });
+    const infos = await connection.getMultipleAccountsInfo(receiptPdas);
+    const voted = new Set<string>();
+    ammPools.forEach((p, i) => { if (infos[i]) voted.add(p.addr); });
     setVotedPools(voted);
   }, [wallet, ammPools, connection]);
 
@@ -244,7 +246,7 @@ export function Vote() {
         [Buffer.from("epoch_votes"), epochBuf], PROG_ID
       );
 
-      const tx = await program.methods
+      const ix = await program.methods
         .voteGauge(new BN(ep), rawVotes)
         .accounts({
           user:             wallet.publicKey,
@@ -260,7 +262,8 @@ export function Vote() {
           systemProgram:   SystemProgram.programId,
           rent:            SYSVAR_RENT_PUBKEY,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setStatus(`✅ Vote recorded — tx: ${tx.slice(0, 16)}…`);
       trackQuest(wallet.publicKey.toBase58(), "vote");
       setVotes("");

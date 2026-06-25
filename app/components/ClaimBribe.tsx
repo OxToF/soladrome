@@ -10,7 +10,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { getProgram } from "@/lib/program";
+import { getProgram, sendTx } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochLabel } from "@/lib/epoch";
 
@@ -122,17 +122,22 @@ export function ClaimBribe() {
 
       setVoteEntries(entries);
 
-      // Check which (pool, mint, epoch) are already claimed
-      const claimedSet = new Set<string>();
-      await Promise.all(
-        entries.flatMap(e =>
-          knownTokens.map(async tok => {
-            const pda = claimPda(wallet.publicKey, e.pool, tok.mint, e.epoch);
-            const acc = await connection.getAccountInfo(pda);
-            if (acc) claimedSet.add(`${e.pool.toBase58()}:${tok.mint.toBase58()}:${e.epoch}`);
-          })
-        )
+      // Check which (pool, mint, epoch) are already claimed. Build every PDA up
+      // front and resolve existence with chunked getMultipleAccountsInfo (100/call)
+      // instead of one getAccountInfo per (entry × token) — that N×M burst was a
+      // primary 429 source on rate-limited RPCs.
+      const probes = entries.flatMap(e =>
+        knownTokens.map(tok => ({
+          key: `${e.pool.toBase58()}:${tok.mint.toBase58()}:${e.epoch}`,
+          pda: claimPda(wallet.publicKey, e.pool, tok.mint, e.epoch),
+        }))
       );
+      const claimedSet = new Set<string>();
+      for (let i = 0; i < probes.length; i += 100) {
+        const chunk = probes.slice(i, i + 100);
+        const infos = await connection.getMultipleAccountsInfo(chunk.map(p => p.pda));
+        chunk.forEach((p, j) => { if (infos[j]) claimedSet.add(p.key); });
+      }
       setClaimed(claimedSet);
     } catch (e) {
       console.error(e);
@@ -213,7 +218,7 @@ export function ClaimBribe() {
       const userVoteReceipt = votePda(wallet.publicKey, pool, ep);
       const userBribeClaim  = claimPda(wallet.publicKey, pool, selectedMint, ep);
 
-      const tx = await program.methods
+      const ix = await program.methods
         .claimBribe(new BN(ep))
         .accounts({
           user: wallet.publicKey, poolId: pool, rewardMint: selectedMint,
@@ -223,7 +228,8 @@ export function ClaimBribe() {
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
-        } as any).rpc();
+        } as any).instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
 
       setStatus(`✅ Bribe claimed — tx: ${tx.slice(0, 16)}…`);
       const key = `${pool.toBase58()}:${selectedMint.toBase58()}:${ep}`;

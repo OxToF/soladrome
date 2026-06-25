@@ -7,7 +7,7 @@ import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import {
   getProgram, statePda, oSolaM, lpMintPda, poolPda,
-  userAta, commonAccounts, PROGRAM_ID,
+  userAta, commonAccounts, PROGRAM_ID, sendTx,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
@@ -155,7 +155,7 @@ export function LpEmissions() {
       const lpMint   = lpMintPda(poolPk);
       const userLpAta = userAta(lpMint, wallet.publicKey);
 
-      const tx = await program.methods
+      const ix = await program.methods
         .checkpointLp(new BN(epoch))
         .accounts({
           user:              wallet.publicKey,
@@ -166,7 +166,8 @@ export function LpEmissions() {
           system_program:    (await import("@solana/web3.js")).SystemProgram.programId,
           rent:              (await import("@solana/web3.js")).SYSVAR_RENT_PUBKEY,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setPoolStatus(poolAddr, `✅ Checkpoint — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
     } catch (e: any) {
@@ -195,7 +196,7 @@ export function LpEmissions() {
         [Buffer.from("epoch_votes"), eb], PROGRAM_ID
       );
 
-      const tx = await program.methods
+      const ix = await program.methods
         .emitPoolRewards(new BN(prevEpoch))
         .accounts({
           caller:           wallet.publicKey,
@@ -207,7 +208,8 @@ export function LpEmissions() {
           system_program:   (await import("@solana/web3.js")).SystemProgram.programId,
           rent:             (await import("@solana/web3.js")).SYSVAR_RENT_PUBKEY,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setPoolStatus(poolAddr, `✅ Rewards emitted — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
     } catch (e: any) {
@@ -228,7 +230,7 @@ export function LpEmissions() {
 
       const userOSola = userAta(oSolaM, wallet.publicKey);
 
-      const tx = await program.methods
+      const ix = await program.methods
         .claimLpEmissions(new BN(epoch - 1))
         .accounts({
           user:          wallet.publicKey,
@@ -238,7 +240,8 @@ export function LpEmissions() {
           userOSola,
           ...commonAccounts,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setPoolStatus(poolAddr, `✅ oSOLA received — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
     } catch (e: any) {

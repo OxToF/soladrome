@@ -8,6 +8,7 @@ import { PublicKey } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction,
+  unpackAccount,
 } from "@solana/spl-token";
 import { SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
@@ -306,22 +307,32 @@ export function Pools() {
     const provider = new AnchorProvider(connection, wallet, {});
     const program  = getProgram(provider);
 
-    Promise.all(pools.map(async (p) => {
-      const poolPk   = new PublicKey(p.address);
-      const lpMint   = lpMintPda(poolPk);
-      const lpAta    = userAta(lpMint, wallet.publicKey);
-      const userInfo = lpUserInfoPda(poolPk, wallet.publicKey);
+    // Batch all per-pool reads into two RPC calls (getMultipleAccountsInfo)
+    // instead of 2 requests per pool. On rate-limited RPCs the old 2N burst
+    // was a primary 429 source. LP token accounts decode via unpackAccount;
+    // lpUserInfo decodes via Anchor's fetchMultiple (both single round-trips).
+    const lpAtas    = pools.map((p) => userAta(lpMintPda(new PublicKey(p.address)), wallet.publicKey));
+    const userInfos = pools.map((p) => lpUserInfoPda(new PublicKey(p.address), wallet.publicKey));
 
-      await Promise.allSettled([
-        connection.getTokenAccountBalance(lpAta).then(res => {
-          bals[p.address] = res.value.uiAmount ?? 0;
-          raws[p.address] = BigInt(res.value.amount);
-        }),
-        (program.account as any).lpUserInfo.fetch(userInfo).then((info: any) => {
-          debts[p.address] = BigInt(info.rewardDebt.toString());
-        }),
-      ]);
-    })).then(() => {
+    Promise.allSettled([
+      connection.getMultipleAccountsInfo(lpAtas),
+      (program.account as any).lpUserInfo.fetchMultiple(userInfos),
+    ]).then(([lpRes, infoRes]) => {
+      const lpInfos: (any | null)[] = lpRes.status === "fulfilled" ? lpRes.value : [];
+      const infos:   (any | null)[] = infoRes.status === "fulfilled" ? infoRes.value : [];
+      pools.forEach((p, i) => {
+        const lpInfo = lpInfos[i];
+        if (lpInfo) {
+          const acc = unpackAccount(lpAtas[i], lpInfo);
+          raws[p.address] = acc.amount;
+          bals[p.address] = Number(acc.amount) / 1e6; // LP mints use 6 decimals (protocol invariant)
+        } else {
+          raws[p.address] = 0n;
+          bals[p.address] = 0;
+        }
+        const info = infos[i];
+        debts[p.address] = info ? BigInt(info.rewardDebt.toString()) : 0n;
+      });
       setUserLpBals({ ...bals });
       setUserLpRaws({ ...raws });
       setUserRewardDbt({ ...debts });
@@ -424,7 +435,7 @@ export function Pools() {
       const [mintAPk, mintBPk] = sortMints(new PublicKey(ma), new PublicKey(mb));
       const poolAddr = poolPda(mintAPk, mintBPk);
       const lpMint   = lpMintPda(poolAddr);
-      const tx = await program.methods
+      const ix = await program.methods
         .createPool(+newFee, +newProto)
         .accounts({
           creator:       wallet.publicKey,
@@ -439,7 +450,8 @@ export function Pools() {
           systemProgram: SystemProgram.programId,
           rent:          commonAccounts.rent,
         } as any)
-        .rpc();
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setStatus(`✅ Pool created — ${tx.slice(0, 16)}…`);
       fetchPools(); setView("list");
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
@@ -582,7 +594,11 @@ export function Pools() {
       const userOSola   = userAta(oSolaM, wallet.publicKey);
       const userLp      = userAta(lpMint, wallet.publicKey);
 
-      const tx = await program.methods
+      // Ensure the oSOLA ATA exists, then route through sendTx (priority fee +
+      // dedicated un-throttled connection + rebroadcast) instead of Anchor .rpc(),
+      // which sends on the shared throttled connection and was failing with 429.
+      const oSolaAtaIx = await ensureAtaIx(connection, wallet.publicKey, oSolaM, wallet.publicKey);
+      const claimIx = await program.methods
         .claimLpRewards()
         .accounts({
           user:                   wallet.publicKey,
@@ -598,7 +614,8 @@ export function Pools() {
           systemProgram:          SystemProgram.programId,
           rent:                   SYSVAR_RENT_PUBKEY,
         } as any)
-        .rpc({ skipPreflight: true });
+        .instruction();
+      const tx = await sendTx(connection, wallet, oSolaAtaIx ? [oSolaAtaIx, claimIx] : [claimIx]);
       setStatus(`✅ oSOLA received — tx: ${tx.slice(0, 16)}…`);
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));

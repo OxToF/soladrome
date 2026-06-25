@@ -8,7 +8,7 @@ import { PublicKey } from "@solana/web3.js";
 import {
   getProgram, statePda, solaM, hiSolaM, oSolaM,
   solaVaultAddr, marketVault, floorVault,
-  positionPda, userAta, commonAccounts, fromUi, PROGRAM_ID,
+  positionPda, userAta, commonAccounts, fromUi, PROGRAM_ID, sendTx,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
@@ -139,7 +139,7 @@ export function ContributorPanel() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
       const pda      = contributorVestingPda(wallet.publicKey);
-      const tx = await program.methods.claimContributorHiSola()
+      const ix = await program.methods.claimContributorHiSola()
         .accounts({
           contributor:          wallet.publicKey,
           protocolState:        statePda,
@@ -153,7 +153,8 @@ export function ContributorPanel() {
           tokenProgram:         commonAccounts.tokenProgram,
           associatedTokenProgram: commonAccounts.associatedTokenProgram,
           systemProgram:        commonAccounts.systemProgram,
-        } as any).rpc();
+        } as any).instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setStatus(`✅ hiSOLA claimed — tx: ${tx.slice(0,16)}…`);
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       await fetchData();
@@ -169,7 +170,7 @@ export function ContributorPanel() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
       const pda      = contributorVestingPda(wallet.publicKey);
-      const tx = await program.methods.claimContributorVesting()
+      const ix = await program.methods.claimContributorVesting()
         .accounts({
           contributor:          wallet.publicKey,
           protocolState:        statePda,
@@ -179,7 +180,8 @@ export function ContributorPanel() {
           tokenProgram:         commonAccounts.tokenProgram,
           associatedTokenProgram: commonAccounts.associatedTokenProgram,
           systemProgram:        commonAccounts.systemProgram,
-        } as any).rpc();
+        } as any).instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
       setStatus(`✅ oSOLA claimed — tx: ${tx.slice(0,16)}…`);
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       await fetchData();
@@ -198,7 +200,7 @@ export function ContributorPanel() {
 
       let tx: string;
       if (borrowTab === "borrow") {
-        tx = await program.methods.contributorBorrowUsdc(fromUi(+borrowAmt))
+        const ix = await program.methods.contributorBorrowUsdc(fromUi(+borrowAmt))
           .accounts({
             contributor:            wallet.publicKey,
             protocolState:          statePda,
@@ -213,10 +215,11 @@ export function ContributorPanel() {
             tokenProgram:           commonAccounts.tokenProgram,
             associatedTokenProgram: commonAccounts.associatedTokenProgram,
             systemProgram:          commonAccounts.systemProgram,
-          } as any).rpc();
+          } as any).instruction();
+        tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Borrowed ${borrowAmt} USDC — tx: ${tx.slice(0,16)}…`);
       } else {
-        tx = await program.methods.repayUsdc(fromUi(+borrowAmt))
+        const ix = await program.methods.repayUsdc(fromUi(+borrowAmt))
           .accounts({
             user:          wallet.publicKey,
             protocolState: statePda,
@@ -224,7 +227,8 @@ export function ContributorPanel() {
             floorVault,
             userUsdc:      userAta(usdcMint, wallet.publicKey),
             tokenProgram:  commonAccounts.tokenProgram,
-          } as any).rpc();
+          } as any).instruction();
+        tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Repaid ${borrowAmt} USDC — tx: ${tx.slice(0,16)}…`);
       }
       setBorrowAmt("");

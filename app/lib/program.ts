@@ -3,7 +3,7 @@
 import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
 import {
   Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY,
-  Transaction, TransactionInstruction,
+  Transaction, TransactionInstruction, ComputeBudgetProgram,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -158,31 +158,64 @@ export async function sendTx(
   wallet: { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction> },
   ixs: TransactionInstruction[],
 ): Promise<string> {
+  // Use a DEDICATED connection for the time-critical send/confirm path, bypassing
+  // the global request throttle on the shared `connection` (providers.tsx spaces
+  // RPC starts to avoid 429s on background reads). If the confirmation polling is
+  // starved behind that throttle, the blockhash window lapses and the tx reports
+  // "block height exceeded" even when it would have landed. Transactions are
+  // low-volume and latency-critical, so they should not be throttled.
+  const txConn = new Connection(connection.rpcEndpoint, "confirmed");
+
   // Guard: catch the "no record of a prior credit" runtime error before it happens.
   // On devnet a fresh wallet has 0 SOL — without at least one tx-fee worth of lamports
   // every transaction is rejected by the runtime before any instruction runs.
-  const lamports = await connection.getBalance(wallet.publicKey);
+  const lamports = await txConn.getBalance(wallet.publicKey);
   if (lamports < 5_000) {
     throw new Error(
       "Your wallet has no devnet SOL. Click « Get SOL + USDC » to receive test tokens before trading."
     );
   }
 
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-  const tx = new Transaction().add(...ixs);
+  // Prepend a priority fee + compute-unit limit. Without these, a devnet tx with
+  // no priority can fail to be included within the blockhash validity window
+  // (~150 blocks) → "Signature … has expired: block height exceeded". The fee is
+  // tiny (price × limit ≈ 0.00002 SOL) but materially improves landing under load.
+  const budgetIxs = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+  ];
+
+  const { blockhash, lastValidBlockHeight } = await txConn.getLatestBlockhash();
+  const tx = new Transaction().add(...budgetIxs, ...ixs);
   tx.recentBlockhash = blockhash;
   tx.feePayer        = wallet.publicKey;
   // Sign with the wallet, but SEND through the dApp's own (Helius) connection —
   // NOT wallet.sendTransaction, which routes via the wallet extension's own RPC
   // and was returning a bare -32603 "Internal error" (WalletSendTransactionError)
-  // on devnet under load. This mirrors how Anchor's .rpc() sends (sign locally →
-  // connection.sendRawTransaction) and keeps every send on the reliable RPC.
-  // skipPreflight: these txs are pre-validated; on-chain failure is caught below.
+  // on devnet under load. skipPreflight: these txs are pre-validated.
   const signed = await wallet.signTransaction(tx);
-  const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 3 });
-  const conf = await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight });
-  if (conf.value.err) {
-    throw new Error(`Transaction failed on-chain (${sig}): ${JSON.stringify(conf.value.err)}`);
+  const raw = signed.serialize();
+  const sig = await txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 });
+
+  // Robust confirm: poll signature status and periodically REBROADCAST the same
+  // signed tx until it confirms or the blockhash truly expires. Rebroadcasting
+  // keeps the tx alive in validators' mempools on a congested cluster instead of
+  // relying on a single send + one-shot confirmTransaction.
+  while (true) {
+    const status = (await txConn.getSignatureStatus(sig)).value;
+    if (status?.err) {
+      throw new Error(`Transaction failed on-chain (${sig}): ${JSON.stringify(status.err)}`);
+    }
+    if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
+      return sig;
+    }
+    const height = await txConn.getBlockHeight("confirmed");
+    if (height > lastValidBlockHeight) {
+      throw new Error(
+        `Transaction expired before confirmation (${sig}). The network may be congested — please try again.`
+      );
+    }
+    await txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 1500));
   }
-  return sig;
 }

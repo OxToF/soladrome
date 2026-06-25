@@ -11,6 +11,7 @@ import {
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch } from "@/lib/epoch";
 import { PublicKey } from "@solana/web3.js";
+import { unpackAccount } from "@solana/spl-token";
 
 interface PortfolioData {
   solaBalance:   number;
@@ -32,16 +33,31 @@ export function Portfolio() {
     const provider = new AnchorProvider(connection, wallet, {});
     const program  = getProgram(provider);
 
-    const [solaRes, hiSolaRes, oSolaRes, posRes] = await Promise.allSettled([
-      connection.getTokenAccountBalance(userAta(solaM,   wallet.publicKey)),
-      connection.getTokenAccountBalance(userAta(hiSolaM, wallet.publicKey)),
-      connection.getTokenAccountBalance(userAta(oSolaM,  wallet.publicKey)),
+    // Batch the four raw account reads (3 token ATAs + the current-epoch UEV
+    // PDA) into ONE getMultipleAccountsInfo, run concurrently with the Anchor
+    // userPosition fetch: 2 RPC calls per tick instead of 5. All SOLA-family
+    // mints use 6 decimals (protocol invariant), so amount/1e6 is exact.
+    const solaAta   = userAta(solaM,   wallet.publicKey);
+    const hiSolaAta  = userAta(hiSolaM, wallet.publicKey);
+    const oSolaAta   = userAta(oSolaM,  wallet.publicKey);
+    const ep = currentEpoch();
+    const eb = Buffer.alloc(8);
+    eb.writeBigUInt64LE(BigInt(ep));
+    const [uevPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROGRAM_ID
+    );
+
+    const [multiRes, posRes] = await Promise.allSettled([
+      connection.getMultipleAccountsInfo([solaAta, hiSolaAta, oSolaAta, uevPda]),
       (program.account as any).userPosition.fetch(positionPda(wallet.publicKey)),
     ]);
 
-    const solaBalance   = solaRes.status   === "fulfilled" ? (solaRes.value.value.uiAmount   ?? 0) : 0;
-    const hiSolaBalance = hiSolaRes.status === "fulfilled" ? (hiSolaRes.value.value.uiAmount ?? 0) : 0;
-    const oSolaBalance  = oSolaRes.status  === "fulfilled" ? (oSolaRes.value.value.uiAmount  ?? 0) : 0;
+    const multi = multiRes.status === "fulfilled" ? multiRes.value : [null, null, null, null];
+    const balOf = (info: any, ata: PublicKey) =>
+      info ? Number(unpackAccount(ata, info).amount) / 1e6 : 0;
+    const solaBalance   = balOf(multi[0], solaAta);
+    const hiSolaBalance = balOf(multi[1], hiSolaAta);
+    const oSolaBalance  = balOf(multi[2], oSolaAta);
 
     // UserPosition only has: owner, usdcBorrowed, feesDebt, bump
     let debt = 0;
@@ -49,21 +65,13 @@ export function Portfolio() {
       debt = toUi(posRes.value.usdcBorrowed as BN);
     }
 
-    // Read o_sola_bonus from UserEpochVotes for current epoch
-    // Layout: discriminator(8) + epoch(8) + allocated(8) + total_power_snapshot(8) + o_sola_bonus(8)
+    // o_sola_bonus from UserEpochVotes (current epoch). Layout:
+    // discriminator(8) + epoch(8) + allocated(8) + total_power_snapshot(8) + o_sola_bonus(8)
     let oSolaBonus = 0;
-    try {
-      const ep = currentEpoch();
-      const eb = Buffer.alloc(8);
-      eb.writeBigUInt64LE(BigInt(ep));
-      const [uevPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROGRAM_ID
-      );
-      const uevInfo = await connection.getAccountInfo(uevPda);
-      if (uevInfo && uevInfo.data.length >= 40) {
-        oSolaBonus = Number(uevInfo.data.readBigUInt64LE(32)) / 1e6;
-      }
-    } catch { /* no UEV account yet — bonus stays 0 */ }
+    const uevInfo = multi[3];
+    if (uevInfo && uevInfo.data.length >= 40) {
+      oSolaBonus = Number(uevInfo.data.readBigUInt64LE(32)) / 1e6;
+    }
 
     setData({ solaBalance, hiSolaBalance, oSolaBalance, oSolaBonus, debt });
   }, [connection, wallet, usdcMint]);
