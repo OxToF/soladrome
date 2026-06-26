@@ -1,8 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // @kunalabs-io/sui-snap-wallet ships TS source with template literal types
-  // that Webpack's SWC loader rejects — transpile the package via Next.js
-  transpilePackages: ["@kunalabs-io/sui-snap-wallet"],
   // Wormhole Connect v6 (Vite build) hard-codes absolute paths like /main.css.
   // Rewrite to our local copy in /public/wh so the preload succeeds.
   async rewrites() {
@@ -22,6 +19,9 @@ const nextConfig = {
     config.resolve.alias = {
       ...config.resolve.alias,
       "pino-pretty": false,
+      // sui-snap-wallet ships raw TS source with template literal types that
+      // Webpack can't parse. Point to the compiled dist instead.
+      "@kunalabs-io/sui-snap-wallet": require.resolve("@kunalabs-io/sui-snap-wallet"),
     };
     return config;
   },
