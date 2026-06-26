@@ -9,7 +9,9 @@ import {
   getAccount,
 } from "@solana/spl-token";
 
-const RPC      = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
+// Server-side faucet: use public devnet RPC to avoid burning Helius free-tier quota
+// (the frontend throttle doesn't apply here — Connection is created raw with no gate)
+const RPC      = process.env.FAUCET_RPC_URL ?? "https://api.devnet.solana.com";
 const KP_JSON  = process.env.FAUCET_KEYPAIR!;      // JSON array of secret key bytes
 const USDC_STR = process.env.FAUCET_USDC_MINT!;    // devnet USDC mint
 const AMOUNT   = 500_000_000;                       // 500 USDC (6 decimals)
