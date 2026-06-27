@@ -13,9 +13,13 @@ const supabase = createClient(
 );
 
 const VALID_QUESTS = new Set([
-  "connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote", "bug",
+  "connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote",
   "follow_x", "repost", "like_video", "repost_video",
 ]);
+// "bug" is intentionally NOT POSTable through this public endpoint. It's a
+// manually-awarded bonus (verified bug reports, severity-weighted) credited only
+// via the Supabase record_quest RPC (service key / SQL editor) — so it can't be
+// self-farmed by curling this route. Same server-side-only rationale as "referral".
 
 // ── On-chain verification ────────────────────────────────────────────────────
 // These quests require real protocol state on-chain before we credit them. They
