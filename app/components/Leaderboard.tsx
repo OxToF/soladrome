@@ -22,17 +22,21 @@ export function Leaderboard() {
   const wallet = useAnchorWallet();
   const me = wallet?.publicKey.toBase58();
   const [rows, setRows]       = useState<Row[]>([]);
+  const [total, setTotal]     = useState(0);
+  const [meInfo, setMeInfo]   = useState<{ row: Row; rank: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage]       = useState(0);
 
   const refresh = useCallback(async () => {
     try {
-      const res  = await fetch("/api/leaderboard");
+      const res  = await fetch(me ? `/api/leaderboard?me=${me}` : "/api/leaderboard");
       const data = await res.json();
       setRows(data.rows ?? []);
+      setTotal(data.total ?? (data.rows?.length ?? 0));
+      setMeInfo(data.me ?? null);
     } catch { /* keep previous */ }
     finally { setLoading(false); }
-  }, []);
+  }, [me]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -42,10 +46,13 @@ export function Leaderboard() {
     return () => window.removeEventListener("quests:refresh", h);
   }, [refresh]);
 
-  const total     = rows.length;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // We only ship the top N rows; pagination spans what we received, not `total`.
+  const shown     = rows.length;
+  const pageCount = Math.max(1, Math.ceil(shown / PAGE_SIZE));
   const myIndex   = useMemo(() => (me ? rows.findIndex((r) => r.wallet_address === me) : -1), [rows, me]);
-  const myRow     = myIndex >= 0 ? rows[myIndex] : null;
+  // My row is either in the visible top N, or returned separately (rank > N).
+  const myRow     = myIndex >= 0 ? rows[myIndex] : meInfo?.row ?? null;
+  const myRank    = myIndex >= 0 ? myIndex + 1 : meInfo?.rank ?? -1;
   const myPage    = myIndex >= 0 ? Math.floor(myIndex / PAGE_SIZE) : -1;
 
   useEffect(() => { if (page > pageCount - 1) setPage(pageCount - 1); }, [pageCount, page]);
@@ -58,10 +65,10 @@ export function Leaderboard() {
       <div className="flex items-center justify-between mb-1">
         <h2 className="text-lg font-bold text-white">Leaderboard</h2>
         <span className="text-xs text-gray-500">
-          <span className="text-brand-green font-semibold">{total}</span> verified contributors
+          <span className="text-brand-green font-semibold">{total}</span> on-chain wallets
         </span>
       </div>
-      <p className="text-[11px] text-gray-600 mb-4">On-chain verified — stake, borrow or vote to appear.</p>
+      <p className="text-[11px] text-gray-600 mb-4">Wallets with at least one on-chain action — stake, borrow or vote to appear. Not sybil-filtered.</p>
 
       {loading ? (
         <p className="text-xs text-gray-600">Loading…</p>
@@ -100,7 +107,7 @@ export function Leaderboard() {
           {myRow && (
             <div className="mt-4 pt-3 border-t border-brand-border">
               <div className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm bg-brand-green/10 border border-brand-green/30">
-                <span className="w-7 shrink-0 text-center font-mono font-bold text-brand-green">#{myIndex + 1}</span>
+                <span className="w-7 shrink-0 text-center font-mono font-bold text-brand-green">#{myRank}</span>
                 <span className="font-mono flex-1 truncate text-brand-green">
                   {short(myRow.wallet_address)}
                   <span className="ml-2 text-[10px] text-brand-green/70">you</span>
@@ -108,7 +115,7 @@ export function Leaderboard() {
                 <span className="text-xs text-gray-500 shrink-0">{myRow.quests}🎯</span>
                 <span className="font-mono font-bold text-white shrink-0 w-14 text-right">{myRow.points}</span>
               </div>
-              {myPage !== page && (
+              {myIndex >= 0 && myPage !== page && (
                 <button onClick={() => setPage(myPage)} className="mt-2 w-full text-[11px] text-gray-400 hover:text-brand-green transition-colors">
                   Jump to my position (page {myPage + 1}) →
                 </button>
