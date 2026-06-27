@@ -14,7 +14,7 @@ const supabase = createClient(
 
 const VALID_QUESTS = new Set([
   "connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote",
-  "follow_x", "repost", "like_video", "repost_video",
+  "follow_x", "repost", "like_video", "repost_video", "solana_id",
 ]);
 // "bug" is intentionally NOT POSTable through this public endpoint. It's a
 // manually-awarded bonus (verified bug reports, severity-weighted) credited only
@@ -27,7 +27,7 @@ const VALID_QUESTS = new Set([
 // longer farm them by POSTing to this endpoint directly — it must actually stake,
 // borrow and vote on-chain. The cheap quests (connect/faucet/swap/liquidity/repay)
 // stay unverified, but you can't qualify without these three.
-const GATED = new Set(["stake", "borrow", "vote"]);
+const GATED = new Set(["stake", "borrow", "vote", "solana_id"]);
 const EPOCH_DURATION = 604_800;
 
 const RPC = process.env.NEXT_PUBLIC_RPC_URL || process.env.RPC_URL || "https://api.devnet.solana.com";
@@ -65,6 +65,21 @@ async function checkOnce(quest: string, user: PublicKey): Promise<boolean> {
       )[0];
       const ev: any = await (program.account as any).userEpochVotes.fetchNullable(uev);
       return !!ev && BigInt(ev.allocated.toString()) > 0n;
+    }
+    case "solana_id": {
+      // Verify via Solana ID Score API — isSolanaIdUser = true means the wallet
+      // has minted its Solana ID NFT. API key is server-side only (never exposed).
+      try {
+        const apiKey = process.env.SOLANA_ID_API_KEY;
+        if (!apiKey) return false;
+        const res = await fetch(
+          `https://score.solana.id/api/solid-score/${user.toBase58()}`,
+          { headers: { "Content-Type": "application/json", "x-api-key": apiKey } },
+        );
+        if (!res.ok) return false;
+        const json = await res.json();
+        return json.isSolanaIdUser === true;
+      } catch { return false; }
     }
     default:
       return true; // not gated on-chain

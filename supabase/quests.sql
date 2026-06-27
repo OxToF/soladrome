@@ -50,6 +50,7 @@ begin
     when 'repost'    then 10   -- social: repost the launch thread (honor-system)
     when 'like_video'   then 5  -- social: like the genesis video (honor-system)
     when 'repost_video' then 10 -- social: repost the genesis video (honor-system)
+    when 'solana_id' then 50   -- ecosystem: minted Solana ID NFT (verified via Score API)
     when 'referral'  then 25   -- social: awarded SERVER-SIDE only when a referred
                                -- wallet becomes a verified on-chain Genesis Tester.
                                -- NOT in VALID_QUESTS → can't be self-POSTed.
