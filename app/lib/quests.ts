@@ -56,9 +56,10 @@ export interface QuestGroup {
   live:  boolean;
 }
 
-// Discord server (#bugs is where verified bug reports are posted). Kept in sync
-// with DISCORD_URL in app/page.tsx.
+// Discord server (general community). Kept in sync with DISCORD_URL in app/page.tsx.
 const DISCORD_URL = "https://discord.com/channels/1506249630218715218/1506249803451994132";
+// Telegram thread where verified bug reports are posted.
+const BUG_REPORT_URL = "https://t.me/Soladrome_Labs/773";
 
 // ── Campaign #1 — Genesis missions (complete all → "Genesis Tester") ─────────
 const GENESIS: QuestGroup = {
@@ -78,7 +79,7 @@ const GENESIS: QuestGroup = {
     { id: "vote",      label: "Vote this epoch",       desc: "Vote on a gauge for the current epoch",                points: 20, icon: "🗳️", page: "vote" },
   ],
   bonus: [
-    { id: "bug", label: "Report a bug", desc: "Find an issue → post it in Discord #bugs", points: 50, icon: "🐛", bonus: true, external: "Discord", href: DISCORD_URL, linkOnly: true },
+    { id: "bug", label: "Report a bug", desc: "Find an issue → post it in our Telegram bugs thread", points: 50, icon: "🐛", bonus: true, external: "Telegram", href: BUG_REPORT_URL, linkOnly: true },
   ],
 };
 
