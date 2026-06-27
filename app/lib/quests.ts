@@ -13,7 +13,8 @@
 export type QuestId =
   | "connect" | "faucet" | "swap" | "liquidity"
   | "stake" | "borrow" | "repay" | "vote" | "bug"
-  | "follow_x" | "repost" | "like_video" | "repost_video";
+  | "follow_x" | "repost" | "like_video" | "repost_video"
+  | "solana_id";
 
 export interface Quest {
   /** Server-backed ids (QuestId) are trackable; any string is allowed for teasers. */
@@ -111,7 +112,31 @@ const SOCIAL: QuestGroup = {
   ],
 };
 
-export const QUEST_GROUPS: QuestGroup[] = [GENESIS, SOCIAL];
+// ── Campaign #3 — Ecosystem Missions ─────────────────────────────────────────
+// Quests that integrate partner protocols. Solana ID: costs 0.1 SOL to mint
+// (hence the premium 50 pts) — verified server-side via the Solana ID Score API
+// (isSolanaIdUser === true). Gate: do NOT post/enable before confirming free vs
+// paid mint resolution and receiving final API key from Simon Molitor.
+const ECOSYSTEM: QuestGroup = {
+  id:    "ecosystem",
+  title: "Ecosystem Missions",
+  blurb: "Integrate with partner protocols to earn bonus $SOLA and strengthen your on-chain reputation.",
+  badge: "Ecosystem Pioneer",
+  live:  true,
+  quests: [
+    {
+      id:       "solana_id",
+      label:    "Mint your Solana ID",
+      desc:     "Create your on-chain identity at solana.id — your SOLID Score becomes your sybil shield on Soladrome.",
+      points:   50,
+      icon:     "🪪",
+      external: "Mint",
+      href:     "https://solana.id",
+    },
+  ],
+};
+
+export const QUEST_GROUPS: QuestGroup[] = [GENESIS, SOCIAL, ECOSYSTEM];
 
 /** Claimable core quests in a group (excludes deferred "soon" teasers). */
 export function claimableQuests(g: QuestGroup): Quest[] {
