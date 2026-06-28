@@ -304,10 +304,9 @@ export default function Home() {
       {/* ── App (connected) ───────────────────────────────────── */}
       {wallet && page !== "airdrop" && (
         <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-8">
-          <Stats />
-
-          {/* Mobile nav */}
-          <div className="flex md:hidden gap-1.5 mb-6 overflow-x-auto pb-1 scrollbar-none">
+          {/* Mobile nav — kept above Stats so navigation is reachable without
+              scrolling the full stats grid on small screens */}
+          <div className="flex md:hidden gap-1.5 mb-5 overflow-x-auto pb-1 scrollbar-none sticky top-[60px] z-40 -mx-4 px-4 pt-3 bg-brand-dark/90 backdrop-blur-md">
             {visibleNav.map(({ id, label }) => (
               <button
                 key={id}
@@ -338,6 +337,8 @@ export default function Home() {
               Telegram
             </a>
           </div>
+
+          <Stats />
 
           {/* ── Home — Beradrome-style layout ─────────────────── */}
           {page === "home" && (

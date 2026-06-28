@@ -239,7 +239,7 @@ export function Gauge() {
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: tok.color }} />
                 <span className="text-xs font-semibold text-gray-200 flex-shrink-0">{tok.symbol}</span>
-                <span className="text-[10px] text-gray-600 font-mono truncate">
+                <span className="hidden sm:block text-[10px] text-gray-600 font-mono truncate">
                   {tok.mint.slice(0, 6)}…{tok.mint.slice(-4)}
                 </span>
               </div>

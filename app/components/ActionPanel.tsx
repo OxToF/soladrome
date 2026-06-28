@@ -32,7 +32,7 @@ export function ActionPanel() {
   return (
     <div className="card glow">
       {/* ── Tab bar ─────────────────────────────────────── */}
-      <div className="flex gap-0 mb-6 border-b border-brand-border -mx-6 px-6">
+      <div className="flex gap-0 mb-6 border-b border-brand-border -mx-5 px-5">
         {TABS.map(({ id, label, hint }) => (
           <button
             key={id}
