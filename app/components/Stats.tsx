@@ -62,7 +62,7 @@ export function Stats() {
   }, [s, ammPools, vaultInfos, usdcMint]);
 
   if (loading || !stats) return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9 gap-4 mb-8">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9 gap-2.5 sm:gap-4 mb-6 sm:mb-8">
       {Array.from({ length: 9 }).map((_, i) => (
         <div key={i} className="card text-center animate-pulse">
           <div className="h-3 bg-brand-border rounded mb-2 mx-auto w-2/3" />
@@ -81,42 +81,42 @@ export function Stats() {
     : null;
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9 gap-4 mb-8">
-      <div className="card text-center">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9 gap-2.5 sm:gap-4 mb-6 sm:mb-8">
+      <div className="card p-3 sm:p-5 text-center">
         <p className="text-xs text-gray-500 mb-1">Protocol TVL</p>
-        <p className="font-bold text-brand-green">
+        <p className="font-bold text-brand-green text-sm sm:text-base leading-tight break-words">
           ${stats.tvl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
         </p>
       </div>
-      <div className="card text-center">
+      <div className="card p-3 sm:p-5 text-center">
         <p className="text-xs text-gray-500 mb-1">hiSOLA Yield</p>
-        <p className="font-bold text-brand-green">
+        <p className="font-bold text-brand-green text-sm sm:text-base leading-tight break-words">
           {stats.pendingPerHiSola > 0
             ? `${stats.pendingPerHiSola.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDC`
             : "—"}
         </p>
         <p className="text-[10px] text-gray-600 mt-0.5">per hiSOLA · claimable</p>
       </div>
-      <div className="card text-center">
+      <div className="card p-3 sm:p-5 text-center">
         <p className="text-xs text-gray-500 mb-1">SOLA Supply</p>
-        <p className="font-bold text-brand-green">
+        <p className="font-bold text-brand-green text-sm sm:text-base leading-tight break-words">
           {stats.totalSola.toLocaleString(undefined, { maximumFractionDigits: 0 })}
         </p>
       </div>
-      <div className="card text-center">
+      <div className="card p-3 sm:p-5 text-center">
         <p className="text-xs text-gray-500 mb-1">hiSOLA Staked</p>
-        <p className="font-bold text-brand-green">
+        <p className="font-bold text-brand-green text-sm sm:text-base leading-tight break-words">
           {stats.totalHiSola.toLocaleString(undefined, { maximumFractionDigits: 0 })}
         </p>
       </div>
-      <div className="card text-center">
+      <div className="card p-3 sm:p-5 text-center">
         <p className="text-xs text-gray-500 mb-1">Curve price</p>
-        <p className="font-bold text-brand-green">{fmt4(stats.curvePrice)} USDC</p>
+        <p className="font-bold text-brand-green text-sm sm:text-base leading-tight break-words">{fmt4(stats.curvePrice)} USDC</p>
         <p className="text-[10px] text-gray-600 mt-0.5">primary issuance</p>
       </div>
-      <div className="card text-center">
+      <div className="card p-3 sm:p-5 text-center">
         <p className="text-xs text-gray-500 mb-1">AMM price</p>
-        <p className="font-bold text-brand-green">
+        <p className="font-bold text-brand-green text-sm sm:text-base leading-tight break-words">
           {stats.solaPrice !== null ? `${fmt4(stats.solaPrice)} USDC` : "No pool"}
         </p>
         {spreadPct !== null && (
@@ -125,9 +125,9 @@ export function Stats() {
           </p>
         )}
       </div>
-      <div className="card text-center">
+      <div className="card p-3 sm:p-5 text-center">
         <p className="text-xs text-gray-500 mb-1">oSOLA</p>
-        <p className="font-bold text-brand-green">
+        <p className="font-bold text-brand-green text-sm sm:text-base leading-tight break-words">
           {stats.osolaMktPrice !== null ? `${fmt4(stats.osolaMktPrice)} USDC` : "—"}
         </p>
         <p className="text-[10px] text-gray-600 mt-0.5">market price</p>
@@ -137,14 +137,14 @@ export function Stats() {
           </p>
         )}
       </div>
-      <div className="card text-center">
+      <div className="card p-3 sm:p-5 text-center">
         <p className="text-xs text-gray-500 mb-1">Floor Price</p>
-        <p className="font-bold text-brand-green">1.0000 USDC</p>
+        <p className="font-bold text-brand-green text-sm sm:text-base leading-tight break-words">1.0000 USDC</p>
         <p className="text-[10px] text-gray-600 mt-0.5">guaranteed</p>
       </div>
-      <div className="card text-center">
+      <div className="card p-3 sm:p-5 text-center">
         <p className="text-xs text-gray-500 mb-1">Protocol Fees</p>
-        <p className="font-bold text-brand-green">
+        <p className="font-bold text-brand-green text-sm sm:text-base leading-tight break-words">
           {stats.accumulatedFees.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC
         </p>
       </div>

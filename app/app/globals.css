@@ -160,6 +160,7 @@ body {
   background: #00e887 !important;
   color: #000 !important;
   transition: all 0.2s ease !important;
+  line-height: 1.2 !important;   /* override adapter's 48px line-height that bloated the header button */
 }
 
 .wallet-adapter-button:not([disabled]):hover {
