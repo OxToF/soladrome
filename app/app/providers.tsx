@@ -5,10 +5,20 @@ import { useMemo } from "react";
 import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter, SolflareWalletAdapter } from "@solana/wallet-adapter-wallets";
+import {
+  SolanaMobileWalletAdapter,
+  createDefaultAddressSelector,
+  createDefaultAuthorizationResultCache,
+  createDefaultWalletNotFoundHandler,
+} from "@solana-mobile/wallet-adapter-mobile";
 import { SoladromeProvider } from "@/lib/SoladromeContext";
 
 const ENDPOINT  = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
 const FALLBACK  = "https://api.devnet.solana.com";
+
+// Public origin shown to the wallet in the connect/authorize dialog (and used
+// for Digital Asset Links when wrapped as an Android APK). Override per-env.
+const APP_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://soladrome.finance";
 
 // Token-bucket throttle: burst capacity of 4 lets the first 4 concurrent requests
 // fire immediately (important on mount when several components fetch in parallel),
@@ -60,8 +70,27 @@ function throttledFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  // On Android, wallet-adapter-react auto-registers a Mobile Wallet Adapter, but
+  // supplying our own lets us brand the connect dialog (name + icon) and pin the
+  // cluster — important for the Solana Seeker / dApp Store experience. On desktop
+  // & iOS this adapter reports Unsupported and is hidden, so Phantom/Solflare are
+  // used instead. cluster is "devnet" for now — switch to "mainnet-beta" at launch.
   const wallets = useMemo(
-    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
+    () => [
+      new SolanaMobileWalletAdapter({
+        addressSelector: createDefaultAddressSelector(),
+        appIdentity: {
+          name: "Soladrome",
+          uri: APP_URL,
+          icon: "icons/icon-512.png", // relative to uri
+        },
+        authorizationResultCache: createDefaultAuthorizationResultCache(),
+        cluster: "devnet",
+        onWalletNotFound: createDefaultWalletNotFoundHandler(),
+      }),
+      new PhantomWalletAdapter(),
+      new SolflareWalletAdapter(),
+    ],
     []
   );
   return (

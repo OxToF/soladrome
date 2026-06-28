@@ -2956,7 +2956,14 @@
     bs58 "^6.0.0"
     js-base64 "^3.7.5"
 
-"@solana-mobile/mobile-wallet-adapter-protocol@^2.2.0":
+"@solana-mobile/mobile-wallet-adapter-protocol-web3js@^2.2.9":
+  version "2.2.9"
+  resolved "https://registry.yarnpkg.com/@solana-mobile/mobile-wallet-adapter-protocol-web3js/-/mobile-wallet-adapter-protocol-web3js-2.2.9.tgz#ea75f809f96fa6e467fa4289b6c19281c02e0367"
+  integrity sha512-TAMItAuOb7duwYQ+PZ6JNqw/6TEhCWLObHF5uOBGV9tjCozHGVunxa7lTeuHAWIgO68IAo86MZdE5kethDATpw==
+  dependencies:
+    "@solana-mobile/mobile-wallet-adapter-protocol" "^2.2.9"
+
+"@solana-mobile/mobile-wallet-adapter-protocol@^2.2.0", "@solana-mobile/mobile-wallet-adapter-protocol@^2.2.9":
   version "2.2.9"
   resolved "https://registry.yarnpkg.com/@solana-mobile/mobile-wallet-adapter-protocol/-/mobile-wallet-adapter-protocol-2.2.9.tgz#4400229c0bcbcf39226e1d0782a79e2e61fda1c5"
   integrity sha512-qtWJq0hzKgngVG0So2ViBRPYDculaxgj40WDSP1nzgdg85MXyAmTEjQqV10uSVbZRm9b1hl601HDJX1sHTgeiw==
@@ -2994,6 +3001,21 @@
   optionalDependencies:
     "@react-native-async-storage/async-storage" "^1.17.7"
 
+"@solana-mobile/wallet-adapter-mobile@^2.2.8":
+  version "2.2.9"
+  resolved "https://registry.yarnpkg.com/@solana-mobile/wallet-adapter-mobile/-/wallet-adapter-mobile-2.2.9.tgz#f24130eda56c2b934492dfa8e2f4076238c733d3"
+  integrity sha512-IWzI2pUmEqBsTNo+XqMTY38NL5TSdMetES59N0Cmuf+zYqiS56rHdMwD/R2IOy7E4yKa1CsuHfCh6CE6zk4ViQ==
+  dependencies:
+    "@solana-mobile/mobile-wallet-adapter-protocol" "^2.2.9"
+    "@solana-mobile/mobile-wallet-adapter-protocol-web3js" "^2.2.9"
+    "@solana-mobile/wallet-standard-mobile" "^0.5.3"
+    "@solana/wallet-adapter-base" "^0.9.27"
+    "@solana/wallet-standard-features" "^1.3.0"
+    "@wallet-standard/core" "^1.1.1"
+    tslib "^2.8.1"
+  optionalDependencies:
+    "@react-native-async-storage/async-storage" "^1.17.7"
+
 "@solana-mobile/wallet-standard-mobile@0.4.1":
   version "0.4.1"
   resolved "https://registry.yarnpkg.com/@solana-mobile/wallet-standard-mobile/-/wallet-standard-mobile-0.4.1.tgz#3c046f8df5d7cb1987e7277d074c7bd9e8cafdaf"
@@ -3021,6 +3043,22 @@
     "@wallet-standard/wallet" "^1.1.0"
     bs58 "^6.0.0"
     js-base64 "^3.7.5"
+    qrcode "^1.5.4"
+    tslib "^2.8.1"
+  optionalDependencies:
+    "@react-native-async-storage/async-storage" "^1.17.7"
+
+"@solana-mobile/wallet-standard-mobile@^0.5.3":
+  version "0.5.3"
+  resolved "https://registry.yarnpkg.com/@solana-mobile/wallet-standard-mobile/-/wallet-standard-mobile-0.5.3.tgz#27fb52fce64fc0d17c0af4f87ce76d0314948f53"
+  integrity sha512-/Ea/CNIWHExpXsA6syVy7fUUhONtYob+VMsmF8flm8GEAZQyzX6UtKSy4NQMMTGBTAGlmmmbBVrZF+Tp5/fDxQ==
+  dependencies:
+    "@solana-mobile/mobile-wallet-adapter-protocol" "^2.2.9"
+    "@solana/wallet-standard-chains" "^1.1.1"
+    "@solana/wallet-standard-features" "^1.3.0"
+    "@wallet-standard/base" "^1.0.1"
+    "@wallet-standard/features" "^1.0.3"
+    "@wallet-standard/wallet" "^1.1.0"
     qrcode "^1.5.4"
     tslib "^2.8.1"
   optionalDependencies:
