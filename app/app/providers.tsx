@@ -79,29 +79,39 @@ function throttledFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  // On Android, wallet-adapter-react auto-registers a Mobile Wallet Adapter, but
-  // supplying our own lets us brand the connect dialog (name + icon) and pin the
-  // cluster — important for the Solana Seeker / dApp Store experience. On desktop
-  // & iOS this adapter reports Unsupported and is hidden, so Phantom/Solflare are
-  // used instead. cluster follows the RPC endpoint (see CLUSTER above).
-  const wallets = useMemo(
-    () => [
-      new SolanaMobileWalletAdapter({
-        addressSelector: createDefaultAddressSelector(),
-        appIdentity: {
-          name: "Soladrome",
-          uri: APP_URL,
-          icon: "icons/icon-512.png", // relative to uri
-        },
-        authorizationResultCache: createDefaultAuthorizationResultCache(),
-        cluster: CLUSTER,
-        onWalletNotFound: createDefaultWalletNotFoundHandler(),
-      }),
-      new PhantomWalletAdapter(),
-      new SolflareWalletAdapter(),
-    ],
-    []
-  );
+  // Wallet list. The Mobile Wallet Adapter (MWA) connects natively to the installed
+  // wallet app on Android; supplying our own instance lets us brand the authorize
+  // dialog (name + icon) and pin the cluster — important for the Seeker / dApp Store.
+  //
+  // On an EXTERNAL Android browser (Chrome, Samsung Internet), we expose ONLY the
+  // MWA: the Phantom/Solflare *web* adapters can't inject there, so tapping them
+  // just bounces to the app's download page — the exact trap testers hit. Leaving
+  // MWA as the sole option makes "Select Wallet" open the installed wallet directly.
+  //
+  // Everywhere else we keep Phantom/Solflare:
+  //   - a wallet's in-app browser is an Android WebView (UA contains "wv") → they
+  //     inject and work; MWA reports Unsupported there and is hidden;
+  //   - desktop & iOS have no MWA → Phantom/Solflare (extension / deeplink) are used.
+  const wallets = useMemo(() => {
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    const isAndroidExternalBrowser = /android/i.test(ua) && !/\bwv\b|; wv\)/i.test(ua);
+
+    const mwa = new SolanaMobileWalletAdapter({
+      addressSelector: createDefaultAddressSelector(),
+      appIdentity: {
+        name: "Soladrome",
+        uri: APP_URL,
+        icon: "icons/icon-512.png", // relative to uri
+      },
+      authorizationResultCache: createDefaultAuthorizationResultCache(),
+      cluster: CLUSTER,
+      onWalletNotFound: createDefaultWalletNotFoundHandler(),
+    });
+
+    return isAndroidExternalBrowser
+      ? [mwa]
+      : [mwa, new PhantomWalletAdapter(), new SolflareWalletAdapter()];
+  }, []);
   return (
     <ConnectionProvider endpoint={ENDPOINT} config={{ commitment: "confirmed", fetch: throttledFetch }}>
       <WalletProvider wallets={wallets} autoConnect>
