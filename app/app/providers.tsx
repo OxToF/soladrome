@@ -17,8 +17,17 @@ const ENDPOINT  = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.
 const FALLBACK  = "https://api.devnet.solana.com";
 
 // Public origin shown to the wallet in the connect/authorize dialog (and used
-// for Digital Asset Links when wrapped as an Android APK). Override per-env.
-const APP_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://soladrome.finance";
+// for Digital Asset Links when wrapped as an Android APK). Canonical prod domain
+// (apex soladrome.finance 308-redirects to www); override per-env if it changes.
+const APP_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.soladrome.finance";
+
+// Wallet cluster, derived from the RPC endpoint so it always matches the network
+// the app talks to. At mainnet launch, switching NEXT_PUBLIC_RPC_URL to a mainnet
+// RPC (no "devnet"/"testnet" in the host) flips this to "mainnet-beta" on its own.
+const CLUSTER: "devnet" | "testnet" | "mainnet-beta" =
+  ENDPOINT.includes("devnet")  ? "devnet"
+  : ENDPOINT.includes("testnet") ? "testnet"
+  : "mainnet-beta";
 
 // Token-bucket throttle: burst capacity of 4 lets the first 4 concurrent requests
 // fire immediately (important on mount when several components fetch in parallel),
@@ -74,7 +83,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   // supplying our own lets us brand the connect dialog (name + icon) and pin the
   // cluster — important for the Solana Seeker / dApp Store experience. On desktop
   // & iOS this adapter reports Unsupported and is hidden, so Phantom/Solflare are
-  // used instead. cluster is "devnet" for now — switch to "mainnet-beta" at launch.
+  // used instead. cluster follows the RPC endpoint (see CLUSTER above).
   const wallets = useMemo(
     () => [
       new SolanaMobileWalletAdapter({
@@ -85,7 +94,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           icon: "icons/icon-512.png", // relative to uri
         },
         authorizationResultCache: createDefaultAuthorizationResultCache(),
-        cluster: "devnet",
+        cluster: CLUSTER,
         onWalletNotFound: createDefaultWalletNotFoundHandler(),
       }),
       new PhantomWalletAdapter(),
