@@ -14,7 +14,9 @@ const supabase = createClient(
 
 const VALID_QUESTS = new Set([
   "connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote",
-  "follow_x", "repost", "like_video", "repost_video", "solana_id",
+  "follow_x", "repost", "like_video", "repost_video", "discord", "solana_id",
+  "claim_lp_osola", "claim_bribe", "borrow_again", "exercise", "vote_again",
+  "like_video2", "repost_video2", "truemrr",
 ]);
 // "bug" is intentionally NOT POSTable through this public endpoint. It's a
 // manually-awarded bonus (verified bug reports, severity-weighted) credited only
@@ -27,8 +29,34 @@ const VALID_QUESTS = new Set([
 // longer farm them by POSTing to this endpoint directly — it must actually stake,
 // borrow and vote on-chain. The cheap quests (connect/faucet/swap/liquidity/repay)
 // stay unverified, but you can't qualify without these three.
-const GATED = new Set(["stake", "borrow", "vote", "solana_id"]);
+const GATED = new Set(["stake", "borrow", "borrow_again", "vote", "vote_again", "solana_id"]);
 const EPOCH_DURATION = 604_800;
+
+// Genesis Missions II quests require a TrueMRR vote first (free distribution ask).
+// Minting a Solana ID is deliberately NOT gated — it costs 0.1 SOL, so it stays
+// an incentive (its own +50 pt quest) rather than a hard requirement. Mirrors
+// `gate: ["truemrr"]` on the GENESIS_2 group in app/lib/quests.ts — kept as its
+// own consts here since this route doesn't import the client quest catalog.
+const GENESIS2_QUESTS = new Set([
+  "claim_lp_osola", "claim_bribe", "borrow_again", "exercise", "vote_again",
+  "like_video2", "repost_video2",
+]);
+const GENESIS2_GATE = ["truemrr"];
+
+async function hasCompletedQuest(wallet: string, questId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from("quest_completions")
+    .select("quest_id")
+    .eq("wallet_address", wallet)
+    .eq("quest_id", questId)
+    .limit(1);
+  return !!data && data.length > 0;
+}
+
+async function missingGates(wallet: string): Promise<string[]> {
+  const results = await Promise.all(GENESIS2_GATE.map(async (id) => ({ id, done: await hasCompletedQuest(wallet, id) })));
+  return results.filter((r) => !r.done).map((r) => r.id);
+}
 
 const RPC = process.env.NEXT_PUBLIC_RPC_URL || process.env.RPC_URL || "https://api.devnet.solana.com";
 const connection = new Connection(RPC, "confirmed");
@@ -53,11 +81,19 @@ async function checkOnce(quest: string, user: PublicKey): Promise<boolean> {
         return BigInt(bal.value.amount) > 0n;
       } catch { return false; } // ATA doesn't exist → never staked
     }
-    case "borrow": {
+    case "borrow":
+    case "borrow_again": {
+      // Same check for both: "borrow" is the one-shot genesis mission, "borrow_again"
+      // is the repeat-participation mission in Genesis II (mirrors vote/vote_again).
       const pos: any = await (program.account as any).userPosition.fetchNullable(positionPda(user));
       return !!pos && BigInt(pos.usdcBorrowed.toString()) > 0n;
     }
-    case "vote": {
+    case "vote":
+    case "vote_again": {
+      // Same check for both: a UserEpochVotes PDA with allocated > 0 for whatever
+      // epoch is current when the tx lands. "vote" is the one-shot genesis
+      // mission; "vote_again" is the repeat-participation mission in Genesis II —
+      // completing it later (a subsequent epoch) just re-runs this same check.
       const epochLe = Buffer.alloc(8);
       epochLe.writeBigUInt64LE(BigInt(currentEpoch()));
       const uev = PublicKey.findProgramAddressSync(
@@ -72,13 +108,20 @@ async function checkOnce(quest: string, user: PublicKey): Promise<boolean> {
       try {
         const apiKey = process.env.SOLANA_ID_API_KEY;
         if (!apiKey) return false;
+        // Endpoint shape per Solana ID docs: /api/solid-score/address/<wallet>
+        // (the bare /solid-score/<wallet> path 404s). Response is nested under
+        // `solidUser`, so the flag is json.solidUser.isSolanaIdUser — reading
+        // json.isSolanaIdUser is always undefined and never credits the quest.
         const res = await fetch(
-          `https://score.solana.id/api/solid-score/${user.toBase58()}`,
+          `https://score.solana.id/api/solid-score/address/${user.toBase58()}`,
           { headers: { "Content-Type": "application/json", "x-api-key": apiKey } },
         );
-        if (!res.ok) return false;
+        if (!res.ok) {
+          console.error("[track-quest solana_id] score API", res.status, await res.text().catch(() => ""));
+          return false;
+        }
         const json = await res.json();
-        return json.isSolanaIdUser === true;
+        return json?.solidUser?.isSolanaIdUser === true;
       } catch { return false; }
     }
     default:
@@ -101,9 +144,13 @@ async function verifyOnChain(quest: string, walletStr: string): Promise<boolean>
 
 // When a wallet has completed all three GATED quests, it is a verified on-chain
 // Genesis Tester (those rows only exist after on-chain verification above). At
-// that point, credit its referrer's one-time +25 'referral' quest. The referrer
-// earns it ONCE regardless of how many it refers (unique wallet+quest), and only
-// for a genuinely on-chain referral — so referral farming doesn't pay.
+// that point, credit its referrer +25 'referral' points. A referrer can refer
+// MULTIPLE testers and earn +25 for each one — quest_completions' unique
+// (wallet, quest_id) constraint would only ever let a plain "referral" id land
+// once per referrer, so each successful referral is recorded under its own
+// per-referred-wallet id (`referral:<referred_wallet>`), scoped by the
+// `referrals` table's one-row-per-referred-wallet key + its `rewarded` flag —
+// so a given referred wallet still only ever pays out once.
 async function maybeRewardReferrer(wallet: string) {
   try {
     const { data: done } = await supabase
@@ -116,7 +163,7 @@ async function maybeRewardReferrer(wallet: string) {
       .eq("referred_wallet", wallet).maybeSingle();
     if (!ref || ref.rewarded) return;
 
-    await supabase.rpc("record_quest", { p_wallet: ref.referrer_wallet, p_quest: "referral" });
+    await supabase.rpc("record_quest", { p_wallet: ref.referrer_wallet, p_quest: `referral:${wallet}` });
     await supabase.from("referrals").update({ rewarded: true }).eq("referred_wallet", wallet);
   } catch (e) {
     console.error("[track-quest referral]", e);
@@ -137,6 +184,16 @@ export async function POST(req: NextRequest) {
     }
     if (!quest || !VALID_QUESTS.has(quest)) {
       return NextResponse.json({ error: "unknown quest" }, { status: 400 });
+    }
+
+    if (GENESIS2_QUESTS.has(quest)) {
+      const missing = await missingGates(wallet);
+      if (missing.length > 0) {
+        return NextResponse.json(
+          { ok: false, reason: "gate required", missing },
+          { status: 403 },
+        );
+      }
     }
 
     // Reject quests whose on-chain action we can't find — kills direct API farming.
@@ -181,7 +238,12 @@ export async function GET(req: NextRequest) {
       console.error("[track-quest GET]", error);
       return NextResponse.json({ completed: [] });
     }
-    return NextResponse.json({ completed: (data ?? []).map((r) => r.quest_id) });
+    // Each successful referral is stored under its own `referral:<wallet>` id
+    // (see maybeRewardReferrer) — collapse them back to the bare "referral" id
+    // so the client's completion checklist can check off "Refer a tester" as
+    // soon as there's at least one, without needing to know the per-referral ids.
+    const completed = (data ?? []).map((r) => (r.quest_id.startsWith("referral:") ? "referral" : r.quest_id));
+    return NextResponse.json({ completed: [...new Set(completed)] });
   } catch {
     return NextResponse.json({ completed: [] });
   }

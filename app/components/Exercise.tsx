@@ -11,6 +11,7 @@ import {
   fromUi, toUi, commonAccounts, ensureAtaIx, sendTx,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { trackQuest } from "@/lib/quests";
 
 const PCT = [25, 50, 75, 100] as const;
 
@@ -119,6 +120,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
       const tx = await sendTx(connection, wallet, [ix]);
 
       setStatus(`✅ ${amt} oSOLA exercised → SOLA — tx: ${tx.slice(0, 16)}…`);
+      trackQuest(wallet.publicKey.toBase58(), "exercise");
       setAmount("");
       fetchAll();
     } catch (e: any) {

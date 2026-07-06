@@ -437,3 +437,652 @@ Toutes les utilisations de `init_if_needed` dans `lib.rs` ont été vérifiées 
 - **`try_load_ve_power`** : `owner != &crate::ID` → retour 0 sans désérialisation (ve.rs:199). ✓
 - **Division par zéro `emit_pool_rewards`** : `require!(total_votes > 0) && require!(pool_votes > 0)` en place (lib.rs:2518–2519). ✓
 - **`claim_bribe`** : `require!(total_votes > 0 && user_votes > 0 && total_bribed > 0)` en place (lib.rs:2600). ✓
+
+---
+
+### 2026-06-21 — Veille automatique (Sonnet 4.6, session planifiée)
+
+#### Sources balayées
+
+- [Humanity Protocol $36M private key hack (2026-06-09) — Halborn/CoinDesk](https://www.halborn.com/blog/post/explained-the-humanity-protocol-hack-june-2026) — laptop malveillant + multisig monolaptop → bridge upgradeable compromis + minting non autorisé
+- [Kelp DAO $292M LayerZero DVN single-verifier (2026-04-18) — Chainalysis/CryptoTimes](https://www.chainalysis.com/blog/kelpdao-bridge-exploit-april-2026/) — DVN 1-of-1, RPC poisonné, finalité non attendue
+- [Step Finance $27M private key treasury hack (2026-01-31) — CoinDesk](https://www.coindesk.com/business/2026/01/31/solana-based-defi-platform-step-finance-hit-by-usd30-million-treasury-hack-as-token-price-craters) — clé treasury compromise, projet fatal
+- [Resolv Labs $25M unbacked mint exploit (2026-03-22) — Yahoo Finance](https://finance.yahoo.com/markets/crypto/articles/resolv-labs-stablecoin-depegs-plunges-110259193.html) — loophole de mintage USR sans backing
+- [Bridge cross-chain $127M (2026-06-14) — Nadcab](https://www.nadcab.com/blog/defi-bridge-exploit-june-cross-chain) — double-finality flaw (déjà documenté 2026-06-18)
+- [DeFi Hacks 2026 $840M+ — AltFins/CCN](https://altfins.com/blog/defi-hacks-2026/) — bilan global
+- RUSTSEC Advisory Database — aucun nouvel advisory `anchor-lang` / `anchor-spl` 0.32.x en juin 2026
+- OtterSec / Neodyme / Sec3 / Zellic — aucun advisory technique Solana nouveau public dans les 48h
+
+---
+
+#### Humanity Protocol $36M / Step Finance $27M — private key → Opsec ✓
+
+**Technique** (commune aux deux incidents) : la clé privée contrôlant un multisig ou un treasury a été compromise (malware laptop pour Humanity, vecteur non précisé pour Step). Pour Humanity : multisig Gnosis Safe à 3-of-6 sur Ethereum, dont toutes les clés étaient sur le **même laptop** → un seul malware a suffi. Le bridge upgradeable a été pointé vers une implémentation malveillante, puis 141M H ont été drainés + 100M H non autorisés mintés.
+
+**Soladrome** : `ProtocolState.authority` (Ledger Nano S physique dédié) est la seule surface équivalente. Différences clés :
+- Il n'y a PAS de bridge upgradeable — le programme est upgradeable uniquement via `upgrade-authority` (BPF Upgradeable Loader) mais les tokens sont PDA-contrôlés par le programme, pas par un multisig externe.
+- La clé authority ne peut PAS minter librement : les mints (SOLA, hiSOLA, oSOLA) sont tous authoritatés par le PDA `[b"state"]`, pas par le wallet authority directement.
+- Les instructions sensibles (pause, transfer_authority, mint_founder_allocation, etc.) sont gated par `has_one = authority` sur le ProtocolState PDA.
+- Le risque résiduel documenté (single-wallet authority → TODO multisig Squads avant mainnet) reste valide.
+
+**Non affecté** — risque OPSEC documenté. ✓
+
+---
+
+#### Kelp DAO $292M LayerZero DVN exploit → Non affecté ✓
+
+**Technique** : configuration 1-of-1 DVN LayerZero Labs ; RPC interne empoisonné → fausse attestation de burn sur la chaîne source → release USDC sur la destination. Déjà documenté le 2026-06-18 comme exploit de bridge cross-chain.
+
+**Soladrome** : aucun bridge, aucun oracle externe, protocole mono-chaîne Solana. Non affecté.
+
+---
+
+#### Resolv Labs $25M — unbacked mint via loophole de mintage → Non affecté ✓
+
+**Technique** : dépôt de 200 000 USDC → mintage de 80 M USR par une faille de comptabilité interne (le contrat accordait une valeur de delta-neutre sans vérifier le backing réel).
+
+**Soladrome** — trois surfaces comparables vérifiées :
+
+1. **`buy_sola`** : `sola_amount = vs - k/(vu + usdc_in)` (arrondi vers le bas → favorable au protocole). `floor_amount = sola_amount` → `usdc_in ≥ floor_amount` prouvé analytiquement (`f(x) = x + k/(vu+x) ≥ vs` pour tout x ≥ 0, avec égalité en 0 et croissante pour x > 0). Le `market_amount` ne peut pas être négatif. `require!(sola_amount > 0)` et `market_amount = usdc_in.checked_sub(floor_amount)` reverts si < 0. ✓
+
+2. **`exercise_o_sola`** : coût = `o_sola_amount` USDC payé **avant** le mint de SOLA → backing toujours assuré avant création. ✓
+
+3. **`flash_arbitrage`** : cas `fee_rate = 0` analysé en détail ce jour. Si la pool a un fee nul, `fee_total = 0`, `amount_net = amount_osola`, aucun SOLA résiduel à brûler. `total_purchased_sola += amount_osola` → le floor reçoit `amount_osola` USDC (step 5, lib.rs:3073–3082) → invariant `floor ≥ total_purchased_sola` maintenu. ✓
+
+Non affecté.
+
+---
+
+#### LOW — `burn_o_sola_for_votes` avant `vote_gauge` : `total_power_snapshot` reste à zéro (CORRIGÉ)
+
+**Surface** : `lib.rs:2360–2401` (handler `burn_o_sola_for_votes`) + `lib.rs:2074–2077` (init block de `vote_gauge`).
+
+**Technique — footgun utilisateur, pas de risque protocolaire** : les deux instructions partagent le même PDA `UserEpochVotes` via les seeds `[b"uev", user, epoch_le8]`. `burn_o_sola_for_votes` initialise le PDA si inexistant (`if uev.epoch == 0 { uev.epoch = epoch; uev.bump = ...; }`) mais ne peuple **pas** le champ `total_power_snapshot` (qui reste à 0). Ensuite, quand l'utilisateur appelle `vote_gauge`, l'init block (`if uev.epoch == 0 { ... }`) est **sauté** car `uev.epoch != 0` — `total_power_snapshot` reste à 0.
+
+**Conséquence** : si un utilisateur appelle `burn_o_sola_for_votes` en PREMIER dans l'epoch :
+```
+hi_sola_cap = total_power_snapshot = 0
+effective_hi_sola = min(0, global_cap) = 0
+power_cap = 0 + o_sola_bonus  ← seul le bonus oSOLA compte
+```
+L'utilisateur perd toute sa puissance de vote hiSOLA pour l'epoch. Seul l'oSOLA brûlé contribue, au lieu de l'addition hiSOLA + oSOLA prévue par le design.
+
+**Ordre correct** (sans perte) : `vote_gauge` → `burn_o_sola_for_votes`. L'init block de `vote_gauge` snapshote la puissance hiSOLA en premier, puis le bonus oSOLA est ajouté additivement.
+
+**Reproductibilité** :
+1. Alice a 1 000 hiSOLA et 500 oSOLA, total_hi_sola = 5 000 (global_cap = 1 500).
+2. Alice appelle `burn_o_sola_for_votes(500)` → UEV.epoch=N, UEV.o_sola_bonus=500, UEV.total_power_snapshot=0.
+3. Alice appelle `vote_gauge(pool, 500)` → power_cap = 0 + 500 = 500. OK.
+4. Alice appelle `vote_gauge(pool2, 1)` → new_total = 501 > 500. REVERT.
+5. Ses 1 000 hiSOLA (= 1 000 votes potentiels) sont perdus pour l'epoch.
+
+**Facteurs atténuants** :
+- L'oSOLA brûlé est irréversiblement détruit — pas de perte protocolaire, seulement une perte de gouvernance utilisateur.
+- Exploitable uniquement par l'utilisateur lui-même (signature requise).
+- Pas de drainage de fonds possible — uniquement de l'influence de vote réduite.
+- Un attaquant social engineering pourrait encourager des baleines hiSOLA à brûler l'oSOLA en premier pour leur faire perdre leur puissance de vote ce jour-là.
+
+**Sévérité** : Low (footgun utilisateur / attaque de gouvernance sociale ; aucun risque de fonds).
+
+**Correctif proposé (NE PAS appliquer automatiquement)** : dans le handler `burn_o_sola_for_votes`, lors de l'initialisation du UEV (`if uev.epoch == 0`), calculer et snapshoter la puissance hiSOLA + ve de l'utilisateur. Cela requiert l'ajout de `user_hi_sola` et `lock_position` dans le contexte `BurnOSolaForVotes`. Exemple :
+```rust
+if uev.epoch == 0 {
+    uev.epoch = epoch;
+    uev.bump = ctx.bumps.user_epoch_votes;
+    // Snapshot hiSOLA power like vote_gauge does:
+    let hi_balance = ctx.accounts.user_hi_sola.amount;
+    let ve = ve::try_load_ve_power(&ctx.accounts.lock_position, &ctx.accounts.user.key(), clock.unix_timestamp);
+    uev.total_power_snapshot = hi_balance.saturating_add(ve);
+}
+```
+Alternativement, le frontend peut imposer l'ordre correct (voter d'abord, brûler ensuite) et documenter la contrainte.
+
+**Fix appliqué (2026-06-21, option snapshot — robuste indépendamment de l'ordre d'appel)** :
+Contexte `BurnOSolaForVotes` étendu avec `hi_sola_mint` (`address = protocol_state.hi_sola_mint`),
+`user_hi_sola` (`constraint mint + owner == user`) et `lock_position` (`UncheckedAccount`), en
+miroir exact de `VoteGauge`. Le handler calcule `total_power = user_hi_sola.amount + try_load_ve_power(...)`
+AVANT le `&mut` du tracker et le snapshote dans le bloc `if uev.epoch == 0` — exactement comme
+`vote_gauge`. Résultat : peu importe l'ordre (`burn` puis `vote` ou l'inverse), `total_power_snapshot`
+capture la puissance hiSOLA+ve réelle au premier appel ; le bonus oSOLA reste additif et non capé.
+Frontend `Stake.tsx` (`burnForVotes`) passe désormais `hiSolaMint` + `userHiSola` + `lockPosition`
+(velock PDA, `try_load_ve_power` renvoie 0 s'il n'existe pas). Vérifié : `cargo check` (devnet + mainnet) ✅,
+`anchor build` ✅, IDL régénéré + copié dans `app/lib/soladrome.json` ✅, `tsc --noEmit` frontend ✅.
+**`anchor deploy` PAS encore fait** — en attente de validation humaine + redeploy devnet SBPFv3.
+
+---
+
+#### HIGH — Émission oSOLA continue non gated : farmable sans limite via pools permissionless (CORRIGÉ + DÉPLOYÉ)
+
+**Surface** : `amm.rs` (`update_pool_rewards!` macro lib.rs-side ~30, `advance_pool_rewards` ~49,
+`create_pool` ~77) + `amm_state.rs` (`AmmPool`). Découvert lors d'une revue ciblée du système
+d'émission LP « maison » demandée avant deploy.
+
+**Technique** : le stream d'émission continu (Masterchef, `osola_reward_per_lp`) accumulait
+`OSOLA_EMISSION_PER_SEC` oSOLA/s pour **tout** pool AMM, sans aucun flag d'éligibilité, alors que
+`create_pool` est **permissionless**. Aucune borne sur le nombre de pools ni sur le total émis
+(contrairement au stream gauge budgété 800k/epoch + decay).
+
+**Scénario** : un attaquant crée K pools avec des mints sans valeur qu'il contrôle, devient seul LP
+(coût ≈ rent ~0,02–0,05 SOL/pool), et récolte `K × 86,4` oSOLA/jour (mainnet, taux 1 000) sans
+plafond. Or l'oSOLA a une valeur réelle :
+- `burn_o_sola_for_votes` → pouvoir de vote **non capé** (par design « burn = déflation »). Le cap
+  anti-capture de 30 % (`VOTE_WEIGHT_CAP_BPS`) ne s'applique qu'au hiSOLA → de l'oSOLA farmé
+  gratuitement **annule le cap de gouvernance** et permet de diriger les vraies émissions gauge.
+- `exercise_o_sola` → mint SOLA au plancher (floor reste backé, mais inflation/dilution SOLA).
+
+**Sévérité** : High (capture de gouvernance + inflation oSOLA non bornée ; l'hypothèse « oSOLA rare »
+qui justifie les votes non capés était cassée). Lien direct avec le fix `burn_o_sola_for_votes` du
+même jour, qui reposait sur cette hypothèse.
+
+**Fix appliqué (2026-06-21, deploy bundle avec le fix burn)** :
+- Champ `rewards_enabled: bool` ajouté à `AmmPool` (taillé dans le padding → `LEN` inchangé, pas de
+  réalloc ; comptes existants lisent 0 = false). Défaut `false` à la création.
+- Accrual gaté sur `rewards_enabled` dans `update_pool_rewards!` ET `advance_pool_rewards` ;
+  `last_reward_ts` avance toujours → pas de back-pay quand un pool est activé après coup.
+- Nouvelle instruction authority-only `set_pool_rewards(enabled)` (`SetPoolRewards`, `address =
+  protocol_state.authority`) qui settle l'accrual sous l'ancien flag avant de basculer.
+- L'émission est désormais bornée au set de pools « maison » approuvés par l'authority.
+
+Vérifié : `cargo check` (devnet + mainnet) ✅, `anchor build` ✅ (IDL : `set_pool_rewards` +
+champ `rewards_enabled` présents), IDL copié `app/lib/soladrome.json` ✅, `tsc --noEmit` frontend ✅,
+`cargo build-sbf --arch v3` ✅, **`solana program deploy` via Helius FAIT** ✅ (slot
+468695860 → 470924886, sig `8YeTTCPcr95M…`).
+
+**⚠️ Action post-deploy requise** : tous les pools devnet existants ont désormais `rewards_enabled =
+false` → l'authority doit appeler `set_pool_rewards(true)` sur les pools « maison » légitimes
+(ex. SOLA/jitoSOL, oSOLA/SOLA) pour ré-activer leurs émissions. À documenter dans le runbook launch.
+
+**Note** : deux streams d'émission oSOLA coexistent (continuous per-pool + gauge epoch) — à
+clarifier/unifier dans une passe tokenomics séparée (hors scope de ce fix sécurité).
+
+**Suivi (même jour) — le gate étendu en outil de bootstrap auto-expirant (déployé, slot 470932853).**
+Le const `OSOLA_EMISSION_PER_SEC` supprimé ; rate désormais runtime `ProtocolState.continuous_rate_per_sec`
+(u32, défaut 0) + sunset on-chain `continuous_end_epoch` (u16, défaut 0), via instruction authority
+`configure_continuous_emissions(rate_per_sec, duration_epochs)`. Accrual gaté sur `rewards_enabled &&
+current_epoch < continuous_end_epoch`. Champs taillés dans le rab de `ProtocolState` (LEN 400 inchangé,
+pas de réalloc ; backward-compat vérifiée on-chain : compte existant désérialise rate=0/end=0). Décision
+launch : 250k oSOLA/epoch (rate 413 360 base/s) sur le pool maison, 4 epochs, puis extinction automatique.
+Le sunset on-chain élimine le risque « fondateur solo oublie de couper » du toggle manuel.
+
+---
+
+#### Confirmation des fixes des veilles précédentes — tous en place ✓
+
+- **`rollover_bribe` owner check** (signalé 2026-06-16, corrigé 2026-06-18) : `owned_by_program = old_gauge_state.owner == ctx.program_id` à lib.rs:2685. ✓
+- **`ve_power` cast saturant** (signalé 2026-06-16, corrigé 2026-06-18) : `.min(u64::MAX as u128) as u64` à math.rs:113. ✓
+- **`contributor_borrow_usdc` check hiSOLA** (signalé + corrigé 2026-06-11) : `require!(new_borrowed <= hi_sola_balance)` à lib.rs:1509–1512. ✓
+- **`unstake_hi_sola` founder vesting** : double PDA + owner check lib.rs:532–563. ✓
+- **`stake_sola` auto-harvest** : auto-payout pending fees avant reset fees_debt lib.rs:437–452. ✓
+
+---
+
+#### RAS — surfaces ré-vérifiées ce jour
+
+- **`borrow_against_locked`** : `lock_position` épinglé par seeds `[VELOCK_SEED, partner.key()]` (lib.rs:4608–4612) → un partenaire ne peut emprunter qu'avec son propre lock. Cap 20% sur locked, 75% floor buffer, flash guard. ✓
+- **`flash_arbitrage`** : `pool` contraint à paire SOLA/USDC explicitement (lib.rs:4386–4389). Profitabilité `usdc_out > amount_osola` vérifiée avant tout transfert (lib.rs:3053). ✓
+- **`vote_gauge`** : cap 30% live vs snapshot analysé — non exploitable par un whale externe ; la snapshot immutable de `total_power_snapshot` limite correctement même si `total_hi_sola` fluctue après le premier vote. ✓
+- **`burn_o_sola_for_votes` post-vote** : si appelé APRÈS `vote_gauge`, le bonus s'ajoute correctement (allocated < power_cap + bonus). ✓
+- **`emit_pool_rewards`** : `require!(total_votes > 0) && require!(pool_votes > 0)` lib.rs:2518–2519. ✓
+- **`checkpoint_lp`** : `require!(!pa.finalized)` bloque toute manipulation post-finalisation lib.rs:2431. ✓
+- **`claim_lp_emissions`** : double-claim bloqué par `LpEpochClaim` PDA `init` lib.rs:2582. ✓
+- **Dépendances** : 3 dépendances directes (anchor-lang 0.32.1, anchor-spl 0.32.1, solana-security-txt 1.1.1), aucun advisory RUSTSEC nouveau. ✓
+
+---
+
+### 2026-06-23 — Veille automatique (Sonnet 4.6, session planifiée)
+
+#### Sources balayées
+
+- [DeFi Hacks 2026 — AltFins / CCN : $840M+ perdu, bridges dominants](https://altfins.com/blog/defi-hacks-2026/) — tour d'horizon, aucun vecteur Solana nouveau
+- [Every Major DeFi Hack 2026 — Phemex : bridges cross-chain dominent](https://phemex.com/blogs/defi-hacks-2026-bridge-exploits-explained) — Aztec escape hatch $2.5M, MEV jaredfromsubway $15M
+- [CCN DeFi Hacks & Exploits 2026 $1B+](https://www.ccn.com/education/crypto/defi-hacks-exploits-causes-crypto-stolen-2026/) — Kelp DAO, Drift, Resolv, bridge
+- [Helius — A Hitchhiker's Guide to Solana Program Security](https://www.helius.dev/blog/a-hitchhikers-guide-to-solana-program-security) — patterns défensifs CPI + account reload
+- [Cantina — Securing Solana: A Developer's Guide](https://cantina.xyz/blog/securing-solana-a-developers-guide) — account reload, CPI reentrancy patterns
+- [Asymmetric Research — Invocation Security: Solana CPIs](https://www.asymmetric.re/blog-archived/invocation-security-navigating-vulnerabilities-in-solana-cpis) — CPI state-refresh vuln pattern
+- [RUSTSEC Advisory DB](https://rustsec.org/advisories/) — aucun advisory `anchor-lang` / `anchor-spl` 0.32.x en juin 2026
+- OtterSec / Neodyme / Sec3 / Zellic — aucun advisory technique Solana nouveau public dans les 48h
+- [SSRN — Solana Security Ecosystem 2025 : 1 669 vulnérabilités, 163 audits](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6552478) — classes de bugs prévalentes
+
+---
+
+#### ⚠️ CORRECTION — infrastructure bridge présente dans le scope
+
+Le rapport de ce jour avait initialement conclu « RAS — Soladrome mono-chaîne, aucun bridge ». **Cette conclusion était erronée.** Le projet comporte deux composants bridge distincts, tous deux absents des veilles précédentes :
+
+1. **Wormhole Connect** — widget frontend statique (`app/public/wh/`) pour bridger des tokens généraux vers Solana avant utilisation du protocole. Pas d'interaction directe avec le programme Soladrome.
+2. **soladrome-bridge** (`~/Desktop/soladrome-bridge/`) — OApp LayerZero V2 pour les bribes cross-chain EVM → Soladrome gauges. Programme Anchor `bridge-receiver` + contrat Solidity `SoladromeBribeRouter`.
+
+Les findings ci-dessous portent sur ces deux surfaces.
+
+---
+
+#### CRITICAL — `DEPLOYER_PUBKEY = SystemProgram` : frontrun de `initialize()` possible
+
+**Surface** : `soladrome-bridge/solana/programs/bridge-receiver/src/lib.rs:16`
+
+```rust
+pub const DEPLOYER_PUBKEY: Pubkey = pubkey!("11111111111111111111111111111111");
+```
+
+**Technique** : quand `DEPLOYER_PUBKEY == SYSTEM_PROGRAM_ID`, le guard F1 est entièrement bypassé :
+```rust
+if DEPLOYER_PUBKEY != SYSTEM_PROGRAM_ID {
+    require!(ctx.accounts.owner.key() == DEPLOYER_PUBKEY, BridgeError::Unauthorized);
+}
+// → en dev mode, ce bloc ne s'exécute jamais
+```
+
+`initialize()` étant permissionless dans cet état, n'importe qui peut l'appeler AVANT le déploiement légitime et s'autoprocla­mer `owner` du `Store` PDA avec :
+- `evm_peer` arbitraire (n'importe quel contrat EVM comme pair autorisé)
+- `executor_whitelist` contenant uniquement ses propres clés
+- `allowed_eids` réduisant les EIDs acceptés
+
+Un attaquant ayant pris le contrôle du `Store` peut ensuite :
+- Enregistrer des messages LZ forgés via `lz_receive` (lui-même dans la whitelist)
+- Bloquer tout bribe légitime (il contrôle `paused`, `evm_peer`, `allowed_eids`)
+- En V2 : drainer `bridge_fbomb_vault` → `soladrome_bribe_vault` pour n'importe quel pool/epoch
+
+**Statut** : actuel. Le commentaire dit « UPDATE before every fresh mainnet deploy » — mais sans procédure enforced, le risque d'oubli avant un déploiement pressé est réel.
+
+**Sévérité** : Critical (window d'attaque = gap entre `program deploy` et `initialize()`).
+
+**Correctif proposé** : remplacer `DEPLOYER_PUBKEY` par la clé réelle AVANT de compiler pour mainnet, et ajouter un test qui échoue si la constante est encore `SYSTEM_PROGRAM_ID` :
+```rust
+// Dans tests ou un assert! au-dessus de declare_id!
+#[cfg(feature = "mainnet")]
+const _: () = {
+    assert!(!DEPLOYER_PUBKEY.eq(&SYSTEM_PROGRAM_ID), "Set DEPLOYER_PUBKEY before mainnet build");
+};
+```
+Alternativement : utiliser `upgrade-authority` pour que le déploiement et l'init soient dans la même transaction atomique.
+
+---
+
+#### HIGH — `lz_receive` sans validation LZ Endpoint : DVN verification entièrement bypassée
+
+**Surface** : `soladrome-bridge/solana/programs/bridge-receiver/src/lib.rs:101–158` + `state.rs` (contexte `LzReceive`)
+
+**Technique** : dans un OApp LayerZero V2 correct sur Solana, `lz_receive` est appelé VIA CPI par le programme LZ Endpoint (`76y77prsiCMvXMjuoZ5VRrhG5qYBrUMYTE5WgHqgjEn6`), qui a lui-même vérifié les attestations DVN. La chaîne de confiance est :
+```
+DVNs attestent → LZ Endpoint vérifie on-chain → CPI → OApp::lz_receive
+```
+
+Dans ce bridge, le contexte `LzReceive` déclare :
+```rust
+#[account(mut)]
+pub relayer: Signer<'info>,
+```
+
+`relayer` est un simple signataire — **pas** le programme LZ Endpoint. La validation se réduit à :
+```rust
+if !store.executor_whitelist.is_empty() {
+    require!(store.executor_whitelist.contains(&relayer_key), BridgeError::UnauthorizedRelayer);
+}
+```
+Le vrai LZ Endpoint n'est nulle part vérifié comme caller. Les paramètres `src_eid`, `sender`, `nonce`, `message` sont **tous fournis par le relayer** sans preuve cryptographique.
+
+**Conséquence** :
+- Si la whitelist est vide (dev mode) : **n'importe qui** peut appeler `lz_receive` avec une payload forgée.
+- Whitelist non vide : un attaquant qui compromet une clé dans la whitelist peut injecter des messages arbitraires — aucune limite sur les champs `src_eid`, `sender`, `nonce`, `message` (sauf `sender == store.evm_peer`, mais ce champ est passé par le relayer lui-même).
+- La recommandation DVN 2-of-2 dans `docs/architecture.md` est correcte mais se configure sur l'EVM LZ Endpoint — elle ne protège PAS la réception Solana si le programme n'enforce pas l'appel CPI depuis l'endpoint.
+
+**Parallèle avec Kelp DAO $292M** : Kelp DAO utilisait le vrai LZ Endpoint mais avec un seul DVN compromis. Soladrome bridge ne valide pas du tout l'appel LZ Endpoint — une surface encore plus large.
+
+**Impact V1 (actuel — message-only, pas de transfert réel)** :
+- Faux événements `BribeReceived` émis on-chain
+- Consommation de nonces pour bloquer des messages légitimes (DoS ciblé)
+- Pas de perte de fonds (V2 CPI pas implémenté)
+
+**Impact V2 (token transfer + CPI Soladrome)** :
+- Drainage de `bridge_fbomb_vault` vers `soladrome_bribe_vault` pour un pool/epoch arbitraire
+- Manipulation du système de gauge Soladrome depuis une fausse bribe cross-chain
+
+**Sévérité** : High (V1 = DoS + events forgés ; V2 = drain + gauge manipulation). À corriger AVANT toute implémentation V2.
+
+**Correctif proposé** : remplacer `relayer: Signer<'info>` par une vérification que l'instruction est appelée via CPI depuis le programme LZ Endpoint :
+```rust
+// Dans le contexte LzReceive :
+#[account(
+    constraint = lz_endpoint.key() == LZ_ENDPOINT @ BridgeError::Unauthorized,
+)]
+pub lz_endpoint: Signer<'info>,  // doit être le programme LZ Endpoint
+```
+Alternativement, si le pattern recommandé LZ V2 Solana utilise `invoke_signed` depuis l'Endpoint, s'assurer que `ctx.accounts.lz_endpoint.key() == LZ_ENDPOINT` ET que le programme est le signataire effectif du CPI. Se référer aux exemples officiels LZ V2 Solana (`layerzerolabs/oapp-solana`).
+
+---
+
+#### MEDIUM — `Store::LEN` : dépassement des Vecs possible à `initialize()`
+
+**Surface** : `soladrome-bridge/solana/programs/bridge-receiver/src/state.rs:22–27`
+
+```rust
+pub const LEN: usize = 8 + 32 + 32 + 4 + (10 * 4) + 4 + (5 * 32) + 1 + 1;
+// max 10 EIDs, max 5 executors
+```
+
+`allowed_eids: Vec<u32>` et `executor_whitelist: Vec<Pubkey>` sont des Vecs dynamiques. Si `initialize()` est appelé avec 11 EIDs ou 6 executors, l'espace alloué (`space = Store::LEN`) est insuffisant → `AccountDidNotSerialize` ou panic Borsh.
+
+En V1 c'est un simple footgun. Mais si l'owner envoie une longue liste et que la transaction échoue, le Store PDA (créé avec `init`) n'existe pas — l'attaque est retentée. Pas de perte de fonds.
+
+**Correctif** : valider les longueurs des Vecs dans `initialize()` avant la désérialisation, ou utiliser des arrays fixes `[u32; 10]` et `[Pubkey; 5]` dans la struct.
+
+---
+
+#### LOW — Pas de garde epoch (EVM) : bribe sur epoch passé acceptée
+
+**Surface** : `soladrome-bridge/evm/contracts/SoladromeBribeRouter.sol:116–141` (`depositBribe`)
+
+Aucune vérification que `epoch >= current_gauge_epoch()`. Un utilisateur peut verrouiller du fBOMB pour une epoch déjà terminée. En V2, `deposit_bribe` sur Soladrome rejetterait probablement les epochs passées (pas encore vérifié), mais le fBOMB resterait bloqué côté EVM 7 jours.
+
+**Correctif** : comparer `epoch >= block.timestamp / EPOCH_DURATION` côté EVM (nécessite un oracle ou accept que Solana rejette et le `adminForceRefund` récupère le fBOMB).
+
+---
+
+#### INFO — Wormhole Connect : risque supply-chain frontend uniquement
+
+**Surface** : `soladrome/app/public/wh/` — widget UI statique (bundle Wormhole Connect)
+
+Ce widget permet aux utilisateurs de bridger des tokens généraux (USDC, SOL...) vers Solana avant d'utiliser Soladrome. Il n'interagit PAS avec le programme Soladrome on-chain. Risques :
+- Si Wormhole est exploité, les actifs bridgés via ce widget (et non encore utilisés dans Soladrome) pourraient être à risque — précédent : $320M Wormhole hack 2022.
+- Risque supply chain : le bundle `main.mjs` est un binaire pré-compilé par l'équipe Wormhole. Vérifier l'intégrité (hash) du bundle à chaque mise à jour.
+- Le cœur du protocole Soladrome (floor, bonding curve, staking, gauge) n'est PAS affecté par un hack Wormhole.
+
+**Recommandation** : épingler la version du bundle Wormhole Connect et vérifier son hash SHA256 après chaque mise à jour.
+
+---
+
+#### INFO — `_lzReceive` EVM : pas de valida­tion du GUID de confirmation
+
+**Surface** : `SoladromeBribeRouter.sol:150–175` (`_lzReceive`)
+
+En V2, BribeReceiver envoie un message de confirmation (success/refund) vers l'EVM. `_lzReceive` décote le `bool success` et efface ou rembourse. Il n'y a pas de validation que le `guid` dans les mappings est valide avant de tenter le remboursement (protégé par `if briber == address(0) || amount == 0 revert UnknownGuid`). Correct pour V1.
+
+---
+
+#### Exploit Aztec escape hatch $2.5M (juin 2026) → Non affecté ✓ (programme core)
+
+**Technique** : faille dans le mécanisme d'« escape hatch » du rollup privé Aztec (ZK/privacy L2 Ethereum).
+
+**Soladrome programme core** : aucun composant ZK, aucun rollup. Non affecté pour le programme principal.
+**soladrome-bridge** : aucun composant ZK non plus. Non affecté par ce vecteur spécifique.
+
+---
+
+#### MEV jaredfromsubway $15M (juin 2026) → Non affecté ✓
+
+**Technique** : attaque sur un bot MEV Ethereum — frontrun EVM, pas de mempool public Solana.
+
+**Soladrome** : prix de bonding curve déterministe, slippage guards en place. Non affecté.
+**soladrome-bridge EVM** : `depositBribe` ne dépend pas du prix → pas de sandwich possible.
+
+---
+
+#### Pattern CPI account-state refresh → Vérifié ✓
+
+**Technique surveillée** : Anchor ne rechargue pas automatiquement les comptes désérialisés après un CPI. Un programme qui lit `token_account.amount` APRÈS une CPI de mint/transfer reçoit une valeur périmée — source potentielle de calculs de fees incorrects.
+
+**Soladrome** : les développeurs sont explicitement conscients du problème. Vérification case-by-case :
+
+| Instruction | Valeur pré-CPI sauvegardée | OK |
+|---|---|---|
+| `stake_sola` | `old_balance = user_hi_sola.amount` avant mint (lib.rs:404) | ✓ |
+| `add_liquidity` | `user_lp_pre = user_lp.amount` avant CPI (amm.rs:198) | ✓ |
+| `remove_liquidity` | `user_lp_pre = user_lp.amount` avant burn (amm.rs:297) | ✓ |
+| `unstake_hi_sola` | `market_balance` capturé avant CPI, `last_market_vault_balance` mis à jour après (lib.rs:494, 589) | ✓ |
+| `lock_hi_sola` | `market_balance` capturé avant CPI ; pattern identique (ve.rs:65–71) | ✓ |
+
+Aucun cas où une valeur post-CPI périmée alimente un calcul financier. Le commentaire `// Anchor does not reload the cached token account after the mint CPI below` (lib.rs:402–403) confirme la conscience du pattern. Non affecté.
+
+---
+
+#### INFO — `configure_continuous_emissions` : pas de settlement préalable des pools
+
+**Surface** : `lib.rs:2195–2224` + `amm.rs:54–68` (`advance_pool_rewards`).
+
+**Observation** : quand l'authority appelle `configure_continuous_emissions(new_rate, duration)`, le champ `protocol_state.continuous_rate_per_sec` est mis à jour **immédiatement** sans pré-régler les accumulateurs par pool. Or chaque pool règle son accumulateur (`osola_reward_per_lp`) uniquement lors de sa prochaine interaction (`add_liquidity`, `remove_liquidity`, `swap`, `set_pool_rewards`) en utilisant `rate = protocol_state.continuous_rate_per_sec` **au moment de l'interaction**.
+
+Conséquence : si le rate passe de R₁ à R₂ à l'instant T₀, et qu'un pool n'est touché qu'à T₁ > T₀, la période [T_last, T₁] est récompensée au taux R₂ au lieu de [T_last, T₀] × R₁ + [T₀, T₁] × R₂.
+- **Hausse de rate** → back-pay partiel au taux supérieur pour la période pré-changement.
+- **Baisse de rate (ou désactivation)** → sous-paiement pour la même période.
+
+**Contraste avec `set_pool_rewards`** : cette instruction (amm.rs:78–90) appelle correctement `advance_pool_rewards(pool, now, old_rate, old_active)` AVANT de modifier `rewards_enabled` — elle règle le pool au taux en vigueur. `configure_continuous_emissions` ne peut pas faire l'équivalent (il ne passe aucun pool en contexte — il y a potentiellement N pools).
+
+**Impact** : erreur de comptabilité de quelques centaines d'oSOLA lors d'un changement de rate (quantité liée à l'interval non réglé × delta de rate). Pas de perte de fonds utilisateurs (l'oSOLA supplémentaire est minté ex nihilo) ni drain de vault. Décision volontaire d'architecture (simplication de l'instruction admin), analogue à Masterchef v1/v2.
+
+**Exploitabilité** : nulle — `configure_continuous_emissions` exige la signature de l'authority (Ledger Nano S). Un attaquant externe ne peut pas déclencher ce comportement.
+
+**Sévérité** : Info (operational concern, non exploitable, authority-gated).
+
+**Recommandation (pré-mainnet, runbook)** : avant tout appel à `configure_continuous_emissions` qui change le rate, appeler d'abord `set_pool_rewards(true)` sur chaque pool approuvé pour régler les accumulateurs au rate courant. Documenter la séquence dans le runbook de gouvernance.
+
+---
+
+#### Confirmation des fixes des veilles précédentes — tous en place ✓
+
+- **`burn_o_sola_for_votes` snapshot hiSOLA** (signalé + corrigé 2026-06-21) : `total_power_snapshot` calculé dans le bloc `if uev.epoch == 0` — lib.rs:~2460–2480. ✓
+- **`set_pool_rewards` gate continu** (signalé + corrigé 2026-06-21) : `rewards_enabled = false` par défaut, `advance_pool_rewards` settle avant toggle — amm.rs:78–90. ✓
+- **`configure_continuous_emissions`** : authority-gated (`address = protocol_state.authority`) — lib.rs:4949–4957. ✓
+- **`rollover_bribe` owner check** (corrigé 2026-06-18) : `owned_by_program = old_gauge_state.owner == ctx.program_id` — lib.rs:2685. ✓
+- **`ve_power` cast saturant** (corrigé 2026-06-18) : `.min(u64::MAX as u128) as u64` — math.rs:109–113. ✓
+- **`contributor_borrow_usdc` check hiSOLA** (corrigé 2026-06-11) : `require!(new_borrowed <= hi_sola_balance)` — lib.rs:1509–1512. ✓
+- **`founder_hi_vesting` PDA + owner check** (corrigé 2026-06-11) — lib.rs:523–545. ✓
+- **`stake_sola` auto-harvest** (corrigé 2026-06-11) — lib.rs:437–452. ✓
+
+---
+
+#### RAS — surfaces ré-vérifiées ce jour
+
+- **AMM `add_liquidity` / `remove_liquidity`** : pré-CPI balances sauvegardées (`user_lp_pre`), reward accumulator settled avant harvest, CEI pattern respecté. ✓
+- **`try_load_ve_power`** : `owner != &crate::ID` → retour 0 (ve.rs:199) ; `lock.owner == user` vérifié (ve.rs:210). ✓
+- **`replay_vote`** : `try_load_ve_power` utilisé pour `lock_position` UncheckedAccount ; founder-guard en miroir de `vote_gauge`. ✓
+- **`DistributeOSola`** : `recipient` UncheckedAccount validé implicitement par `associated_token::authority = recipient` ; instruction gated par `has_one = authority`. ✓
+- **`claim_lp_emissions`** : `LpEpochClaim` PDA `init` = double-claim impossible ; `weighted_balance` remis à 0 après claim (fix M-01). ✓
+- **`pending_fees` multiplication** : `delta * hi_sola_balance as u128` sans `checked_mul`, mais `overflow-checks = true` en release → panic plutôt que wrap silencieux. Pratiquement inatteignable. ✓
+- **Dépendances** : anchor-lang 0.32.1, anchor-spl 0.32.1, solana-security-txt 1.1.1 — aucun advisory RUSTSEC en juin 2026. ✓
+
+---
+
+#### ✅ Fixes appliqués — soladrome-bridge (2026-06-23, session même jour)
+
+Suite à l'autorisation explicite de l'utilisateur (`/goal Fix findings`), les correctifs suivants ont été appliqués dans `~/Desktop/soladrome-bridge/`. **`cargo check` : 0 erreur ✓** (warnings Anchor upstream pré-existants uniquement).
+
+**[CRITICAL] `lib.rs` — DEPLOYER_PUBKEY → upgrade authority on-chain**
+- Supprimé : `pub const DEPLOYER_PUBKEY: Pubkey = pubkey!("111...1")` (bypass permissionless).
+- Ajouté : vérification du compte BPF Loader Upgradeable `program_data` (PDA `[program_id]` sous `bpf_loader_upgradeable::ID`). Le handler `initialize()` lit les octets `[0..4]` (variant=3), `[12]` (authority présente), `[13..45]` (pubkey upgrade authority) et exige `upgrade_authority == owner.key()`.
+- Contexte `Initialize` : ajout de `program_data: UncheckedAccount<'info>` avec constraint seeds BPF Loader Upgradeable ; commentaire `/// CHECK:` documentant la vérification manuelle.
+
+**[HIGH] `lib.rs` + `Cargo.toml` + `errors.rs` — executor whitelist non-contournable**
+- Ajouté : `EmptyWhitelist` dans `errors.rs`.
+- Ajouté : feature `dev = []` dans `Cargo.toml` (documentation explicite « NEVER mainnet »).
+- Dans `initialize()`, `set_executor_whitelist()` ET `lz_receive()` : `#[cfg(not(feature = "dev"))] require!(!whitelist.is_empty(), BridgeError::EmptyWhitelist)`.
+- La vérification « relayer dans whitelist » est conservée inconditionnellement quand la whitelist est non vide (dev et prod) ; en dev avec whitelist vide elle est sautée (localnet).
+
+**[MEDIUM] `lib.rs` + `errors.rs` — bornes Vec pour Store::LEN**
+- Ajouté : `pub const MAX_EIDS: usize = 10` et `pub const MAX_EXECUTORS: usize = 5`.
+- Ajouté : `InvalidConfig` dans `errors.rs`.
+- Dans `initialize()` : `require!(allowed_eids.len() <= MAX_EIDS)` + `require!(executor_whitelist.len() <= MAX_EXECUTORS)`.
+- Dans `set_executor_whitelist()` : même check `<= MAX_EXECUTORS`.
+
+**[LOW] `SoladromeBribeRouter.sol` — epoch guard EVM**
+- Ajouté : error `EpochAlreadyEnded(uint64 epoch, uint64 currentEpoch)`.
+- Dans `depositBribe()` : `uint64 currentEpoch = uint64(block.timestamp / 604_800); if (epoch < currentEpoch) revert EpochAlreadyEnded(epoch, currentEpoch)`. Durée d'epoch = 604 800 s = EPOCH_DURATION Soladrome.
+
+**À faire avant deploy bridge** :
+1. ✅ `anchor build` dans `soladrome-bridge/solana/` (IDL + .so régénérés avec les nouveaux contexts).
+2. ✅ **FAIT** — Test localnet `initialize()` : validateur lancé avec `--upgradeable-program <id> <so> <provider_wallet>` (authority = provider) → `tests/bridge-receiver.ts` **2/2 passing** : (a) wallet ≠ authority revert `Unauthorized` (6005), (b) provider wallet = authority → succès + Store.owner correct. Harness `package.json`+`tsconfig.json`+`tests/` créée. Note : `anchor test` par défaut cible devnet (Anchor.toml) ; le validateur localnet vanilla charge le programme avec authority nulle → utiliser `--upgradeable-program` pour fixer l'authority.
+3. ✅ **FAIT** — Test Hardhat `depositBribe()` : `evm/test/SoladromeBribeRouter.epoch.test.ts` **3/3 passing** (past epoch → revert `EpochAlreadyEnded(epoch,current)` ; current + future → `BribeQueued`). Mock `MockLZEndpoint.sol` ajouté ; plugin `hardhat-chai-matchers` ajouté à la config.
+4. ✅ **FAIT** — Build mainnet SANS `dev` : `default = []` confirmé (dev opt-in), `cargo build-sbf --arch v3` produit `bridge_receiver.so` SBPFv3 (216 KB, sha256 `257d8d74…`). Diff de hash no-dev vs `--features dev` → DIFFÉRENT (l'enforcement `#[cfg(not(feature="dev"))] EmptyWhitelist` est bien dans le binaire mainnet) ; build no-dev déterministe.
+
+**Reste avant deploy réel** : redéployer le `.so` v3 sur devnet/mainnet (le Store devnet existant — créé par un run de test sur devnet — devra être pris en compte : pas d'instruction `close`, le PDA `[b"Store"]` est singleton). Tout script d'init doit passer le nouveau compte `program_data`.
+
+---
+
+### 2026-06-29 — Veille automatique (Sonnet 4.6, session planifiée)
+
+#### Sources balayées
+
+- [Taiko Bridge Exploit $1.7M — SGX signing key leaked on GitHub (2026-06-21/22)](https://thedefiant.io/news/hacks/taiko-bridge-exploit-sgx-signing-key-github-1-7m) — clé RSA-3072 (`enclave-key.pem`) commitée publiquement → prover forgé → fausses preuves de retrait acceptées
+- [Taiko Bridge Exploit — Darknavy deep-dive](https://www.darknavy.org/blog/web3/exploits/taiko-bridge-source-signal-proof-forgery/) — vecteur source-signal proof forgery
+- [DeFi Hacks 2026 $840M+ — AltFins](https://altfins.com/blog/defi-hacks-2026/) — bilan global ; bridges dominent
+- [Every Major DeFi Hack 2026 — Phemex](https://phemex.com/blogs/defi-hacks-2026-bridge-exploits-explained) — $127M bridge (déjà documenté), Aztec (déjà documenté), MEV jaredfromsubway
+- [Blockaid — TOCTOU attacks Solana (référence, 2024)](https://www.blockaid.io/blog/dissecting-toctou-attacks-how-wallet-drainers-exploit-solanas-transaction-timing) — classe d'attaque client-side (simulation vs exécution)
+- [RareSkills — `init_if_needed` reinitialization attack (référence)](https://rareskills.io/post/init-if-needed-anchor) — classe de bugs connue Anchor
+- [SseRex — Symbolic execution Solana smart contracts (arxiv 2026-03)](https://arxiv.org/abs/2603.16349) — état de l'art analyse statique Solana
+- RustSec Advisory Database — aucun nouvel advisory `anchor-lang` / `anchor-spl` 0.32.x trouvé en juin 2026
+- OtterSec / Neodyme / Sec3 / Zellic — aucun advisory technique Solana nouveau public dans les 48–72h précédant ce rapport
+
+---
+
+#### Taiko Bridge SGX Key Leak $1.7M (2026-06-21/22) → Non affecté, opsec note
+
+**Technique** : la clé RSA-3072 de l'enclave SGX (`enclave-key.pem`) de Raiko (prouveur multi-stack de Taiko) avait été commitée dans le dépôt public `taikoxyz/raiko`. L'attaquant a enregistré un faux prover via cette clé, obtenu des attestations SGX légitimes sur des états L2 fictifs, puis soumis des preuves de retrait sans dépôt correspondant → $1.7M drainé avant le freeze.
+
+**Soladrome core** : aucun SGX, aucun prouveur externe, aucune preuve ZK. Non affecté.
+
+**soladrome-bridge** : aucun composant SGX. La confiance repose sur les DVNs LayerZero (off-chain) + whitelist executor on-chain. Non affecté par ce vecteur spécifique.
+
+**Leçon transposable — opsec clés bridge** : le vrai risque analogue pour soladrome-bridge est la compromission des clés privées des executors dans la whitelist. Vérification effectuée ce jour : le repo `soladrome-bridge` ne contient aucun fichier `.pem`, `.key`, `.env` ni private key commitée (seul `tests/bridge-receiver.ts` utilise `anchor.provider.wallet` = keypair local, jamais commitée). Statut : ✓ propre.
+
+---
+
+#### TOCTOU attacks Solana (client-side) → Non affecté ✓
+
+**Technique** : des draineurs exploitent le delta entre simulation de transaction (client) et exécution on-chain en modifiant l'état entre les deux fenêtres (quelques secondes). Les wallets/dApps basés uniquement sur la simulation peuvent approuver une transaction qui se révèle destructrice à l'exécution.
+
+**Soladrome** : cette classe d'attaque est principalement un risque d'interface (frontend / wallet), pas un risque de programme Anchor.
+
+Vérification code ce jour :
+- `buy_sola` : slippage guard `require!(sola_amount >= min_sola_out)` à lib.rs:227 — si un attaquant MEV insère un buy entre la simulation et l'exécution, le prix bouge mais le guard rejette la transaction. ✓
+- `sell_sola` : prix déterministe 1:1 depuis `floor_vault` (invariant k ne bouge pas sur sell) — aucune surface de sandwiching. ✓
+- `amm_swap` : slippage guard `require!(out >= min_out)` à amm.rs (paramètre `min_out`). ✓
+- `exercise_o_sola` / `borrow_usdc` / `lock_hi_sola` : aucune dépendance à un prix oracle externe → pas de surface TOCTOU.
+
+Non affecté.
+
+---
+
+#### Vérification code complète des fixes précédents — tous confirmés en place ✓
+
+| Finding | Localisation | Statut |
+|---|---|---|
+| `founder_hi_vesting` PDA + owner check | lib.rs:533–545 | ✓ en place |
+| `rollover_bribe` owner check | lib.rs:2736–2738 | ✓ en place |
+| `ve_power` cast saturant `.min(u64::MAX as u128)` | math.rs:109–113 | ✓ en place |
+| `contributor_borrow_usdc` check `new_borrowed <= hi_sola_balance` | lib.rs:1509–1512 | ✓ en place |
+| `burn_o_sola_for_votes` snapshot `total_power_snapshot` | lib.rs:2444 | ✓ en place |
+| `rewards_enabled` gate `advance_pool_rewards` / `update_pool_rewards!` | amm.rs:39, 61 | ✓ en place |
+| `stake_sola` auto-harvest pending fees avant reset | lib.rs:437–452 | ✓ en place |
+
+---
+
+#### Vérification surfaces UncheckedAccount — RAS ✓
+
+Tous les `UncheckedAccount` vérifiés ce jour :
+
+| Compte | Validation | OK |
+|---|---|---|
+| `new_authority` | Pubkey uniquement utilisé ; handler vérifie ≠ default et ≠ authority actuelle | ✓ |
+| `recipient` (DistributeOSola) | Dérivation ATA implicite (`associated_token::authority = recipient`) | ✓ |
+| `contributor_wallet` | Seed PDA : identité enforced par `[CONTRIBUTOR_SEED, contributor_wallet.key()]` | ✓ |
+| `founder_ops` | `#[account(address = FOUNDER_OPS_WALLET)]` — adresse fixe hardcodée | ✓ |
+| `lock_position` | Consommé via `try_load_ve_power` (owner check + discriminateur + `lock.owner == user`) | ✓ |
+| `pool_id` | Utilisé uniquement comme seed PDA ; authentifié par les PDAs dérivés | ✓ |
+| `old_gauge_state` | PDA re-dérivé canoniquement avant lecture + `owned_by_program` check avant usage | ✓ |
+
+---
+
+#### RAS — autres surfaces ré-vérifiées ce jour
+
+- **AMM math** : `amm_math.rs` — tout `checked_mul` / `checked_div` / `checked_add` / `checked_sub` avec erreur `Overflow`. `as u64` sur résultat u128 garanti ≤ u64::MAX par la structure des calculs (vérification ci-dessus). ✓
+- **`init_if_needed` reinitialization** : revue rapide — tous les handlers d'init_if_needed accumulent (pas de reset à zéro) ; ATAs = adresses déterministes SystemProgram → réinit physiquement impossible. ✓
+- **`sell_sola` sans min_usdc_out** : acceptable car prix déterministe (1:1 floor, pas d'oracle). ✓
+- **Dépendances** : anchor-lang 0.32.1, anchor-spl 0.32.1, solana-security-txt 1.1.1 — aucun advisory RUSTSEC en juin 2026. ✓
+- **soladrome-bridge opsec** : aucune clé privée commitée dans le repo. ✓
+
+---
+
+### 2026-07-03 — Veille automatique (Sonnet 5, session planifiée)
+
+#### Contexte
+
+Aucun commit n'a touché `programs/soladrome/src/` depuis le dernier audit du 2026-06-29 (dernier commit programme : `80ae6f0`, déjà audité). Les commits récents (`46bb16b`…`c0327b4`) sont tous frontend/PWA/wallet-mobile, hors périmètre programme on-chain. Cette veille porte donc uniquement sur les nouvelles divulgations externes.
+
+#### Sources balayées
+
+- WebSearch "Solana exploit hack July 2026" → [Drift Protocol $285M (avril 2026, déjà connu, hors fenêtre)](https://www.helius.dev/blog/solana-hacks)
+- WebSearch "Anchor framework vulnerability advisory 2026" → bruit (résultats "Anchore" container-scanning, sans rapport)
+- WebSearch "DeFi exploit post-mortem rounding bug AMM" → [Balancer V2 $116-128M — rounding error `_upscaleArray` mulDown vs mulUp sur EXACT_OUT batchSwap](https://www.theblock.co/post/377863/balancer-identifies-rounding-error-as-root-cause-of-multi-chain-defi-exploit)
+- WebSearch + WebFetch RustSec package `anchor-lang` → **2 advisories HIGH trouvés** (RUSTSEC-2026-0146, RUSTSEC-2026-0144), voir ci-dessous
+- WebSearch "ve(3,3) gauge bribe exploit governance attack 2026" → rien de spécifique/daté, seulement doc générale sur les risques de délégation
+- WebSearch "Solana PDA account substitution exploit" → [FuzzingLabs — Revival Attacks on Solana Programs](https://fuzzinglabs.com/revival-attacks-solana-programs/) (classe de bug, pas un incident daté)
+- OtterSec / Neodyme / Sec3 / Zellic — aucun nouvel advisory technique Solana publié dans les 48–72h précédant ce rapport
+
+---
+
+#### RUSTSEC-2026-0146 & RUSTSEC-2026-0144 (anchor-lang, mai 2026) → Non affecté, version pinned trop ancienne ✓ (mais piège pour upgrade future)
+
+**RUSTSEC-2026-0146 — `InterfaceAccount` account substitution (CVSS 8.7 HIGH, 2026-05-19)**
+Le wrapper `InterfaceAccount` ne validait plus que l'`owner` du compte (un des programs acceptés par l'interface) sans vérifier le discriminateur / type réel des données → substitution de compte d'un type inattendu si détenu par un programme accepté.
+**Versions affectées** : `anchor-lang >=1.0.0-rc.1, <1.0.0-rc.2`. **Non affecté** : `<1.0.0-rc.1`.
+
+**RUSTSEC-2026-0144 — `Program<System>` accepte des programmes exécutables arbitraires (HIGH, 2026-05-18)**
+`Pubkey::default()` utilisé comme sentinelle pour distinguer `Program<T>` typé de `Program<()>` non typé ; comme l'ID du system program == `Pubkey::default()`, la validation typée dégénérait en acceptation de n'importe quel programme exécutable en lieu et place du system program → CPI/création de compte/paiement détournables.
+**Versions affectées** : `anchor-lang >=1.0.0, <1.0.2`. **Non affecté** : `<1.0.0`.
+
+**Vérification code** :
+- `Cargo.lock` : `anchor-lang` / `anchor-spl` / tous les crates `anchor-*` uniformément à **0.32.1** — largement en dessous des deux plages affectées (`1.0.0-rc.1+` et `1.0.0+`). **Non exposé.**
+- `grep -rn "InterfaceAccount"` sur `programs/soladrome/src/*.rs` → aucun usage (Soladrome n'utilise que `Account<T>` typé strict + validations manuelles `try_deserialize` avec owner-check pour les `UncheckedAccount`). Non exposé même hors version.
+- `grep -rn "Program<'info, System>"` → ~40 occurrences (toutes les instructions qui créent/paient des comptes). C'est exactement le type visé par 0144 — **surface à re-vérifier obligatoirement avant toute montée de version anchor-lang**.
+
+**Sévérité pour Soladrome aujourd'hui** : Info (non exploitable, version trop basse pour être dans la plage affectée).
+
+**Recommandation (piège futur, pas un fix immédiat)** : si/quand `anchor-lang` est mis à jour vers une branche `1.x`, ne JAMAIS s'arrêter entre `1.0.0-rc.1` et `1.0.2` — sauter directement à `>=1.0.2`. Ajouter un check `cargo audit` (ou `cargo deny`) au CI pour attraper ce genre d'avisory RUSTSEC automatiquement au lieu de dépendre de la veille manuelle. Actuellement `programs/soladrome/.github` ne semble pas lancer `cargo audit` — à confirmer/ajouter en tâche séparée (non fait ce jour, hors scope veille).
+
+---
+
+#### Balancer V2 $116-128M rounding bug (EXACT_OUT batchSwap, mulDown/mulUp mismatch) → Non affecté ✓
+
+**Technique** : `_upscaleArray` utilisait `mulDown` au lieu de `mulUp` dans le chemin `EXACT_OUT` du `batchSwap` v2, permettant à l'attaquant de faire chuter les balances de pool sous le seuil minimum via 65 micro-swaps successifs, chaque arrondi drainant une fraction de dust en sa faveur.
+
+**Vérification code** (`amm_math.rs`) :
+- Soladrome n'a **qu'un seul mode de swap : EXACT_IN** (`swap(amount_in, min_out, a_to_b)` — amm.rs:457 ; `buy_sola(usdc_in, min_sola_out)` — lib.rs:215 ; flash-arb interne — lib.rs:3000). Aucune instruction `EXACT_OUT` n'existe → pas de paire de fonctions de scaling forward/reverse pouvant diverger comme chez Balancer.
+- `swap_out()` (amm_math.rs:24) : division entière `numerator.checked_div(denominator)` = floor — arrondi systématiquement en faveur du protocole (l'utilisateur reçoit `out` légèrement inférieur au continu). ✓
+- `lp_for_deposit()` / `tokens_for_lp()` (amm_math.rs) : mêmes divisions floor sur `lp_a`/`lp_b`/`optimal_a`/`optimal_b` et sur les montants rendus au burn de LP → toujours arrondi en faveur du pool, jamais en faveur de l'utilisateur. ✓
+- Une seule fonction d'arrondi utilisée de bout en bout (pas de duplication de logique de mise à l'échelle) → classe de bug structurellement absente.
+
+Non affecté.
+
+---
+
+#### Revival attacks (FuzzingLabs, classe de bug — fermeture de compte non correctement marquée) → Non applicable ✓
+
+**Technique** : un programme qui ferme un compte en mettant les lamports à zéro sans utiliser la contrainte `close` d'Anchor (qui écrit le discriminateur `CLOSED_ACCOUNT_DISCRIMINATOR` et transfère les lamports de façon atomique) laisse une fenêtre où un attaquant peut re-créditer des lamports dans la même transaction et "ressusciter" le compte avec son ancien état.
+
+**Vérification code** : `grep -rn "close\|lamports()" programs/soladrome/src/*.rs` → **aucune occurrence**. Soladrome ne ferme jamais de compte manuellement (aucune instruction `close_account`, aucun usage de la contrainte `#[account(close = ...)]`, aucune manipulation directe de `lamports()`). Tous les comptes du protocole sont conçus pour vivre indéfiniment (accumulateurs, positions, PDAs de vote) ou sont des ATAs standard gérés par `init_if_needed`. Surface d'attaque structurellement absente — pas de fermeture de compte à sécuriser.
+
+Non applicable.
+
+---
+
+#### Vérification code complète des fixes précédents — tous confirmés en place ✓
+
+| Finding | Localisation | Statut |
+|---|---|---|
+| `founder_hi_vesting` PDA + owner check | lib.rs:533–545 | ✓ en place |
+| `rollover_bribe` owner check | lib.rs:2736–2738 | ✓ en place |
+| `ve_power` cast saturant `.min(u64::MAX as u128)` | math.rs:109–113 | ✓ en place |
+| `contributor_borrow_usdc` check `new_borrowed <= hi_sola_balance` | lib.rs:1509–1512 | ✓ en place |
+| `burn_o_sola_for_votes` snapshot `total_power_snapshot` | lib.rs:~2460–2480 | ✓ en place |
+| `rewards_enabled` gate `advance_pool_rewards` / `update_pool_rewards!` | amm.rs:78–90 | ✓ en place |
+| `stake_sola` auto-harvest pending fees avant reset | lib.rs:437–452 | ✓ en place |
+| `configure_continuous_emissions` authority-gated | lib.rs:4949–4957 | ✓ en place |
+
+---
+
+#### RAS — autres points ré-vérifiés ce jour
+
+- **Aucun commit programme depuis le 06-29** : surface on-chain inchangée, seul le frontend/PWA/wallet a bougé (`46bb16b`, `4b2c0fa`, `a330a98`, `c0327b4`, etc.) — hors périmètre de cette veille (programme Anchor).
+- **Dépendances** : `anchor-lang`/`anchor-spl` 0.32.1 partout dans `Cargo.lock`, pas de version mixte. `solana-security-txt` 1.1.1. Aucun advisory RUSTSEC applicable à la version pinned actuelle.
+- **soladrome-bridge** : pas de nouveau commit depuis le fix du 2026-06-23 ; pas re-audité en profondeur ce jour (hors scope "Soladrome" strict de ce run, cf. procédure).
+
+**Conclusion du jour : RAS.** Aucune faille nouvellement divulguée n'affecte le code actuel de Soladrome. Seul point actionnable non-urgent : ajouter `cargo audit`/`cargo deny` au CI pour ne plus dépendre uniquement de la veille manuelle sur les advisories RUSTSEC, et se souvenir de sauter directement à `anchor-lang >=1.0.2` si une montée de version majeure a lieu un jour.

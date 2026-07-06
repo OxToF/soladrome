@@ -36,6 +36,19 @@ begin
     return; -- not a plausible base58 Solana pubkey
   end if;
 
+  -- Referrals are repeatable: a referrer earns +25 per unique referred wallet,
+  -- not once total. quest_completions' unique(wallet, quest_id) constraint would
+  -- cap a plain 'referral' id at one row per referrer, so each successful
+  -- referral is recorded under its own `referral:<referred_wallet>` id instead
+  -- (app/api/track-quest/route.ts, maybeRewardReferrer) — matched here by prefix.
+  if p_quest like 'referral:%' then
+    v_points := 25;
+    insert into quest_completions (wallet_address, quest_id, points)
+    values (p_wallet, p_quest, v_points)
+    on conflict (wallet_address, quest_id) do nothing;
+    return;
+  end if;
+
   v_points := case p_quest
     when 'connect'   then 5    -- connect a wallet to the devnet app
     when 'faucet'    then 5    -- claim devnet SOL + test USDC
@@ -50,10 +63,19 @@ begin
     when 'repost'    then 10   -- social: repost the launch thread (honor-system)
     when 'like_video'   then 5  -- social: like the genesis video (honor-system)
     when 'repost_video' then 10 -- social: repost the genesis video (honor-system)
+    when 'discord'   then 10   -- social: register on the Discord server (honor-system)
     when 'solana_id' then 50   -- ecosystem: minted Solana ID NFT (verified via Score API)
-    when 'referral'  then 25   -- social: awarded SERVER-SIDE only when a referred
-                               -- wallet becomes a verified on-chain Genesis Tester.
-                               -- NOT in VALID_QUESTS → can't be self-POSTed.
+    when 'claim_lp_osola' then 15 -- genesis II: claimed LP's oSOLA emissions
+    when 'claim_bribe'    then 15 -- genesis II: claimed a gauge-vote bribe reward
+    when 'borrow_again'   then 15 -- genesis II: borrowed again (verified on-chain, see track-quest)
+    when 'exercise'       then 20 -- genesis II: exercised oSOLA -> SOLA
+    when 'vote_again'     then 20 -- genesis II: voted again (verified on-chain, see track-quest)
+    when 'like_video2'    then 5  -- genesis II: like explainer video 2 on X (honor-system)
+    when 'repost_video2'  then 10 -- genesis II: repost explainer video 2 on X (honor-system)
+    when 'truemrr'        then 20 -- ecosystem: voted for Soladrome on TrueMRR (honor-system)
+    -- 'referral:<wallet>' (repeatable, one per referred wallet) is handled above,
+    -- before this case — awarded SERVER-SIDE only when a referred wallet becomes
+    -- a verified on-chain Genesis Tester. Not a POSTable id → can't be self-farmed.
     else 0
   end;
 
@@ -70,10 +92,10 @@ $$;
 -- ── 3. Public leaderboard view ──────────────────────────────────────────────
 -- Aggregated per wallet. Ties broken by who got there first (last_active asc).
 -- ANTI-SYBIL: only wallets with at least one ON-CHAIN-VERIFIED quest
--- (stake/borrow/vote) appear. Those quests are checked against chain state at
--- write time (app/api/track-quest), so they can't be forged — whereas
--- connect/faucet/swap/etc. are cheap and bot-spammable. This keeps pure
--- connect/faucet bots off the board for good, with no per-request RPC.
+-- (stake/borrow/vote/vote_again/borrow_again) appear. Those quests are checked
+-- against chain state at write time (app/api/track-quest), so they can't be
+-- forged — whereas connect/faucet/swap/etc. are cheap and bot-spammable. This
+-- keeps pure connect/faucet bots off the board for good, with no per-request RPC.
 create or replace view leaderboard as
   select wallet_address,
          sum(points)::int   as points,
@@ -81,7 +103,7 @@ create or replace view leaderboard as
          max(completed_at)  as last_active
   from quest_completions
   group by wallet_address
-  having bool_or(quest_id in ('stake', 'borrow', 'vote'))
+  having bool_or(quest_id in ('stake', 'borrow', 'vote', 'vote_again', 'borrow_again'))
   order by points desc, last_active asc;
 
 -- ── 4. Row Level Security ───────────────────────────────────────────────────
