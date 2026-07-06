@@ -102,6 +102,7 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
         const tx = await sendTx(connection, wallet, [ix]);
         setStatus(`✅ Borrowed ${amount} USDC — tx: ${tx.slice(0, 16)}…`);
         trackQuest(wallet.publicKey.toBase58(), "borrow");
+        trackQuest(wallet.publicKey.toBase58(), "borrow_again");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
         const ix = await program.methods

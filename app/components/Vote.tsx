@@ -266,6 +266,7 @@ export function Vote() {
       const tx = await sendTx(connection, wallet, [ix]);
       setStatus(`✅ Vote recorded — tx: ${tx.slice(0, 16)}…`);
       trackQuest(wallet.publicKey.toBase58(), "vote");
+      trackQuest(wallet.publicKey.toBase58(), "vote_again");
       setVotes("");
       setVotedPools(prev => new Set([...prev, poolId]));
       // Optimistic update for allocated counter

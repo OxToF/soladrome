@@ -218,6 +218,15 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
     ? estimatedOut * (1 - slippage / 100)
     : null;
 
+  // Heuristic only — there's no price oracle for permissionless pools, so we
+  // can't know if a quote is "wrong". What we CAN detect is shallow absolute
+  // depth: a pool like 21 SOL vs 11.8M USDC still shows a tiny, reassuring
+  // price-impact % for a given trade (impact scales with trade size vs
+  // reserveIn, not with how thin reserveOut actually is), while its spot price
+  // is meaningless. Flag it whenever either side's raw reserve is this small.
+  const LOW_LIQUIDITY_THRESHOLD = 100;
+  const lowLiquidity = !!pool && (pool.reserveIn < LOW_LIQUIDITY_THRESHOLD || pool.reserveOut < LOW_LIQUIDITY_THRESHOLD);
+
   const noPool  = !pool && tokIn && tokOut && tokIn.mint !== tokOut.mint;
   const canSwap = !!wallet && !!amountIn && +amountIn > 0 && !!estimatedOut && !!pool && !loading;
 
@@ -323,6 +332,12 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
           <span className="font-mono text-gray-300">
             1 {tokIn?.symbol} = {(pool.reserveOut / pool.reserveIn).toLocaleString(undefined, { maximumFractionDigits: 6 })} {tokOut?.symbol}
           </span>
+        </div>
+      )}
+
+      {lowLiquidity && (
+        <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 mb-3 text-xs text-yellow-500">
+          ⚠️ Low liquidity pool — this price may not reflect fair value. Trade with caution.
         </div>
       )}
 

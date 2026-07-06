@@ -14,7 +14,11 @@ export type QuestId =
   | "connect" | "faucet" | "swap" | "liquidity"
   | "stake" | "borrow" | "repay" | "vote" | "bug"
   | "follow_x" | "repost" | "like_video" | "repost_video"
-  | "solana_id";
+  | "discord"
+  | "solana_id"
+  | "claim_lp_osola" | "claim_bribe" | "borrow_again" | "exercise" | "vote_again"
+  | "like_video2" | "repost_video2"
+  | "truemrr";
 
 export interface Quest {
   /** Server-backed ids (QuestId) are trackable; any string is allowed for teasers. */
@@ -25,7 +29,7 @@ export interface Quest {
   icon:   string;
   /** Where the "Go" button sends the user: an app page, optionally an inner tab. */
   page?:  string;
-  tab?:   "swap" | "earn" | "lend";
+  tab?:   "swap" | "earn" | "lend" | "options";
   /** Awarded out-of-band (e.g. verified bug report) — shown under "Bonus". */
   bonus?: boolean;
   /** Off-app action (Discord, X…) — shows this label on the action button. */
@@ -55,10 +59,16 @@ export interface QuestGroup {
   bonus?: Quest[];
   /** false → "Coming soon": rows are shown but disabled (no Go, no tracking). */
   live:  boolean;
+  /** Requires ALL of these quest ids to be completed first — rows show locked until then. */
+  gate?: QuestId[];
 }
 
 // Discord server (general community). Kept in sync with DISCORD_URL in app/page.tsx.
 const DISCORD_URL = "https://discord.com/channels/1506249630218715218/1506249803451994132";
+// Public invite link for the "Register on our Discord" quest — unlike DISCORD_URL
+// (a channel deep-link that only works once you're already a member), this lets a
+// new user actually join the server.
+const DISCORD_INVITE = "https://discord.gg/37r97aY6B";
 // Telegram thread where verified bug reports are posted.
 const BUG_REPORT_URL = "https://t.me/Soladrome_Labs/773";
 
@@ -84,7 +94,41 @@ const GENESIS: QuestGroup = {
   ],
 };
 
-// ── Campaign #2 — Social (LIVE: follow + repost; referral deferred) ───────────
+// ── Campaign #2 — Genesis Missions II (post-launch protocol loop) ────────────
+// Unlike GENESIS (one-shot onboarding), these missions reward the ongoing
+// yield/governance loop: claiming emissions, claiming bribes, exercising the
+// option, and voting again next epoch. "vote_again" reuses the same on-chain
+// check as "vote" (server-side, see track-quest route) since both just confirm
+// a UserEpochVotes PDA with allocated > 0 for whatever epoch is current.
+//
+const GENESIS2_VIDEO_URL = "https://x.com/soladrome/status/2074079950903128238";
+
+const GENESIS_2: QuestGroup = {
+  id:    "genesis2",
+  title: "Genesis Missions II",
+  blurb: "Keep the loop going: claim your yield, exercise your option, and vote again next epoch.",
+  badge: "Protocol Native",
+  live:  true,
+  // Requires a TrueMRR vote first (the distribution ask, costs nothing — see
+  // ECOSYSTEM below). Minting a Solana ID is NOT gated here on purpose: it's a
+  // paid action (0.1 SOL), so it stays an incentive (its own +50 pt quest)
+  // rather than a hard requirement to reach the rest of the campaign.
+  // Enforced server-side too, see GENESIS2_GATE in app/api/track-quest/route.ts.
+  gate:  ["truemrr"],
+  quests: [
+    // Video quests come first — watching the explainer is the natural starting
+    // point before doing the 4 protocol missions below.
+    { id: "like_video2",    label: "Like explainer video 2",       desc: "Like our Genesis II explainer video on X, then claim",   points: 5,  icon: "❤️", external: "Watch",  href: GENESIS2_VIDEO_URL },
+    { id: "repost_video2",  label: "Repost explainer video 2",     desc: "Repost our Genesis II explainer video on X, then claim", points: 10, icon: "🎬", external: "Repost", href: GENESIS2_VIDEO_URL },
+    { id: "claim_lp_osola", label: "Claim your LP's oSOLA reward", desc: "Claim the oSOLA emissions earned by your AMM liquidity position", points: 15, icon: "🌾", page: "pools" },
+    { id: "claim_bribe",    label: "Claim your voting rewards",    desc: "Claim the bribe reward earned by voting on a gauge last epoch",  points: 15, icon: "🎁", page: "claim" },
+    { id: "borrow_again",   label: "Borrow USDC again",            desc: "Borrow USDC against your hiSOLA position — keep your credit line active", points: 15, icon: "🏦", page: "home", tab: "lend" },
+    { id: "exercise",       label: "Exercise your oSOLA option",   desc: "Burn oSOLA + pay floor price in USDC to mint SOLA",              points: 20, icon: "📈", page: "home", tab: "options" },
+    { id: "vote_again",     label: "Vote for the next epoch",      desc: "Allocate your hiSOLA voting power to a gauge for the current epoch", points: 20, icon: "🗳️", page: "vote" },
+  ],
+};
+
+// ── Campaign #3 — Social (LIVE: follow + repost; referral deferred) ───────────
 // follow_x + repost are honor-system click-to-claim: the button opens X and
 // credits the quest. Their ids + points live in record_quest (supabase/quests.sql)
 // and VALID_QUESTS (app/api/track-quest/route.ts).
@@ -108,11 +152,12 @@ const SOCIAL: QuestGroup = {
     { id: "repost",   label: "Repost the launch thread", desc: "Repost our genesis announcement, then claim",    points: 10, icon: "🔁", external: "Repost", href: LAUNCH_THREAD_URL },
     { id: "like_video",   label: "Like the genesis video",   desc: "Like our genesis explainer video on X, then claim",   points: 5,  icon: "❤️", external: "Watch",  href: GENESIS_VIDEO_URL },
     { id: "repost_video", label: "Repost the genesis video", desc: "Repost our genesis explainer video on X, then claim", points: 10, icon: "🎬", external: "Repost", href: GENESIS_VIDEO_URL },
+    { id: "discord", label: "Register on our Discord", desc: "Join the Soladrome Discord server, then claim", points: 10, icon: "💬", external: "Join", href: DISCORD_INVITE },
     { id: "referral", label: "Refer a tester",           desc: "Share your link — friends just open it, nothing to paste. Earn when they finish the Genesis set on-chain.", points: 25, icon: "🤝", copyRef: true },
   ],
 };
 
-// ── Campaign #3 — Ecosystem Missions ─────────────────────────────────────────
+// ── Campaign #4 — Ecosystem Missions ─────────────────────────────────────────
 // Quests that integrate partner protocols. Solana ID: costs 0.1 SOL to mint
 // (hence the premium 50 pts) — verified server-side via the Solana ID Score API
 // (isSolanaIdUser === true). Gate: do NOT post/enable before confirming free vs
@@ -133,10 +178,28 @@ const ECOSYSTEM: QuestGroup = {
       external: "Mint",
       href:     "https://solana.id",
     },
+    {
+      id:       "truemrr",
+      label:    "Vote for Soladrome on TrueMRR",
+      desc:     "We're pre-revenue and listed in the Trenches on TrueMRR — vote for us there, then claim.",
+      points:   20,
+      icon:     "🗳️",
+      external: "Vote",
+      href:     "https://truemrr.fun/project/soladrome",
+    },
   ],
 };
 
-export const QUEST_GROUPS: QuestGroup[] = [GENESIS, SOCIAL, ECOSYSTEM];
+export const QUEST_GROUPS: QuestGroup[] = [GENESIS, GENESIS_2, SOCIAL, ECOSYSTEM];
+
+/** Look up a quest (and which group it lives in) by id — used to render gate banners. */
+export function findQuest(id: QuestId): { quest: Quest; groupIndex: number } | undefined {
+  for (let i = 0; i < QUEST_GROUPS.length; i++) {
+    const q = QUEST_GROUPS[i].quests.find((q) => q.id === id);
+    if (q) return { quest: q, groupIndex: i };
+  }
+  return undefined;
+}
 
 /** Claimable core quests in a group (excludes deferred "soon" teasers). */
 export function claimableQuests(g: QuestGroup): Quest[] {

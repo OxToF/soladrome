@@ -11,6 +11,7 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { getProgram, sendTx } from "@/lib/program";
+import { trackQuest } from "@/lib/quests";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochLabel } from "@/lib/epoch";
 
@@ -232,6 +233,7 @@ export function ClaimBribe() {
       const tx = await sendTx(connection, wallet, [ix]);
 
       setStatus(`✅ Bribe claimed — tx: ${tx.slice(0, 16)}…`);
+      trackQuest(wallet.publicKey.toBase58(), "claim_bribe");
       const key = `${pool.toBase58()}:${selectedMint.toBase58()}:${ep}`;
       setClaimed(prev => new Set([...prev, key]));
       setSelectedMint(null);

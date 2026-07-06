@@ -545,9 +545,15 @@ export function Pools() {
 
       const preIxs:  any[] = [];
       const postIxs: any[] = [];
+      // Ensure BOTH destination ATAs exist before the burn — INCLUDING the wSOL
+      // side. remove_liquidity declares user_token_a/b without init_if_needed, so
+      // it expects them to already exist; a user who closed their wSOL ATA after a
+      // prior unwrap (wallets do this automatically) otherwise hits
+      // AccountNotInitialized (Custom 3012). The wSOL ATA is a normal ATA, so we
+      // create it here too and close it again via the unwrap post-ix below.
+      const ixA = await ensureAtaIx(connection, wallet.publicKey, mintAPk, wallet.publicKey); if (ixA) preIxs.push(ixA);
+      const ixB = await ensureAtaIx(connection, wallet.publicKey, mintBPk, wallet.publicKey); if (ixB) preIxs.push(ixB);
       if (isWsolA || isWsolB) postIxs.push(buildUnwrapInstruction(wallet.publicKey));
-      if (!isWsolA) { const ix = await ensureAtaIx(connection, wallet.publicKey, mintAPk, wallet.publicKey); if (ix) preIxs.push(ix); }
-      if (!isWsolB) { const ix = await ensureAtaIx(connection, wallet.publicKey, mintBPk, wallet.publicKey); if (ix) preIxs.push(ix); }
 
       const userInfoPda = lpUserInfoPda(poolAddr, wallet.publicKey);
       const userOSola   = userAta(oSolaM, wallet.publicKey);
@@ -617,6 +623,7 @@ export function Pools() {
         .instruction();
       const tx = await sendTx(connection, wallet, oSolaAtaIx ? [oSolaAtaIx, claimIx] : [claimIx]);
       setStatus(`✅ oSOLA received — tx: ${tx.slice(0, 16)}…`);
+      trackQuest(wallet.publicKey.toBase58(), "claim_lp_osola");
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) { console.error("tx failed:", e); setStatus(`❌ ${fmtErr(e)}`); }
@@ -677,6 +684,7 @@ export function Pools() {
 
       const total = eligible.reduce((s, p) => s + (pendingOsola[p.address] ?? 0), 0);
       setClaimAllMsg(`✅ Claimed ~${total.toFixed(4)} oSOLA from ${eligible.length} pool(s) — ${sigs.length} tx`);
+      trackQuest(wallet.publicKey.toBase58(), "claim_lp_osola");
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) {

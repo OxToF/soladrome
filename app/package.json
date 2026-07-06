@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "postinstall": "node scripts/fix-sui-icon.js"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

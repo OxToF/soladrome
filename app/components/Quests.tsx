@@ -3,7 +3,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
-import { QUEST_GROUPS, groupPoints, claimableQuests, trackQuest, type Quest, type QuestGroup, type QuestId } from "@/lib/quests";
+import { QUEST_GROUPS, groupPoints, claimableQuests, trackQuest, findQuest, type Quest, type QuestGroup, type QuestId } from "@/lib/quests";
 
 // Jump to where a mission is performed (page + optional inner ActionPanel tab).
 function go(q: Quest) {
@@ -40,6 +40,11 @@ export function Quests() {
 
   const groups = QUEST_GROUPS;
   const group  = groups[page];
+  const missingGates = (group.gate ?? []).filter((id) => !done.has(id));
+  const locked = missingGates.length > 0;
+  // Which tab holds the first unmet prerequisite (Solana ID + TrueMRR both live in Ecosystem).
+  const unlockTargetIndex = locked ? (findQuest(missingGates[0])?.groupIndex ?? -1) : -1;
+  const unlockLabel = unlockTargetIndex >= 0 ? groups[unlockTargetIndex].title : undefined;
 
   // Two-step honor claim: QuestRow opens the external action (X follow/repost)
   // first, then calls this to credit. Splitting open from credit means a single
@@ -80,7 +85,16 @@ export function Quests() {
         ))}
       </div>
 
-      <GroupBody group={group} done={done} wallet={!!wallet} onClaim={claim} onCopyRef={copyRef} />
+      <GroupBody
+        group={group}
+        done={done}
+        wallet={!!wallet}
+        missingGates={missingGates}
+        unlockLabel={unlockLabel}
+        onUnlock={unlockTargetIndex >= 0 ? () => setPage(unlockTargetIndex) : undefined}
+        onClaim={claim}
+        onCopyRef={copyRef}
+      />
 
       {!wallet && group.live && (
         <p className="mt-4 text-xs text-gray-500 text-center">
@@ -96,6 +110,9 @@ function TabStatus({ group, done }: { group: QuestGroup; done: Set<string> }) {
   if (!group.live) {
     return <span className="text-[9px] uppercase tracking-wider text-yellow-500/70">Soon</span>;
   }
+  if (group.gate && group.gate.some((id) => !done.has(id))) {
+    return <span className="text-xs" aria-label="locked">🔒</span>;
+  }
   const claimable = claimableQuests(group);
   const completed = claimable.every((q) => done.has(q.id));
   if (completed) return <span className="text-brand-green text-xs" aria-label="completed">★</span>;
@@ -104,17 +121,33 @@ function TabStatus({ group, done }: { group: QuestGroup; done: Set<string> }) {
 }
 
 // ── Group body: blurb + progress + quest rows + bonus ──────────────────────
-function GroupBody({ group, done, wallet, onClaim, onCopyRef }: { group: QuestGroup; done: Set<string>; wallet: boolean; onClaim: (q: Quest) => void; onCopyRef: () => boolean }) {
+function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, onClaim, onCopyRef }: { group: QuestGroup; done: Set<string>; wallet: boolean; missingGates: QuestId[]; unlockLabel?: string; onUnlock?: () => void; onClaim: (q: Quest) => void; onCopyRef: () => boolean }) {
   const claimable = claimableQuests(group);
   const earned    = claimable.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
-  const pct       = group.live ? Math.round((earned / groupPoints(group)) * 100) : 0;
-  const completed = group.live && claimable.every((q) => done.has(q.id));
+  const locked    = missingGates.length > 0;
+  const pct       = group.live && !locked ? Math.round((earned / groupPoints(group)) * 100) : 0;
+  const completed = group.live && !locked && claimable.every((q) => done.has(q.id));
+  const active    = group.live && !locked;
 
   return (
     <>
       <p className="text-xs text-gray-500 mb-4">{group.blurb}</p>
 
-      {group.live ? (
+      {locked ? (
+        <div className="mb-5 rounded-xl border border-brand-green/20 bg-brand-green/5 px-4 py-2.5 text-center">
+          <p className="text-xs text-brand-green/90 font-semibold">🔒 Complete these first to unlock</p>
+          <ul className="text-[11px] text-gray-400 mt-1 space-y-0.5">
+            {missingGates.map((id) => (
+              <li key={id}>{findQuest(id)?.quest.label ?? id}</li>
+            ))}
+          </ul>
+          {onUnlock && (
+            <button onClick={onUnlock} className="mt-2 text-xs text-brand-green border border-brand-green/50 hover:bg-brand-green/10 rounded-lg px-2.5 py-1 transition-colors">
+              Go to {unlockLabel ?? "Ecosystem Missions"} →
+            </button>
+          )}
+        </div>
+      ) : group.live ? (
         <div className="h-2 rounded-full bg-brand-dark border border-brand-border overflow-hidden mb-5">
           <div className="h-full bg-brand-green transition-all duration-500" style={{ width: `${pct}%` }} />
         </div>
@@ -127,7 +160,7 @@ function GroupBody({ group, done, wallet, onClaim, onCopyRef }: { group: QuestGr
 
       <ul className="space-y-2">
         {group.quests.map((q, i) => (
-          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={group.live} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} />
+          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} />
         ))}
       </ul>
 
@@ -136,7 +169,7 @@ function GroupBody({ group, done, wallet, onClaim, onCopyRef }: { group: QuestGr
           <p className="text-[11px] uppercase tracking-widest text-gray-600 mt-5 mb-2">Bonus</p>
           <ul className="space-y-2">
             {group.bonus.map((q) => (
-              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={group.live} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} />
+              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} />
             ))}
           </ul>
         </>
@@ -155,12 +188,12 @@ function GroupBody({ group, done, wallet, onClaim, onCopyRef }: { group: QuestGr
 }
 
 // ── A single quest row ─────────────────────────────────────────────────────
-function QuestRow({ q, n, done, live, wallet, onClaim, onCopyRef }: { q: Quest; n?: number; done: boolean; live: boolean; wallet: boolean; onClaim: (q: Quest) => void; onCopyRef: () => boolean }) {
+function QuestRow({ q, n, done, live, locked, wallet, onClaim, onCopyRef }: { q: Quest; n?: number; done: boolean; live: boolean; locked?: boolean; wallet: boolean; onClaim: (q: Quest) => void; onCopyRef: () => boolean }) {
   const [copied, setCopied] = useState(false);
   // Two-step: first click opens the X action, second click claims. Resets on
   // unmount, which is fine — re-opening costs nothing.
   const [opened, setOpened] = useState(false);
-  const dim = (!live || q.soon) && !done;
+  const dim = (!live || q.soon || locked) && !done;
   return (
     <li
       className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors ${
@@ -187,13 +220,11 @@ function QuestRow({ q, n, done, live, wallet, onClaim, onCopyRef }: { q: Quest; 
         </div>
         <p className="text-xs text-gray-500 truncate">{q.desc}</p>
       </div>
-      {done ? (
-        <span className="text-brand-green text-sm shrink-0">✓</span>
-      ) : q.soon ? (
-        <span className="text-[10px] text-gray-600 shrink-0">Soon</span>
-      ) : !live ? (
-        <span className="text-[10px] text-gray-600 shrink-0">{q.external ?? "Soon"}</span>
-      ) : q.copyRef ? (
+      {q.copyRef ? (
+        // Referral is repeatable — always show the copy button, even once
+        // `done` (the label above already turns green to signal "earned at
+        // least once"), so testers can keep sharing and earning +25 per
+        // NEW successful referral instead of getting stuck after the first.
         <button
           onClick={() => { if (onCopyRef()) { setCopied(true); setTimeout(() => setCopied(false), 1500); } }}
           disabled={!wallet}
@@ -201,6 +232,14 @@ function QuestRow({ q, n, done, live, wallet, onClaim, onCopyRef }: { q: Quest; 
         >
           {copied ? "Copied ✓" : "Copy link"}
         </button>
+      ) : done ? (
+        <span className="text-brand-green text-sm shrink-0">✓</span>
+      ) : locked ? (
+        <span className="text-[10px] text-gray-600 shrink-0">🔒 Locked</span>
+      ) : q.soon ? (
+        <span className="text-[10px] text-gray-600 shrink-0">Soon</span>
+      ) : !live ? (
+        <span className="text-[10px] text-gray-600 shrink-0">{q.external ?? "Soon"}</span>
       ) : q.linkOnly && q.href ? (
         <a
           href={q.href}
