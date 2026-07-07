@@ -9,3 +9,5 @@ onchain_eligible.json
 deleted_bots_backup_*.json
 tainted_referrals_preview.json
 tainted_referrals_removed_*.json
+sybil_report_before_fix.json
+referrals_to_restore.json

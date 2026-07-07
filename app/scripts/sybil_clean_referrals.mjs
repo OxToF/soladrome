@@ -12,8 +12,16 @@
 // before touching the database, so the action is reversible by re-inserting
 // from that file if something looks wrong afterwards.
 //
-//   node scripts/sybil_clean_referrals.mjs           # preview only, no writes
-//   node scripts/sybil_clean_referrals.mjs --apply   # actually delete + update
+//   node scripts/sybil_clean_referrals.mjs                    # preview only, no writes
+//   node scripts/sybil_clean_referrals.mjs --apply             # actually delete + update
+//   node scripts/sybil_clean_referrals.mjs --restore <file>    # re-credit rows from a
+//                                                               # previous backup/removal file
+//
+// The --restore path exists because the verdict a removal was based on can
+// itself get corrected later (e.g. the 2026-07-07 SUSPECT-on-speed-alone bug
+// in sybil_scan.mjs's classify() wrongly flagged 283 human wallets — any
+// referral credit removed because of one of those false positives needs
+// re-crediting once the fix lands and the wallet re-scans as HUMAN_LIKE).
 //
 // Requires sybil_report.json (run sybil_scan.mjs first).
 
@@ -26,6 +34,41 @@ const env = Object.fromEntries(
 );
 const sb = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
 const APPLY = process.argv.includes("--apply");
+const restoreIdx = process.argv.indexOf("--restore");
+const RESTORE_FILE = restoreIdx >= 0 ? process.argv[restoreIdx + 1] : null;
+
+if (RESTORE_FILE) {
+  if (!existsSync(RESTORE_FILE)) {
+    console.error(`Restore file not found: ${RESTORE_FILE}`);
+    process.exit(1);
+  }
+  const rows = JSON.parse(readFileSync(RESTORE_FILE, "utf8"));
+  console.log(`Restoring ${rows.length} referral credits from ${RESTORE_FILE}…`);
+  if (!APPLY) {
+    console.log("Dry run — pass --apply to actually re-credit these. No writes made.");
+    process.exit(0);
+  }
+  let restored = 0, failed = 0;
+  for (const r of rows) {
+    const { error: insErr } = await sb.from("quest_completions")
+      .insert({ wallet_address: r.referrer_wallet, quest_id: `referral:${r.referred_wallet}`, points: 25 });
+    const { error: updErr } = await sb.from("referrals")
+      .update({ rewarded: true }).eq("referred_wallet", r.referred_wallet);
+    // insErr on a row that was never actually deleted (e.g. re-running --restore
+    // twice) is a harmless unique-constraint conflict, not a real failure.
+    if (insErr && !insErr.message?.includes("duplicate")) {
+      failed++;
+      console.error(`  ✗ ${r.referrer_wallet.slice(0, 8)}… <- ${r.referred_wallet.slice(0, 8)}…: ${insErr.message}`);
+    } else if (updErr) {
+      failed++;
+      console.error(`  ✗ ${r.referrer_wallet.slice(0, 8)}… <- ${r.referred_wallet.slice(0, 8)}… (rewarded flag): ${updErr.message}`);
+    } else {
+      restored++;
+    }
+  }
+  console.log(`\n✅ Restored ${restored} referral credits (${failed} failed).`);
+  process.exit(0);
+}
 
 if (!existsSync("sybil_report.json")) {
   console.error("sybil_report.json not found — run `node scripts/sybil_scan.mjs` first.");
