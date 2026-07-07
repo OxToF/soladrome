@@ -14,7 +14,7 @@ const supabase = createClient(
 
 const VALID_QUESTS = new Set([
   "connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote",
-  "follow_x", "repost", "like_video", "repost_video", "discord", "solana_id",
+  "follow_x", "repost", "like_video", "repost_video", "solana_id",
   "claim_lp_osola", "claim_bribe", "borrow_again", "exercise", "vote_again",
   "like_video2", "repost_video2", "truemrr",
 ]);
@@ -22,6 +22,13 @@ const VALID_QUESTS = new Set([
 // manually-awarded bonus (verified bug reports, severity-weighted) credited only
 // via the Supabase record_quest RPC (service key / SQL editor) — so it can't be
 // self-farmed by curling this route. Same server-side-only rationale as "referral".
+//
+// "discord" is also intentionally excluded — it used to be honor-system
+// click-to-claim (open the invite, then self-report), which meant any wallet
+// could POST {quest:"discord"} directly without ever joining the server.
+// Reported exploited in the community Discord; now only credited by
+// app/api/discord/callback/route.ts after a real OAuth + bot-verified guild
+// membership check.
 
 // ── On-chain verification ────────────────────────────────────────────────────
 // These quests require real protocol state on-chain before we credit them. They

@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
 import { QUEST_GROUPS, groupPoints, claimableQuests, trackQuest, findQuest, type Quest, type QuestGroup, type QuestId } from "@/lib/quests";
+import { StatusBanner } from "./ui/StatusBanner";
 
 // Jump to where a mission is performed (page + optional inner ActionPanel tab).
 function go(q: Quest) {
@@ -19,6 +20,25 @@ export function Quests() {
   const wallet = useAnchorWallet();
   const [done, setDone] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(0); // which campaign group is shown
+  const [discordNotice, setDiscordNotice] = useState<string | null>(null);
+
+  // Land back here after the Discord OAuth round-trip (/api/discord/callback
+  // redirects to /?discord_verified=1 or /?discord_error=<reason>) — show a
+  // one-line result and strip the query param so a page refresh doesn't repeat it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const verified = params.get("discord_verified");
+    const error    = params.get("discord_error");
+    if (!verified && !error) return;
+    setDiscordNotice(
+      verified ? "✅ Discord verified — quest credited."
+      : error === "not_a_member" ? "❌ You need to join the Soladrome Discord first."
+      : "❌ Discord verification failed — try again."
+    );
+    window.history.replaceState({}, "", window.location.pathname);
+    setTimeout(() => window.dispatchEvent(new CustomEvent("quests:refresh")), 800);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!wallet) { setDone(new Set()); return; }
@@ -50,9 +70,24 @@ export function Quests() {
   // first, then calls this to credit. Splitting open from credit means a single
   // stray click no longer mints points — the user has to come back and claim,
   // which converts far more of them into real follows/reposts.
+  //
+  // NOTE: this honor-system path still applies to follow_x/repost/like_video/
+  // repost_video — real X follow/like/repost verification needs the paid X API
+  // tier, not budgeted yet. "discord" was reported exploited the same way and
+  // has since moved to real OAuth + bot verification (see verifyDiscord below);
+  // it no longer goes through this function.
   const claim = useCallback((q: Quest) => {
     const id = wallet?.publicKey.toBase58();
     if (id) trackQuest(id, q.id as QuestId);
+  }, [wallet?.publicKey.toBase58()]);
+
+  // Discord: full-page redirect into OAuth (not window.open — the callback has
+  // to land back on our own domain to credit the quest), instead of a client-
+  // side self-report claim.
+  const verifyDiscord = useCallback(() => {
+    const id = wallet?.publicKey.toBase58();
+    if (!id) return;
+    window.location.href = `/api/discord/authorize?wallet=${id}`;
   }, [wallet?.publicKey.toBase58()]);
 
   // Referral: copy this wallet's invite link (credited server-side when a
@@ -66,6 +101,8 @@ export function Quests() {
 
   return (
     <div className="card">
+      {discordNotice && <StatusBanner message={discordNotice} />}
+
       {/* ── Campaign tabs ───────────────────────────────────────── */}
       <div className="flex items-center gap-1 mb-4 border-b border-brand-border overflow-x-auto">
         {groups.map((g, i) => (
@@ -94,6 +131,7 @@ export function Quests() {
         onUnlock={unlockTargetIndex >= 0 ? () => setPage(unlockTargetIndex) : undefined}
         onClaim={claim}
         onCopyRef={copyRef}
+        onVerifyDiscord={verifyDiscord}
       />
 
       {!wallet && group.live && (
@@ -121,7 +159,7 @@ function TabStatus({ group, done }: { group: QuestGroup; done: Set<string> }) {
 }
 
 // ── Group body: blurb + progress + quest rows + bonus ──────────────────────
-function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, onClaim, onCopyRef }: { group: QuestGroup; done: Set<string>; wallet: boolean; missingGates: QuestId[]; unlockLabel?: string; onUnlock?: () => void; onClaim: (q: Quest) => void; onCopyRef: () => boolean }) {
+function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, onClaim, onCopyRef, onVerifyDiscord }: { group: QuestGroup; done: Set<string>; wallet: boolean; missingGates: QuestId[]; unlockLabel?: string; onUnlock?: () => void; onClaim: (q: Quest) => void; onCopyRef: () => boolean; onVerifyDiscord: () => void }) {
   const claimable = claimableQuests(group);
   const earned    = claimable.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
   const locked    = missingGates.length > 0;
@@ -160,7 +198,7 @@ function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, o
 
       <ul className="space-y-2">
         {group.quests.map((q, i) => (
-          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} />
+          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} onVerifyDiscord={onVerifyDiscord} />
         ))}
       </ul>
 
@@ -169,7 +207,7 @@ function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, o
           <p className="text-[11px] uppercase tracking-widest text-gray-600 mt-5 mb-2">Bonus</p>
           <ul className="space-y-2">
             {group.bonus.map((q) => (
-              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} />
+              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} onVerifyDiscord={onVerifyDiscord} />
             ))}
           </ul>
         </>
@@ -188,7 +226,7 @@ function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, o
 }
 
 // ── A single quest row ─────────────────────────────────────────────────────
-function QuestRow({ q, n, done, live, locked, wallet, onClaim, onCopyRef }: { q: Quest; n?: number; done: boolean; live: boolean; locked?: boolean; wallet: boolean; onClaim: (q: Quest) => void; onCopyRef: () => boolean }) {
+function QuestRow({ q, n, done, live, locked, wallet, onClaim, onCopyRef, onVerifyDiscord }: { q: Quest; n?: number; done: boolean; live: boolean; locked?: boolean; wallet: boolean; onClaim: (q: Quest) => void; onCopyRef: () => boolean; onVerifyDiscord: () => void }) {
   const [copied, setCopied] = useState(false);
   // Two-step: first click opens the X action, second click claims. Resets on
   // unmount, which is fine — re-opening costs nothing.
@@ -257,6 +295,17 @@ function QuestRow({ q, n, done, live, locked, wallet, onClaim, onCopyRef }: { q:
             className="text-xs text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
           >
             {q.external ?? "Open"} →
+          </button>
+        ) : q.id === "discord" ? (
+          // Real verification, not honor-system: hits Discord OAuth + a
+          // bot-checked guild-membership lookup server-side (see
+          // app/api/discord/authorize + /callback) instead of self-crediting.
+          <button
+            onClick={onVerifyDiscord}
+            disabled={!wallet}
+            className="text-xs text-brand-green border border-brand-green/50 hover:bg-brand-green/10 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
+          >
+            Verify Discord →
           </button>
         ) : (
           <button
