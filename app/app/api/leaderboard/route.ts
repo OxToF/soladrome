@@ -24,48 +24,69 @@ const TOP_N = 100;
 // 1000 the old `total: rows.length` silently truncated *and* under-counted
 // (it reported 1000 when there were more). We now (a) page to the top N and
 // (b) read the real count from the `count=exact` header, which is NOT capped.
+
+// Wallets flagged non-HUMAN_LIKE by scripts/sybil_scan.mjs (see
+// supabase/wallet_verdicts.sql) are hidden from this public view — a display
+// filter only, not a data deletion: quest_completions is untouched, and
+// airdrop eligibility is decided separately at snapshot time. Wallets with no
+// verdict yet (not scanned since they last completed a quest) default to
+// shown — this is a display convenience, not the eligibility gate, so failing
+// open here is the right default.
+async function hiddenWallets(): Promise<Set<string>> {
+  const hidden = new Set<string>();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("wallet_verdicts")
+      .select("wallet_address")
+      .neq("verdict", "HUMAN_LIKE")
+      .range(from, from + 999);
+    if (error || !data) break; // most likely: migration not run yet — fail open, show everyone
+    for (const r of data) hidden.add(r.wallet_address);
+    if (data.length < 1000) break;
+  }
+  return hidden;
+}
+
+async function pullAllLeaderboardRows() {
+  let all: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("leaderboard")
+      .select("wallet_address, points, quests, last_active")
+      .order("points", { ascending: false })
+      .order("last_active", { ascending: true })
+      .range(from, from + 999);
+    if (error) throw new Error(error.message);
+    all = all.concat(data ?? []);
+    if (!data || data.length < 1000) break;
+  }
+  return all;
+}
+
 export async function GET(req: Request) {
   try {
     const me = new URL(req.url).searchParams.get("me");
 
-    const { data, error, count } = await supabase
-      .from("leaderboard")
-      .select("wallet_address, points, quests, last_active", { count: "exact" })
-      .order("points", { ascending: false })
-      .order("last_active", { ascending: true })
-      .range(0, TOP_N - 1);
+    const [hidden, allRows] = await Promise.all([hiddenWallets(), pullAllLeaderboardRows()]);
+    const visible = allRows.filter((r) => !hidden.has(r.wallet_address));
+    // Already ordered by points desc / last_active asc from the query above.
+    const rows  = visible.slice(0, TOP_N);
+    const total = visible.length;
 
-    if (error) {
-      console.error("[leaderboard]", error);
-      return NextResponse.json({ rows: [], total: 0, me: null, error: error.message }, { status: 500 });
-    }
-
-    const rows = data ?? [];
-    const total = count ?? rows.length;
-
-    // If the caller's wallet is verified but ranks outside the top N, it won't
-    // be in `rows` — resolve its row + approximate rank so the UI can still
-    // show "your position" instead of falsely claiming "not verified yet".
+    // If the caller's wallet is verified but ranks outside the top N (or is
+    // itself hidden), it won't be in `rows` — resolve its row + rank among the
+    // visible set so the UI can show "your position" instead of falsely
+    // claiming "not verified yet". A hidden wallet simply gets no meInfo,
+    // same as an unverified one.
     let meInfo: { row: any; rank: number } | null = null;
-    if (me && !rows.some((r) => r.wallet_address === me)) {
-      const { data: mine } = await supabase
-        .from("leaderboard")
-        .select("wallet_address, points, quests, last_active")
-        .eq("wallet_address", me)
-        .maybeSingle();
-      if (mine) {
-        // rank = (# wallets strictly ahead on points) + 1. Ties are reported at
-        // the same rank; good enough for a "you're #N" badge.
-        const { count: ahead } = await supabase
-          .from("leaderboard")
-          .select("wallet_address", { count: "exact", head: true })
-          .gt("points", mine.points);
-        meInfo = { row: mine, rank: (ahead ?? 0) + 1 };
-      }
+    if (me && !rows.some((r) => r.wallet_address === me) && !hidden.has(me)) {
+      const idx = visible.findIndex((r) => r.wallet_address === me);
+      if (idx >= 0) meInfo = { row: visible[idx], rank: idx + 1 };
     }
 
     return NextResponse.json({ rows, total, me: meInfo });
   } catch (e: any) {
+    console.error("[leaderboard]", e);
     return NextResponse.json({ rows: [], total: 0, me: null, error: e?.message ?? String(e) }, { status: 500 });
   }
 }
