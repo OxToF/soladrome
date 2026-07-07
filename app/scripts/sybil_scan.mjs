@@ -11,6 +11,8 @@
 // Outputs (written next to this script's cwd):
 //   sybil_report.json        — every wallet with score + flags
 //   eligible_candidates.json — wallets that pass (human-like)
+//   clean_leaderboard.json   — leaderboard points with tainted referral payouts
+//                              stripped out (see step 5 below)
 //
 // Tunables via env: SPAN_BOT_SEC (default 300), SPAN_SUSPECT_SEC (default 1800).
 
@@ -29,6 +31,8 @@ const ONCHAIN = ["swap", "liquidity", "stake", "borrow", "repay", "vote"];
 const SPAN_BOT_SEC     = Number(env.SPAN_BOT_SEC     ?? 300);   // all-8 faster than this → bot
 const SPAN_SUSPECT_SEC = Number(env.SPAN_SUSPECT_SEC ?? 1800);  // all-8 within this → suspect
 const DO_FUNDING = process.argv.includes("--funding");
+// Must match the "referral" quest's points in app/lib/quests.ts.
+const REFERRAL_POINTS = 25;
 
 // ── 1. Pull all completions ────────────────────────────────────────────────
 async function pullCompletions() {
@@ -116,6 +120,73 @@ async function rpc(method, params) {
   return r.json();
 }
 
+// ── 5. Leaderboard cleanup: strip referral payouts sourced from bot referrals ──
+// The "referral" quest pays +25 to the REFERRER once the REFERRED wallet is a
+// verified on-chain Genesis Tester (stake+borrow+vote) — a real bar, but a
+// scripted swarm can still clear it and self-refer back to one hub wallet,
+// inflating that hub's leaderboard score without it doing anything itself
+// (see the AuQh…mLov case: 86% of its 2085 points came from 72 referral
+// payouts, 83/99 of which trace to LIKELY_BOT-flagged referred wallets).
+// This recomputes each wallet's score with tainted referral credits removed,
+// using the same timing-fingerprint verdicts computed above — no separate
+// pass, no extra RPC calls.
+async function pullReferrals() {
+  let all = [], from = 0;
+  for (;;) {
+    const { data, error } = await sb.from("referrals")
+      .select("referrer_wallet,referred_wallet,rewarded").eq("rewarded", true).range(from, from + 999);
+    if (error) throw new Error(error.message);
+    all = all.concat(data);
+    if (data.length < 1000) break;
+    from += 1000;
+  }
+  return all;
+}
+
+async function pullLeaderboard() {
+  let all = [], from = 0;
+  for (;;) {
+    const { data, error } = await sb.from("leaderboard")
+      .select("wallet_address,points,quests").range(from, from + 999);
+    if (error) throw new Error(error.message);
+    all = all.concat(data);
+    if (data.length < 1000) break;
+    from += 1000;
+  }
+  return all;
+}
+
+async function cleanLeaderboard(scored) {
+  const verdictOf = new Map(scored.map((w) => [w.addr, w.verdict]));
+  const referrals = await pullReferrals();
+  const board      = await pullLeaderboard();
+
+  // Referred wallets absent from `scored` (no quest_completions at all) should
+  // never happen — a rewarded referral requires the referred wallet to have
+  // completed stake+borrow+vote — but default to "tainted" if it somehow does,
+  // rather than silently trusting an un-scoreable wallet.
+  const taintedCount = new Map(); // referrer_wallet -> # tainted referrals
+  for (const r of referrals) {
+    const verdict = verdictOf.get(r.referred_wallet);
+    const tainted = verdict !== "HUMAN_LIKE"; // covers LIKELY_BOT, SUSPECT, SHALLOW, and missing
+    if (tainted) taintedCount.set(r.referrer_wallet, (taintedCount.get(r.referrer_wallet) ?? 0) + 1);
+  }
+
+  const clean = board.map((w) => {
+    const tainted = taintedCount.get(w.wallet_address) ?? 0;
+    return {
+      wallet_address: w.wallet_address,
+      points:      w.points,
+      quests:      w.quests,
+      cleanPoints: Math.max(0, w.points - tainted * REFERRAL_POINTS),
+      cleanQuests: Math.max(0, w.quests - tainted),
+      taintedReferrals: tainted,
+    };
+  }).sort((a, b) => b.cleanPoints - a.cleanPoints);
+
+  return clean;
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 const round2 = (x) => Math.round(x * 100) / 100;
 function median(a) { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return Math.round(s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2); }
@@ -153,3 +224,15 @@ writeFileSync("sybil_report.json", JSON.stringify(scored, null, 2));
 writeFileSync("eligible_candidates.json", JSON.stringify(eligible.map((w) => w.addr), null, 2));
 console.log(`\n✅ wrote sybil_report.json (${scored.length}) + eligible_candidates.json (${eligible.length} human-like)`);
 console.log(`   flagged out: ${scored.length - eligible.length} (${Math.round((1 - eligible.length / scored.length) * 100)}%)`);
+
+console.log(`\nCleaning leaderboard (stripping referral payouts from non-HUMAN_LIKE referred wallets)…`);
+const clean = await cleanLeaderboard(scored);
+writeFileSync("clean_leaderboard.json", JSON.stringify(clean, null, 2));
+const affected = clean.filter((w) => w.taintedReferrals > 0).sort((a, b) => (b.points - b.cleanPoints) - (a.points - a.cleanPoints));
+const totalStripped = affected.reduce((s, w) => s + (w.points - w.cleanPoints), 0);
+console.log(`\n✅ wrote clean_leaderboard.json (${clean.length} wallets)`);
+console.log(`   ${affected.length} wallets had tainted referral points removed · ${totalStripped} points stripped in total`);
+console.log(`\nTop 15 most affected wallets (rank by points lost):`);
+for (const w of affected.slice(0, 15)) {
+  console.log(`  ${w.wallet_address}  ${w.points} → ${w.cleanPoints}  (-${w.points - w.cleanPoints}, ${w.taintedReferrals} tainted referrals)`);
+}
