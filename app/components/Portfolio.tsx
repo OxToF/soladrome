@@ -7,11 +7,13 @@ import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import {
   getProgram, solaM, hiSolaM, oSolaM,
   positionPda, userAta, toUi, PROGRAM_ID,
+  marketVault,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch } from "@/lib/epoch";
 import { PublicKey } from "@solana/web3.js";
 import { unpackAccount } from "@solana/spl-token";
+import { jsAdvanceAccumulator, jsPendingFees, computeClaimableBribesSummary, type ClaimableBribesSummary } from "@/lib/claims";
 
 interface PortfolioData {
   solaBalance:   number;
@@ -19,14 +21,17 @@ interface PortfolioData {
   oSolaBalance:  number;
   oSolaBonus:    number;   // extra voting power from burning oSOLA this epoch
   debt:          number;
+  claimableFees: number;   // live USDC fee share, same computation as ClaimFees.tsx
+  allocated:     number;   // hiSOLA already voted with this epoch (0 = no vote yet)
 }
 
 export function Portfolio() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
-  const { usdcMint } = useSoladrome();
+  const { usdcMint, protocolState, vaultInfos } = useSoladrome();
 
   const [data, setData] = useState<PortfolioData | null>(null);
+  const [bribeSummary, setBribeSummary] = useState<ClaimableBribesSummary | null>(null);
 
   const load = useCallback(async () => {
     if (!wallet || !usdcMint) return;
@@ -61,20 +66,40 @@ export function Portfolio() {
 
     // UserPosition only has: owner, usdcBorrowed, feesDebt, bump
     let debt = 0;
-    if (posRes.status === "fulfilled" && posRes.value?.usdcBorrowed) {
-      debt = toUi(posRes.value.usdcBorrowed as BN);
+    let feesDebt: BN | null = null;
+    if (posRes.status === "fulfilled" && posRes.value) {
+      if (posRes.value.usdcBorrowed) debt = toUi(posRes.value.usdcBorrowed as BN);
+      feesDebt = posRes.value.feesDebt as BN;
     }
 
-    // o_sola_bonus from UserEpochVotes (current epoch). Layout:
+    // Fee accumulator uses protocolState + the marketVault account info already
+    // fetched every 10s by SoladromeContext — no extra RPC calls needed here.
+    let claimableFees = 0;
+    const marketVaultInfo = vaultInfos[1];
+    if (protocolState && marketVaultInfo && feesDebt) {
+      const mktBal = BigInt(unpackAccount(marketVault, marketVaultInfo).amount);
+      const acc = jsAdvanceAccumulator(
+        BigInt(protocolState.feesPerHiSola.toString()),
+        mktBal,
+        BigInt(protocolState.lastMarketVaultBalance.toString()),
+        BigInt(protocolState.totalHiSola.toString()),
+      );
+      const raw = jsPendingFees(acc, BigInt(feesDebt.toString()), BigInt(Math.round(hiSolaBalance * 1e6)));
+      claimableFees = Number(raw) / 1e6;
+    }
+
+    // o_sola_bonus + allocated from UserEpochVotes (current epoch). Layout:
     // discriminator(8) + epoch(8) + allocated(8) + total_power_snapshot(8) + o_sola_bonus(8)
     let oSolaBonus = 0;
+    let allocated  = 0;
     const uevInfo = multi[3];
     if (uevInfo && uevInfo.data.length >= 40) {
+      allocated  = Number(uevInfo.data.readBigUInt64LE(16)) / 1e6;
       oSolaBonus = Number(uevInfo.data.readBigUInt64LE(32)) / 1e6;
     }
 
-    setData({ solaBalance, hiSolaBalance, oSolaBalance, oSolaBonus, debt });
-  }, [connection, wallet, usdcMint]);
+    setData({ solaBalance, hiSolaBalance, oSolaBalance, oSolaBonus, debt, claimableFees, allocated });
+  }, [connection, wallet, usdcMint, protocolState, vaultInfos]);
 
   useEffect(() => {
     load();
@@ -83,6 +108,22 @@ export function Portfolio() {
     window.addEventListener("soladrome:refresh", onRefresh);
     return () => { clearInterval(id); window.removeEventListener("soladrome:refresh", onRefresh); };
   }, [load]);
+
+  // Bribe-claimable summary scans every past-epoch vote via chunked
+  // getMultipleAccountsInfo (see computeClaimableBribesSummary in
+  // lib/claims.ts) — meaningfully more RPC-heavy than the balance poll above,
+  // so it only runs on wallet connect and on the existing "soladrome:refresh"
+  // event (fired after transactions elsewhere in the app), never on a timer.
+  const loadBribeSummary = useCallback(async () => {
+    if (!wallet) { setBribeSummary(null); return; }
+    setBribeSummary(await computeClaimableBribesSummary(connection, wallet, usdcMint ?? null));
+  }, [connection, wallet, usdcMint]);
+
+  useEffect(() => {
+    loadBribeSummary();
+    window.addEventListener("soladrome:refresh", loadBribeSummary);
+    return () => window.removeEventListener("soladrome:refresh", loadBribeSummary);
+  }, [loadBribeSummary]);
 
   // Value SOLA & hiSOLA at the $1 floor (each is floor-backed 1:1 and redeemable
   // via sell_sola). The bonding-curve marginal price is unsuitable here: sells
@@ -183,13 +224,16 @@ export function Portfolio() {
         </div>
       </div>
 
-      {/* CTAs */}
+      {/* CTAs — data-driven where possible so users don't need to know the
+          ve(3,3) cycle by heart to find what's actionable. */}
       <div className="pt-4 space-y-3">
         <button
           className="btn-primary w-full text-sm"
           onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "claim" }))}
         >
-          Claim Fees
+          {data && data.claimableFees > 0
+            ? `Claim ${data.claimableFees.toLocaleString(undefined, { maximumFractionDigits: 4 })} USDC in fees →`
+            : "Claim Fees"}
         </button>
         <button
           className="btn-secondary w-full text-sm"
@@ -197,6 +241,22 @@ export function Portfolio() {
         >
           Pools &amp; LP Rewards →
         </button>
+        {bribeSummary && bribeSummary.claimableCount > 0 && (
+          <button
+            className="btn-secondary w-full text-sm"
+            onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "claim" }))}
+          >
+            Claim bribes — {bribeSummary.claimableCount} available across {bribeSummary.poolCount} pool{bribeSummary.poolCount === 1 ? "" : "s"} →
+          </button>
+        )}
+        {data && data.allocated === 0 && data.hiSolaBalance > 0 && (
+          <button
+            className="w-full text-sm py-2.5 rounded-xl border border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10 transition-colors"
+            onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "vote" }))}
+          >
+            No vote this epoch — {data.hiSolaBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} hiSOLA unused →
+          </button>
+        )}
       </div>
     </div>
   );

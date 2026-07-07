@@ -12,6 +12,9 @@ import {
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch } from "@/lib/epoch";
 import { trackQuest } from "@/lib/quests";
+import { StatusBanner } from "./ui/StatusBanner";
+import { EmptyState } from "./ui/EmptyState";
+import { ButtonHint } from "./ui/ButtonHint";
 
 type Tab = "stake" | "unstake" | "burn";
 const PCT = [25, 50, 75, 100] as const;
@@ -286,6 +289,18 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
         </div>
       </div>
 
+      {wallet && balance === 0 && (
+        <EmptyState
+          icon="✨"
+          title={`No ${tokenLabel[tab]} to ${tab === "burn" ? "burn" : tab} yet.`}
+          hint={
+            tab === "stake"   ? "Get SOLA from the Swap tab first."
+            : tab === "unstake" ? "Stake SOLA to receive hiSOLA."
+            : "Exercise oSOLA options to receive oSOLA to burn."
+          }
+        />
+      )}
+
       <p className="text-xs text-gray-500 mb-4">
         {tab === "stake"
           ? "hiSOLA gives governance rights, fee share & borrow power"
@@ -304,8 +319,15 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
           : tab === "unstake" ? "Unstake"
           : "🔥 Burn oSOLA for votes"}
       </button>
+      <ButtonHint
+        text={
+          !wallet ? "Connect your wallet to continue"
+          : !amount && !loading ? "Enter an amount"
+          : null
+        }
+      />
 
-      {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+      <StatusBanner message={status} />
     </div>
   );
 }

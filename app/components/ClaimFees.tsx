@@ -7,22 +7,12 @@ import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
 import {
   getProgram, statePda, hiSolaM, marketVault,
-  positionPda, userAta, toUi, sendTx,
+  positionPda, userAta, sendTx,
 } from "@/lib/program";
 import { TOKEN_PROGRAM_ID as SPL_TOKEN } from "@solana/spl-token";
 import { useSoladrome } from "@/lib/SoladromeContext";
-
-const PRECISION = BigInt("1000000000000"); // 1e12
-
-function jsAdvanceAccumulator(acc: bigint, mktBal: bigint, lastBal: bigint, totalHi: bigint): bigint {
-  if (mktBal <= lastBal || totalHi === 0n) return acc;
-  return acc + (mktBal - lastBal) * PRECISION / totalHi;
-}
-
-function jsPendingFees(acc: bigint, debt: bigint, hiBal: bigint): bigint {
-  const delta = acc > debt ? acc - debt : 0n;
-  return delta * hiBal / PRECISION;
-}
+import { computeClaimableFees } from "@/lib/claims";
+import { StatusBanner } from "./ui/StatusBanner";
 
 export function ClaimFees() {
   const { connection } = useConnection();
@@ -34,31 +24,7 @@ export function ClaimFees() {
 
   const computeClaimable = useCallback(async () => {
     if (!wallet || !usdcMint) { setClaimable(null); return; }
-    try {
-      const provider = new AnchorProvider(connection, wallet, {});
-      const program  = getProgram(provider);
-      const [stateRes, posRes, mktRes, hiRes] = await Promise.allSettled([
-        (program.account as any).protocolState.fetch(statePda),
-        (program.account as any).userPosition.fetch(positionPda(wallet.publicKey)),
-        connection.getTokenAccountBalance(marketVault),
-        connection.getTokenAccountBalance(userAta(hiSolaM, wallet.publicKey)),
-      ]);
-
-      if (stateRes.status !== "fulfilled" || posRes.status !== "fulfilled") { setClaimable(0); return; }
-      const s      = stateRes.value as any;
-      const pos    = posRes.value as any;
-      const mktBal = mktRes.status === "fulfilled" ? BigInt(mktRes.value.value.amount) : 0n;
-      const hiBal  = hiRes.status  === "fulfilled" ? BigInt(hiRes.value.value.amount)  : 0n;
-
-      const acc  = jsAdvanceAccumulator(
-        BigInt(s.feesPerHiSola.toString()),
-        mktBal,
-        BigInt(s.lastMarketVaultBalance.toString()),
-        BigInt(s.totalHiSola.toString()),
-      );
-      const raw = jsPendingFees(acc, BigInt(pos.feesDebt.toString()), hiBal);
-      setClaimable(Number(raw) / 1e6);
-    } catch { setClaimable(0); }
+    setClaimable(await computeClaimableFees(connection, wallet, usdcMint));
   }, [connection, wallet, usdcMint]);
 
   useEffect(() => { computeClaimable(); }, [computeClaimable]);
@@ -143,7 +109,7 @@ export function ClaimFees() {
         {loading ? "Claiming…" : claimable && claimable > 0 ? `Claim ${claimable.toLocaleString(undefined, { maximumFractionDigits: 4 })} USDC` : "Claim USDC Fees"}
       </button>
 
-      {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+      <StatusBanner message={status} />
     </div>
   );
 }

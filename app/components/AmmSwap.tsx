@@ -15,6 +15,7 @@ import {
 import { getTokenList, TokenInfo, WSOL_MINT, decimalsForMint } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { trackQuest } from "@/lib/quests";
+import { StatusBanner } from "./ui/StatusBanner";
 
 const SLIPPAGE_OPTIONS = [0.1, 0.5, 1.0] as const;
 const PCT_SHORTCUTS    = [25, 50, 75, 100] as const;
@@ -383,7 +384,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
         {loading ? "Processing…" : "Swap"}
       </button>
 
-      {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+      <StatusBanner message={status} />
 
       {/* Devnet faucet */}
       <div className="mt-4 pt-4 border-t border-brand-border flex items-center justify-between">

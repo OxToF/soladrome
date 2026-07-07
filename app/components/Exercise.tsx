@@ -12,6 +12,8 @@ import {
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { trackQuest } from "@/lib/quests";
+import { StatusBanner } from "./ui/StatusBanner";
+import { EmptyState } from "./ui/EmptyState";
 
 const PCT = [25, 50, 75, 100] as const;
 
@@ -157,6 +159,14 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
         Profit if market price &gt; $1.00.
       </p>
 
+      {wallet && oSolaBal === 0 && (
+        <EmptyState
+          icon="📈"
+          title="No oSOLA to exercise yet."
+          hint="You receive oSOLA from LP emissions or bribe rewards."
+        />
+      )}
+
       <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-400">oSOLA to exercise</span>
@@ -215,7 +225,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
         disabled={loading || !wallet || !amount || !canExercise}>
         {loading ? "Exercising…" : "Exercise oSOLA → SOLA"}
       </button>
-      {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+      <StatusBanner message={status} />
     </div>
   );
 
@@ -257,6 +267,14 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
           Pay 1 USDC per oSOLA → burns oSOLA → receive 1 SOLA at floor price.
           Profit if market price &gt; $1.00.
         </p>
+
+        {wallet && oSolaBal === 0 && (
+          <EmptyState
+            icon="📈"
+            title="No oSOLA to exercise yet."
+            hint="You receive oSOLA from LP emissions or bribe rewards."
+          />
+        )}
 
         <div className="rounded-xl bg-brand-dark border border-brand-border p-4 mb-4">
           <div className="flex items-center justify-between mb-2">
@@ -330,7 +348,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
           {loading ? "Exercising…" : "Exercise oSOLA → SOLA"}
         </button>
 
-        {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+        <StatusBanner message={status} />
       </div>
 
       {/* oSOLA/USDC Pool card */}
@@ -351,7 +369,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
         </div>
 
         {poolExists === true && poolPrice !== null && (
-          <div className="grid grid-cols-3 gap-4 text-center mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center mb-4">
             <div>
               <p className="text-xs text-gray-500 mb-1">Pool price</p>
               <p className="font-bold text-brand-green">${poolPrice.toFixed(4)}</p>

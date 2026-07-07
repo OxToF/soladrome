@@ -173,7 +173,7 @@ export function FlashArb() {
       </div>
 
       {/* Live market state */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="rounded-xl bg-brand-dark border border-brand-border p-3 text-center">
           <p className="text-xs text-gray-500 mb-1">SOLA AMM price</p>
           <p className="font-bold text-brand-green">

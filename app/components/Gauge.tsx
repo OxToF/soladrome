@@ -9,6 +9,9 @@ import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-tok
 import { getProgram, fromUi, toUi, sendTx } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochLabel } from "@/lib/epoch";
+import { StatusBanner } from "./ui/StatusBanner";
+import { EmptyState } from "./ui/EmptyState";
+import { ButtonHint } from "./ui/ButtonHint";
 
 // ── PDA helpers ───────────────────────────────────────────────────────────────
 const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
@@ -280,8 +283,11 @@ export function Gauge() {
             ))}
           </select>
         ) : (
-          <input className="input" placeholder="Target pool address"
-            value={poolId} onChange={(e) => setPoolId(e.target.value)} />
+          <>
+            <input className="input" placeholder="Target pool address"
+              value={poolId} onChange={(e) => setPoolId(e.target.value)} />
+            <EmptyState title="No AMM pools found yet." hint="Paste a pool address manually, or create the first pool on the Pools page." />
+          </>
         )}
         {poolId && (
           <div className="flex items-center gap-1 mt-1">
@@ -364,8 +370,17 @@ export function Gauge() {
         disabled={loading || !wallet || !amount || !poolId || !rewardMint}>
         {loading ? "Depositing…" : "Deposit bribe"}
       </button>
+      <ButtonHint
+        text={
+          !wallet ? "Connect your wallet to continue"
+          : !poolId ? "Select or paste a pool address"
+          : !rewardMint ? "Select or paste a bribe token"
+          : !amount && !loading ? "Enter an amount"
+          : null
+        }
+      />
 
-      {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+      <StatusBanner message={status} />
 
       {/* ── Rollover section ── */}
       <div className="mt-6 border-t border-brand-border pt-5">
@@ -388,7 +403,15 @@ export function Gauge() {
           disabled={rolloverLoading || !wallet || !rolloverEpoch || !rolloverPool || !rolloverMint}>
           {rolloverLoading ? "Rolling over…" : "↻ Rollover to current epoch"}
         </button>
-        {rolloverStatus && <p className="mt-2 text-xs text-gray-400 break-all">{rolloverStatus}</p>}
+        <ButtonHint
+          text={
+            !wallet ? "Connect your wallet to continue"
+            : (!rolloverEpoch || !rolloverPool || !rolloverMint) && !rolloverLoading
+              ? "Fill in the old epoch, pool address, and bribe token mint"
+              : null
+          }
+        />
+        <StatusBanner message={rolloverStatus} />
       </div>
     </div>
   );
