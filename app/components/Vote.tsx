@@ -10,6 +10,7 @@ import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
 import { trackQuest } from "@/lib/quests";
+import { StatusBanner } from "./ui/StatusBanner";
 
 // ── PDA helpers ───────────────────────────────────────────────────────────────
 const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
@@ -470,7 +471,7 @@ export function Vote() {
           </button>
         )}
 
-        {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+        <StatusBanner message={status} />
       </div>
     </div>
   );

@@ -21,6 +21,9 @@ import {
 import { getTokenList, symbolByMint, WSOL_MINT, decimalsForMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { trackQuest } from "@/lib/quests";
+import { StatusBanner } from "./ui/StatusBanner";
+import { Skeleton } from "./ui/Skeleton";
+import { ButtonHint } from "./ui/ButtonHint";
 
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
 const PCT = [25, 50, 75, 100] as const;
@@ -181,6 +184,7 @@ export function Pools() {
   const [view,      setView]      = useState<View>("list");
   const [manageTab, setManageTab] = useState<ManageTab>("add");
   const [pools,     setPools]     = useState<PoolInfo[]>([]);
+  const [poolsLoading, setPoolsLoading] = useState(true);
   const [selected,  setSelected]  = useState<PoolInfo | null>(null);
   const [osolaPrice, setOsolaPrice] = useState<number | null>(null);
   const [emissionCfg, setEmissionCfg] = useState<EmissionCfg>(EMISSIONS_OFF);
@@ -285,7 +289,7 @@ export function Pools() {
           setOsolaPrice(mA === oSolaM.toString() ? rb / ra : ra / rb);
         } catch { setOsolaPrice(null); }
       }
-    } catch { }
+    } catch { } finally { setPoolsLoading(false); }
   }, [connection, wallet, usdcMint]);
 
   useEffect(() => { fetchPools(); }, [fetchPools]);
@@ -871,7 +875,7 @@ export function Pools() {
               onClick={addLiquidity} disabled={loading || !addA || !addB || !wallet}>
               {loading ? "Processing…" : "Deposit"}
             </button>
-            {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
+            <StatusBanner message={status} />
           </div>
         )}
 
@@ -942,7 +946,7 @@ export function Pools() {
               onClick={removeLiquidity} disabled={loading || !lpAmt || !wallet}>
               {loading ? "Processing…" : "Withdraw"}
             </button>
-            {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
+            <StatusBanner message={status} />
           </div>
         )}
 
@@ -986,7 +990,7 @@ export function Pools() {
                 ? `Claim ${pending.toLocaleString(undefined, { maximumFractionDigits: 4 })} oSOLA`
                 : "Nothing to claim yet"}
             </button>
-            {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
+            <StatusBanner message={status} />
           </div>
         )}
       </div>
@@ -1055,7 +1059,7 @@ export function Pools() {
             onClick={createPool} disabled={loading || !wallet || newMintA === newMintB}>
             {loading ? "Processing…" : "Create pool"}
           </button>
-          {status && <p className="text-xs text-gray-400 break-all">{status}</p>}
+          <StatusBanner message={status} />
         </div>
       </div>
     );
@@ -1086,31 +1090,36 @@ export function Pools() {
             {(() => {
               const totalPending = myPools.reduce((s, p) => s + (pendingOsola[p.address] ?? 0), 0);
               return (
-                <button
-                  onClick={claimAll}
-                  disabled={claimAllBusy || totalPending <= 0}
-                  className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg
-                             border border-brand-green/40 text-brand-green hover:bg-brand-green/10
-                             transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {claimAllBusy ? (
-                    "Claiming…"
-                  ) : totalPending > 0 ? (
-                    <>
-                      <span>Claim All</span>
-                      <span className="font-mono text-brand-green/80">
-                        {totalPending.toLocaleString(undefined, { maximumFractionDigits: 4 })} oSOLA
-                      </span>
-                    </>
-                  ) : (
-                    "Claim All"
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    onClick={claimAll}
+                    disabled={claimAllBusy || totalPending <= 0}
+                    className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg
+                               border border-brand-green/40 text-brand-green hover:bg-brand-green/10
+                               transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {claimAllBusy ? (
+                      "Claiming…"
+                    ) : totalPending > 0 ? (
+                      <>
+                        <span>Claim All</span>
+                        <span className="font-mono text-brand-green/80">
+                          {totalPending.toLocaleString(undefined, { maximumFractionDigits: 4 })} oSOLA
+                        </span>
+                      </>
+                    ) : (
+                      "Claim All"
+                    )}
+                  </button>
+                  {!claimAllBusy && totalPending <= 0 && (
+                    <ButtonHint text="No pending rewards across your pools yet" />
                   )}
-                </button>
+                </div>
               );
             })()}
           </div>
           {claimAllMsg && (
-            <p className="text-xs text-gray-400 break-all mb-3">{claimAllMsg}</p>
+            <div className="mb-3"><StatusBanner message={claimAllMsg} /></div>
           )}
           <div className="rounded-2xl border border-brand-green/20 bg-brand-green/[0.03] divide-y divide-brand-green/10 overflow-hidden">
             {myPools.map(p => {
@@ -1177,7 +1186,13 @@ export function Pools() {
           </button>
         </div>
 
-        {pools.length === 0 ? (
+        {poolsLoading ? (
+          <div className="rounded-2xl border border-brand-border overflow-hidden p-4 space-y-3">
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
+          </div>
+        ) : pools.length === 0 ? (
           <div className="card text-center py-12">
             <p className="text-4xl mb-3">💧</p>
             <p className="text-gray-400 text-sm mb-1">No AMM pool yet.</p>

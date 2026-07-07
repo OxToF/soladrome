@@ -12,6 +12,7 @@ import {
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
+import { StatusBanner } from "./ui/StatusBanner";
 function epochBuf(e: number) {
   const b = Buffer.alloc(8);
   b.writeBigUInt64LE(BigInt(e));
@@ -372,9 +373,7 @@ export function LpEmissions() {
               )}
             </div>
 
-            {status[row.poolAddress] && (
-              <p className="text-xs text-gray-400 break-all">{status[row.poolAddress]}</p>
-            )}
+            <StatusBanner message={status[row.poolAddress] ?? ""} />
           </div>
         ))
       )}

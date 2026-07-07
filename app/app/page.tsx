@@ -24,26 +24,48 @@ import { ContributorPanel, contributorVestingPda } from "@/components/Contributo
 import { PartnerPanel, partnerAllocationPda }      from "@/components/PartnerPanel";
 import { Bridge }          from "@/components/Bridge";
 import { Airdrop }         from "@/components/Airdrop";
+import { Whitelist }       from "@/components/Whitelist";
 import { useConnection }   from "@solana/wallet-adapter-react";
 
 // Founder wallet — must match FOUNDER_WALLET in programs/soladrome/src/lib.rs
 const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
-type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "airdrop" | "founder" | "contributor" | "partner";
+type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "airdrop" | "whitelist" | "founder" | "contributor" | "partner";
 
-const NAV: { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean; partnerOnly?: boolean }[] = [
-  { id: "home",        label: "Home"        },
-  { id: "pools",       label: "Pools"       },
-  { id: "vote",        label: "Vote"        },
-  { id: "bribe",       label: "Bribe"       },
-  { id: "claim",       label: "Claim"       },
-  { id: "arb",         label: "Arb"          },
-  { id: "bridge",      label: "Bridge"       },
-  { id: "airdrop",     label: "Airdrop"      },
+type NavItem = { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean; partnerOnly?: boolean };
+
+// Nav is clustered by user intent (Trade / Governance / More) rather than one
+// flat list — the ve(3,3) cycle (Vote → Bribe → Claim) reads as one group
+// instead of three unrelated top-level destinations.
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  { label: "Trade", items: [
+    { id: "home",  label: "Home"  },
+    { id: "pools", label: "Pools" },
+    { id: "arb",   label: "Arb"   },
+  ] },
+  { label: "Governance", items: [
+    { id: "vote",  label: "Vote"  },
+    { id: "bribe", label: "Bribe" },
+    { id: "claim", label: "Claim" },
+  ] },
+  { label: "More", items: [
+    { id: "bridge",    label: "Bridge"    },
+    { id: "airdrop",   label: "Airdrop"   },
+    { id: "whitelist", label: "Whitelist" },
+  ] },
+];
+
+const ROLE_NAV: NavItem[] = [
   { id: "founder",     label: "Founder",     founderOnly: true      },
   { id: "contributor", label: "Allocation",  contributorOnly: true  },
   { id: "partner",     label: "Partner",     partnerOnly: true      },
 ];
+
+// Flattened source of truth — drives visibleNav filtering, HOME_ALIASES
+// resolution, and the "nav" CustomEvent listener below. Every dispatch site
+// (Portfolio, PartnerPanel, Bridge, Exercise, LpEmissions, Quests, legacy
+// aliases) sends a flat Page id, so clustering must stay presentation-only.
+const NAV: NavItem[] = [...NAV_GROUPS.flatMap((g) => g.items), ...ROLE_NAV];
 
 // Legacy page ids that used to be standalone tabs — redirect them to home
 const HOME_ALIASES = new Set(["swap", "stake", "borrow", "osola", "liquidity"]);
@@ -80,12 +102,16 @@ export default function Home() {
   }, [wallet?.publicKey.toBase58(), connection]);
 
   // Visible nav: hide role-specific entries unless applicable
-  const visibleNav = NAV.filter((n) => {
+  const visibleRoleFilter = (n: NavItem) => {
     if (n.founderOnly)     return isFounder;
     if (n.contributorOnly) return isContributor;
     if (n.partnerOnly)     return isPartner;
     return true;
-  });
+  };
+  const visibleNavGroups = NAV_GROUPS
+    .map((g) => ({ ...g, items: g.items.filter(visibleRoleFilter) }))
+    .filter((g) => g.items.length > 0);
+  const visibleRoleNav = ROLE_NAV.filter(visibleRoleFilter);
 
   // First-touch referral capture: stash ?ref=<wallet> once, before any connect.
   // We also surface it (referredBy) so the invited user gets a visible "you're
@@ -145,7 +171,28 @@ export default function Home() {
 
           {/* Nav */}
           <nav className="hidden md:flex items-center gap-0.5">
-            {visibleNav.map(({ id, label, founderOnly, partnerOnly, contributorOnly }) => (
+            {visibleNavGroups.map((group, gi) => (
+              <div key={group.label} className="flex items-center gap-0.5">
+                {gi > 0 && <span className="w-px h-4 bg-brand-border/60 mx-0.5" aria-hidden="true" />}
+                {group.items.map(({ id, label }) => (
+                  <button
+                    key={id}
+                    onClick={() => setPage(id)}
+                    className={`relative px-3.5 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${
+                      page === id
+                        ? "text-brand-green bg-brand-green/8"
+                        : "text-brand-muted hover:text-gray-200 hover:bg-white/4"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {visibleRoleNav.length > 0 && (
+              <span className="w-px h-4 bg-brand-border/60 mx-0.5" aria-hidden="true" />
+            )}
+            {visibleRoleNav.map(({ id, label }) => (
               <button
                 key={id}
                 onClick={() => setPage(id)}
@@ -156,9 +203,7 @@ export default function Home() {
                 }`}
               >
                 {label}
-                {(founderOnly || partnerOnly || contributorOnly) && (
-                  <span className="absolute top-1.5 right-1.5 w-1 h-1 rounded-full bg-brand-green opacity-70" />
-                )}
+                <span className="absolute top-1.5 right-1.5 w-1 h-1 rounded-full bg-brand-green opacity-70" />
               </button>
             ))}
             <a
@@ -242,8 +287,15 @@ export default function Home() {
         </main>
       )}
 
+      {/* ── Public Whitelist page (visible without a wallet) ─────── */}
+      {page === "whitelist" && (
+        <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-8">
+          <Whitelist />
+        </main>
+      )}
+
       {/* ── Hero (not connected) ───────────────────────────────── */}
-      {!wallet && page !== "airdrop" && (
+      {!wallet && page !== "airdrop" && page !== "whitelist" && (
         <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-24">
           <h1 className="text-5xl md:text-7xl font-black mb-4 leading-tight">
             <span className="text-white">The Eternal</span>
@@ -302,12 +354,33 @@ export default function Home() {
       )}
 
       {/* ── App (connected) ───────────────────────────────────── */}
-      {wallet && page !== "airdrop" && (
+      {wallet && page !== "airdrop" && page !== "whitelist" && (
         <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-8">
           {/* Mobile nav — kept above Stats so navigation is reachable without
               scrolling the full stats grid on small screens */}
           <div className="flex md:hidden gap-1.5 mb-5 overflow-x-auto pb-1 scrollbar-none sticky top-[60px] z-40 -mx-4 px-4 pt-3 bg-brand-dark/90 backdrop-blur-md">
-            {visibleNav.map(({ id, label }) => (
+            {visibleNavGroups.map((group, gi) => (
+              <div key={group.label} className="flex items-center gap-1.5 shrink-0">
+                {gi > 0 && <span className="shrink-0 w-px h-5 bg-brand-border/60" aria-hidden="true" />}
+                {group.items.map(({ id, label }) => (
+                  <button
+                    key={id}
+                    onClick={() => setPage(id)}
+                    className={`shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${
+                      page === id
+                        ? "bg-brand-green/10 text-brand-green border border-brand-green/25"
+                        : "text-brand-muted border border-brand-border hover:text-gray-200"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {visibleRoleNav.length > 0 && (
+              <span className="shrink-0 w-px h-5 bg-brand-border/60" aria-hidden="true" />
+            )}
+            {visibleRoleNav.map(({ id, label }) => (
               <button
                 key={id}
                 onClick={() => setPage(id)}

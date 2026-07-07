@@ -13,6 +13,7 @@ import {
 import { getProgram, sendTx } from "@/lib/program";
 import { trackQuest } from "@/lib/quests";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { StatusBanner } from "./ui/StatusBanner";
 import { currentEpoch, epochLabel } from "@/lib/epoch";
 
 const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
@@ -393,7 +394,7 @@ export function ClaimBribe() {
         </button>
       )}
 
-      {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+      <StatusBanner message={status} />
     </div>
   );
 }

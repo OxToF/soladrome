@@ -12,6 +12,8 @@ import {
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { BN } from "@coral-xyz/anchor";
 import { trackQuest } from "@/lib/quests";
+import { StatusBanner } from "./ui/StatusBanner";
+import { EmptyState } from "./ui/EmptyState";
 
 type Tab = "borrow" | "repay";
 const PCT = [25, 50, 75, 100] as const;
@@ -159,6 +161,14 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
         </div>
       )}
 
+      {wallet && tab === "borrow" && hiSolaBal === 0 && (
+        <EmptyState
+          icon="🏦"
+          title="No hiSOLA to borrow against yet."
+          hint="Stake SOLA → hiSOLA first, then borrow USDC against it."
+        />
+      )}
+
       <div className="flex gap-6 mb-6 border-b border-brand-border">
         {(["borrow", "repay"] as Tab[]).map((t) => (
           <button
@@ -248,7 +258,7 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
         {loading ? "Processing…" : tab === "borrow" ? "Borrow" : "Repay"}
       </button>
 
-      {status && <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>}
+      <StatusBanner message={status} />
     </div>
   );
 }
