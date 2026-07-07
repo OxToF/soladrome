@@ -14,6 +14,11 @@
 //   clean_leaderboard.json   — leaderboard points with tainted referral payouts
 //                              stripped out (see step 5 below)
 //
+// Also upserts every wallet's verdict into the `wallet_verdicts` table (see
+// supabase/wallet_verdicts.sql — run that migration once before the first
+// scan) so app/api/leaderboard/route.ts can hide non-HUMAN_LIKE wallets from
+// the public leaderboard display without deleting any quest_completions rows.
+//
 // Tunables via env: SPAN_BOT_SEC (default 300), SPAN_SUSPECT_SEC (default 1800).
 
 import { createClient } from "@supabase/supabase-js";
@@ -156,6 +161,22 @@ async function pullLeaderboard() {
   return all;
 }
 
+async function upsertVerdicts(scored) {
+  const rows = scored.map((w) => ({ wallet_address: w.addr, verdict: w.verdict, scanned_at: new Date().toISOString() }));
+  let upserted = 0;
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = rows.slice(i, i + 500);
+    const { error } = await sb.from("wallet_verdicts").upsert(chunk, { onConflict: "wallet_address" });
+    if (error) {
+      // Most likely cause: supabase/wallet_verdicts.sql hasn't been run yet.
+      console.warn(`  ⚠ wallet_verdicts upsert failed (has the migration been run?): ${error.message}`);
+      return upserted;
+    }
+    upserted += chunk.length;
+  }
+  return upserted;
+}
+
 async function cleanLeaderboard(scored) {
   const verdictOf = new Map(scored.map((w) => [w.addr, w.verdict]));
   const referrals = await pullReferrals();
@@ -224,6 +245,10 @@ writeFileSync("sybil_report.json", JSON.stringify(scored, null, 2));
 writeFileSync("eligible_candidates.json", JSON.stringify(eligible.map((w) => w.addr), null, 2));
 console.log(`\n✅ wrote sybil_report.json (${scored.length}) + eligible_candidates.json (${eligible.length} human-like)`);
 console.log(`   flagged out: ${scored.length - eligible.length} (${Math.round((1 - eligible.length / scored.length) * 100)}%)`);
+
+console.log(`\nUpserting verdicts into wallet_verdicts (drives the public leaderboard filter)…`);
+const upserted = await upsertVerdicts(scored);
+console.log(`   ${upserted}/${scored.length} verdicts written`);
 
 console.log(`\nCleaning leaderboard (stripping referral payouts from non-HUMAN_LIKE referred wallets)…`);
 const clean = await cleanLeaderboard(scored);
