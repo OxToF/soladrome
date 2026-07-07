@@ -85,9 +85,17 @@ function classify(w) {
   if (w.all8 && w.cv > 0 && w.cv < 0.35 && w.span_sec < SPAN_SUSPECT_SEC) flags.push("regular_cadence");
   if (w.onchain === 0) flags.push("no_onchain"); // only connect/faucet — shallow
 
+  // Bug fixed 2026-07-07: this used to be `w.all8 && w.span_sec < SPAN_SUSPECT_SEC`,
+  // which flagged SUSPECT on speed alone — any wallet finishing the 8 core
+  // quests in under 30 min, even with none of the actual bot signals above
+  // (irregular gaps, real variance). That's just "an efficient human tester"
+  // (confirmed false positive: FSUvbMx8xw5DSvpCxvqzbY2ZVNnqXFYQvJgMrBhKeeGh —
+  // 17.6 min span, cv 0.75, zero flags, real irregular human-paced gaps).
+  // SUSPECT now requires the regular_cadence flag itself (low variance = the
+  // actual "looks scripted" signal), not just being reasonably fast.
   let verdict;
   if (flags.includes("fast_full_run")) verdict = "LIKELY_BOT";
-  else if (w.all8 && w.span_sec < SPAN_SUSPECT_SEC) verdict = "SUSPECT";
+  else if (flags.includes("regular_cadence")) verdict = "SUSPECT";
   else if (w.onchain === 0) verdict = "SHALLOW";
   else verdict = "HUMAN_LIKE";
   return { ...w, flags, verdict };
