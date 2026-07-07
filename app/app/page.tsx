@@ -24,13 +24,12 @@ import { ContributorPanel, contributorVestingPda } from "@/components/Contributo
 import { PartnerPanel, partnerAllocationPda }      from "@/components/PartnerPanel";
 import { Bridge }          from "@/components/Bridge";
 import { Airdrop }         from "@/components/Airdrop";
-import { Whitelist }       from "@/components/Whitelist";
 import { useConnection }   from "@solana/wallet-adapter-react";
 
 // Founder wallet — must match FOUNDER_WALLET in programs/soladrome/src/lib.rs
 const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
-type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "airdrop" | "whitelist" | "founder" | "contributor" | "partner";
+type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "airdrop" | "founder" | "contributor" | "partner";
 
 type NavItem = { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean; partnerOnly?: boolean };
 
@@ -51,7 +50,6 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   { label: "More", items: [
     { id: "bridge",    label: "Bridge"    },
     { id: "airdrop",   label: "Airdrop"   },
-    { id: "whitelist", label: "Whitelist" },
   ] },
 ];
 
@@ -287,15 +285,8 @@ export default function Home() {
         </main>
       )}
 
-      {/* ── Public Whitelist page (visible without a wallet) ─────── */}
-      {page === "whitelist" && (
-        <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-8">
-          <Whitelist />
-        </main>
-      )}
-
       {/* ── Hero (not connected) ───────────────────────────────── */}
-      {!wallet && page !== "airdrop" && page !== "whitelist" && (
+      {!wallet && page !== "airdrop" && (
         <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-24">
           <h1 className="text-5xl md:text-7xl font-black mb-4 leading-tight">
             <span className="text-white">The Eternal</span>
@@ -354,7 +345,7 @@ export default function Home() {
       )}
 
       {/* ── App (connected) ───────────────────────────────────── */}
-      {wallet && page !== "airdrop" && page !== "whitelist" && (
+      {wallet && page !== "airdrop" && (
         <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-8">
           {/* Mobile nav — kept above Stats so navigation is reachable without
               scrolling the full stats grid on small screens */}
