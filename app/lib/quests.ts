@@ -242,13 +242,19 @@ export const CAMPAIGN = {
 /**
  * Fire-and-forget: record that a wallet completed a quest. Never throws, never
  * blocks the UX — a failed track must not break a successful on-chain action.
+ * `meta` carries quest-specific proof coordinates the server can't derive on
+ * its own (claim_bribe: which {pool, rewardMint, epoch} receipt PDA to check).
  */
-export function trackQuest(wallet: string | undefined | null, quest: QuestId): void {
+export function trackQuest(
+  wallet: string | undefined | null,
+  quest: QuestId,
+  meta?: Record<string, string | number>,
+): void {
   if (!wallet) return;
   fetch("/api/track-quest", {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify({ wallet, quest }),
+    body:    JSON.stringify(meta ? { wallet, quest, meta } : { wallet, quest }),
   })
     .then(() => {
       if (typeof window !== "undefined") {

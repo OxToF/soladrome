@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { AnchorProvider } from "@coral-xyz/anchor";
+import { AnchorProvider, utils } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { getProgram, positionPda, hiSolaM, PROGRAM_ID } from "@/lib/program";
 
@@ -32,12 +32,25 @@ const VALID_QUESTS = new Set([
 
 // ── On-chain verification ────────────────────────────────────────────────────
 // These quests require real protocol state on-chain before we credit them. They
-// gate the "Genesis Tester" badge (all 8) and the airdrop pool, so a bot can no
-// longer farm them by POSTing to this endpoint directly — it must actually stake,
-// borrow and vote on-chain. The cheap quests (connect/faucet/swap/liquidity/repay)
-// stay unverified, but you can't qualify without these three.
-const GATED = new Set(["stake", "borrow", "borrow_again", "vote", "vote_again", "solana_id"]);
+// gate the "Genesis Tester" badge and the airdrop pool, so a bot can no longer
+// farm them by POSTing to this endpoint directly — it must actually stake,
+// borrow, vote, LP, repay, claim and exercise on-chain. Only the cheap quests
+// (connect/faucet/swap) stay unverified; they don't qualify anyone on their own.
+const GATED = new Set([
+  "stake", "borrow", "borrow_again", "vote", "vote_again", "solana_id",
+  "liquidity", "repay", "claim_bribe", "exercise",
+]);
 const EPOCH_DURATION = 604_800;
+
+// Anti-dust floor: 1.0 token in base units (all protocol tokens are 6 decimals).
+// A bare `> 0` check let anyone pass `stake` by *receiving* 1 base unit of
+// hiSOLA (and, since vote allocation and borrow max are both capped by that
+// balance, chain `vote` and `borrow` off the same dust) — one staker could dust
+// thousands of sybil wallets through the full Genesis gate for tx fees.
+const MIN_UNITS = 1_000_000n;
+
+// exercise_o_sola instruction discriminator (app/lib/soladrome.json).
+const EXERCISE_DISC = Buffer.from([74, 214, 117, 160, 171, 161, 126, 242]);
 
 // Genesis Missions II quests require a TrueMRR vote first (free distribution ask).
 // Minting a Solana ID is deliberately NOT gated — it costs 0.1 SOL, so it stays
@@ -79,13 +92,14 @@ function currentEpoch() {
   return Math.floor(Date.now() / 1000 / EPOCH_DURATION);
 }
 
-async function checkOnce(quest: string, user: PublicKey): Promise<boolean> {
+async function checkOnce(quest: string, user: PublicKey, meta?: Record<string, unknown>): Promise<boolean> {
   switch (quest) {
     case "stake": {
-      // Proof of stake = holds hiSOLA. (Borrowing and voting both require it too.)
+      // Proof of stake = holds ≥ 1 hiSOLA. (Borrowing and voting both require it
+      // too.) MIN_UNITS floor: 1 base unit received by transfer used to pass.
       try {
         const bal = await connection.getTokenAccountBalance(getAssociatedTokenAddressSync(hiSolaM, user));
-        return BigInt(bal.value.amount) > 0n;
+        return BigInt(bal.value.amount) >= MIN_UNITS;
       } catch { return false; } // ATA doesn't exist → never staked
     }
     case "borrow":
@@ -93,7 +107,93 @@ async function checkOnce(quest: string, user: PublicKey): Promise<boolean> {
       // Same check for both: "borrow" is the one-shot genesis mission, "borrow_again"
       // is the repeat-participation mission in Genesis II (mirrors vote/vote_again).
       const pos: any = await (program.account as any).userPosition.fetchNullable(positionPda(user));
-      return !!pos && BigInt(pos.usdcBorrowed.toString()) > 0n;
+      return !!pos && BigInt(pos.usdcBorrowed.toString()) >= MIN_UNITS;
+    }
+    case "repay": {
+      // UserPosition has no repaid-cumulative field, but last_borrow_slot is only
+      // ever written by borrow_usdc — so (borrowed at least once) + (zero debt
+      // now) proves a full borrow→repay cycle. Partial repays don't count; the
+      // user can claim again after clearing the loan (record_quest is idempotent
+      // and a failed claim writes nothing).
+      const pos: any = await (program.account as any).userPosition.fetchNullable(positionPda(user));
+      return !!pos
+        && BigInt(pos.lastBorrowSlot.toString()) > 0n
+        && BigInt(pos.usdcBorrowed.toString()) === 0n;
+    }
+    case "liquidity": {
+      // Proof of deposit = LpUserInfo PDA ([b"lp_user", pool, user]): it is only
+      // ever init'ed inside the user's OWN add/remove_liquidity call, so it can't
+      // be dusted onto a wallet from outside, and it survives later staking or
+      // exiting the LP position. Fallback: an LP ATA holding ≥ MINIMUM_LIQUIDITY
+      // (1000, the amount the program burns to the dead address on pool creation)
+      // covers positions opened before LpUserInfo existed.
+      const pools: any[] = await (program.account as any).ammPool.all();
+      if (pools.length === 0) return false;
+      const keys: PublicKey[] = [];
+      for (const p of pools) {
+        keys.push(PublicKey.findProgramAddressSync(
+          [Buffer.from("lp_user"), p.publicKey.toBuffer(), user.toBuffer()], PROGRAM_ID,
+        )[0]);
+        keys.push(getAssociatedTokenAddressSync(p.account.lpMint, user));
+      }
+      const infos = await connection.getMultipleAccountsInfo(keys);
+      for (let i = 0; i < infos.length; i += 2) {
+        if (infos[i]) return true; // LpUserInfo exists → user LP'd this pool
+        const ata = infos[i + 1];
+        // SPL token account layout: amount = u64 LE at offset 64.
+        if (ata && ata.data.length >= 72 && ata.data.readBigUInt64LE(64) >= 1_000n) return true;
+      }
+      return false;
+    }
+    case "claim_bribe": {
+      // UserBribeClaim stores only its bump — the claimer is only in the PDA
+      // seeds — so the client must say WHICH (pool, reward_mint, epoch) it
+      // claimed. Deriving the PDA with THIS wallet in the seeds means nobody can
+      // point at someone else's receipt: the account only exists if this wallet
+      // ran claim_bribe itself (created with `init`, so it can't be spoofed).
+      if (!meta) return false;
+      let pool: PublicKey, rewardMint: PublicKey;
+      try {
+        pool       = new PublicKey(String(meta.pool));
+        rewardMint = new PublicKey(String(meta.rewardMint));
+      } catch { return false; }
+      const epoch = Number(meta.epoch);
+      if (!Number.isSafeInteger(epoch) || epoch < 0) return false;
+      const epochLe = Buffer.alloc(8);
+      epochLe.writeBigUInt64LE(BigInt(epoch));
+      const claimPda = PublicKey.findProgramAddressSync(
+        [Buffer.from("bribe_claim"), user.toBuffer(), pool.toBuffer(), rewardMint.toBuffer(), epochLe],
+        PROGRAM_ID,
+      )[0];
+      return (await connection.getAccountInfo(claimPda)) !== null;
+    }
+    case "exercise": {
+      // exercise_o_sola leaves no per-user account behind (oSOLA burned, SOLA
+      // minted), so the only stateless proof is the transaction itself: scan the
+      // wallet's recent history for an exercise_o_sola instruction where THIS
+      // wallet is the instruction's `user` account (accounts[0]) — being a mere
+      // co-signer/fee-payer of someone else's exercise doesn't count — with
+      // o_sola_amount ≥ MIN_UNITS (anti-dust; 1 oSOLA costs 1 USDC at floor).
+      // RPC cost: 2 calls (1 signature list + 1 batched tx fetch); the claim
+      // fires right after the tx confirms, so 20 recent signatures is plenty.
+      const sigs = await connection.getSignaturesForAddress(user, { limit: 20 }, "confirmed");
+      if (sigs.length === 0) return false;
+      const txs = await connection.getParsedTransactions(
+        sigs.map((s) => s.signature),
+        { maxSupportedTransactionVersion: 0, commitment: "confirmed" },
+      );
+      for (const tx of txs) {
+        if (!tx || tx.meta?.err) continue;
+        for (const ix of tx.transaction.message.instructions) {
+          if (!("data" in ix)) continue;              // fully-parsed system/token ix — not ours
+          if (!ix.programId.equals(PROGRAM_ID)) continue;
+          const data = Buffer.from(utils.bytes.bs58.decode(ix.data));
+          if (data.length < 16 || !EXERCISE_DISC.equals(data.subarray(0, 8))) continue;
+          if (!ix.accounts[0]?.equals(user)) continue; // `user` account of ExerciseOSola
+          if (data.readBigUInt64LE(8) >= MIN_UNITS) return true;
+        }
+      }
+      return false;
     }
     case "vote":
     case "vote_again": {
@@ -107,7 +207,7 @@ async function checkOnce(quest: string, user: PublicKey): Promise<boolean> {
         [Buffer.from("uev"), user.toBuffer(), epochLe], PROGRAM_ID,
       )[0];
       const ev: any = await (program.account as any).userEpochVotes.fetchNullable(uev);
-      return !!ev && BigInt(ev.allocated.toString()) > 0n;
+      return !!ev && BigInt(ev.allocated.toString()) >= MIN_UNITS;
     }
     case "solana_id": {
       // Verify via Solana ID Score API — isSolanaIdUser = true means the wallet
@@ -138,12 +238,12 @@ async function checkOnce(quest: string, user: PublicKey): Promise<boolean> {
 
 // A legit user calls this right after their tx confirms; absorb RPC lag with a
 // short retry so we don't drop their credit. Idempotent server-side either way.
-async function verifyOnChain(quest: string, walletStr: string): Promise<boolean> {
+async function verifyOnChain(quest: string, walletStr: string, meta?: Record<string, unknown>): Promise<boolean> {
   if (!GATED.has(quest)) return true;
   let user: PublicKey;
   try { user = new PublicKey(walletStr); } catch { return false; }
   for (let attempt = 0; attempt < 2; attempt++) {
-    try { if (await checkOnce(quest, user)) return true; } catch { /* retry */ }
+    try { if (await checkOnce(quest, user, meta)) return true; } catch { /* retry */ }
     await new Promise((r) => setTimeout(r, 800));
   }
   return false;
@@ -181,11 +281,13 @@ async function maybeRewardReferrer(wallet: string) {
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// POST { wallet, quest } → idempotent quest completion (points decided server-side,
-// gated quests verified on-chain).
+// POST { wallet, quest, meta? } → idempotent quest completion (points decided
+// server-side, gated quests verified on-chain). `meta` is only read for
+// claim_bribe ({ pool, rewardMint, epoch } → which receipt PDA to look up); it
+// is untrusted input and never grants anything by itself.
 export async function POST(req: NextRequest) {
   try {
-    const { wallet, quest } = await req.json();
+    const { wallet, quest, meta } = await req.json();
     if (!wallet || typeof wallet !== "string") {
       return NextResponse.json({ error: "wallet required" }, { status: 400 });
     }
@@ -204,7 +306,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Reject quests whose on-chain action we can't find — kills direct API farming.
-    if (!(await verifyOnChain(quest, wallet))) {
+    if (!(await verifyOnChain(quest, wallet, meta))) {
       return NextResponse.json(
         { ok: false, reason: "on-chain action not found for this wallet" },
         { status: 422 },

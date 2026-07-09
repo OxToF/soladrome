@@ -234,7 +234,11 @@ export function ClaimBribe() {
       const tx = await sendTx(connection, wallet, [ix]);
 
       setStatus(`✅ Bribe claimed — tx: ${tx.slice(0, 16)}…`);
-      trackQuest(wallet.publicKey.toBase58(), "claim_bribe");
+      // meta = which UserBribeClaim receipt PDA the server should verify exists
+      // (the account only stores its bump; the claimer is only in the seeds).
+      trackQuest(wallet.publicKey.toBase58(), "claim_bribe", {
+        pool: pool.toBase58(), rewardMint: selectedMint.toBase58(), epoch: ep,
+      });
       const key = `${pool.toBase58()}:${selectedMint.toBase58()}:${ep}`;
       setClaimed(prev => new Set([...prev, key]));
       setSelectedMint(null);
