@@ -387,18 +387,33 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       <StatusBanner message={status} />
 
       {/* Devnet faucet */}
-      <div className="mt-4 pt-4 border-t border-brand-border flex items-center justify-between">
-        <div>
-          <span className="text-xs text-gray-500">New wallet?</span>
-          <p className="text-[10px] text-gray-600 mt-0.5">Get devnet SOL + 500 test USDC</p>
+      <div className="mt-4 pt-4 border-t border-brand-border">
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-xs text-gray-500">New wallet?</span>
+            <p className="text-[10px] text-gray-600 mt-0.5">Get devnet SOL + 500 test USDC</p>
+          </div>
+          <button
+            className="btn-secondary text-xs px-4 py-2"
+            onClick={claimFaucet}
+            disabled={faucetLoading || !wallet}
+          >
+            {faucetLoading ? "Sending…" : "Get SOL + USDC"}
+          </button>
         </div>
-        <button
-          className="btn-secondary text-xs px-4 py-2"
-          onClick={claimFaucet}
-          disabled={faucetLoading || !wallet}
-        >
-          {faucetLoading ? "Sending…" : "Get SOL + USDC"}
-        </button>
+        {/* The faucet's SOL leg rides the devnet airdrop and is often rate-limited —
+            point users at the official faucet as a fallback for tx-fee SOL. */}
+        <p className="text-[10px] text-gray-600 mt-2">
+          No SOL received?{" "}
+          <a
+            href="https://faucet.solana.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-gray-400"
+          >
+            Get devnet SOL at faucet.solana.com
+          </a>
+        </p>
       </div>
     </div>
   );

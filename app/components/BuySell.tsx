@@ -165,6 +165,19 @@ export function BuySell() {
         >
           {faucetLoading ? "Sending…" : "Get SOL + 500 Test USDC"}
         </button>
+        {/* The faucet's SOL leg rides the devnet airdrop and is often rate-limited —
+            point users at the official faucet as a fallback for tx-fee SOL. */}
+        <p className="text-[10px] text-gray-600 mt-2">
+          No SOL received?{" "}
+          <a
+            href="https://faucet.solana.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-gray-400"
+          >
+            Get devnet SOL at faucet.solana.com
+          </a>
+        </p>
       </div>
     </div>
   );
