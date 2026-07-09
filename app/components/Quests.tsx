@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
 import { QUEST_GROUPS, groupPoints, claimableQuests, trackQuest, findQuest, type Quest, type QuestGroup, type QuestId } from "@/lib/quests";
+import { questCode, questIntentUrl } from "@/lib/xcode";
 import { StatusBanner } from "./ui/StatusBanner";
 
 // Jump to where a mission is performed (page + optional inner ActionPanel tab).
@@ -71,11 +72,13 @@ export function Quests() {
   // stray click no longer mints points — the user has to come back and claim,
   // which converts far more of them into real follows/reposts.
   //
-  // NOTE: this honor-system path still applies to follow_x/repost/like_video/
-  // repost_video — real X follow/like/repost verification needs the paid X API
-  // tier, not budgeted yet. "discord" was reported exploited the same way and
-  // has since moved to real OAuth + bot verification (see verifyDiscord below);
-  // it no longer goes through this function.
+  // NOTE: this honor-system path now only applies to follow_x/like_video/
+  // like_video2 — likes are private on X since June 2024 and follows leave no
+  // URL to submit, so they're unverifiable without the paid X API on any
+  // platform (Zealy gates Twitter tasks behind the same paid API). The former
+  // repost quests moved to the verified quote-tweet flow (submitX in QuestRow
+  // + /api/x-verify), and "discord" to OAuth + bot verification (verifyDiscord
+  // below); neither goes through this function anymore.
   const claim = useCallback((q: Quest) => {
     const id = wallet?.publicKey.toBase58();
     if (id) trackQuest(id, q.id as QuestId);
@@ -126,6 +129,7 @@ export function Quests() {
         group={group}
         done={done}
         wallet={!!wallet}
+        walletAddr={wallet?.publicKey.toBase58()}
         missingGates={missingGates}
         unlockLabel={unlockLabel}
         onUnlock={unlockTargetIndex >= 0 ? () => setPage(unlockTargetIndex) : undefined}
@@ -159,7 +163,7 @@ function TabStatus({ group, done }: { group: QuestGroup; done: Set<string> }) {
 }
 
 // ── Group body: blurb + progress + quest rows + bonus ──────────────────────
-function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, onClaim, onCopyRef, onVerifyDiscord }: { group: QuestGroup; done: Set<string>; wallet: boolean; missingGates: QuestId[]; unlockLabel?: string; onUnlock?: () => void; onClaim: (q: Quest) => void; onCopyRef: () => boolean; onVerifyDiscord: () => void }) {
+function GroupBody({ group, done, wallet, walletAddr, missingGates, unlockLabel, onUnlock, onClaim, onCopyRef, onVerifyDiscord }: { group: QuestGroup; done: Set<string>; wallet: boolean; walletAddr?: string; missingGates: QuestId[]; unlockLabel?: string; onUnlock?: () => void; onClaim: (q: Quest) => void; onCopyRef: () => boolean; onVerifyDiscord: () => void }) {
   const claimable = claimableQuests(group);
   const earned    = claimable.filter((q) => done.has(q.id)).reduce((s, q) => s + q.points, 0);
   const locked    = missingGates.length > 0;
@@ -198,7 +202,7 @@ function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, o
 
       <ul className="space-y-2">
         {group.quests.map((q, i) => (
-          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} onVerifyDiscord={onVerifyDiscord} />
+          <QuestRow key={q.id} q={q} n={i + 1} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} walletAddr={walletAddr} onClaim={onClaim} onCopyRef={onCopyRef} onVerifyDiscord={onVerifyDiscord} />
         ))}
       </ul>
 
@@ -207,7 +211,7 @@ function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, o
           <p className="text-[11px] uppercase tracking-widest text-gray-600 mt-5 mb-2">Bonus</p>
           <ul className="space-y-2">
             {group.bonus.map((q) => (
-              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} onClaim={onClaim} onCopyRef={onCopyRef} onVerifyDiscord={onVerifyDiscord} />
+              <QuestRow key={q.id} q={q} done={done.has(q.id)} live={active} locked={locked} wallet={wallet} walletAddr={walletAddr} onClaim={onClaim} onCopyRef={onCopyRef} onVerifyDiscord={onVerifyDiscord} />
             ))}
           </ul>
         </>
@@ -226,15 +230,48 @@ function GroupBody({ group, done, wallet, missingGates, unlockLabel, onUnlock, o
 }
 
 // ── A single quest row ─────────────────────────────────────────────────────
-function QuestRow({ q, n, done, live, locked, wallet, onClaim, onCopyRef, onVerifyDiscord }: { q: Quest; n?: number; done: boolean; live: boolean; locked?: boolean; wallet: boolean; onClaim: (q: Quest) => void; onCopyRef: () => boolean; onVerifyDiscord: () => void }) {
+function QuestRow({ q, n, done, live, locked, wallet, walletAddr, onClaim, onCopyRef, onVerifyDiscord }: { q: Quest; n?: number; done: boolean; live: boolean; locked?: boolean; wallet: boolean; walletAddr?: string; onClaim: (q: Quest) => void; onCopyRef: () => boolean; onVerifyDiscord: () => void }) {
   const [copied, setCopied] = useState(false);
   // Two-step: first click opens the X action, second click claims. Resets on
   // unmount, which is fine — re-opening costs nothing.
   const [opened, setOpened] = useState(false);
+  // Verified X quote flow (q.xVerify): submitted tweet URL + request state.
+  const [xUrl, setXUrl]   = useState("");
+  const [xBusy, setXBusy] = useState(false);
+  const [xMsg, setXMsg]   = useState<string | null>(null);
   const dim = (!live || q.soon || locked) && !done;
+
+  // Real verification, not honor-system: the server checks the submitted post
+  // via X's public oEmbed (code present + quotes the right target) before
+  // crediting — see app/api/x-verify/route.ts.
+  async function submitX() {
+    if (!walletAddr || !xUrl) return;
+    setXBusy(true); setXMsg(null);
+    try {
+      const res  = await fetch("/api/x-verify", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ wallet: walletAddr, quest: q.id, url: xUrl.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setXMsg("✅ Verified!");
+        window.dispatchEvent(new CustomEvent("quests:refresh"));
+      } else {
+        setXMsg(`❌ ${data.reason ?? "verification failed"}`);
+      }
+    } catch {
+      setXMsg("❌ Network error — try again");
+    } finally {
+      setXBusy(false);
+    }
+  }
+
+  const showXPanel = !!q.xVerify && opened && !done && live && !locked && !!walletAddr;
+
   return (
     <li
-      className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors ${
+      className={`rounded-xl border px-3 py-2.5 transition-colors ${
         done
           ? "border-brand-green/40 bg-brand-green/5"
           : dim
@@ -242,6 +279,7 @@ function QuestRow({ q, n, done, live, locked, wallet, onClaim, onCopyRef, onVeri
           : "border-brand-border hover:border-gray-600"
       }`}
     >
+    <div className="flex items-center gap-3">
       {n !== undefined && (
         <span className="w-5 shrink-0 text-center text-xs font-mono text-gray-600">{n}</span>
       )}
@@ -278,6 +316,20 @@ function QuestRow({ q, n, done, live, locked, wallet, onClaim, onCopyRef, onVeri
         <span className="text-[10px] text-gray-600 shrink-0">Soon</span>
       ) : !live ? (
         <span className="text-[10px] text-gray-600 shrink-0">{q.external ?? "Soon"}</span>
+      ) : q.xVerify ? (
+        // Opens a prefilled compose (text with the wallet's code + the quoted
+        // target); the submission panel below appears once opened.
+        <button
+          onClick={() => {
+            if (!walletAddr) return;
+            window.open(questIntentUrl(walletAddr, q.id), "_blank", "noopener,noreferrer");
+            setOpened(true);
+          }}
+          disabled={!wallet}
+          className="text-xs text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
+        >
+          {opened ? "Re-open ↗" : "Quote →"}
+        </button>
       ) : q.linkOnly && q.href ? (
         <a
           href={q.href}
@@ -327,6 +379,35 @@ function QuestRow({ q, n, done, live, locked, wallet, onClaim, onCopyRef, onVeri
           Go →
         </button>
       )}
+    </div>
+
+    {showXPanel && (
+      <div className="mt-2.5 ml-8 flex flex-col gap-1.5">
+        <p className="text-[11px] text-gray-500">
+          Your code{" "}
+          <span className="font-mono text-brand-green">{questCode(walletAddr!, q.id)}</span>{" "}
+          must appear in your post. Once posted, paste your post's link:
+        </p>
+        <div className="flex gap-2">
+          <input
+            value={xUrl}
+            onChange={(e) => { setXUrl(e.target.value); setXMsg(null); }}
+            placeholder="https://x.com/you/status/…"
+            className="min-w-0 flex-1 bg-brand-dark border border-brand-border focus:border-brand-green/50 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none transition-colors"
+          />
+          <button
+            onClick={submitX}
+            disabled={xBusy || !xUrl.trim()}
+            className="text-xs text-brand-green border border-brand-green/50 hover:bg-brand-green/10 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
+          >
+            {xBusy ? "Checking…" : `Verify +${q.points}`}
+          </button>
+        </div>
+        {xMsg && (
+          <p className={`text-[11px] ${xMsg.startsWith("✅") ? "text-brand-green" : "text-red-400"}`}>{xMsg}</p>
+        )}
+      </div>
+    )}
     </li>
   );
 }

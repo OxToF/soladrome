@@ -14,10 +14,17 @@ const supabase = createClient(
 
 const VALID_QUESTS = new Set([
   "connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote",
-  "follow_x", "repost", "like_video", "repost_video", "solana_id",
+  "follow_x", "like_video", "solana_id",
   "claim_lp_osola", "claim_bribe", "borrow_again", "exercise", "vote_again",
-  "like_video2", "repost_video2", "truemrr",
+  "like_video2", "truemrr",
 ]);
+// "repost", "repost_video" and "repost_video2" are intentionally NOT POSTable
+// here anymore — they used to be honor-system click-to-claim and are now only
+// credited by app/api/x-verify/route.ts after a real oEmbed-verified quote
+// tweet carrying the wallet's code (same lockdown pattern as "discord" below).
+// follow_x + like_video(2) stay honor-system: X likes are private since June
+// 2024 and follows leave nothing submittable — unverifiable without the paid
+// X API on every platform, Zealy included.
 // "bug" is intentionally NOT POSTable through this public endpoint. It's a
 // manually-awarded bonus (verified bug reports, severity-weighted) credited only
 // via the Supabase record_quest RPC (service key / SQL editor) — so it can't be
@@ -59,7 +66,7 @@ const EXERCISE_DISC = Buffer.from([74, 214, 117, 160, 171, 161, 126, 242]);
 // own consts here since this route doesn't import the client quest catalog.
 const GENESIS2_QUESTS = new Set([
   "claim_lp_osola", "claim_bribe", "borrow_again", "exercise", "vote_again",
-  "like_video2", "repost_video2",
+  "like_video2", // repost_video2 is x-verify only now — its gate lives there
 ]);
 const GENESIS2_GATE = ["truemrr"];
 
