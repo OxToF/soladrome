@@ -44,6 +44,10 @@ export interface Quest {
   /** Referral: shows a "Copy link" button (copies ?ref=<wallet>); earned when a
    *  referred wallet becomes a verified on-chain Genesis Tester (server-side). */
   copyRef?: boolean;
+  /** Verified X quote-tweet flow (app/lib/xcode.ts + /api/x-verify): the row
+   *  shows the wallet's code, a prefilled "Quote" intent, and a URL submission
+   *  box instead of an honor-system claim. */
+  xVerify?: boolean;
 }
 
 // ── A quest GROUP = one campaign page in the Missions card ───────────────────
@@ -119,7 +123,7 @@ const GENESIS_2: QuestGroup = {
     // Video quests come first — watching the explainer is the natural starting
     // point before doing the 4 protocol missions below.
     { id: "like_video2",    label: "Like explainer video 2",       desc: "Like our Genesis II explainer video on X, then claim",   points: 5,  icon: "❤️", external: "Watch",  href: GENESIS2_VIDEO_URL },
-    { id: "repost_video2",  label: "Repost explainer video 2",     desc: "Repost our Genesis II explainer video on X, then claim", points: 10, icon: "🎬", external: "Repost", href: GENESIS2_VIDEO_URL },
+    { id: "repost_video2",  label: "Quote explainer video 2",      desc: "Quote-post our Genesis II explainer video with your code, then paste your post's link", points: 10, icon: "🎬", xVerify: true },
     { id: "claim_lp_osola", label: "Claim your LP's oSOLA reward", desc: "Claim the oSOLA emissions earned by your AMM liquidity position", points: 15, icon: "🌾", page: "pools" },
     { id: "claim_bribe",    label: "Claim your voting rewards",    desc: "Claim the bribe reward earned by voting on a gauge last epoch",  points: 15, icon: "🎁", page: "claim" },
     { id: "borrow_again",   label: "Borrow USDC again",            desc: "Borrow USDC against your hiSOLA position — keep your credit line active", points: 15, icon: "🏦", page: "home", tab: "lend" },
@@ -128,30 +132,33 @@ const GENESIS_2: QuestGroup = {
   ],
 };
 
-// ── Campaign #3 — Social (LIVE: follow + repost; referral deferred) ───────────
-// follow_x + repost are honor-system click-to-claim: the button opens X and
-// credits the quest. Their ids + points live in record_quest (supabase/quests.sql)
-// and VALID_QUESTS (app/api/track-quest/route.ts).
+// ── Campaign #3 — Social (LIVE) ───────────────────────────────────────────────
+// The former repost quests (`repost`, `repost_video`) are now VERIFIED quote
+// tweets: the row shows the wallet's code, opens a prefilled compose, and the
+// tester pastes their post's URL back for server-side oEmbed verification
+// (app/api/x-verify/route.ts). Same quest ids — points in record_quest are
+// unchanged. follow_x + like_video stay honor-system click-to-claim: X made
+// likes private (June 2024, nobody can verify them) and a follow leaves no URL
+// to submit — the paid X API tier is the only path, not budgeted (Zealy gates
+// its Twitter tasks behind the same paid API, so it can't help either).
 // intent/follow opens X with the Follow action pre-armed (one tap to follow),
 // instead of dropping the user on the profile to hunt for the button.
 const SOLADROME_X = "https://x.com/intent/follow?screen_name=soladrome";
-// The pinned launch thread the "repost" quest points at.
-const LAUNCH_THREAD_URL = "https://x.com/soladrome/status/2067971567770804567";
-// The genesis-mission explainer video post the like_video / repost_video quests
-// point at — opening it is where the user likes and reposts.
+// Quest targets (quoted posts) live in app/lib/xcode.ts (X_VERIFIED) — the
+// genesis video URL is still needed here for the honor-system like quest.
 const GENESIS_VIDEO_URL = "https://x.com/soladrome/status/2069730059821175111";
 
 const SOCIAL: QuestGroup = {
   id:    "social",
   title: "Social Campaign",
-  blurb: "Spread the word and earn more $SOLA. Follow, repost, and refer real testers.",
+  blurb: "Spread the word and earn more $SOLA. Follow, quote, and refer real testers.",
   badge: "Amplifier",
   live:  true,
   quests: [
     { id: "follow_x", label: "Follow @soladrome on X",   desc: "Follow the official account, then claim",       points: 5,  icon: "🐦", external: "Follow", href: SOLADROME_X },
-    { id: "repost",   label: "Repost the launch thread", desc: "Repost our genesis announcement, then claim",    points: 10, icon: "🔁", external: "Repost", href: LAUNCH_THREAD_URL },
-    { id: "like_video",   label: "Like the genesis video",   desc: "Like our genesis explainer video on X, then claim",   points: 5,  icon: "❤️", external: "Watch",  href: GENESIS_VIDEO_URL },
-    { id: "repost_video", label: "Repost the genesis video", desc: "Repost our genesis explainer video on X, then claim", points: 10, icon: "🎬", external: "Repost", href: GENESIS_VIDEO_URL },
+    { id: "repost",   label: "Quote the launch thread",  desc: "Quote-post our genesis announcement with your code, then paste your post's link", points: 10, icon: "🔁", xVerify: true },
+    { id: "like_video",   label: "Like the genesis video",  desc: "Like our genesis explainer video on X, then claim",   points: 5,  icon: "❤️", external: "Watch",  href: GENESIS_VIDEO_URL },
+    { id: "repost_video", label: "Quote the genesis video", desc: "Quote-post our genesis explainer video with your code, then paste your post's link", points: 10, icon: "🎬", xVerify: true },
     { id: "discord", label: "Register on our Discord", desc: "Join the Soladrome Discord server, then claim", points: 10, icon: "💬", external: "Join", href: DISCORD_INVITE },
     { id: "referral", label: "Refer a tester",           desc: "Share your link — friends just open it, nothing to paste. Earn when they finish the Genesis set on-chain.", points: 25, icon: "🤝", copyRef: true },
   ],
