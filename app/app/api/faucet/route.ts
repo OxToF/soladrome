@@ -26,20 +26,8 @@ export async function POST(req: NextRequest) {
     const usdcMint   = new PublicKey(USDC_STR);
     const connection = new Connection(RPC, "confirmed");
 
-    // ── Devnet SOL airdrop if wallet has < 0.1 SOL ───────────────────────────
-    // Without SOL, the user can't pay tx fees and every transaction will fail.
-    let solAirdropped = false;
-    try {
-      const solBalance = await connection.getBalance(recipient);
-      if (solBalance < 100_000_000) { // < 0.1 SOL
-        const airdropSig = await connection.requestAirdrop(recipient, 1_000_000_000); // 1 SOL
-        const { blockhash: abh, lastValidBlockHeight: alvbh } = await connection.getLatestBlockhash();
-        await connection.confirmTransaction({ signature: airdropSig, blockhash: abh, lastValidBlockHeight: alvbh });
-        solAirdropped = true;
-      }
-    } catch {
-      // Devnet airdrop is rate-limited — continue with USDC mint regardless
-    }
+    // USDC only — no SOL airdrop. The devnet airdrop was rate-limited into
+    // uselessness anyway; the UI points users at faucet.solana.com for fee SOL.
 
     const recipientAta = await getAssociatedTokenAddress(usdcMint, recipient);
     const ixs = [];
@@ -62,7 +50,7 @@ export async function POST(req: NextRequest) {
     const sig = await connection.sendRawTransaction(tx.serialize());
     await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight });
 
-    return NextResponse.json({ sig, amount: AMOUNT / 1e6, solAirdropped });
+    return NextResponse.json({ sig, amount: AMOUNT / 1e6 });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });
   }

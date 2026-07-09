@@ -36,7 +36,7 @@ export function BuySell() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setStatus(`✅ Got ${data.amount} test USDC${data.solAirdropped ? " + 1 devnet SOL" : ""}!`);
+      setStatus(`✅ Got ${data.amount} test USDC!`);
       trackQuest(wallet.publicKey.toBase58(), "faucet");
     } catch (e: any) {
       setStatus(`❌ Faucet: ${e?.message ?? e}`);
@@ -156,19 +156,18 @@ export function BuySell() {
 
       {/* Devnet faucet */}
       <div className="mt-4 pt-4 border-t border-brand-border">
-        <p className="text-xs text-gray-500 mb-0.5">New wallet? Get devnet SOL + test USDC</p>
-        <p className="text-[10px] text-gray-600 mb-2">SOL needed to pay transaction fees</p>
+        <p className="text-xs text-gray-500 mb-2">New wallet? Get test USDC</p>
         <button
           className="btn-secondary w-full text-xs"
           onClick={claimFaucet}
           disabled={faucetLoading || !wallet}
         >
-          {faucetLoading ? "Sending…" : "Get SOL + 500 Test USDC"}
+          {faucetLoading ? "Sending…" : "Get 500 Test USDC"}
         </button>
-        {/* The faucet's SOL leg rides the devnet airdrop and is often rate-limited —
-            point users at the official faucet as a fallback for tx-fee SOL. */}
+        {/* SOL comes from the official faucet — the in-app one only mints our
+            custom test USDC (fee SOL via devnet airdrop was rate-limited anyway). */}
         <p className="text-[10px] text-gray-600 mt-2">
-          No SOL received?{" "}
+          Need SOL for transaction fees?{" "}
           <a
             href="https://faucet.solana.com/"
             target="_blank"
