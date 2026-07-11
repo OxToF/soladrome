@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { toUi, solaM, oSolaM, floorVault, marketVault } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { ammPriceVsUsdc } from "@/lib/prices";
 import { unpackAccount } from "@solana/spl-token";
 
 export function Stats() {
@@ -17,19 +18,8 @@ export function Stats() {
     const marketUsdc = vaultInfos[1] ? Number(unpackAccount(marketVault, vaultInfos[1]).amount) / 1e6 : 0;
     const curvePrice = toUi(s.virtualUsdc as BN) / toUi(s.virtualSola as BN);
 
-    const priceVsUsdc = (mintStr: string): number | null => {
-      const p = ammPools.find((p: any) => {
-        const a = p.account.tokenAMint.toString();
-        const b = p.account.tokenBMint.toString();
-        return (a === mintStr && b === usdcStr) || (a === usdcStr && b === mintStr);
-      });
-      if (!p) return null;
-      const a  = p.account.tokenAMint.toString();
-      const ra = toUi(p.account.reserveA as BN);
-      const rb = toUi(p.account.reserveB as BN);
-      if (ra === 0 || rb === 0) return null;
-      return a === mintStr ? rb / ra : ra / rb;
-    };
+    const priceVsUsdc = (mintStr: string): number | null =>
+      ammPriceVsUsdc(ammPools, mintStr, usdcStr);
 
     const solaPrice      = priceVsUsdc(solaM.toString());
     const osolaIntrinsic = solaPrice !== null ? Math.max(0, solaPrice - 1) : null;

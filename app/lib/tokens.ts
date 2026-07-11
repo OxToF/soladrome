@@ -73,7 +73,7 @@ export function decimalsForMint(mint: string, usdcMint: PublicKey | null): numbe
 // Add new protocol tokens here as partnerships are established (JitoSOL, JTO…).
 // The list is checked at display time only — it does NOT affect on-chain state.
 
-const TRUSTED_MINTS = new Set([
+export const TRUSTED_MINTS = new Set([
   // ── Soladrome protocol tokens ──
   solaM.toString(),
   oSolaM.toString(),

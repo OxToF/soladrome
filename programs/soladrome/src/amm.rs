@@ -109,6 +109,10 @@ pub fn create_pool(ctx: Context<CreatePool>, fee_rate: u16, protocol_fee_bps: u1
         !ctx.accounts.protocol_state.paused,
         crate::errors::SoladromeError::ProtocolPaused
     );
+    require!(
+        ctx.accounts.protocol_state.lp_enabled,
+        SoladromeError::FeatureDisabled
+    );
     require!(fee_rate <= MAX_FEE_RATE, SoladromeError::InvalidAmount);
     require!(
         protocol_fee_bps <= MAX_PROTOCOL_FEE,

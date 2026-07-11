@@ -161,6 +161,17 @@ pub mod soladrome {
         // `configure_continuous_emissions`. rate 0 + end_epoch 0 => never accrues.
         s.continuous_rate_per_sec = 0;
         s.continuous_end_epoch = 0;
+
+        // Closed launch: LP creation, bribes, voting, oSOLA exercise AND the
+        // bonding curve all start disabled. Two-stage open via `set_phase_flags`:
+        // stage 1 (partner-only window) enables lp/bribes/voting for founding
+        // partners while the curve stays closed; stage 2 (public open) flips
+        // `curve_enabled` — curve opening, TGE and airdrop are one event.
+        s.lp_enabled = false;
+        s.bribes_enabled = false;
+        s.voting_enabled = false;
+        s.exercise_enabled = false;
+        s.curve_enabled = false;
         Ok(())
     }
 
@@ -185,6 +196,44 @@ pub mod soladrome {
     pub fn set_founder_voting(ctx: Context<SetPaused>, enabled: bool) -> Result<()> {
         ctx.accounts.protocol_state.founder_voting_enabled = enabled;
         msg!("Founder voting enabled = {}", enabled);
+        Ok(())
+    }
+
+    /// Authority-only: toggle the closed-launch feature gates independently.
+    /// `None` leaves a flag untouched, so a single call can flip only one gate
+    /// (e.g. enabling LP for one partner integration) without disturbing the rest.
+    pub fn set_phase_flags(
+        ctx: Context<SetPaused>,
+        lp_enabled: Option<bool>,
+        bribes_enabled: Option<bool>,
+        voting_enabled: Option<bool>,
+        exercise_enabled: Option<bool>,
+        curve_enabled: Option<bool>,
+    ) -> Result<()> {
+        let state = &mut ctx.accounts.protocol_state;
+        if let Some(v) = lp_enabled {
+            state.lp_enabled = v;
+        }
+        if let Some(v) = bribes_enabled {
+            state.bribes_enabled = v;
+        }
+        if let Some(v) = voting_enabled {
+            state.voting_enabled = v;
+        }
+        if let Some(v) = exercise_enabled {
+            state.exercise_enabled = v;
+        }
+        if let Some(v) = curve_enabled {
+            state.curve_enabled = v;
+        }
+        msg!(
+            "Phase flags: lp={} bribes={} voting={} exercise={} curve={}",
+            state.lp_enabled,
+            state.bribes_enabled,
+            state.voting_enabled,
+            state.exercise_enabled,
+            state.curve_enabled,
+        );
         Ok(())
     }
 
@@ -216,6 +265,14 @@ pub mod soladrome {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
+        );
+        // Phase gate: the curve is closed during the partner-only launch window.
+        // The curve price is monotonically increasing, so an open curve before
+        // the public event would let snipers buy the cheapest SOLA ahead of the
+        // community airdrop. sell_sola stays open (exit path).
+        require!(
+            ctx.accounts.protocol_state.curve_enabled,
+            SoladromeError::FeatureDisabled
         );
         let vu = ctx.accounts.protocol_state.virtual_usdc;
         let vs = ctx.accounts.protocol_state.virtual_sola;
@@ -785,6 +842,10 @@ pub mod soladrome {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
+        );
+        require!(
+            ctx.accounts.protocol_state.exercise_enabled,
+            SoladromeError::FeatureDisabled
         );
         require!(o_sola_amount > 0, SoladromeError::InvalidAmount);
         let bump = ctx.accounts.protocol_state.bump;
@@ -1926,6 +1987,10 @@ pub mod soladrome {
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
         );
+        require!(
+            ctx.accounts.protocol_state.bribes_enabled,
+            SoladromeError::FeatureDisabled
+        );
         require!(amount > 0, SoladromeError::InvalidAmount);
         let clock = Clock::get()?;
         require!(
@@ -1976,6 +2041,10 @@ pub mod soladrome {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
+        );
+        require!(
+            ctx.accounts.protocol_state.bribes_enabled,
+            SoladromeError::FeatureDisabled
         );
         require!(amount > 0, SoladromeError::InvalidAmount);
         let clock = Clock::get()?;
@@ -2042,6 +2111,10 @@ pub mod soladrome {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
+        );
+        require!(
+            ctx.accounts.protocol_state.voting_enabled,
+            SoladromeError::FeatureDisabled
         );
         require!(votes > 0, SoladromeError::InvalidAmount);
         let clock = Clock::get()?;
@@ -2278,6 +2351,14 @@ pub mod soladrome {
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
         );
+        // Phase gate: replay_vote casts REAL gauge votes (gauge_state.total_votes,
+        // global_epoch_votes, UserVoteReceipt), so it must honor the same
+        // voting_enabled gate as vote_gauge — otherwise the closed-launch "voting
+        // disabled" window is bypassable through a saved auto-replay config.
+        require!(
+            ctx.accounts.protocol_state.voting_enabled,
+            SoladromeError::FeatureDisabled
+        );
         let clock = Clock::get()?;
         require!(
             epoch == current_epoch(clock.unix_timestamp),
@@ -2403,6 +2484,13 @@ pub mod soladrome {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
+        );
+        // Phase gate: banking oSOLA-bonus voting power only has meaning once votes
+        // can be cast, and burning is irreversible — block it while voting is
+        // closed so a user can't destroy oSOLA for power they can't yet use.
+        require!(
+            ctx.accounts.protocol_state.voting_enabled,
+            SoladromeError::FeatureDisabled
         );
         require!(amount > 0, SoladromeError::InvalidAmount);
         let clock = Clock::get()?;
@@ -2934,6 +3022,13 @@ pub mod soladrome {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
+        );
+        // Phase gate: flash arb burns oSOLA and mints floor-backed SOLA — it is
+        // an exercise pathway and must honor the same gate as exercise_o_sola,
+        // otherwise the closed-launch "exercise disabled" promise is bypassable.
+        require!(
+            ctx.accounts.protocol_state.exercise_enabled,
+            SoladromeError::FeatureDisabled
         );
         require!(amount_osola > 0, SoladromeError::InvalidAmount);
 

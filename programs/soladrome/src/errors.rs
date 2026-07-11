@@ -96,4 +96,7 @@ pub enum SoladromeError {
     // ── Founder governance ────────────────────────────────────────────────────
     #[msg("Founder voting is disabled — the founder stake is a dormant anti-capture reserve")]
     FounderVotingDisabled,
+    // ── Phase gating (private mainnet launch) ─────────────────────────────────
+    #[msg("This feature is disabled during the closed launch phase — authority has not enabled it yet")]
+    FeatureDisabled,
 }

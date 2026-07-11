@@ -20,9 +20,11 @@
     "@supabase/supabase-js": "^2.106.2",
     "@wormhole-foundation/wormhole-connect": "^6.0.0",
     "bn.js": "^5.2.1",
+    "bs58": "^6.0.0",
     "next": "14.2.5",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@types/node": "^20",

@@ -149,6 +149,29 @@ pub struct ProtocolState {
     /// launch bootstrap auto-expires without a manual toggle. Default 0 (off).
     /// u16 caps at epoch 65 535 (≈ year 3225) — irrelevant for a bootstrap window.
     pub continuous_end_epoch: u16,
+
+    // ── Phase gating (private mainnet launch) ───────────────────────────────
+    // Packed into the remaining spare bytes of this singleton — no realloc.
+    // All default `false` at `initialize`. Two-stage launch:
+    //   Stage 1 (partner-only window): authority enables lp/bribes/voting for
+    //     founding partners; the bonding curve stays CLOSED (`curve_enabled`
+    //     false) so nobody can front-run the bottom of the monotonic curve
+    //     before the public open + airdrop.
+    //   Stage 2 (public open): authority flips `curve_enabled` — curve opening,
+    //     TGE and airdrop distribution happen as one event.
+    /// Gates `create_pool` — no permissionless AMM pool can be created while false.
+    pub lp_enabled: bool,
+    /// Gates `deposit_bribe` and `partner_deposit_bribe`.
+    pub bribes_enabled: bool,
+    /// Gates `vote_gauge`.
+    pub voting_enabled: bool,
+    /// Gates `exercise_o_sola`.
+    pub exercise_enabled: bool,
+    /// Gates `buy_sola` (bonding-curve entry). `sell_sola` is intentionally NOT
+    /// gated: redemption at floor is an exit path and must never be blockable
+    /// (same policy as `paused`). Partners don't need the curve during stage 1 —
+    /// they receive hiSOLA via `register_partner` and LP on non-SOLA pools.
+    pub curve_enabled: bool,
 }
 
 impl ProtocolState {
@@ -157,8 +180,9 @@ impl ProtocolState {
     // Emission:   u64(8) + u16(2) + u16(2) + u64(8) = 20
     // Founder:    bool(1) = 1
     // Continuous: u32(4) + u16(2) = 6    ← carved from the prior 16 spare bytes
+    // Phase gate: bool×5 = 5              ← carved from the remaining spare bytes
     // ⚠️ Update this value whenever a field is added or removed.
-    pub const LEN: usize = 400;
+    pub const LEN: usize = 416;
 }
 
 // Compile-time guard: if ProtocolState grows past LEN the program will fail to

@@ -527,7 +527,10 @@ export function Pools() {
 
       const sig = await sendTx(connection, wallet, [...preIxs, addIx, ...postIxs]);
       setStatus(`✅ Liquidity added — ${sig.slice(0, 16)}…`);
-      trackQuest(wallet.publicKey.toBase58(), "liquidity");
+      // meta.pool = which pool we deposited into, so the server can verify the
+      // un-dustable LpUserInfo PDA directly (no all-pools scan). Same pattern as
+      // claim_bribe's meta.
+      trackQuest(wallet.publicKey.toBase58(), "liquidity", { pool: poolAddr.toBase58() });
       setAddA(""); setAddB("");
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
