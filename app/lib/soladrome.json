@@ -7702,6 +7702,83 @@
       ]
     },
     {
+      "name": "set_phase_flags",
+      "docs": [
+        "Authority-only: toggle the closed-launch feature gates independently.",
+        "`None` leaves a flag untouched, so a single call can flip only one gate",
+        "(e.g. enabling LP for one partner integration) without disturbing the rest."
+      ],
+      "discriminator": [
+        111,
+        117,
+        235,
+        19,
+        45,
+        95,
+        149,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "lp_enabled",
+          "type": {
+            "option": "bool"
+          }
+        },
+        {
+          "name": "bribes_enabled",
+          "type": {
+            "option": "bool"
+          }
+        },
+        {
+          "name": "voting_enabled",
+          "type": {
+            "option": "bool"
+          }
+        },
+        {
+          "name": "exercise_enabled",
+          "type": {
+            "option": "bool"
+          }
+        },
+        {
+          "name": "curve_enabled",
+          "type": {
+            "option": "bool"
+          }
+        }
+      ]
+    },
+    {
       "name": "set_pool_rewards",
       "docs": [
         "Authority-only: approve/revoke a pool for continuous oSOLA emissions.",
@@ -9461,6 +9538,11 @@
       "code": 6036,
       "name": "FounderVotingDisabled",
       "msg": "Founder voting is disabled — the founder stake is a dormant anti-capture reserve"
+    },
+    {
+      "code": 6037,
+      "name": "FeatureDisabled",
+      "msg": "This feature is disabled during the closed launch phase — authority has not enabled it yet"
     }
   ],
   "types": [
@@ -10143,6 +10225,44 @@
               "u16 caps at epoch 65 535 (≈ year 3225) — irrelevant for a bootstrap window."
             ],
             "type": "u16"
+          },
+          {
+            "name": "lp_enabled",
+            "docs": [
+              "Gates `create_pool` — no permissionless AMM pool can be created while false."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bribes_enabled",
+            "docs": [
+              "Gates `deposit_bribe` and `partner_deposit_bribe`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "voting_enabled",
+            "docs": [
+              "Gates `vote_gauge`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "exercise_enabled",
+            "docs": [
+              "Gates `exercise_o_sola`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "curve_enabled",
+            "docs": [
+              "Gates `buy_sola` (bonding-curve entry). `sell_sola` is intentionally NOT",
+              "gated: redemption at floor is an exit path and must never be blockable",
+              "(same policy as `paused`). Partners don't need the curve during stage 1 —",
+              "they receive hiSOLA via `register_partner` and LP on non-SOLA pools."
+            ],
+            "type": "bool"
           }
         ]
       }

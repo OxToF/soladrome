@@ -7,9 +7,11 @@
 // their tweet URL here. We fetch the tweet through X's public oEmbed endpoint
 // (free, keyless — the paid X API stays out of the loop) and only credit when:
 //   1. the tweet text contains THIS wallet's code for THIS quest, and
-//   2. the tweet actually quotes the quest's target post.
-// The code makes cross-wallet and cross-quest reuse structurally impossible,
-// so no submissions table is needed; record_quest is idempotent per wallet.
+//   2. the tweet actually quotes the quest's target post, and
+//   3. the tweet hasn't already been consumed by another wallet.
+// The per-(wallet, quest) code binds a tweet's INTENDED beneficiary, but one
+// post can physically carry many codes, so we also consume each tweet_id once
+// (claim_x_tweet in supabase/quests.sql) — first wallet to claim it wins.
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { PublicKey } from "@solana/web3.js";
@@ -33,23 +35,35 @@ function bad(reason: string, status = 422) {
   return NextResponse.json({ ok: false, reason }, { status });
 }
 
-// oEmbed HTML shortens links to t.co, so the quoted target usually isn't
-// visible verbatim. Resolve each t.co link (one manual-redirect hop) and check
-// whether any lands on the target status.
+// fetch with a hard timeout — these are unauthenticated outbound calls to
+// twitter.com / t.co, so a slow/hanging peer must not pin a serverless
+// invocation open indefinitely.
+function fetchT(url: string, init: RequestInit = {}, ms = 5000): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(ms) });
+}
+
+// Does the tweet actually QUOTE the target post (not merely mention its id as
+// typed text)? oEmbed shortens the quoted permalink to a t.co link, so the
+// reliable signal is a t.co link that RESOLVES to the target status. We do NOT
+// treat a bare `/status/<target>` substring as proof: a user can type that
+// string as plain text without quoting anything. (Residual limitation: a real
+// quote and a "comment + pasted link" tweet both shorten to t.co and are
+// indistinguishable via keyless oEmbed — closing that gap needs the paid X API.)
 async function quotesTarget(html: string, target: string): Promise<boolean> {
-  if (html.includes(`/status/${target}`)) return true; // sometimes unshortened
+  // Only accept `/status/<target>` when it appears inside an href="" X emits —
+  // i.e. a real rendered link, not text the author typed.
+  const hrefRe = new RegExp(`href="https://(www\\.)?(x|twitter)\\.com/[^/"]+/status/${target}([/?"]|$)`);
+  if (hrefRe.test(html)) return true;
   const tcoLinks = [...new Set(html.match(/https:\/\/t\.co\/[A-Za-z0-9]+/g) ?? [])].slice(0, 4);
-  for (const link of tcoLinks) {
-    try {
-      const res = await fetch(link, { method: "HEAD", redirect: "manual" });
-      const loc = res.headers.get("location") ?? "";
-      // Accept path suffixes (/video/1, /photo/1) and query params — media
-      // links inside a quote resolve with those, and any link to the target
-      // post still proves the tweet points at the right mission.
-      if (new RegExp(`^https://(www\\.)?(x|twitter)\\.com/[^/]+/status/${target}([/?]|$)`).test(loc)) return true;
-    } catch { /* try the next link */ }
-  }
-  return false;
+  // Resolve the t.co links concurrently; the first that lands on the target wins.
+  const checks = tcoLinks.map(async (link) => {
+    const res = await fetchT(link, { method: "HEAD", redirect: "manual" }, 4000);
+    const loc = res.headers.get("location") ?? "";
+    // Accept path suffixes (/video/1, /photo/1) and query params.
+    return new RegExp(`^https://(www\\.)?(x|twitter)\\.com/[^/]+/status/${target}([/?]|$)`).test(loc);
+  });
+  const results = await Promise.allSettled(checks);
+  return results.some((r) => r.status === "fulfilled" && r.value);
 }
 
 // POST { wallet, quest, url } → verify the quote tweet and credit the quest.
@@ -80,7 +94,7 @@ export async function POST(req: NextRequest) {
 
     // Public oEmbed lookup — 404s for deleted/private tweets. The /i/status/
     // form resolves regardless of the author handle in the submitted URL.
-    const oembedRes = await fetch(
+    const oembedRes = await fetchT(
       `https://publish.twitter.com/oembed?url=${encodeURIComponent(`https://twitter.com/i/status/${tweetId}`)}&omit_script=1&dnt=1`,
       { headers: { Accept: "application/json" } },
     );
@@ -99,6 +113,18 @@ export async function POST(req: NextRequest) {
     if (!(await quotesTarget(html, conf.target))) {
       return bad("that post doesn't quote the mission's target post");
     }
+
+    // Consume the tweet: bind it to THIS wallet (first claimant wins). A single
+    // post carrying several wallets' codes can therefore credit only one wallet,
+    // so per-wallet friction (one genuine quote each) is enforced.
+    const { data: claimed, error: claimErr } = await supabase.rpc("claim_x_tweet", {
+      p_tweet: tweetId, p_wallet: wallet, p_quest: quest,
+    });
+    if (claimErr) {
+      console.error("[x-verify] claim_x_tweet", claimErr);
+      return bad("could not record the quest", 500);
+    }
+    if (!claimed) return bad("that post was already used to verify another wallet");
 
     const { error } = await supabase.rpc("record_quest", { p_wallet: wallet, p_quest: quest });
     if (error) {

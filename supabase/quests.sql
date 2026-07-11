@@ -121,6 +121,41 @@ create policy "leaderboard read"
 -- record_quest runs as SECURITY DEFINER (table owner), so the API service key
 -- can write through it even with RLS on. No INSERT policy is granted to anon.
 
+-- ── 4b. X (Twitter) quote-tweet verification ledger ─────────────────────────
+-- Each verified quote tweet is consumed exactly once. Without this, a farmer
+-- could put many wallets' deterministic codes into ONE quote tweet and POST the
+-- same URL for each wallet — every call would pass oEmbed verification and mint
+-- points. Binding the tweet_id to the FIRST wallet that claims it caps a single
+-- post at a single wallet, so real per-wallet friction (one genuine post each)
+-- is required. Idempotent re-submits by the same wallet still succeed.
+create table if not exists x_verifications (
+  tweet_id       text        primary key,
+  wallet_address text        not null,
+  quest_id       text        not null,
+  created_at     timestamptz not null default now()
+);
+alter table x_verifications enable row level security; -- no policy → service key only
+
+-- Claim a tweet for a wallet. Returns true only if the tweet is now bound to
+-- THIS wallet (either we just inserted it, or this wallet already owned it).
+-- A different wallet having claimed it first returns false → no credit.
+create or replace function claim_x_tweet(p_tweet text, p_wallet text, p_quest text)
+returns boolean
+language plpgsql
+security definer
+as $$
+declare
+  v_owner text;
+begin
+  insert into x_verifications (tweet_id, wallet_address, quest_id)
+  values (p_tweet, p_wallet, p_quest)
+  on conflict (tweet_id) do nothing;
+
+  select wallet_address into v_owner from x_verifications where tweet_id = p_tweet;
+  return v_owner = p_wallet;
+end;
+$$;
+
 -- ── 5. Referrals ────────────────────────────────────────────────────────────
 -- One referrer per referred wallet, immutable (first-touch). A wallet can't
 -- refer itself. Written by the API (service key) at register time. The referrer

@@ -10,6 +10,7 @@ import {
   marketVault,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { ammPriceVsUsdc, FLOOR_PRICE } from "@/lib/prices";
 import { currentEpoch } from "@/lib/epoch";
 import { PublicKey } from "@solana/web3.js";
 import { unpackAccount } from "@solana/spl-token";
@@ -28,7 +29,7 @@ interface PortfolioData {
 export function Portfolio() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
-  const { usdcMint, protocolState, vaultInfos } = useSoladrome();
+  const { usdcMint, protocolState, vaultInfos, ammPools } = useSoladrome();
 
   const [data, setData] = useState<PortfolioData | null>(null);
   const [bribeSummary, setBribeSummary] = useState<ClaimableBribesSummary | null>(null);
@@ -125,13 +126,21 @@ export function Portfolio() {
     return () => window.removeEventListener("soladrome:refresh", loadBribeSummary);
   }, [loadBribeSummary]);
 
-  // Value SOLA & hiSOLA at the $1 floor (each is floor-backed 1:1 and redeemable
-  // via sell_sola). The bonding-curve marginal price is unsuitable here: sells
-  // don't move virtual reserves, so it only ratchets up and overstates a balance
-  // you could never realise at that marginal price.
+  // Realisable valuation: value SOLA (and hiSOLA, which unstakes 1:1) at the
+  // SOLA/USDC AMM market price when such a pool exists, else the $1 floor
+  // (sell_sola redemption). We deliberately do NOT use the curve price
+  // (virtual_usdc/virtual_sola) — that is the buy/mint price and can't be
+  // realised by a seller, so it would overstate the balance. oSOLA is an option:
+  // its market price if a pool exists, else its intrinsic value max(0, SOLA − 1)
+  // (the $1 exercise cost), which is 0 while SOLA sits at the floor.
+  const usdcStr   = usdcMint?.toString() ?? "";
+  const solaPrice = ammPriceVsUsdc(ammPools, solaM.toString(), usdcStr) ?? FLOOR_PRICE;
+  const oSolaPrice = ammPriceVsUsdc(ammPools, oSolaM.toString(), usdcStr)
+    ?? Math.max(0, solaPrice - FLOOR_PRICE);
   const totalValue = data
-    ? data.solaBalance + data.hiSolaBalance
-      + data.oSolaBalance       // oSOLA floor value ≈ $1
+    ? data.solaBalance * solaPrice
+      + data.hiSolaBalance * solaPrice
+      + data.oSolaBalance * oSolaPrice
       - data.debt
     : null;
 
@@ -184,7 +193,7 @@ export function Portfolio() {
           </p>
           <p className="text-xs text-gray-600">
             ≈ ${data
-              ? data.hiSolaBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })
+              ? (data.hiSolaBalance * solaPrice).toLocaleString(undefined, { maximumFractionDigits: 2 })
               : "0"}
           </p>
         </div>
@@ -201,7 +210,7 @@ export function Portfolio() {
             {data ? data.oSolaBalance.toLocaleString(undefined, { maximumFractionDigits: 4 }) : "—"}
           </p>
           <p className="text-xs text-gray-600">
-            ≈ ${data ? data.oSolaBalance.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "0"}
+            ≈ ${data ? (data.oSolaBalance * oSolaPrice).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "0"}
           </p>
         </div>
       </div>
@@ -218,7 +227,7 @@ export function Portfolio() {
           </p>
           <p className="text-xs text-gray-600">
             ≈ ${data
-              ? data.solaBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })
+              ? (data.solaBalance * solaPrice).toLocaleString(undefined, { maximumFractionDigits: 2 })
               : "0"}
           </p>
         </div>
