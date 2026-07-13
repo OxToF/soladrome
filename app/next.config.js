@@ -8,6 +8,9 @@ const nextConfig = {
       // Rewrite them to our local copy in /public/wh/.
       { source: "/main.css",        destination: "/wh/main.css"        },
       { source: "/assets/:path*",   destination: "/wh/assets/:path*"   },
+      // Clean URL for the bribe-bridge satellite page (vercel cleanUrls is ignored
+      // under the Next.js framework preset — must rewrite here).
+      { source: "/bribebridge",     destination: "/bribebridge.html"   },
     ];
   },
   webpack: (config, { isServer }) => {
