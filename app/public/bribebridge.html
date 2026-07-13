@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Soladrome | ve(3,3) Bribe Marketplace</title>
+    <meta name="description" content="The cross-chain ve(3,3) bribe hub. Bribe any gauge — Aerodrome, Velodrome, Hyperdrome, Soladrome — from any chain, paying in any token. USDC-settled, on-chain DVN verified.">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0b0e14;
+            color: white;
+            scroll-behavior: smooth;
+        }
+        .gradient-text {
+            background: linear-gradient(90deg, #9945FF, #14F195);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .bg-solana {
+            background: linear-gradient(135deg, rgba(153, 69, 255, 0.05) 0%, rgba(20, 241, 149, 0.05) 100%);
+        }
+        .border-glow {
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: all 0.3s ease;
+        }
+        .border-glow:hover {
+            border-color: #14F195;
+            box-shadow: 0 0 20px rgba(20, 241, 149, 0.2);
+            transform: translateY(-5px);
+        }
+        .hero-glow {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            max-width: 800px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(153, 69, 255, 0.15) 0%, rgba(20, 241, 149, 0.05) 50%, transparent 100%);
+            filter: blur(80px);
+            z-index: -1;
+        }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    </style>
+</head>
+<body class="overflow-x-hidden">
+
+    <!-- Hero Background Glow -->
+    <div class="hero-glow"></div>
+
+    <!-- Navigation -->
+    <nav class="sticky top-0 z-50 backdrop-blur-md bg-[#0b0e14]/80 border-b border-white/5">
+        <div class="flex justify-between items-center px-6 md:px-12 py-4 max-w-7xl mx-auto">
+            <div class="flex items-center space-x-3">
+                <svg width="42" height="42" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" class="animate-pulse">
+                    <circle cx="50" cy="50" r="46" stroke="url(#logo_grad)" stroke-width="4"/>
+                    <path d="M30 50C30 38.9543 38.9543 30 50 30C61.0457 30 70 38.9543 70 50C70 61.0457 61.0457 70 50 70" stroke="#14F195" stroke-width="6" stroke-linecap="round"/>
+                    <path d="M30 50L55 50L70 35" stroke="#9945FF" stroke-width="6" stroke-linecap="round"/>
+                    <defs>
+                        <linearGradient id="logo_grad" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+                            <stop stop-color="#9945FF"/><stop offset="1" stop-color="#14F195"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+                <a href="/" class="text-2xl font-bold tracking-tighter uppercase">Sola<span class="gradient-text">drome</span></a>
+            </div>
+
+            <div class="hidden md:flex space-x-8 text-sm font-semibold tracking-wide text-gray-400">
+                <a href="#how" class="hover:text-white transition">How it works</a>
+                <a href="#sources" class="hover:text-white transition">Sources</a>
+                <a href="#send" class="hover:text-[#14F195] transition">Send a bribe</a>
+                <a href="#security" class="hover:text-white transition">Security</a>
+                <a href="/about.html" class="hover:text-white transition">About Soladrome</a>
+            </div>
+
+            <a href="/" class="bg-white text-black px-7 py-2.5 rounded-full font-bold text-sm hover:bg-[#14F195] hover:text-black transition-all duration-300 shadow-lg shadow-white/5">
+                Launch App
+            </a>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="relative pt-24 pb-24 px-6 max-w-5xl mx-auto text-center">
+        <div class="flex flex-wrap justify-center gap-3 mb-6">
+            <div class="inline-block px-4 py-1.5 rounded-full border border-[#14F195]/30 bg-[#14F195]/10 text-[#14F195] text-xs font-bold uppercase tracking-widest">
+                LayerZero V2 · USDC-Settled · On-Chain DVN Proof
+            </div>
+            <div class="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full border border-[#9945FF]/40 bg-[#9945FF]/10 text-[#9945FF] text-xs font-bold uppercase tracking-widest">
+                Total ve(3,3) Interoperability
+            </div>
+        </div>
+        <h1 class="text-5xl md:text-7xl font-bold mb-8 leading-tight tracking-tight">
+            The ve(3,3) <br><span class="gradient-text">Bribe Hub</span>
+        </h1>
+        <p class="text-gray-400 text-lg md:text-xl max-w-2xl mx-auto mb-12 leading-relaxed">
+            Everyone bribes everyone. Incentivize any gauge on any connected ve(3,3) — Aerodrome, Velodrome, Hyperdrome or Soladrome — from any chain, paying in any token. The hub settles cross-chain in USDC, swaps into the gauge's reward token, and delivers into the protocol's native bribe system. No manual bridging.
+        </p>
+        <div class="flex flex-col sm:flex-row justify-center items-center gap-4">
+            <a href="#how" class="w-full sm:w-auto bg-gradient-to-r from-[#9945FF] to-[#14F195] px-10 py-4 rounded-2xl font-bold text-lg hover:shadow-[0_0_30px_rgba(20,241,149,0.4)] transition-all duration-300">
+                See how it works
+            </a>
+            <a href="https://t.me/+SW4sVvoypbRkZTQ0" target="_blank" rel="noreferrer" class="w-full sm:w-auto border border-[#29A8E0]/40 bg-[#29A8E0]/10 text-[#29A8E0] px-10 py-4 rounded-2xl font-bold text-lg hover:bg-[#29A8E0]/20 transition flex items-center justify-center gap-2">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.19 13.4l-2.952-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.95.16z"/></svg>
+                Talk to us
+            </a>
+        </div>
+    </section>
+
+    <!-- Flow -->
+    <section id="how" class="px-6 max-w-7xl mx-auto py-24 border-t border-white/5">
+        <div class="text-center mb-16">
+            <h2 class="text-3xl md:text-5xl font-bold mb-4">How a bribe <span class="gradient-text">travels</span></h2>
+            <p class="text-gray-500 max-w-2xl mx-auto">One transaction on your chain. The rest is protocol-to-protocol.</p>
+        </div>
+        <div class="grid md:grid-cols-4 gap-6">
+            <div class="bg-solana p-8 rounded-[2rem] border-glow">
+                <div class="w-11 h-11 rounded-full bg-[#9945FF]/20 border border-[#9945FF]/40 flex items-center justify-center text-[#9945FF] font-bold text-lg mb-5">1</div>
+                <h3 class="text-lg font-bold mb-2">Deposit on EVM</h3>
+                <p class="text-gray-400 text-sm leading-relaxed">Call <code class="mono text-gray-300">depositBribe(amount, poolId, epoch)</code> on the <span class="text-white">SoladromeBribeRouter</span> on your chain. Tokens are locked; a LayerZero V2 message is emitted.</p>
+            </div>
+            <div class="bg-solana p-8 rounded-[2rem] border-glow">
+                <div class="w-11 h-11 rounded-full bg-[#9945FF]/20 border border-[#9945FF]/40 flex items-center justify-center text-[#9945FF] font-bold text-lg mb-5">2</div>
+                <h3 class="text-lg font-bold mb-2">DVNs verify</h3>
+                <p class="text-gray-400 text-sm leading-relaxed">LayerZero's Decentralized Verifier Networks attest the message. The Executor relays it to the Solana endpoint — no trusted single relayer.</p>
+            </div>
+            <div class="bg-solana p-8 rounded-[2rem] border-glow">
+                <div class="w-11 h-11 rounded-full bg-[#14F195]/20 border border-[#14F195]/40 flex items-center justify-center text-[#14F195] font-bold text-lg mb-5">3</div>
+                <h3 class="text-lg font-bold mb-2">Cleared on Solana</h3>
+                <p class="text-gray-400 text-sm leading-relaxed">The <span class="text-white">BribeReceiver</span> OApp calls the Endpoint's <code class="mono text-gray-300">clear()</code> — proving DVN verification on-chain and burning the nonce against replays.</p>
+            </div>
+            <div class="bg-solana p-8 rounded-[2rem] border-glow">
+                <div class="w-11 h-11 rounded-full bg-[#14F195]/20 border border-[#14F195]/40 flex items-center justify-center text-[#14F195] font-bold text-lg mb-5">4</div>
+                <h3 class="text-lg font-bold mb-2">Voters earn</h3>
+                <p class="text-gray-400 text-sm leading-relaxed">The bribe lands in the gauge's bribe vault for that epoch. hiSOLA voters who backed the pool claim it pro-rata — same as a native Soladrome bribe.</p>
+            </div>
+        </div>
+
+        <!-- Path visual -->
+        <div class="mt-12 bg-black/30 rounded-[2rem] p-8 border border-white/5 overflow-x-auto">
+            <div class="flex items-center justify-between gap-4 min-w-[640px] text-center text-sm">
+                <div class="flex-1">
+                    <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest mb-2">EVM chain</p>
+                    <div class="bg-black/40 rounded-xl p-4 border border-[#9945FF]/20">SoladromeBribeRouter<br><span class="text-gray-500 text-xs">locks tokens · _lzSend()</span></div>
+                </div>
+                <div class="text-gray-600 text-2xl shrink-0">→</div>
+                <div class="flex-1">
+                    <p class="text-gray-400 text-xs font-bold uppercase tracking-widest mb-2">LayerZero V2</p>
+                    <div class="bg-black/40 rounded-xl p-4 border border-white/10">DVN attestation<br><span class="text-gray-500 text-xs">+ Executor relay</span></div>
+                </div>
+                <div class="text-gray-600 text-2xl shrink-0">→</div>
+                <div class="flex-1">
+                    <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest mb-2">Solana · Soladrome</p>
+                    <div class="bg-black/40 rounded-xl p-4 border border-[#14F195]/20">BribeReceiver → gauge vault<br><span class="text-gray-500 text-xs">clear() · deposit_bribe</span></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Supported sources -->
+    <section id="sources" class="bg-white/[0.02] py-28 px-6 border-y border-white/5">
+        <div class="max-w-7xl mx-auto">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl md:text-5xl font-bold mb-4">Supported <span class="gradient-text">sources</span></h2>
+                <p class="text-gray-500 max-w-2xl mx-auto">Any ve(3,3) protocol can route bribes to Soladrome voters. The router is token-agnostic — one deployment per chain and bribe token.</p>
+            </div>
+            <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div class="bg-solana p-7 rounded-2xl border border-[#14F195]/20">
+                    <div class="text-2xl mb-3">🟢</div>
+                    <h3 class="text-xl font-bold mb-1">Aerodrome</h3>
+                    <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest mb-4">Base</p>
+                    <p class="text-gray-500 text-xs mono">LZ EID 30184</p>
+                </div>
+                <div class="bg-solana p-7 rounded-2xl border border-[#9945FF]/20">
+                    <div class="text-2xl mb-3">🔴</div>
+                    <h3 class="text-xl font-bold mb-1">Velodrome</h3>
+                    <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest mb-4">Optimism</p>
+                    <p class="text-gray-500 text-xs mono">LZ EID 30111</p>
+                </div>
+                <div class="bg-solana p-7 rounded-2xl border border-white/10">
+                    <div class="text-2xl mb-3">💣</div>
+                    <h3 class="text-xl font-bold mb-1">fBOMB</h3>
+                    <p class="text-gray-400 text-xs font-bold uppercase tracking-widest mb-4">Base · Arbitrum · Optimism</p>
+                    <p class="text-gray-500 text-xs mono">EID 30184 · 30110 · 30111</p>
+                </div>
+                <div class="bg-solana p-7 rounded-2xl border border-[#14F195]/20">
+                    <div class="text-2xl mb-3">⚡</div>
+                    <h3 class="text-xl font-bold mb-1">Hyperdrome</h3>
+                    <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest mb-4">Hyperliquid HyperEVM</p>
+                    <p class="text-gray-500 text-xs mono">LZ EID 30367</p>
+                </div>
+            </div>
+            <p class="text-center text-gray-600 text-xs mt-8">Adding a chain is a single on-chain <code class="mono">set_peer</code> call — no receiver redeploy.</p>
+        </div>
+    </section>
+
+    <!-- Marketplace (interactive) -->
+    <section id="send" class="px-6 max-w-4xl mx-auto py-28 border-t border-white/5">
+        <div class="text-center mb-12">
+            <div class="inline-block px-4 py-1.5 mb-6 rounded-full border border-[#14F195]/30 bg-[#14F195]/10 text-[#14F195] text-xs font-bold uppercase tracking-widest">
+                ve(3,3) Bribe Marketplace
+            </div>
+            <h2 class="text-3xl md:text-5xl font-bold mb-4">Bribe <span class="gradient-text">any gauge</span></h2>
+            <p class="text-gray-500 max-w-xl mx-auto">Pick where the bribe goes, pick what you pay with. The hub routes it cross-chain and settles into the destination protocol's native gauge. Bribing <span class="text-white">into Soladrome</span> accepts any token; bribing into a Solidly ve(3,3) is limited to that gauge's whitelisted tokens.</p>
+        </div>
+
+        <div class="bg-solana rounded-[2rem] border border-white/10 p-6 md:p-8">
+            <!-- Wallet row -->
+            <div class="flex flex-col sm:flex-row items-center justify-between gap-4 mb-6 pb-6 border-b border-white/10">
+                <div id="walletInfo" class="text-sm text-gray-400 text-center sm:text-left">Wallet not connected</div>
+                <button id="connectBtn" class="bg-white text-black px-6 py-2.5 rounded-full font-bold text-sm hover:bg-[#14F195] transition-all duration-300 whitespace-nowrap">Connect Wallet</button>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-6">
+                <!-- Destination -->
+                <div class="bg-black/30 rounded-2xl p-5 border border-[#14F195]/20">
+                    <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest mb-4">Destination · where the bribe goes</p>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Protocol</label>
+                    <select id="dstProto" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#14F195] focus:outline-none mb-4"></select>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Gauge</label>
+                    <select id="dstGauge" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#14F195] focus:outline-none mb-4"></select>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Bribe token (what voters receive)</label>
+                    <select id="dstToken" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#14F195] focus:outline-none"></select>
+                </div>
+
+                <!-- Source -->
+                <div class="bg-black/30 rounded-2xl p-5 border border-[#9945FF]/20">
+                    <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest mb-4">Source · what you pay with</p>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Source chain</label>
+                    <select id="srcChain" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#9945FF] focus:outline-none mb-4"></select>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Pay token</label>
+                    <select id="srcToken" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#9945FF] focus:outline-none mb-4"></select>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Amount</label>
+                    <input id="amountIn" type="text" inputmode="decimal" placeholder="1000" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white mono focus:border-[#9945FF] focus:outline-none">
+                </div>
+            </div>
+
+            <!-- Route preview -->
+            <div class="mt-6 bg-black/40 rounded-2xl p-5 border border-white/10">
+                <p class="text-xs text-gray-500 uppercase tracking-widest mb-3">Route</p>
+                <div id="routePreview" class="text-sm text-gray-300 leading-relaxed">Select a destination and source to preview the route.</div>
+            </div>
+
+            <div class="mt-5">
+                <button id="sendBtn" class="w-full bg-gradient-to-r from-[#9945FF] to-[#14F195] px-6 py-4 rounded-xl font-bold text-base hover:shadow-[0_0_20px_rgba(20,241,149,0.3)] transition disabled:opacity-40 disabled:cursor-not-allowed" disabled>Send bribe</button>
+                <div id="status" class="hidden mt-4 rounded-xl p-4 text-sm border"></div>
+            </div>
+        </div>
+        <p class="text-center text-gray-600 text-xs mt-6">Live route today: EVM&nbsp;→&nbsp;Soladrome on testnet. Solidly destinations (Aerodrome/Velodrome/Hyperdrome) and Solana&nbsp;→&nbsp;EVM are wired in the model and land as the adapters + CCTP orchestration ship (see the interop spec).</p>
+    </section>
+
+    <!-- Security -->
+    <section id="security" class="px-6 max-w-7xl mx-auto py-28 border-t border-white/5">
+        <div class="text-center mb-16">
+            <div class="inline-block px-4 py-1.5 mb-6 rounded-full border border-[#14F195]/30 bg-[#14F195]/10 text-[#14F195] text-xs font-bold uppercase tracking-widest">
+                Trust-Minimized by Design
+            </div>
+            <h2 class="text-3xl md:text-5xl font-bold mb-4">Security <span class="gradient-text">model</span></h2>
+            <p class="text-gray-500 max-w-2xl mx-auto">The receiver is a genuine LayerZero OApp. Its trust anchor is the Endpoint's on-chain verification — not an off-chain relayer we ask you to trust.</p>
+        </div>
+        <div class="grid md:grid-cols-2 gap-6">
+            <div class="bg-black/30 rounded-2xl p-7 border border-[#14F195]/20">
+                <h3 class="font-bold text-white mb-2 flex items-center gap-2"><span>🛡</span> On-chain DVN proof</h3>
+                <p class="text-gray-400 text-sm leading-relaxed">Every incoming bribe calls the Endpoint's <code class="mono text-gray-300">clear()</code> before any state change. If the configured DVNs didn't verify the exact payload, the instruction reverts. Verification is checked <span class="text-white">on Solana</span>, not assumed.</p>
+            </div>
+            <div class="bg-black/30 rounded-2xl p-7 border border-[#9945FF]/20">
+                <h3 class="font-bold text-white mb-2 flex items-center gap-2"><span>🔁</span> Replay protection</h3>
+                <p class="text-gray-400 text-sm leading-relaxed">The same <code class="mono text-gray-300">clear()</code> burns the message nonce at the Endpoint. A bribe can never be delivered twice, and out-of-order or forged nonces are rejected by the protocol itself.</p>
+            </div>
+            <div class="bg-black/30 rounded-2xl p-7 border border-[#9945FF]/20">
+                <h3 class="font-bold text-white mb-2 flex items-center gap-2"><span>🔗</span> Per-chain peer allowlist</h3>
+                <p class="text-gray-400 text-sm leading-relaxed">Each source chain has a Peer PDA pinning the exact <span class="text-white">SoladromeBribeRouter</span> address allowed to deliver. A message from any other sender on that chain is rejected.</p>
+            </div>
+            <div class="bg-black/30 rounded-2xl p-7 border border-white/10">
+                <h3 class="font-bold text-white mb-2 flex items-center gap-2"><span>🔑</span> Upgrade-authority gated init</h3>
+                <p class="text-gray-400 text-sm leading-relaxed">The receiver can only be initialized by the program's on-chain upgrade authority — verified against the BPF loader account, closing the front-running window common to stock OApp templates.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Addresses -->
+    <section class="bg-white/[0.02] py-24 px-6 border-y border-white/5">
+        <div class="max-w-4xl mx-auto">
+            <div class="text-center mb-12">
+                <h2 class="text-3xl md:text-4xl font-bold mb-4">Verify it <span class="gradient-text">yourself</span></h2>
+                <p class="text-gray-500">Deployed on testnet today. Mainnet targets listed for reference.</p>
+            </div>
+            <div class="bg-black/30 rounded-[2rem] p-6 md:p-8 border border-white/5 overflow-x-auto">
+                <table class="w-full text-sm min-w-[520px]">
+                    <thead>
+                        <tr class="text-gray-500 text-xs uppercase tracking-widest border-b border-white/10">
+                            <th class="text-left py-3 font-semibold">Component</th>
+                            <th class="text-left py-3 font-semibold">Network</th>
+                            <th class="text-left py-3 font-semibold">Address</th>
+                        </tr>
+                    </thead>
+                    <tbody class="text-gray-300">
+                        <tr class="border-b border-white/5">
+                            <td class="py-3">SoladromeBribeRouter</td>
+                            <td class="py-3 text-gray-500">Base Sepolia</td>
+                            <td class="py-3 mono text-xs text-[#14F195]">0x7e16Ebb22e9F5437BB323AcFA72D96cf9d4C2ADB</td>
+                        </tr>
+                        <tr class="border-b border-white/5">
+                            <td class="py-3">BribeReceiver (OApp)</td>
+                            <td class="py-3 text-gray-500">Solana devnet</td>
+                            <td class="py-3 mono text-xs text-[#14F195]">EYvYZ5k14XF8PUQU61LLjArFC3JJ8qXCiCdEqeK6nfQa</td>
+                        </tr>
+                        <tr class="border-b border-white/5">
+                            <td class="py-3">Soladrome program</td>
+                            <td class="py-3 text-gray-500">Solana devnet</td>
+                            <td class="py-3 mono text-xs text-gray-400">4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd</td>
+                        </tr>
+                        <tr class="border-b border-white/5">
+                            <td class="py-3">LZ Endpoint</td>
+                            <td class="py-3 text-gray-500">Solana mainnet</td>
+                            <td class="py-3 mono text-xs text-gray-400">76y77prsiCMvXMjuoZ5VRrhG5qYBrUMYTE5WgHqgjEn6</td>
+                        </tr>
+                        <tr>
+                            <td class="py-3">Destination EID</td>
+                            <td class="py-3 text-gray-500">Solana mainnet</td>
+                            <td class="py-3 mono text-xs text-gray-400">30168</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-center text-gray-600 text-xs mt-6">Full technical walkthrough available to integrating partners on request.</p>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="py-32 px-6 text-center">
+        <div class="max-w-4xl mx-auto bg-gradient-to-b from-white/5 to-transparent p-16 rounded-[3rem] border border-white/5">
+            <h2 class="text-4xl md:text-5xl font-bold mb-6">Bribe from <span class="gradient-text">your chain</span></h2>
+            <p class="text-gray-400 mb-10 text-lg">Running a ve(3,3) protocol or a treasury that wants Soladrome liquidity?<br>Route bribes to hiSOLA voters without leaving your native chain.</p>
+            <div class="flex flex-col sm:flex-row justify-center gap-4">
+                <a href="https://t.me/+SW4sVvoypbRkZTQ0" target="_blank" rel="noreferrer" class="inline-flex items-center justify-center gap-3 bg-gradient-to-r from-[#9945FF] to-[#14F195] px-12 py-5 rounded-2xl font-bold text-xl hover:shadow-[0_0_30px_rgba(20,241,149,0.4)] transition-all duration-300">
+                    Start a conversation
+                </a>
+                <a href="/" class="inline-block border border-white/10 text-gray-300 px-12 py-5 rounded-2xl font-bold text-xl hover:bg-white/5 hover:text-white transition-all duration-300">
+                    Launch App
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="py-20 px-6 border-t border-white/5">
+        <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-10">
+            <div class="flex flex-col items-center md:items-start">
+                <div class="flex items-center space-x-2 mb-4">
+                    <span class="text-xl font-bold uppercase tracking-tighter">Sola<span class="gradient-text">drome</span></span>
+                </div>
+                <p class="text-gray-500 text-sm">The decentralized liquidity hub for Solana.</p>
+                <p class="text-gray-600 text-xs mt-2">Cross-Chain Bribe Bridge · LayerZero V2 · On-chain DVN verification</p>
+            </div>
+            <div class="flex space-x-8 text-gray-400 text-sm">
+                <a href="/about.html" class="hover:text-white transition">About</a>
+                <a href="https://x.com/soladrome" target="_blank" rel="noreferrer" class="hover:text-white transition">Twitter / X</a>
+                <a href="https://discord.com/channels/1506249630218715218/1506249803451994132" target="_blank" rel="noreferrer" class="hover:text-[#5865F2] transition">Discord</a>
+                <a href="https://t.me/+SW4sVvoypbRkZTQ0" target="_blank" rel="noreferrer" class="hover:text-[#29A8E0] transition">Telegram</a>
+                <a href="mailto:info@soladrome.finance" class="hover:text-[#14F195] transition">Contact</a>
+            </div>
+            <div class="text-gray-600 text-xs">
+                © 2025 Soladrome Protocol. All rights reserved.
+            </div>
+        </div>
+    </footer>
+
+    <script>
+    (function () {
+      const EPOCH_DURATION = 604800;
+
+      // Destination protocols (where a bribe lands). Gauges + accepted tokens per §3 of INTEROP_MODEL.
+      const PROTOCOLS = {
+        soladrome: { name: "Soladrome", chain: "Solana", kind: "soladrome",
+          // Soladrome pays bribes to voters in oSOLA (Beradrome oToken model). The inbound
+          // token is converted to oSOLA; wSOLA is outbound-only and never a reward here.
+          gauges: [ { id: "pool-0", name: "Soladrome pool #0", tokens: ["oSOLA"] },
+                    { id: "pool-1", name: "Soladrome pool #1", tokens: ["oSOLA"] } ] },
+        aerodrome: { name: "Aerodrome", chain: "Base", kind: "solidly",
+          gauges: [ { id: "aero-usdc", name: "AERO / USDC", tokens: ["USDC", "AERO", "WETH"] },
+                    { id: "aero-weth", name: "AERO / WETH", tokens: ["USDC", "AERO", "WETH"] } ] },
+        velodrome: { name: "Velodrome", chain: "Optimism", kind: "solidly",
+          gauges: [ { id: "velo-usdc", name: "VELO / USDC", tokens: ["USDC", "VELO", "WETH"] },
+                    { id: "velo-weth", name: "VELO / WETH", tokens: ["USDC", "VELO", "WETH"] } ] },
+        hyperdrome: { name: "Hyperdrome", chain: "HyperEVM", kind: "solidly",
+          gauges: [ { id: "hdrome-usdc", name: "HDROME / USDC", tokens: ["USDC", "HDROME", "WHYPE"] },
+                    { id: "hdrome-hype", name: "HDROME / HYPE", tokens: ["USDC", "HDROME", "WHYPE"] } ] }
+      };
+
+      // Source chains + the tokens you can pay from them. fBOMB is source-only (never a destination).
+      const SOURCES = {
+        "base-sepolia": { name: "Base Sepolia (testnet)", tokens: ["fBOMB", "USDC"] },
+        base:      { name: "Base",     tokens: ["USDC", "AERO", "WETH", "fBOMB"] },
+        optimism:  { name: "Optimism", tokens: ["USDC", "VELO", "WETH", "fBOMB"] },
+        hyperevm:  { name: "HyperEVM", tokens: ["USDC", "HDROME", "HYPE"] },
+        solana:    { name: "Solana",   tokens: ["SOLA", "USDC"] }
+      };
+
+      // The only live route today: EVM (Base Sepolia) -> Soladrome, via the deployed V1 router.
+      const LIVE = {
+        "base-sepolia": {
+          chainIdHex: "0x14a34",
+          router: "0x7e16Ebb22e9F5437BB323AcFA72D96cf9d4C2ADB",
+          explorer: "https://sepolia.basescan.org",
+          addParams: { chainId: "0x14a34", chainName: "Base Sepolia",
+            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+            rpcUrls: ["https://sepolia.base.org"], blockExplorerUrls: ["https://sepolia.basescan.org"] }
+        }
+      };
+
+      const ROUTER_ABI = [
+        "function fBomb() view returns (address)",
+        "function quoteBribe(uint8 poolId, uint64 epoch, uint256 amount, bytes options) view returns (tuple(uint256 nativeFee, uint256 lzTokenFee))",
+        "function depositBribe(uint256 amount, uint8 poolId, uint64 epoch, bytes options) payable returns (tuple(bytes32 guid, uint64 nonce, tuple(uint256 nativeFee, uint256 lzTokenFee) fee))"
+      ];
+      const ERC20_ABI = [
+        "function decimals() view returns (uint8)", "function symbol() view returns (string)",
+        "function allowance(address,address) view returns (uint256)", "function approve(address,uint256) returns (bool)"
+      ];
+
+      const $ = (id) => document.getElementById(id);
+      const dstProto = $("dstProto"), dstGauge = $("dstGauge"), dstToken = $("dstToken"),
+            srcChain = $("srcChain"), srcToken = $("srcToken"), amountIn = $("amountIn"),
+            routePreview = $("routePreview"), sendBtn = $("sendBtn"), statusEl = $("status"),
+            walletInfo = $("walletInfo"), connectBtn = $("connectBtn");
+
+      let provider, signer, account;
+
+      function setStatus(msg, kind) {
+        statusEl.className = "mt-4 rounded-xl p-4 text-sm border " + (
+          kind === "error" ? "bg-red-500/10 border-red-500/30 text-red-300" :
+          kind === "success" ? "bg-[#14F195]/10 border-[#14F195]/30 text-[#14F195]" :
+          "bg-white/5 border-white/10 text-gray-300");
+        statusEl.innerHTML = msg; statusEl.classList.remove("hidden");
+      }
+      const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "";
+      const opt = (v, t, dis) => { const o = document.createElement("option"); o.value = v; o.textContent = t; if (dis) o.disabled = true; return o; };
+      const fill = (sel, items) => { sel.innerHTML = ""; items.forEach(i => sel.appendChild(opt(i.v, i.t, i.dis))); };
+
+      // --- cascade population
+      function initSelects() {
+        fill(dstProto, Object.entries(PROTOCOLS).map(([k, p]) => ({ v: k, t: p.name + " · " + p.chain })));
+        fill(srcChain, Object.entries(SOURCES).map(([k, s]) => ({ v: k, t: s.name })));
+        onProto(); onSrc();
+      }
+      function onProto() {
+        const p = PROTOCOLS[dstProto.value];
+        fill(dstGauge, p.gauges.map(g => ({ v: g.id, t: g.name })));
+        onGauge();
+      }
+      function onGauge() {
+        const p = PROTOCOLS[dstProto.value];
+        const g = p.gauges.find(x => x.id === dstGauge.value) || p.gauges[0];
+        const toks = g.tokens;
+        fill(dstToken, toks.map(t => ({ v: t, t: t })));
+        preview();
+      }
+      function onSrc() {
+        const s = SOURCES[srcChain.value];
+        fill(srcToken, s.tokens.map(t => ({ v: t, t: t })));
+        preview();
+      }
+
+      function routeIsLive() {
+        // Live iff destination = Soladrome and source chain has a deployed V1 router.
+        return dstProto.value === "soladrome" && !!LIVE[srcChain.value];
+      }
+
+      function preview() {
+        const p = PROTOCOLS[dstProto.value];
+        const g = p.gauges.find(x => x.id === dstGauge.value);
+        const dToken = dstToken.value, sChain = SOURCES[srcChain.value].name, sToken = srcToken.value;
+        const sameChain = (p.chain === SOURCES[srcChain.value].name);
+        // Tokens with a native omnichain form (LayerZero OFT) skip the USDC rail.
+        const OMNICHAIN = ["fBOMB", "wSOLA"];
+        let steps = [];
+        steps.push(`<span class="text-[#9945FF]">${sToken}</span> on ${sChain}`);
+        // What actually lands on the destination chain.
+        let delivered = sToken;
+        if (!sameChain) {
+          if (OMNICHAIN.includes(sToken)) {
+            steps.push(`OFT → ${p.chain}`);            // direct, no USDC
+          } else {
+            if (sToken !== "USDC") steps.push("swap → USDC");
+            steps.push("CCTP → " + p.chain);           // USDC fallback rail
+            delivered = "USDC";
+          }
+        }
+        if (p.kind === "solidly") {
+          // Solidly gauge needs a whitelisted token; swap only if what arrived isn't it.
+          if (delivered !== dToken) steps.push(`swap ${delivered} → ${dToken}`);
+          steps.push(`<span class="text-[#14F195]">notifyRewardAmount</span> · ${p.name} ${g ? g.name : ""} gauge`);
+        } else {
+          // Soladrome pays voters in oSOLA (Beradrome oToken model): convert the inbound
+          // token to oSOLA, then deposit. Exercising oSOLA later feeds the floor.
+          if (delivered !== "oSOLA") steps.push(`convert ${delivered} → oSOLA`);
+          steps.push(`<span class="text-[#14F195]">deposit_bribe</span> · ${g ? g.name : p.name} · voters earn oSOLA`);
+        }
+        const live = routeIsLive();
+        routePreview.innerHTML =
+          steps.join(' <span class="text-gray-600">→</span> ') +
+          (live
+            ? `<div class="mt-3 text-xs text-[#14F195]">● Live route (testnet). Note: the deployed V1 router bribes in its configured token; full token choice arrives with the adapters.</div>`
+            : `<div class="mt-3 text-xs text-gray-500">○ Modeled route — not live yet. Lands with the ${p.kind === "solidly" ? "Solidly adapter + CCTP" : "Solana sender + CCTP"} (see interop spec).</div>`);
+        sendBtn.disabled = !live;
+        sendBtn.textContent = live ? "Send bribe" : "Route not live yet";
+      }
+
+      dstProto.addEventListener("change", onProto);   // → onGauge → preview
+      dstGauge.addEventListener("change", onGauge);    // → preview (repopulates token list)
+      dstToken.addEventListener("change", preview);    // token choice must NOT repopulate itself
+      srcChain.addEventListener("change", onSrc);      // → preview
+      srcToken.addEventListener("change", preview);
+
+      // --- wallet
+      async function connect() {
+        if (!window.ethereum) { setStatus("No EVM wallet found. Install <a class='underline' href='https://metamask.io' target='_blank' rel='noreferrer'>MetaMask</a>.", "error"); return false; }
+        provider = new ethers.BrowserProvider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        signer = await provider.getSigner();
+        account = await signer.getAddress();
+        walletInfo.innerHTML = "Connected · <span class='text-white mono'>" + short(account) + "</span>";
+        connectBtn.textContent = "Connected";
+        window.ethereum.on && window.ethereum.on("accountsChanged", () => location.reload());
+        window.ethereum.on && window.ethereum.on("chainChanged", () => location.reload());
+        return true;
+      }
+      connectBtn.addEventListener("click", () => connect().catch(e => setStatus("Connection failed: " + (e.shortMessage || e.message), "error")));
+
+      function buildOptions(gas) { const g = BigInt(gas).toString(16).padStart(32, "0"); return "0x0003" + "01" + "0011" + "01" + g; }
+      const currentEpoch = () => Math.floor(Date.now() / 1000 / EPOCH_DURATION);
+
+      async function ensureNetwork(cfg) {
+        const net = await provider.getNetwork();
+        if ("0x" + net.chainId.toString(16) !== cfg.chainIdHex) {
+          try { await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: cfg.chainIdHex }] }); }
+          catch (e) { if (e.code === 4902) await window.ethereum.request({ method: "wallet_addEthereumChain", params: [cfg.addParams] }); else throw e; }
+          provider = new ethers.BrowserProvider(window.ethereum); signer = await provider.getSigner();
+        }
+      }
+
+      // Live execution: EVM -> Soladrome via the deployed V1 router.
+      sendBtn.addEventListener("click", async () => {
+        if (!routeIsLive()) return;
+        try {
+          if (!signer && !(await connect())) return;
+          const cfg = LIVE[srcChain.value];
+          await ensureNetwork(cfg);
+          const poolId = parseInt((dstGauge.value.split("-")[1]) || "0", 10);
+          const amtStr = (amountIn.value || "").trim();
+          if (!amtStr || Number(amtStr) <= 0) throw new Error("Enter an amount.");
+          const epoch = currentEpoch();
+          const options = buildOptions(200000);
+          const router = new ethers.Contract(cfg.router, ROUTER_ABI, signer);
+          const tokenAddr = await router.fBomb();
+          const token = new ethers.Contract(tokenAddr, ERC20_ABI, signer);
+          const dec = await token.decimals();
+          const amount = ethers.parseUnits(amtStr, dec);
+
+          setStatus("Quoting LayerZero fee…", "info");
+          const fee = await router.quoteBribe(poolId, epoch, amount, options);
+          const nativeFee = fee.nativeFee ?? fee[0];
+
+          const allowance = await token.allowance(account, cfg.router);
+          if (allowance < amount) { setStatus("Approving token…", "info"); await (await token.approve(cfg.router, amount)).wait(); }
+
+          setStatus("Sending bribe to Soladrome pool #" + poolId + "…", "info");
+          const tx = await router.depositBribe(amount, poolId, epoch, options, { value: nativeFee });
+          const rc = await tx.wait();
+          setStatus("Bribe queued ✓ — <a class='underline' target='_blank' rel='noreferrer' href='" + cfg.explorer + "/tx/" + rc.hash + "'>view tx</a>. LayerZero carries it to Soladrome once DVNs verify.", "success");
+        } catch (e) { setStatus("Failed: " + (e.shortMessage || e.reason || e.message), "error"); }
+      });
+
+      initSelects();
+    })();
+    </script>
+
+</body>
+</html>
