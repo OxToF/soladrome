@@ -211,30 +211,36 @@
             <!-- Wallet row -->
             <div class="flex flex-col sm:flex-row items-center justify-between gap-4 mb-6 pb-6 border-b border-white/10">
                 <div id="walletInfo" class="text-sm text-gray-400 text-center sm:text-left">Wallet not connected</div>
-                <button id="connectBtn" class="bg-white text-black px-6 py-2.5 rounded-full font-bold text-sm hover:bg-[#14F195] transition-all duration-300 whitespace-nowrap">Connect Wallet</button>
+                <div class="flex items-center gap-2">
+                    <button id="connectBtn" class="bg-white text-black px-6 py-2.5 rounded-full font-bold text-sm hover:bg-[#14F195] transition-all duration-300 whitespace-nowrap">Connect Wallet</button>
+                    <button id="disconnectBtn" class="hidden border border-white/15 text-gray-300 px-5 py-2.5 rounded-full font-bold text-sm hover:border-red-400/50 hover:text-red-300 transition-all duration-300 whitespace-nowrap">Disconnect</button>
+                </div>
             </div>
 
             <div class="grid md:grid-cols-2 gap-6">
-                <!-- Destination -->
-                <div class="bg-black/30 rounded-2xl p-5 border border-[#14F195]/20">
-                    <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest mb-4">Destination · where the bribe goes</p>
-                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Protocol</label>
-                    <select id="dstProto" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#14F195] focus:outline-none mb-4"></select>
-                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Gauge</label>
-                    <select id="dstGauge" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#14F195] focus:outline-none mb-4"></select>
-                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Bribe token (what voters receive)</label>
-                    <select id="dstToken" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#14F195] focus:outline-none"></select>
-                </div>
-
-                <!-- Source -->
+                <!-- Source (you bribe FROM here) -->
                 <div class="bg-black/30 rounded-2xl p-5 border border-[#9945FF]/20">
-                    <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest mb-4">Source · what you pay with</p>
-                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Source chain</label>
-                    <select id="srcChain" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#9945FF] focus:outline-none mb-4"></select>
+                    <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest mb-4">Source · the protocol you bribe from</p>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Source protocol</label>
+                    <select id="srcProto" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#9945FF] focus:outline-none mb-4"></select>
                     <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Pay token</label>
                     <select id="srcToken" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#9945FF] focus:outline-none mb-4"></select>
-                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Amount</label>
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="block text-xs text-gray-500 uppercase tracking-widest">Amount</label>
+                        <span id="balanceLine" class="text-xs text-gray-500"></span>
+                    </div>
                     <input id="amountIn" type="text" inputmode="decimal" placeholder="1000" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white mono focus:border-[#9945FF] focus:outline-none">
+                </div>
+
+                <!-- Destination (the gauge that receives your token's liquidity) -->
+                <div class="bg-black/30 rounded-2xl p-5 border border-[#14F195]/20">
+                    <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest mb-4">Destination · where your liquidity is incentivized</p>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Protocol</label>
+                    <select id="dstProto" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#14F195] focus:outline-none mb-4"></select>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Gauge <span class="text-gray-600 normal-case tracking-normal">· your token, paired on the destination</span></label>
+                    <select id="dstGauge" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#14F195] focus:outline-none mb-4"></select>
+                    <label class="block text-xs text-gray-500 uppercase tracking-widest mb-2">Reward token (what voters receive)</label>
+                    <select id="dstToken" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#14F195] focus:outline-none"></select>
                 </div>
             </div>
 
@@ -373,44 +379,78 @@
     (function () {
       const EPOCH_DURATION = 604800;
 
-      // Destination protocols (where a bribe lands). Gauges + accepted tokens per §3 of INTEROP_MODEL.
+      // Registry. Every protocol can be a SOURCE (you bribe FROM it, bringing its token's
+      // liquidity cross-chain). Protocols with gauges can also be a DESTINATION. fBOMB is a
+      // token/treasury — source-only, no gauges of its own.
       const PROTOCOLS = {
-        soladrome: { name: "Soladrome", chain: "Solana", kind: "soladrome",
-          // Soladrome pays bribes to voters in oSOLA (Beradrome oToken model). The inbound
-          // token is converted to oSOLA; wSOLA is outbound-only and never a reward here.
-          gauges: [ { id: "pool-0", name: "Soladrome pool #0", tokens: ["oSOLA"] },
-                    { id: "pool-1", name: "Soladrome pool #1", tokens: ["oSOLA"] } ] },
-        aerodrome: { name: "Aerodrome", chain: "Base", kind: "solidly",
-          gauges: [ { id: "aero-usdc", name: "AERO / USDC", tokens: ["USDC", "AERO", "WETH"] },
-                    { id: "aero-weth", name: "AERO / WETH", tokens: ["USDC", "AERO", "WETH"] } ] },
-        velodrome: { name: "Velodrome", chain: "Optimism", kind: "solidly",
-          gauges: [ { id: "velo-usdc", name: "VELO / USDC", tokens: ["USDC", "VELO", "WETH"] },
-                    { id: "velo-weth", name: "VELO / WETH", tokens: ["USDC", "VELO", "WETH"] } ] },
-        hyperdrome: { name: "Hyperdrome", chain: "HyperEVM", kind: "solidly",
-          gauges: [ { id: "hdrome-usdc", name: "HDROME / USDC", tokens: ["USDC", "HDROME", "WHYPE"] },
-                    { id: "hdrome-hype", name: "HDROME / HYPE", tokens: ["USDC", "HDROME", "WHYPE"] } ] }
+        aerodrome:  { name: "Aerodrome",  chain: "Base",     wallet: "evm",    kind: "solidly",   token: "AERO",   canDest: true  },
+        velodrome:  { name: "Velodrome",  chain: "Optimism", wallet: "evm",    kind: "solidly",   token: "VELO",   canDest: true  },
+        hyperdrome: { name: "Hyperdrome", chain: "HyperEVM", wallet: "evm",    kind: "solidly",   token: "HDROME", canDest: true  },
+        fbomb:      { name: "fBOMB",      chain: "Base",     wallet: "evm",    kind: "token",     token: "fBOMB",  canDest: false },
+        soladrome:  { name: "Soladrome",  chain: "Solana",   wallet: "solana", kind: "soladrome", token: "SOLA",   canDest: true  }
       };
 
-      // Source chains + the tokens you can pay from them. fBOMB is source-only (never a destination).
-      const SOURCES = {
-        "base-sepolia": { name: "Base Sepolia (testnet)", tokens: ["fBOMB", "USDC"] },
-        base:      { name: "Base",     tokens: ["USDC", "AERO", "WETH", "fBOMB"] },
-        optimism:  { name: "Optimism", tokens: ["USDC", "VELO", "WETH", "fBOMB"] },
-        hyperevm:  { name: "HyperEVM", tokens: ["USDC", "HDROME", "HYPE"] },
-        solana:    { name: "Solana",   tokens: ["SOLA", "USDC"] }
+      // A gauge is ALWAYS `${sourceToken} / ${quote}` — the SOURCE protocol's token, made
+      // tradeable and incentivized on the DESTINATION chain. Never the destination's own native
+      // pairs: Velodrome doesn't bribe an AERO gauge, it brings VELO liquidity onto Base. The
+      // `quote` set is what the destination lets an incoming token pair against.
+      const SOLADROME_QUOTES = {          // curated launch set — bribing INTO Soladrome (Solana)
+        aerodrome:  ["SOL", "fBOMB", "ETH", "USDC"],
+        velodrome:  ["SOL", "fBOMB", "ETH", "USDC"],
+        fbomb:      ["SOL", "AERO", "VELO", "ETH"],
+        hyperdrome: ["HYPE", "SOL", "USDC"]
       };
+      // Soladrome as a SOURCE: SOLA crosses to EVM as its OFT wrapper wSOLA (never as SOLA, and
+      // never paired with USDC). Curated per destination — the point is to pull Solana liquidity
+      // onto that EVM ve(3,3).
+      const WSOLA_QUOTES = {
+        aerodrome:  ["AERO", "fBOMB", "wSOL", "ETH"],   // Aerodrome runs a Base⇄Solana bridge → wSOL pair
+        velodrome:  ["VELO", "fBOMB", "ETH"],
+        hyperdrome: ["HDROME", "fBOMB", "HYPE"]         // inferred — confirm with founder
+      };
+      const SOLIDLY_QUOTES    = ["USDC", "ETH"];   // Base / Optimism blue-chips (non-Soladrome sources)
+      const HYPERDROME_QUOTES = ["HYPE", "USDC"];  // HyperEVM local blue-chips (non-Soladrome sources)
 
-      // The only live route today: EVM (Base Sepolia) -> Soladrome, via the deployed V1 router.
+      // The token that actually lands on the destination. SOLA crosses to EVM as its OFT wrapper wSOLA.
+      const bridgedToken = (srcId, dstId) =>
+        (srcId === "soladrome" && dstId !== "soladrome") ? "wSOLA" : PROTOCOLS[srcId].token;
+
+      // Gauges available when bribing from `srcId` into `dstId` — always `${bridgedToken} / ${quote}`.
+      function gaugesFor(srcId, dstId) {
+        const tok = bridgedToken(srcId, dstId);
+        let quotes;
+        if (dstId === "soladrome")       quotes = SOLADROME_QUOTES[srcId] || ["SOL", "USDC"];
+        else if (srcId === "soladrome")  quotes = WSOLA_QUOTES[dstId] || ["ETH"];
+        else if (dstId === "hyperdrome") quotes = HYPERDROME_QUOTES;
+        else                             quotes = SOLIDLY_QUOTES;
+        return quotes.filter(q => q !== tok).map((q, i) => ({
+          id: srcId + "-" + dstId + "-" + i,
+          poolId: i,
+          name: tok + " / " + q,
+          quote: q,
+          // Soladrome pays voters in oSOLA; a Solidly gauge whitelists its LP constituents + USDC.
+          tokens: dstId === "soladrome" ? ["oSOLA"] : [...new Set([tok, q, "USDC"])]
+        }));
+      }
+
+      // Destinations you can reach from a source (has gauges + isn't the source itself).
+      const destOptionsFor = (srcId) => Object.keys(PROTOCOLS).filter(k => PROTOCOLS[k].canDest && k !== srcId);
+      // Pay tokens on the source chain: the protocol token + USDC.
+      const payTokensFor = (srcId) => { const t = PROTOCOLS[srcId].token; return t === "USDC" ? ["USDC"] : [t, "USDC"]; };
+
+      // The only live route today: fBOMB on Base Sepolia -> Soladrome, via the deployed V1 router.
       const LIVE = {
-        "base-sepolia": {
+        fbomb: {
           chainIdHex: "0x14a34",
           router: "0x7e16Ebb22e9F5437BB323AcFA72D96cf9d4C2ADB",
           explorer: "https://sepolia.basescan.org",
+          sourceLabel: "Base Sepolia (testnet)",
           addParams: { chainId: "0x14a34", chainName: "Base Sepolia",
             nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
             rpcUrls: ["https://sepolia.base.org"], blockExplorerUrls: ["https://sepolia.basescan.org"] }
         }
       };
+      const SOLANA_RPC = "https://api.mainnet-beta.solana.com";
 
       const ROUTER_ABI = [
         "function fBomb() view returns (address)",
@@ -419,16 +459,21 @@
       ];
       const ERC20_ABI = [
         "function decimals() view returns (uint8)", "function symbol() view returns (string)",
+        "function balanceOf(address) view returns (uint256)",
         "function allowance(address,address) view returns (uint256)", "function approve(address,uint256) returns (bool)"
       ];
 
       const $ = (id) => document.getElementById(id);
-      const dstProto = $("dstProto"), dstGauge = $("dstGauge"), dstToken = $("dstToken"),
-            srcChain = $("srcChain"), srcToken = $("srcToken"), amountIn = $("amountIn"),
+      const srcProto = $("srcProto"), srcToken = $("srcToken"), amountIn = $("amountIn"),
+            dstProto = $("dstProto"), dstGauge = $("dstGauge"), dstToken = $("dstToken"),
             routePreview = $("routePreview"), sendBtn = $("sendBtn"), statusEl = $("status"),
-            walletInfo = $("walletInfo"), connectBtn = $("connectBtn");
+            walletInfo = $("walletInfo"), connectBtn = $("connectBtn"),
+            disconnectBtn = $("disconnectBtn"), balanceLine = $("balanceLine");
 
-      let provider, signer, account;
+      // Wallet state: EVM (MetaMask) and Solana (Phantom) are tracked separately.
+      let provider, signer, account;   // EVM
+      let solanaPubkey = null;         // Solana
+      let walletKind = null;           // "evm" | "solana" | null
 
       function setStatus(msg, kind) {
         statusEl.className = "mt-4 rounded-xl p-4 text-sm border " + (
@@ -441,95 +486,211 @@
       const opt = (v, t, dis) => { const o = document.createElement("option"); o.value = v; o.textContent = t; if (dis) o.disabled = true; return o; };
       const fill = (sel, items) => { sel.innerHTML = ""; items.forEach(i => sel.appendChild(opt(i.v, i.t, i.dis))); };
 
-      // --- cascade population
+      // --- cascade population. Source drives everything: pay tokens, reachable destinations,
+      // and (with the destination) the gauges — which are the source token paired on the dest.
       function initSelects() {
-        fill(dstProto, Object.entries(PROTOCOLS).map(([k, p]) => ({ v: k, t: p.name + " · " + p.chain })));
-        fill(srcChain, Object.entries(SOURCES).map(([k, s]) => ({ v: k, t: s.name })));
-        onProto(); onSrc();
+        fill(srcProto, Object.keys(PROTOCOLS).map(k => ({ v: k, t: PROTOCOLS[k].name + " · " + PROTOCOLS[k].chain })));
+        onSrc();
       }
-      function onProto() {
-        const p = PROTOCOLS[dstProto.value];
-        fill(dstGauge, p.gauges.map(g => ({ v: g.id, t: g.name })));
+      function onSrc() {
+        fill(srcToken, payTokensFor(srcProto.value).map(t => ({ v: t, t: t })));
+        const dests = destOptionsFor(srcProto.value);
+        const keep = dests.includes(dstProto.value) ? dstProto.value : dests[0];
+        fill(dstProto, dests.map(k => ({ v: k, t: PROTOCOLS[k].name + " · " + PROTOCOLS[k].chain })));
+        dstProto.value = keep;
+        onDst();               // → gauges → reward tokens → preview
+        refreshWalletUI();     // this source may need a different wallet than what's connected
+        updateBalance();
+      }
+      function onDst() {
+        const gs = gaugesFor(srcProto.value, dstProto.value);
+        fill(dstGauge, gs.map(g => ({ v: g.id, t: g.name })));
         onGauge();
       }
       function onGauge() {
-        const p = PROTOCOLS[dstProto.value];
-        const g = p.gauges.find(x => x.id === dstGauge.value) || p.gauges[0];
-        const toks = g.tokens;
-        fill(dstToken, toks.map(t => ({ v: t, t: t })));
-        preview();
-      }
-      function onSrc() {
-        const s = SOURCES[srcChain.value];
-        fill(srcToken, s.tokens.map(t => ({ v: t, t: t })));
+        const gs = gaugesFor(srcProto.value, dstProto.value);
+        const g = gs.find(x => x.id === dstGauge.value) || gs[0];
+        fill(dstToken, (g ? g.tokens : []).map(t => ({ v: t, t: t })));
         preview();
       }
 
       function routeIsLive() {
-        // Live iff destination = Soladrome and source chain has a deployed V1 router.
-        return dstProto.value === "soladrome" && !!LIVE[srcChain.value];
+        // Live iff destination = Soladrome and the source protocol has a deployed V1 router.
+        return dstProto.value === "soladrome" && !!LIVE[srcProto.value];
       }
 
       function preview() {
-        const p = PROTOCOLS[dstProto.value];
-        const g = p.gauges.find(x => x.id === dstGauge.value);
-        const dToken = dstToken.value, sChain = SOURCES[srcChain.value].name, sToken = srcToken.value;
-        const sameChain = (p.chain === SOURCES[srcChain.value].name);
+        const src = PROTOCOLS[srcProto.value], dst = PROTOCOLS[dstProto.value];
+        const gs = gaugesFor(srcProto.value, dstProto.value);
+        const g = gs.find(x => x.id === dstGauge.value) || gs[0];
+        const dToken = dstToken.value, sToken = srcToken.value;
+        const sChain = LIVE[srcProto.value] ? LIVE[srcProto.value].sourceLabel : src.chain;
+        const sameChain = (src.chain === dst.chain);
         // Tokens with a native omnichain form (LayerZero OFT) skip the USDC rail.
         const OMNICHAIN = ["fBOMB", "wSOLA"];
         let steps = [];
-        steps.push(`<span class="text-[#9945FF]">${sToken}</span> on ${sChain}`);
+        steps.push(`<span class="text-[#9945FF]">${sToken}</span> on ${src.name} · ${sChain}`);
         // What actually lands on the destination chain.
         let delivered = sToken;
         if (!sameChain) {
-          if (OMNICHAIN.includes(sToken)) {
-            steps.push(`OFT → ${p.chain}`);            // direct, no USDC
+          if (srcProto.value === "soladrome" && sToken !== "USDC") {
+            // SOLA is exercised into its OFT wrapper wSOLA and bridged directly — no USDC round-trip.
+            steps.push("exercise → wSOLA"); steps.push(`OFT → ${dst.chain}`);
+            delivered = "wSOLA";
+          } else if (OMNICHAIN.includes(sToken)) {
+            steps.push(`OFT → ${dst.chain}`);          // direct, no USDC
           } else {
             if (sToken !== "USDC") steps.push("swap → USDC");
-            steps.push("CCTP → " + p.chain);           // USDC fallback rail
+            steps.push("CCTP → " + dst.chain);         // USDC fallback rail
             delivered = "USDC";
           }
         }
-        if (p.kind === "solidly") {
+        if (dst.kind === "solidly") {
           // Solidly gauge needs a whitelisted token; swap only if what arrived isn't it.
           if (delivered !== dToken) steps.push(`swap ${delivered} → ${dToken}`);
-          steps.push(`<span class="text-[#14F195]">notifyRewardAmount</span> · ${p.name} ${g ? g.name : ""} gauge`);
+          steps.push(`<span class="text-[#14F195]">notifyRewardAmount</span> · ${dst.name} ${g ? g.name : ""} gauge`);
         } else {
           // Soladrome pays voters in oSOLA (Beradrome oToken model): convert the inbound
           // token to oSOLA, then deposit. Exercising oSOLA later feeds the floor.
           if (delivered !== "oSOLA") steps.push(`convert ${delivered} → oSOLA`);
-          steps.push(`<span class="text-[#14F195]">deposit_bribe</span> · ${g ? g.name : p.name} · voters earn oSOLA`);
+          steps.push(`<span class="text-[#14F195]">deposit_bribe</span> · ${g ? g.name : dst.name} gauge · voters earn oSOLA`);
         }
         const live = routeIsLive();
         routePreview.innerHTML =
           steps.join(' <span class="text-gray-600">→</span> ') +
           (live
             ? `<div class="mt-3 text-xs text-[#14F195]">● Live route (testnet). Note: the deployed V1 router bribes in its configured token; full token choice arrives with the adapters.</div>`
-            : `<div class="mt-3 text-xs text-gray-500">○ Modeled route — not live yet. Lands with the ${p.kind === "solidly" ? "Solidly adapter + CCTP" : "Solana sender + CCTP"} (see interop spec).</div>`);
+            : `<div class="mt-3 text-xs text-gray-500">○ Modeled route — not live yet. Lands with the ${dst.kind === "solidly" ? "Solidly adapter + CCTP" : "Solana sender + CCTP"} (see interop spec).</div>`);
         sendBtn.disabled = !live;
         sendBtn.textContent = live ? "Send bribe" : "Route not live yet";
       }
 
-      dstProto.addEventListener("change", onProto);   // → onGauge → preview
+      srcProto.addEventListener("change", onSrc);      // → pay tokens + dests + gauges + wallet
+      dstProto.addEventListener("change", onDst);      // → onGauge → preview
       dstGauge.addEventListener("change", onGauge);    // → preview (repopulates token list)
       dstToken.addEventListener("change", preview);    // token choice must NOT repopulate itself
-      srcChain.addEventListener("change", onSrc);      // → preview
-      srcToken.addEventListener("change", preview);
+      srcToken.addEventListener("change", () => { preview(); updateBalance(); });
 
-      // --- wallet
+      // --- wallet (EVM MetaMask + Solana Phantom, routed by the source protocol's chain)
+      const sourceWallet = () => PROTOCOLS[srcProto.value].wallet;          // "evm" | "solana"
+      const isConnected  = () => walletKind === "evm" ? !!account : walletKind === "solana" ? !!solanaPubkey : false;
+      const connectedAddr = () => walletKind === "evm" ? account : (solanaPubkey || "");
+
+      function refreshWalletUI() {
+        const need = sourceWallet();
+        if (isConnected()) {
+          const kindLabel = walletKind === "evm" ? "EVM · MetaMask" : "Solana · Phantom";
+          walletInfo.innerHTML = "Connected · <span class='text-white mono'>" + short(connectedAddr()) +
+            "</span> <span class='text-gray-600'>" + kindLabel + "</span>";
+          disconnectBtn.classList.remove("hidden");
+          if (walletKind !== need) {
+            // connected wallet is for a different chain than the selected source
+            walletInfo.innerHTML += "<div class='text-xs text-yellow-400/80 mt-1'>Source is on " +
+              PROTOCOLS[srcProto.value].chain + " — connect a " +
+              (need === "solana" ? "Solana (Phantom)" : "EVM (MetaMask)") + " wallet for it.</div>";
+            connectBtn.classList.remove("hidden");
+            connectBtn.textContent = need === "solana" ? "Connect Phantom" : "Connect MetaMask";
+          } else {
+            connectBtn.classList.add("hidden");
+          }
+        } else {
+          walletInfo.textContent = "Wallet not connected";
+          connectBtn.classList.remove("hidden");
+          connectBtn.textContent = need === "solana" ? "Connect Phantom" : "Connect Wallet";
+          disconnectBtn.classList.add("hidden");
+        }
+      }
+
+      function resetWalletState() {
+        provider = signer = account = null; solanaPubkey = null; walletKind = null;
+        balanceLine.textContent = "";
+        refreshWalletUI();
+      }
+
       async function connect() {
+        return sourceWallet() === "solana" ? connectSolana() : connectEvm();
+      }
+      async function connectEvm() {
         if (!window.ethereum) { setStatus("No EVM wallet found. Install <a class='underline' href='https://metamask.io' target='_blank' rel='noreferrer'>MetaMask</a>.", "error"); return false; }
         provider = new ethers.BrowserProvider(window.ethereum);
         await provider.send("eth_requestAccounts", []);
         signer = await provider.getSigner();
         account = await signer.getAddress();
-        walletInfo.innerHTML = "Connected · <span class='text-white mono'>" + short(account) + "</span>";
-        connectBtn.textContent = "Connected";
-        window.ethereum.on && window.ethereum.on("accountsChanged", () => location.reload());
-        window.ethereum.on && window.ethereum.on("chainChanged", () => location.reload());
+        walletKind = "evm"; solanaPubkey = null;
+        window.ethereum.on && window.ethereum.on("accountsChanged", resetWalletState);
+        window.ethereum.on && window.ethereum.on("chainChanged", () => { updateBalance(); });
+        refreshWalletUI(); updateBalance();
         return true;
       }
+      async function connectSolana() {
+        const sol = window.solana;
+        if (!sol || !sol.isPhantom) { setStatus("No Solana wallet found. Install <a class='underline' href='https://phantom.app' target='_blank' rel='noreferrer'>Phantom</a>.", "error"); return false; }
+        const res = await sol.connect();
+        solanaPubkey = (res && res.publicKey ? res.publicKey : sol.publicKey).toString();
+        walletKind = "solana"; account = signer = provider = null;
+        sol.on && sol.on("disconnect", resetWalletState);
+        sol.on && sol.on("accountChanged", resetWalletState);
+        refreshWalletUI(); updateBalance();
+        return true;
+      }
+      async function disconnect() {
+        const kind = walletKind;
+        try {
+          if (kind === "evm" && window.ethereum && window.ethereum.request) {
+            try { await window.ethereum.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] }); } catch (e) {}
+          } else if (kind === "solana" && window.solana && window.solana.disconnect) {
+            try { await window.solana.disconnect(); } catch (e) {}
+          }
+        } finally {
+          resetWalletState();
+          setStatus("Wallet disconnected.", "info");
+        }
+      }
       connectBtn.addEventListener("click", () => connect().catch(e => setStatus("Connection failed: " + (e.shortMessage || e.message), "error")));
+      disconnectBtn.addEventListener("click", () => disconnect());
+
+      // --- balance detection for the selected pay token (real where resolvable, honest otherwise)
+      async function solGetBalance(pubkey) {
+        const r = await fetch(SOLANA_RPC, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [pubkey] }) });
+        const j = await r.json();
+        return (j.result && j.result.value ? j.result.value : 0) / 1e9;
+      }
+      function showBalance(valStr, sym) {
+        const n = Number(valStr);
+        const disp = n >= 1 ? n.toLocaleString(undefined, { maximumFractionDigits: 4 }) : n.toPrecision(4);
+        balanceLine.innerHTML = "Balance: <span class='text-gray-300 mono'>" + disp + " " + sym +
+          "</span> <button type='button' id='maxBtn' class='text-[#14F195] ml-1 hover:underline'>Max</button>";
+        const mb = document.getElementById("maxBtn");
+        if (mb) mb.addEventListener("click", () => { amountIn.value = valStr; });
+      }
+      async function updateBalance() {
+        balanceLine.textContent = "";
+        if (!isConnected() || walletKind !== sourceWallet()) return;
+        const tok = srcToken.value;
+        try {
+          if (walletKind === "evm") {
+            if (tok === "ETH") {
+              showBalance(ethers.formatEther(await provider.getBalance(account)), "ETH");
+            } else if (tok === "fBOMB" && LIVE[srcProto.value]) {
+              const router = new ethers.Contract(LIVE[srcProto.value].router, ROUTER_ABI, provider);
+              const erc = new ethers.Contract(await router.fBomb(), ERC20_ABI, provider);
+              const [raw, dec] = await Promise.all([erc.balanceOf(account), erc.decimals()]);
+              showBalance(ethers.formatUnits(raw, dec), "fBOMB");
+            } else {
+              balanceLine.innerHTML = "<span class='text-gray-600'>balance detected on mainnet</span>";
+            }
+          } else if (walletKind === "solana") {
+            if (tok === "SOL" || tok === "SOLA") {
+              showBalance(String(await solGetBalance(solanaPubkey)), "SOL");
+            } else {
+              balanceLine.innerHTML = "<span class='text-gray-600'>balance detected on mainnet</span>";
+            }
+          }
+        } catch (e) {
+          balanceLine.innerHTML = "<span class='text-gray-600'>balance unavailable</span>";
+        }
+      }
 
       function buildOptions(gas) { const g = BigInt(gas).toString(16).padStart(32, "0"); return "0x0003" + "01" + "0011" + "01" + g; }
       const currentEpoch = () => Math.floor(Date.now() / 1000 / EPOCH_DURATION);
@@ -547,10 +708,13 @@
       sendBtn.addEventListener("click", async () => {
         if (!routeIsLive()) return;
         try {
-          if (!signer && !(await connect())) return;
-          const cfg = LIVE[srcChain.value];
+          if (sourceWallet() !== "evm") { setStatus("This route needs an EVM wallet.", "error"); return; }
+          if ((!signer || walletKind !== "evm") && !(await connectEvm())) return;
+          const cfg = LIVE[srcProto.value];
           await ensureNetwork(cfg);
-          const poolId = parseInt((dstGauge.value.split("-")[1]) || "0", 10);
+          const gs = gaugesFor(srcProto.value, dstProto.value);
+          const g = gs.find(x => x.id === dstGauge.value) || gs[0];
+          const poolId = g ? g.poolId : 0;
           const amtStr = (amountIn.value || "").trim();
           if (!amtStr || Number(amtStr) <= 0) throw new Error("Enter an amount.");
           const epoch = currentEpoch();
@@ -568,7 +732,7 @@
           const allowance = await token.allowance(account, cfg.router);
           if (allowance < amount) { setStatus("Approving token…", "info"); await (await token.approve(cfg.router, amount)).wait(); }
 
-          setStatus("Sending bribe to Soladrome pool #" + poolId + "…", "info");
+          setStatus("Sending bribe to Soladrome " + (g ? g.name : "pool #" + poolId) + " gauge…", "info");
           const tx = await router.depositBribe(amount, poolId, epoch, options, { value: nativeFee });
           const rc = await tx.wait();
           setStatus("Bribe queued ✓ — <a class='underline' target='_blank' rel='noreferrer' href='" + cfg.explorer + "/tx/" + rc.hash + "'>view tx</a>. LayerZero carries it to Soladrome once DVNs verify.", "success");
