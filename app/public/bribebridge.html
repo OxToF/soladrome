@@ -255,6 +255,18 @@
                 <div id="status" class="hidden mt-4 rounded-xl p-4 text-sm border"></div>
             </div>
         </div>
+
+        <!-- Solana wallet picker -->
+        <div id="walletModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <div id="walletModalCard" class="bg-[#0f131c] border border-white/10 rounded-2xl w-full max-w-xs p-5 flex flex-col gap-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-white font-bold text-sm">Connect a Solana wallet</h3>
+                    <button id="walletModalClose" class="text-gray-500 hover:text-white text-xl leading-none">&times;</button>
+                </div>
+                <div id="walletList" class="flex flex-col gap-2"></div>
+                <p class="text-[11px] text-gray-600">Don't see yours? Any wallet that injects a standard Solana provider works.</p>
+            </div>
+        </div>
         <p class="text-center text-gray-600 text-xs mt-6">Live route today: EVM&nbsp;→&nbsp;Soladrome on testnet. Solidly destinations (Aerodrome/Velodrome/Hyperdrome) and Solana&nbsp;→&nbsp;EVM are wired in the model and land as the adapters + CCTP orchestration ship (see the interop spec).</p>
     </section>
 
@@ -468,12 +480,31 @@
             dstProto = $("dstProto"), dstGauge = $("dstGauge"), dstToken = $("dstToken"),
             routePreview = $("routePreview"), sendBtn = $("sendBtn"), statusEl = $("status"),
             walletInfo = $("walletInfo"), connectBtn = $("connectBtn"),
-            disconnectBtn = $("disconnectBtn"), balanceLine = $("balanceLine");
+            disconnectBtn = $("disconnectBtn"), balanceLine = $("balanceLine"),
+            walletModal = $("walletModal"), walletModalCard = $("walletModalCard"),
+            walletModalClose = $("walletModalClose"), walletList = $("walletList");
 
-      // Wallet state: EVM (MetaMask) and Solana (Phantom) are tracked separately.
+      // Wallet state: EVM (any injected EVM wallet) and Solana (any standard provider) tracked separately.
       let provider, signer, account;   // EVM
       let solanaPubkey = null;         // Solana
+      let solProvider = null;          // active Solana wallet provider object
+      let solWalletName = null;        // its display name
       let walletKind = null;           // "evm" | "solana" | null
+
+      // Main Solana wallets. `get()` returns the injected provider if present, else null.
+      const SOLANA_WALLETS = [
+        { id: "phantom",  name: "Phantom",  icon: "👻", url: "https://phantom.app/download",
+          get: () => (window.phantom && window.phantom.solana) || ((window.solana && window.solana.isPhantom) ? window.solana : null) },
+        { id: "solflare", name: "Solflare", icon: "🔆", url: "https://solflare.com/download",
+          get: () => (window.solflare && window.solflare.isSolflare) ? window.solflare : ((window.solana && window.solana.isSolflare) ? window.solana : null) },
+        { id: "backpack", name: "Backpack", icon: "🎒", url: "https://backpack.app/download",
+          get: () => (window.backpack && window.backpack.isBackpack) ? window.backpack : null },
+        { id: "glow",     name: "Glow",     icon: "✨", url: "https://glow.app/download",
+          get: () => window.glowSolana || (window.glow && window.glow.solana) || null },
+        { id: "coinbase", name: "Coinbase Wallet", icon: "🔵", url: "https://www.coinbase.com/wallet/downloads",
+          get: () => window.coinbaseSolana || null },
+      ];
+      const solProbe = (w) => { try { return w.get(); } catch (e) { return null; } };
 
       function setStatus(msg, kind) {
         statusEl.className = "mt-4 rounded-xl p-4 text-sm border " + (
@@ -576,10 +607,12 @@
       const isConnected  = () => walletKind === "evm" ? !!account : walletKind === "solana" ? !!solanaPubkey : false;
       const connectedAddr = () => walletKind === "evm" ? account : (solanaPubkey || "");
 
+      const evmName = () => (window.ethereum && window.ethereum.isMetaMask) ? "MetaMask" : "EVM wallet";
+
       function refreshWalletUI() {
         const need = sourceWallet();
         if (isConnected()) {
-          const kindLabel = walletKind === "evm" ? "EVM · MetaMask" : "Solana · Phantom";
+          const kindLabel = walletKind === "evm" ? "EVM · " + evmName() : "Solana · " + (solWalletName || "wallet");
           walletInfo.innerHTML = "Connected · <span class='text-white mono'>" + short(connectedAddr()) +
             "</span> <span class='text-gray-600'>" + kindLabel + "</span>";
           disconnectBtn.classList.remove("hidden");
@@ -587,22 +620,24 @@
             // connected wallet is for a different chain than the selected source
             walletInfo.innerHTML += "<div class='text-xs text-yellow-400/80 mt-1'>Source is on " +
               PROTOCOLS[srcProto.value].chain + " — connect a " +
-              (need === "solana" ? "Solana (Phantom)" : "EVM (MetaMask)") + " wallet for it.</div>";
+              (need === "solana" ? "Solana" : "EVM") + " wallet for it.</div>";
             connectBtn.classList.remove("hidden");
-            connectBtn.textContent = need === "solana" ? "Connect Phantom" : "Connect MetaMask";
+            connectBtn.textContent = "Connect Wallet";
           } else {
             connectBtn.classList.add("hidden");
           }
         } else {
           walletInfo.textContent = "Wallet not connected";
           connectBtn.classList.remove("hidden");
-          connectBtn.textContent = need === "solana" ? "Connect Phantom" : "Connect Wallet";
+          connectBtn.textContent = "Connect Wallet";
           disconnectBtn.classList.add("hidden");
         }
       }
 
       function resetWalletState() {
-        provider = signer = account = null; solanaPubkey = null; walletKind = null;
+        provider = signer = account = null;
+        solanaPubkey = solProvider = solWalletName = null;
+        walletKind = null;
         balanceLine.textContent = "";
         refreshWalletUI();
       }
@@ -611,25 +646,52 @@
         return sourceWallet() === "solana" ? connectSolana() : connectEvm();
       }
       async function connectEvm() {
-        if (!window.ethereum) { setStatus("No EVM wallet found. Install <a class='underline' href='https://metamask.io' target='_blank' rel='noreferrer'>MetaMask</a>.", "error"); return false; }
+        if (!window.ethereum) { setStatus("No EVM wallet found. Install <a class='underline' href='https://metamask.io' target='_blank' rel='noreferrer'>MetaMask</a> or another EVM wallet.", "error"); return false; }
         provider = new ethers.BrowserProvider(window.ethereum);
         await provider.send("eth_requestAccounts", []);
         signer = await provider.getSigner();
         account = await signer.getAddress();
-        walletKind = "evm"; solanaPubkey = null;
+        walletKind = "evm"; solanaPubkey = solProvider = solWalletName = null;
         window.ethereum.on && window.ethereum.on("accountsChanged", resetWalletState);
         window.ethereum.on && window.ethereum.on("chainChanged", () => { updateBalance(); });
         refreshWalletUI(); updateBalance();
         return true;
       }
-      async function connectSolana() {
-        const sol = window.solana;
-        if (!sol || !sol.isPhantom) { setStatus("No Solana wallet found. Install <a class='underline' href='https://phantom.app' target='_blank' rel='noreferrer'>Phantom</a>.", "error"); return false; }
-        const res = await sol.connect();
-        solanaPubkey = (res && res.publicKey ? res.publicKey : sol.publicKey).toString();
-        walletKind = "solana"; account = signer = provider = null;
-        sol.on && sol.on("disconnect", resetWalletState);
-        sol.on && sol.on("accountChanged", resetWalletState);
+
+      // Solana connect = open a picker of the main wallets (no more Phantom-only).
+      function connectSolana() { openWalletModal(); return true; }
+      function openWalletModal() {
+        walletList.innerHTML = "";
+        SOLANA_WALLETS.forEach(w => {
+          const p = solProbe(w);
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-white/10 hover:border-[#14F195]/50 hover:bg-white/5 transition text-left";
+          btn.innerHTML = "<span class='flex items-center gap-2.5 text-white font-medium text-sm'><span class='text-lg'>" + w.icon + "</span>" + w.name + "</span>" +
+            (p ? "<span class='text-[10px] font-bold text-[#14F195] uppercase tracking-widest'>Detected</span>"
+               : "<span class='text-[10px] text-gray-500 uppercase tracking-widest'>Install ↗</span>");
+          btn.addEventListener("click", () => {
+            if (p) { closeWalletModal(); connectSolanaWith(p, w.name).catch(e => setStatus("Connection failed: " + (e.shortMessage || e.message), "error")); }
+            else { window.open(w.url, "_blank", "noreferrer"); }
+          });
+          walletList.appendChild(btn);
+        });
+        walletModal.classList.remove("hidden");
+      }
+      function closeWalletModal() { walletModal.classList.add("hidden"); }
+      walletModalClose.addEventListener("click", closeWalletModal);
+      walletModal.addEventListener("click", closeWalletModal);
+      walletModalCard.addEventListener("click", (e) => e.stopPropagation());
+
+      async function connectSolanaWith(wp, name) {
+        const res = await wp.connect();
+        const pk = (res && res.publicKey) ? res.publicKey : wp.publicKey;
+        if (!pk) throw new Error("wallet returned no public key");
+        solanaPubkey = pk.toString();
+        solProvider = wp; solWalletName = name;
+        walletKind = "solana"; provider = signer = account = null;
+        wp.on && wp.on("disconnect", resetWalletState);
+        wp.on && wp.on("accountChanged", resetWalletState);
         refreshWalletUI(); updateBalance();
         return true;
       }
@@ -638,8 +700,8 @@
         try {
           if (kind === "evm" && window.ethereum && window.ethereum.request) {
             try { await window.ethereum.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] }); } catch (e) {}
-          } else if (kind === "solana" && window.solana && window.solana.disconnect) {
-            try { await window.solana.disconnect(); } catch (e) {}
+          } else if (kind === "solana" && solProvider && solProvider.disconnect) {
+            try { await solProvider.disconnect(); } catch (e) {}
           }
         } finally {
           resetWalletState();
