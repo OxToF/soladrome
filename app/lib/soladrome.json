@@ -2200,102 +2200,65 @@
           ]
         },
         {
-          "name": "founder_hi_sola",
+          "name": "lock_position",
           "docs": [
-            "Founder's hiSOLA ATA — created on first claim if needed."
+            "Lifetime ve lock metadata — created on first claim. Mirrors ClaimPartnerAllocation."
           ],
           "writable": true,
           "pda": {
             "seeds": [
               {
-                "kind": "account",
-                "path": "founder"
-              },
-              {
                 "kind": "const",
                 "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
+                  118,
                   101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
+                  108,
+                  111,
+                  99,
+                  107
                 ]
               },
               {
                 "kind": "account",
-                "path": "hi_sola_mint"
+                "path": "founder"
               }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
+            ]
+          }
+        },
+        {
+          "name": "ve_lock_vault",
+          "docs": [
+            "Vault holding the locked hiSOLA. Minted directly here — the founder's wallet",
+            "balance stays 0, which is what makes borrow_usdc blind to the 7M reserve."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "founder"
+              }
+            ]
           }
         },
         {
           "name": "founder_position",
           "docs": [
-            "Founder's fee-share position — tracks fees_debt for claim_fees."
+            "Founder's fee-share position — fees_debt snapshotted at claim. The reserve never",
+            "unlocks, so this never becomes a fee claim; it exists for symmetry with partners."
           ],
           "writable": true,
           "pda": {
@@ -4376,6 +4339,12 @@
         },
         {
           "name": "protocol_state",
+          "docs": [
+            "`mut` is load-bearing: without it Anchor never serializes the account back, so",
+            "`ecosystem_o_sola_minted` would silently stay 0 and the ECOSYSTEM_TOTAL cap would",
+            "never fire — a cap reading a counter that never increments."
+          ],
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -6026,195 +5995,110 @@
           "writable": true
         },
         {
-          "name": "authority_sola",
-          "docs": [
-            "Authority's SOLA ATA — receives the ecosystem allocation (1 750 000 SOLA)."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "authority"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "sola_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
+          "name": "hi_sola_mint",
+          "writable": true
         },
         {
-          "name": "founder_ops",
+          "name": "sola_vault",
           "docs": [
-            "Separate from FOUNDER_WALLET so this tranche can vote as an ordinary user."
+            "Receives the SOLA backing the team's locked hiSOLA."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read-only — accumulator snapshot before the hiSOLA supply changes."
           ]
         },
         {
-          "name": "founder_ops_sola",
+          "name": "team_wallet",
           "docs": [
-            "Founder ops wallet's SOLA ATA — created here if it doesn't exist yet."
+            "Distinct from FOUNDER_WALLET by design: the vote_gauge guard keys on FOUNDER_WALLET,",
+            "so this tranche votes as an ordinary user."
+          ]
+        },
+        {
+          "name": "team_lock_position",
+          "docs": [
+            "Team ve lock metadata. Mirrors ClaimPartnerAllocation."
           ],
           "writable": true,
           "pda": {
             "seeds": [
               {
-                "kind": "account",
-                "path": "founder_ops"
-              },
-              {
                 "kind": "const",
                 "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
+                  118,
                   101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
+                  108,
+                  111,
+                  99,
+                  107
                 ]
               },
               {
                 "kind": "account",
-                "path": "sola_mint"
+                "path": "team_wallet"
               }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
+            ]
+          }
+        },
+        {
+          "name": "team_ve_lock_vault",
+          "docs": [
+            "Vault holding the team's locked hiSOLA. Minted directly here — the team wallet's",
+            "balance stays 0, which keeps borrow_usdc blind and sell_sola unreachable."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "team_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "team_position",
+          "docs": [
+            "Team fee-share position — fees_debt snapshotted at allocation."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "team_wallet"
+              }
+            ]
           }
         },
         {
@@ -8316,7 +8200,15 @@
     {
       "name": "unlock_hi_sola",
       "docs": [
-        "Return locked hiSOLA after expiry. Restores tokens to the fee pool."
+        "Return locked hiSOLA after expiry. Restores tokens to the fee pool.",
+        "Locked for life — the founder can never unlock.",
+        "",
+        "The 7M are minted straight into a ve lock by `claim_founder_hi_sola` and must",
+        "never return to a wallet. Unlocking would undo all three guarantees at once:",
+        "the hiSOLA re-enters `total_hi_sola` (fee accrual resumes), `borrow_usdc`",
+        "regains sight of it (the 20% cap becomes bypassable), and unstake → sell_sola",
+        "turns the reserve into a floor drain. The guard is on FOUNDER_WALLET only —",
+        "TEAM_WALLET and partners release their non-permanent portions normally."
       ],
       "discriminator": [
         123,
@@ -9543,6 +9435,11 @@
       "code": 6037,
       "name": "FeatureDisabled",
       "msg": "This feature is disabled during the closed launch phase — authority has not enabled it yet"
+    },
+    {
+      "code": 6038,
+      "name": "EcosystemBudgetExceeded",
+      "msg": "Ecosystem oSOLA budget exhausted — cumulative distribute_o_sola would exceed ECOSYSTEM_TOTAL"
     }
   ],
   "types": [
@@ -10263,6 +10160,18 @@
               "they receive hiSOLA via `register_partner` and LP on non-SOLA pools."
             ],
             "type": "bool"
+          },
+          {
+            "name": "ecosystem_o_sola_minted",
+            "docs": [
+              "Cumulative oSOLA minted through `distribute_o_sola`, capped at `ECOSYSTEM_TOTAL`.",
+              "Without this counter the published 1.75M ecosystem budget was decorative:",
+              "`distribute_o_sola` only checked `amount > 0`, so the authority could mint oSOLA",
+              "without limit — unbounded dilution of every holder's upside, and any fixed-supply",
+              "claim false. Appended last and carved from the spare bytes, so existing accounts",
+              "read 0 and no realloc is needed (same trick as the phase flags above)."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -10485,6 +10394,23 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "permanent_amount",
+            "docs": [
+              "Portion of `amount_locked` that can NEVER be unlocked, whatever `lock_end_ts` says.",
+              "`unlock_hi_sola` releases at most `amount_locked - permanent_amount`.",
+              "",
+              "This is what \"we sell permanent voting power\" means mechanically: the partner",
+              "welcome bag (and the team tranche) is unfinanced — no USDC ever entered the floor",
+              "vault for it — so letting it reach a wallet would let it be redeemed 1:1 against",
+              "backing that real buyers funded. Locking it forever leaves exactly one channel open,",
+              "`borrow_against_locked` at 20%, the protocol's drain ceiling for unfinanced supply.",
+              "",
+              "Appended last and carved from the 47 spare bytes → existing positions read 0, i.e.",
+              "fully releasable, which is exactly the pre-2026-07-17 behaviour. No realloc."
+            ],
+            "type": "u64"
           }
         ]
       }

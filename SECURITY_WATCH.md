@@ -1086,3 +1086,71 @@ Non applicable.
 - **soladrome-bridge** : pas de nouveau commit depuis le fix du 2026-06-23 ; pas re-audité en profondeur ce jour (hors scope "Soladrome" strict de ce run, cf. procédure).
 
 **Conclusion du jour : RAS.** Aucune faille nouvellement divulguée n'affecte le code actuel de Soladrome. Seul point actionnable non-urgent : ajouter `cargo audit`/`cargo deny` au CI pour ne plus dépendre uniquement de la veille manuelle sur les advisories RUSTSEC, et se souvenir de sauter directement à `anchor-lang >=1.0.2` si une montée de version majeure a lieu un jour.
+
+---
+
+### 2026-07-16 — Veille automatique (Sonnet 5, session planifiée)
+
+#### Contexte
+
+Premier commit touchant `programs/soladrome/src/` depuis le dernier audit du 2026-07-03 : **`6ff6b62`** (2026-07-11, "ultrareview hardening + realisable Portfolio pricing"). Audité en profondeur ci-dessous. Aucun commit programme depuis (`93a70a7`…`a128f6a` sont quests/faucet/bribebridge/docs, hors `programs/soladrome/src/`).
+
+#### Sources balayées
+
+- WebSearch "Solana exploit hack July 2026" → **BonkDAO $20M governance attack (2026-07-07)**, cf. analyse ci-dessous — [Halborn](https://www.halborn.com/blog/post/explained-the-bonkdao-hack-july-2026), [SolanaFloor](https://solanafloor.com/news/20-m-of-treasury-funds-lost-in-bonk-dao-governance-blunder), [crypto.news](https://crypto.news/the-bonk-governance-attack-how-a-dao-lost-20-million-in-one-proposal/)
+- WebSearch "Anchor framework vulnerability advisory 2026" → rien de nouveau, seul CVE-2026-45137 déjà connu (RUSTSEC-2026-0144, documenté 07-03) — [TheHackerWire](https://www.thehackerwire.com/vulnerability/CVE-2026-45137/)
+- WebSearch "DeFi exploit post-mortem rounding bug bonding curve AMM 2026" → Balancer V2 $116-128M (déjà documenté 07-03) ; [Q1 2026 DeFi Exploit Pattern Analysis](https://dev.to/ohmygod/q1-2026-defi-exploit-pattern-analysis-137m-lost-5-attack-patterns-every-auditor-must-know-2mh) confirme les mêmes 5 classes déjà couvertes (donation attack, share inflation first-depositor, rounding)
+- WebSearch "ve(3,3) gauge bribe governance exploit 2026" → renvoie vers BonkDAO, analysé ci-dessous
+- WebSearch "RustSec anchor-lang anchor-spl advisory July 2026" → aucun nouvel advisory
+- WebSearch "Solana PDA account substitution exploit OtterSec Neodyme Zellic July 2026" → rien de daté/spécifique, uniquement doc générale déjà connue
+- `cargo check -p soladrome --no-default-features` (mainnet features) → ✅ compile propre
+
+---
+
+#### Audit du commit `6ff6b62` — Phase gating (closed-launch) : gates cohérents, aucune brèche trouvée ✓
+
+**Contexte** : ajout de 5 flags booléens sur `ProtocolState` (`lp_enabled`, `bribes_enabled`, `voting_enabled`, `exercise_enabled`, `curve_enabled`) + instruction `set_phase_flags` pour préparer le lancement mainnet en deux temps (fenêtre partenaires-only avec curve fermée, puis ouverture publique). Objectif déclaré du commit : fermer un bypass anti-sybil sur `replay_vote` (castait de vrais votes de gauge sans aucune gate de phase).
+
+Vérification systématique de chaque gate déclarée vs son usage réel (`grep -n "pub fn \|FeatureDisabled" lib.rs`) :
+
+| Flag | Instructions gatées | Vérifié |
+|---|---|---|
+| `lp_enabled` | `create_pool` (amm.rs:112) | ✓ |
+| `bribes_enabled` | `deposit_bribe` (lib.rs:1991), `partner_deposit_bribe` (lib.rs:2046) | ✓ |
+| `voting_enabled` | `vote_gauge` (lib.rs:2116), `replay_vote` (lib.rs:2359 — **le bypass visé par ce commit**), `burn_o_sola_for_votes` (lib.rs:2492) | ✓ |
+| `exercise_enabled` | `exercise_o_sola` (lib.rs:847), `flash_arbitrage` (lib.rs:3030 — burn oSOLA/mint SOLA, même classe que exercise, correctement aligné) | ✓ |
+| `curve_enabled` | `buy_sola` (lib.rs:274) ; `sell_sola` intentionnellement NON gaté (chemin de sortie, floor redemption, doit rester ouvert comme `paused`) | ✓ |
+
+Surfaces adjacentes vérifiées pour absence d'oubli :
+- `rollover_bribe` : non gaté par `bribes_enabled`, mais ne fait que déplacer un solde de bribe déjà déposé vers l'épreuve suivante (aucun nouveau dépôt) — si `bribes_enabled` était resté `false` depuis `initialize`, tout bribe vault serait à `amount == 0` → `NothingToClaim` avant même d'atteindre cette logique. Pas de bypass.
+- `add_liquidity`/`remove_liquidity` : non gatés par `lp_enabled`, mais aucun pool ne peut exister avant que `create_pool` (gaté) n'en crée un — cohérent, `remove_liquidity` reste un chemin de sortie de toute façon.
+- `claim_bribe`, `claim_lp_rewards`, `unstake_hi_sola`, `repay_usdc` : chemins de sortie, non gatés — cohérent avec la politique documentée dans le code (même traitement que `paused`).
+- `set_phase_flags` : contexte `SetPaused`, `has_one = authority` (lib.rs:3275) — accès admin-only confirmé, pas de bypass d'autorité.
+
+**Vérification supplémentaire (non triviale) — compatibilité de taille de compte `ProtocolState`** : `ProtocolState::LEN` passe de 400 → 416 pour ce commit, alors que `ProtocolState` est un PDA singleton dont l'espace n'est JAMAIS réalloué après `initialize()` (`space = ProtocolState::LEN` uniquement à la création, `grep realloc` ne renvoie que `UserPosition`). Une hausse de `LEN` post-déploiement pourrait potentiellement casser une instance déjà initialisée sur devnet si la taille réellement nécessaire dépassait l'ancien espace alloué (400 octets). Calcul manuel du payload sérialisé réel (Borsh ne padde pas, contrairement à `size_of::<T>()` utilisé par le guard de compilation) : 8 pubkeys (256) + champs cœur (80) + 3 bool (3) + 2×u64 borrow (16) + `paused` (1) + émission (20) + `founder_voting_enabled` (1) + continuous (6) + 5×bool phase-gate (5) = **388 octets** + 8 octets discriminateur = **396 octets réels**. C'est ≤ 400 (ancien `LEN`) : un compte `ProtocolState` déjà initialisé sur devnet avant ce commit a donc bien assez de place pour les 5 nouveaux booléens sans réallocation — la hausse à 416 n'est qu'une marge de manœuvre pour de futurs champs, pas un besoin réel aujourd'hui. **Aucune incompatibilité.**
+
+**Conclusion** : le gating est cohérent, complet, correctement authority-gated, et le bypass ciblé (`replay_vote` sans phase gate) est bien corrigé. `cargo check --no-default-features` ✅. IDL vérifié : `set_phase_flags` + les 5 champs présents dans `app/lib/soladrome.json`, cohérent avec le programme.
+
+---
+
+#### BonkDAO $20M governance attack (2026-07-07) → Non applicable à Soladrome ✓
+
+**Technique** : un attaquant a acheté ~$4M de BONK pour dominer le vote sur une proposition Realms (SPL Governance) dissimulant une clause de transfert de 4,43T BONK ($20M) de la trésorerie DAO vers son adresse. Proposition en ligne 6 jours, seulement 7 wallets ont voté, l'attaquant contrôlait ~99,9% du vote exprimé → adoptée et exécutée on-chain automatiquement. Root cause : gouvernance token-weighted à faible participation exécutant une transaction arbitraire, pas un bug de code.
+
+**Vérification code Soladrome** :
+- `grep -rni "realms\|spl-governance\|spl_governance"` sur `programs/` → aucune occurrence. Soladrome n'utilise ni Realms ni aucun moteur de proposition on-chain à exécution automatique.
+- `grep -rn "invoke(\|invoke_signed("` hors `CpiContext` → aucune occurrence : pas de CPI générique piloté par un paramètre utilisateur qui pourrait servir de "charge utile" de proposition.
+- Le vote de gauge (`vote_gauge`/`replay_vote`) ne fait que router du poids de vote vers `GaugeState.total_votes` — cela influence uniquement la répartition des émissions oSOLA/LP et l'éligibilité aux bribes déjà déposés. Aucune instruction de vote ne transfère de fonds depuis `floor_vault`/`market_vault`/`sola_vault` ; tous les mouvements de trésorerie (mint founder/ecosystem, transfer_authority, pause) restent strictement `has_one = authority` (clé unique, pas de vote).
+- Le marché de bribes (dépôt → vote → claim proportionnel) est structurellement le même modèle ve(3,3)/Curve-wars que celui cité par les articles ("bribe markets... treated as legitimate yield") — c'est le design voulu, pas une vulnérabilité ; il ne permet de déplacer que les bribes volontairement déposées par des tiers, jamais la trésorerie du protocole.
+
+**Non applicable** : Soladrome n'a aucun mécanisme où un vote token-weighted autorise l'exécution d'une transaction arbitraire ou un mouvement de trésorerie protocole. Rester vigilant si un futur "treasury council on-chain" ou intégration Realms est un jour envisagé (à re-vérifier explicitement à ce moment-là).
+
+---
+
+#### RAS — autres points ré-vérifiés ce jour
+
+- **Dépendances** : `anchor-lang`/`anchor-spl` toujours 0.32.1 dans `Cargo.lock`. Aucun nouvel advisory RUSTSEC applicable.
+- **soladrome-bridge** : hors scope strict de cette procédure (repo séparé), non re-audité ce jour.
+- Point non-urgent déjà loggé le 07-03 toujours valable : `cargo audit`/`cargo deny` en CI pas encore ajouté.
+
+**Conclusion du jour : RAS.** Le seul changement de surface programme depuis le dernier audit (`6ff6b62`, phase gating) a été vérifié en profondeur et est sain — gating cohérent, authority-gated, compatibilité de taille de compte confirmée par calcul, IDL synchronisé. Aucune faille externe nouvellement divulguée (BonkDAO governance attack, RUSTSEC, rounding bugs) n'affecte Soladrome, pour les raisons détaillées ci-dessus.

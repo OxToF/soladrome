@@ -22,9 +22,16 @@ pub const EPOCH_DURATION: u64 = 7 * 24 * 60 * 60; // 604 800 s
 // ── Founder vesting schedule ──────────────────────────────────────────────────
 
 /// Cliff before any founder tokens unlock.
-/// devnet: 6 h  |  mainnet: 6 months
+/// devnet/localnet: 5 s  |  mainnet: 6 months
+///
+/// 5 s (was 6 h) so a test can actually cross it — the founder escrow in
+/// `claim_founder_hi_sola` is unreachable otherwise, and `start_ts` is stamped from the
+/// Clock at allocation, so there is no way to fake elapsed time. This costs nothing on
+/// devnet: under this same feature `FOUNDER_WALLET` is a throwaway key committed in the
+/// repo, so the devnet cliff no longer protects anything real. The mainnet cliff below
+/// is on the other branch and is untouched.
 #[cfg(feature = "devnet")]
-pub const VESTING_CLIFF_SECS: u64 = 6 * 3_600;
+pub const VESTING_CLIFF_SECS: u64 = 5;
 #[cfg(not(feature = "devnet"))]
 pub const VESTING_CLIFF_SECS: u64 = 180 * 24 * 3_600;
 
@@ -59,7 +66,14 @@ pub const CONTRIBUTOR_DURATION_SECS: u64 = 6 * 3_600;
 pub const CONTRIBUTOR_DURATION_SECS: u64 = 6 * 30 * 24 * 3_600;
 
 // ── Ve-layer constants ────────────────────────────────────────────────────────
-/// Minimum lock duration: 1 epoch.
+/// Minimum lock duration: 1 epoch on mainnet, 5 s on devnet/localnet.
+///
+/// 7 days made the whole ve lock/unlock cycle untestable — which is why the partner path
+/// had zero coverage until 2026-07-17. A 5 s floor costs nothing on devnet: ve voting power
+/// scales with lock duration, so a 5 s lock earns a boost of 5/(208×604800) ≈ 0.
+#[cfg(feature = "devnet")]
+pub const MIN_LOCK_DURATION: u64 = 5;
+#[cfg(not(feature = "devnet"))]
 pub const MIN_LOCK_DURATION: u64 = EPOCH_DURATION;
 /// Maximum lock duration: 208 epochs (4 years) → full 4× ve-power at max lock.
 pub const MAX_LOCK_DURATION: u64 = 208 * EPOCH_DURATION;
@@ -172,6 +186,14 @@ pub struct ProtocolState {
     /// (same policy as `paused`). Partners don't need the curve during stage 1 —
     /// they receive hiSOLA via `register_partner` and LP on non-SOLA pools.
     pub curve_enabled: bool,
+
+    /// Cumulative oSOLA minted through `distribute_o_sola`, capped at `ECOSYSTEM_TOTAL`.
+    /// Without this counter the published 1.75M ecosystem budget was decorative:
+    /// `distribute_o_sola` only checked `amount > 0`, so the authority could mint oSOLA
+    /// without limit — unbounded dilution of every holder's upside, and any fixed-supply
+    /// claim false. Appended last and carved from the spare bytes, so existing accounts
+    /// read 0 and no realloc is needed (same trick as the phase flags above).
+    pub ecosystem_o_sola_minted: u64,
 }
 
 impl ProtocolState {
@@ -301,8 +323,21 @@ pub struct VeLockPosition {
     pub amount_locked: u64, // hiSOLA held in ve_lock_vault
     pub lock_end_ts: i64,   // Unix timestamp when lock expires
     pub bump: u8,
+    /// Portion of `amount_locked` that can NEVER be unlocked, whatever `lock_end_ts` says.
+    /// `unlock_hi_sola` releases at most `amount_locked - permanent_amount`.
+    ///
+    /// This is what "we sell permanent voting power" means mechanically: the partner
+    /// welcome bag (and the team tranche) is unfinanced — no USDC ever entered the floor
+    /// vault for it — so letting it reach a wallet would let it be redeemed 1:1 against
+    /// backing that real buyers funded. Locking it forever leaves exactly one channel open,
+    /// `borrow_against_locked` at 20%, the protocol's drain ceiling for unfinanced supply.
+    ///
+    /// Appended last and carved from the 47 spare bytes → existing positions read 0, i.e.
+    /// fully releasable, which is exactly the pre-2026-07-17 behaviour. No realloc.
+    pub permanent_amount: u64,
 }
 impl VeLockPosition {
+    // 32 + 8 + 8 + 1 + 8 = 57 used of 96 (39 spare).
     pub const LEN: usize = 96;
 }
 

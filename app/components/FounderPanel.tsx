@@ -43,6 +43,22 @@ const founderVestingPda = PublicKey.findProgramAddressSync(
   PROGRAM_ID
 )[0];
 
+// Lifetime ve escrow — claim_founder_hi_sola mints here, never to the wallet.
+// Same seeds as the partner ve lock ([b"velock"] / [b"ve_vault"], keyed by owner).
+function veLockPositionPda(owner: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("velock"), owner.toBuffer()],
+    PROGRAM_ID
+  )[0];
+}
+
+function veLockVaultPda(owner: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("ve_vault"), owner.toBuffer()],
+    PROGRAM_ID
+  )[0];
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtSola(raw: number) {
@@ -262,7 +278,9 @@ export function FounderPanel() {
           hiSolaMint:          hiSolaM,
           solaVault:           solaVaultAddr,
           marketVault:         marketVault,
-          founderHiSola:       userAta(hiSolaM, founder),
+          // Escrow accounts — the wallet never receives the hiSOLA (no ATA involved).
+          lockPosition:        veLockPositionPda(founder),
+          veLockVault:         veLockVaultPda(founder),
           founderPosition:     positionPda(founder),
           founderHiVesting:    founderHiVestingPda,
           tokenProgram:        commonAccounts.tokenProgram,
@@ -271,7 +289,7 @@ export function FounderPanel() {
         } as any)
         .instruction();
       const tx = await sendTx(connection, wallet, [ix]);
-      setStatus(`✅ hiSOLA claimed — tx: ${tx.slice(0, 16)}…`);
+      setStatus(`✅ hiSOLA claimed into the lifetime ve escrow (not your wallet — by design) — tx: ${tx.slice(0, 16)}…`);
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       await fetchData();
     } catch (e: any) {

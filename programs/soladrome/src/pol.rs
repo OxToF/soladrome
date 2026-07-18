@@ -40,7 +40,15 @@ pub fn initialize_pol(
 }
 
 /// Redirect a portion of market_vault USDC into pol_usdc_vault.
-/// Advances the fee accumulator first so stakers' pending fees are preserved.
+///
+/// The POL skim comes OUT of the stakers' share: the accumulator is advanced on
+/// `market_balance - amount`, so stakers are only ever credited fees that remain in the
+/// vault after the skim. Until 2026-07-18 the accumulator was advanced on the FULL
+/// balance and `amount` removed afterwards — crediting stakers 100% of new fees while
+/// the vault held less, an insolvent promise: once cumulative collections exceeded the
+/// unclaimed remainder, `claim_fees` (and `stake_sola`, which auto-claims) reverted with
+/// a raw SPL "insufficient funds". Same defect class as the floor drain: an accounting
+/// promise the vault cannot honour.
 pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
     require!(
         !ctx.accounts.protocol_state.paused,
@@ -51,12 +59,21 @@ pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
     let market_balance = ctx.accounts.market_vault.amount;
     require!(market_balance >= amount, SoladromeError::InvalidAmount);
 
-    // Lock in stakers' share before removing from market_vault.
+    // Credit stakers only on what the skim leaves behind. saturating_sub also covers the
+    // case where `amount` digs into fees already credited in a previous advance: the
+    // accumulator simply doesn't move (it can never move backwards), and the guard below
+    // keeps the vault able to honour every credit already issued.
     let acc = math::advance_accumulator(
         ctx.accounts.protocol_state.fees_per_hi_sola,
-        market_balance,
+        market_balance.saturating_sub(amount),
         ctx.accounts.protocol_state.last_market_vault_balance,
         ctx.accounts.protocol_state.total_hi_sola,
+    );
+    // Solvency guard: never skim fees that stakers were already credited. Everything at
+    // or below last_market_vault_balance is spoken for; only growth above it is available.
+    require!(
+        market_balance.saturating_sub(amount) >= ctx.accounts.protocol_state.last_market_vault_balance,
+        SoladromeError::InvalidAmount
     );
 
     let state_bump = ctx.accounts.protocol_state.bump;
