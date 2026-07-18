@@ -62,9 +62,9 @@ pub fn pending_fees(fees_per_hi_sola: u128, fees_debt: u128, hi_sola_balance: u6
 /// - decay_bps = 10_000 → initial forever (identity, no decay configured)
 pub fn decayed_emission(
     initial: u64,
-    decay_bps: u16,  // e.g. 9_900 = 99 % = −1 % per epoch
-    elapsed: u64,    // epochs since osola_emission_start_epoch
-    floor_bps: u16,  // e.g. 1_000 = 10 % of initial as minimum
+    decay_bps: u16, // e.g. 9_900 = 99 % = −1 % per epoch
+    elapsed: u64,   // epochs since osola_emission_start_epoch
+    floor_bps: u16, // e.g. 1_000 = 10 % of initial as minimum
 ) -> u64 {
     if elapsed == 0 || decay_bps >= 10_000 {
         return initial;

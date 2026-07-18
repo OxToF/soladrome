@@ -34,11 +34,16 @@ jobs:
           sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
+      # Prebuilt binary from the official release: building anchor-cli from source
+      # pulls in `hidapi`, which needs libudev-dev — absent from ubuntu-latest
+      # runner images since mid-2026 — and costs ~15 min of compile time.
       - name: Install Anchor CLI
         run: |
-          cargo install --git https://github.com/coral-xyz/anchor --tag v0.32.1 anchor-cli --locked --force
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: true
+          curl -sSfL -o anchor \
+            https://github.com/coral-xyz/anchor/releases/download/v0.32.1/anchor-0.32.1-x86_64-unknown-linux-gnu
+          chmod +x anchor
+          sudo mv anchor /usr/local/bin/anchor
+          anchor --version
 
       - name: Check formatting
         run: cargo fmt --manifest-path programs/soladrome/Cargo.toml -- --check

@@ -498,17 +498,17 @@ impl UserVoteConfig {
 /// PDA: [b"partner", partner_wallet]
 #[account]
 pub struct PartnerAllocation {
-    pub partner: Pubkey,             // beneficiary wallet (immutable after init)
-    pub bribe_mint: Pubkey,          // committed bribe token — only this mint credits the allocation
-    pub rate_num: u64,               // hiSOLA earned per bribe unit = rate_num / rate_den
-    pub rate_den: u64,               // (1:1 = rate_num == rate_den)
-    pub cap_hi_sola: u64,            // hard cap on bribe-EARNED hiSOLA (= negotiated commitment); excludes base bag
-    pub total_bribed_credited: u64,  // cumulative bribe (bribe_mint base units) deposited via partner_deposit_bribe
-    pub hi_sola_claimed: u64,        // cumulative hiSOLA already minted + locked (base + bribe, monotonic)
-    pub lock_duration_secs: u64,     // lock duration per claim (validated in [MIN, MAX] at register)
-    pub start_ts: i64,               // unix timestamp when register_partner was executed
+    pub partner: Pubkey,            // beneficiary wallet (immutable after init)
+    pub bribe_mint: Pubkey,         // committed bribe token — only this mint credits the allocation
+    pub rate_num: u64,              // hiSOLA earned per bribe unit = rate_num / rate_den
+    pub rate_den: u64,              // (1:1 = rate_num == rate_den)
+    pub cap_hi_sola: u64, // hard cap on bribe-EARNED hiSOLA (= negotiated commitment); excludes base bag
+    pub total_bribed_credited: u64, // cumulative bribe (bribe_mint base units) deposited via partner_deposit_bribe
+    pub hi_sola_claimed: u64, // cumulative hiSOLA already minted + locked (base + bribe, monotonic)
+    pub lock_duration_secs: u64, // lock duration per claim (validated in [MIN, MAX] at register)
+    pub start_ts: i64,        // unix timestamp when register_partner was executed
     pub bump: u8,
-    pub base_hi_sola: u64,           // one-time welcome bag (streams over BASE_BAG_VEST_SECS); appended last for backward-compatible upgrades
+    pub base_hi_sola: u64, // one-time welcome bag (streams over BASE_BAG_VEST_SECS); appended last for backward-compatible upgrades
 }
 impl PartnerAllocation {
     // 32 + 32 + 8*7 + 8 + 1 = 129 bytes used; 31 spare
