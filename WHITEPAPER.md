@@ -28,7 +28,7 @@ Soladrome uses three native tokens, all with 6 decimals, all as SPL tokens on So
 The base protocol token. Minted exclusively via the bonding curve (`buy_sola`) or as collateral backing (`exercise_o_sola`). Every SOLA in existence has exactly 1 USDC of floor backing in the `floor_vault`. Burned irreversibly when redeemed at floor price via `sell_sola`.
 
 ### 2.2 hiSOLA (Staked SOLA)
-Minted 1:1 when SOLA is staked, or allocated via the founder/contributor/partner vesting systems. Represents:
+Minted 1:1 when SOLA is staked, or allocated via the founder/team/contributor/partner systems (ve-locked). Represents:
 - **Governance rights** — voting power in the gauge system
 - **Fee share** — pro-rata claim on `market_vault` fees from bonding curve activity and AMM swaps
 - **Borrow rights** — collateral for borrowing USDC from `floor_vault` (1:1, no interest, no liquidation)
@@ -216,11 +216,11 @@ Protocol partners earn oSOLA via LP emissions on their native pools (JitoSOL/SOL
 
 ### 7.3 Contributor / Service Provider Allocation (`register_contributor`)
 
-For long-term service providers (developers, designers, ongoing contributors) who receive governance tokens as compensation. Each contributor gets a dual allocation:
-- **hiSOLA:** 1-month cliff → 12-month linear vest. Borrow capped at 10% of claimed.
-- **oSOLA:** same schedule. Exercisable at floor price.
+For the people who worked unpaid until launch and keep contributing — first-class members of the project. Each contributor gets a dual allocation, claimed **all at once at launch** (no cliff, no vesting):
+- **hiSOLA:** minted directly into a **lifetime ve-lock** (`permanent_amount` = full tranche — `unlock_hi_sola` can never release it). Never liquid SOLA: the wallet balance stays 0, so it earns no fees and cannot be sold; it votes (up to 4×) and borrows up to 20% via `borrow_against_locked`. Same pattern as the team tranche and the partner welcome bag.
+- **oSOLA:** minted to the wallet, exercisable at the floor price (each exercise pays 1 USDC into the floor — self-financing).
 
-This system is used sparingly — only for individuals with ongoing, meaningful roles in the protocol. Small one-time rewards (KOLs, contest winners) are paid in **oSOLA** via `distribute_o_sola`, drawing on the capped ecosystem budget below.
+Used sparingly — a handful of individuals, small amounts (single-digit thousands each). Amounts are set per wallet at `register_contributor` by the authority. Small one-time rewards (KOLs, contest winners) are paid in **oSOLA** via `distribute_o_sola`, drawing on the capped ecosystem budget below.
 
 ### 7.4 Ecosystem / Airdrop Allocation — issued as oSOLA, never as SOLA
 
@@ -457,7 +457,7 @@ Because step 1 is an oSOLA exercise, `flash_arbitrage` honors the same `exercise
 | Founder oSOLA | 5,000,000 | 6-month cliff, 24-month linear vest | ✅ on exercise |
 | Team hiSOLA | 250,000 | Lifetime ve-lock at launch — votes, borrows 20%, never liquid SOLA | ❌ locked for life |
 | Protocol partners | bags 250K / 175K / 100K by tier + per-deal bribe caps | Welcome bag **locked for life** · bribe-earned streamed vs bribes, 4-year lock | ❌ locked |
-| Contributors | TBD | 1-month cliff, 12-month vest | ❌ locked |
+| Contributors | small, per-wallet | hiSOLA lifetime ve-lock + oSOLA, claimed at launch | ❌ hiSOLA locked for life |
 | Ecosystem / airdrop | 1,750,000 **oSOLA** | `distribute_o_sola`, hard-capped on-chain | ✅ on exercise |
 
 **All SOLA purchased by users is individually floor-backed at 1:1.** Unfinanced allocations never reach a wallet as liquid SOLA: the founder reserve, the team tranche and partner welcome bags are permanently escrowed, and the ecosystem budget only enters circulation through oSOLA exercise (which pays the floor). The single liquidity valve on all of them is `borrow_against_locked`, capped at **20%** — so the protocol's maximum exposure to unfinanced supply is 20% of the sum of those allocations, and the 75% floor buffer bounds it further. The one scheduled exception: partner **bribe-earned** hiSOLA becomes releasable when its 4-year lock expires — a capped, per-deal, published exposure.
@@ -466,7 +466,7 @@ Because step 1 is an oSOLA exercise, `flash_arbitrage` honors the same `exercise
 
 The only new SOLA entering circulation is:
 - User `buy_sola` activity (each unit 100% floor-backed)
-- Vesting claims — founder, contributor, partner (minted to `sola_vault`, locked as hiSOLA)
+- Allocation claims — founder, team, contributor, partner (SOLA minted to `sola_vault`, hiSOLA locked in a ve vault)
 - oSOLA exercises (each unit adds 1 USDC to `floor_vault` — net positive)
 
 There is no protocol-controlled inflation. oSOLA is the primary incentive token; its value is derived from the right to acquire SOLA at floor price.
@@ -476,7 +476,7 @@ There is no protocol-controlled inflation. oSOLA is the primary incentive token;
 Protocol revenue flows to `market_vault`:
 - **Bonding curve premium** — spread between purchase price and floor price
 - **AMM protocol fees** — `protocol_fee_share_bps` of each swap
-- **Borrow origination fees** — 2% of each `borrow_usdc` / `founder_borrow_usdc` / `contributor_borrow_usdc`
+- **Borrow origination fees** — 2% of each `borrow_usdc` / `borrow_against_locked`
 - **Flash arbitrage** — 90% of arb profit
 
 All `market_vault` revenue is distributed pro-rata to hiSOLA stakers via the reward-per-token accumulator.
@@ -588,7 +588,7 @@ Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM58
 
 **Staking & fees:** `stake_sola` · `unstake_hi_sola` · `claim_fees`
 
-**Borrowing:** `borrow_usdc` · `repay_usdc` · `founder_borrow_usdc` · `contributor_borrow_usdc`
+**Borrowing:** `borrow_usdc` · `repay_usdc` · `borrow_against_locked` (the sole path for ve-locked, unfinanced allocations — founder, team, contributor, partner — capped at 20%)
 
 **oSOLA:** `exercise_o_sola` · `distribute_o_sola`
 
@@ -596,7 +596,7 @@ Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM58
 
 **Ecosystem:** `mint_ecosystem_allocation`
 
-**Contributor vesting:** `register_contributor` · `claim_contributor_hi_sola` · `claim_contributor_vesting`
+**Contributor allocation (claimed at launch):** `register_contributor` · `claim_contributor_hi_sola` · `claim_contributor_vesting`
 
 **Protocol partners:** `register_partner` · `partner_deposit_bribe` · `claim_partner_allocation`
 
@@ -688,10 +688,11 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 | Jito (Tier 1) | hiSOLA | 250,000 | None | Bag: locked for life · bribe-earned: 4-year lock | 20% (`borrow_against_locked`) | `claim_partner_allocation` |
 | Marinade (Tier 2) | hiSOLA | 175,000 | None | Bag: locked for life · bribe-earned: 4-year lock | 20% (`borrow_against_locked`) | `claim_partner_allocation` |
 | Solayer (Tier 3) | hiSOLA | 100,000 | None | Bag: locked for life · bribe-earned: 4-year lock | 20% (`borrow_against_locked`) | `claim_partner_allocation` |
-| Contributors (TBD) | hiSOLA + oSOLA | TBD | 1 month | 12 months linear | 20% of claimed | `claim_contributor_hi_sola` |
-| Community airdrop | oSOLA | ~500,000 | None | Immediate (claim) — exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
-| LP incentive reserve | SOLA | ~500,000 | None | Progressive | None | Direct SPL transfer |
-| Marketing reserve | SOLA | ~750,000 | None | Held in reserve | None | Direct SPL transfer |
+| Contributors | hiSOLA + oSOLA | small, per-wallet | None | hiSOLA lifetime ve-lock + oSOLA, claimed at launch | 20% (`borrow_against_locked`) | `claim_contributor_hi_sola` |
+| Community airdrop | oSOLA | 875,000 | None | Claim at TGE — exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
+| Marketing reserve | oSOLA | 437,500 | None | Exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
+| Contests / community | oSOLA | 218,750 | None | Exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
+| Reserve | oSOLA | 218,750 | None | Exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
 
 *All hiSOLA allocations mint SOLA to `sola_vault` as 1:1 backing. None enter `total_purchased_sola` — the floor vault is exclusively funded by user `buy_sola` and oSOLA exercise activity.*
 
