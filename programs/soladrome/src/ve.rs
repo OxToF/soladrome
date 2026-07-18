@@ -130,11 +130,17 @@ pub fn lock_hi_sola(ctx: Context<LockHiSola>, amount: u64, lock_duration_secs: u
 pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
     let clock = Clock::get()?;
 
-    let amount = ctx.accounts.lock_position.amount_locked;
+    // Only the non-permanent portion may ever leave the vault. `permanent_amount` is the
+    // partner welcome bag (see VeLockPosition): unfinanced hiSOLA that must never reach a
+    // wallet, where it could be unstaked and redeemed 1:1 against backing it never funded.
+    // Legacy positions read permanent_amount = 0 and behave exactly as before.
+    let locked = ctx.accounts.lock_position.amount_locked;
+    let permanent = ctx.accounts.lock_position.permanent_amount;
+    let amount = locked.saturating_sub(permanent);
     let lock_bump = ctx.accounts.lock_position.bump;
     let user_key = ctx.accounts.user.key();
 
-    require!(amount > 0, SoladromeError::InvalidAmount);
+    require!(amount > 0, SoladromeError::NothingToClaim);
     require!(
         clock.unix_timestamp >= ctx.accounts.lock_position.lock_end_ts,
         SoladromeError::LockNotExpired
@@ -164,7 +170,9 @@ pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
         amount,
     )?;
 
-    ctx.accounts.lock_position.amount_locked = 0;
+    // NOT zero: the permanent portion stays locked and stays counted, so the position keeps
+    // its voting power forever and a later unlock can never drain it.
+    ctx.accounts.lock_position.amount_locked = permanent;
 
     // ── Checkpoint user fees_debt at unlock time ─────────────────────────────
     // Sets the baseline for future claims so the user earns fees only from this

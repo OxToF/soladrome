@@ -10,6 +10,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
+import * as fs from "fs";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,20 @@ async function getTokenBalance(
 ): Promise<bigint> {
   const info = await getAccount(connection, account);
   return info.amount;
+}
+
+/// Block until the cluster advances a slot.
+///
+/// `repay_usdc` rejects a repay in the same slot as the borrow (flash-borrow guard,
+/// lib.rs:834). Localnet slots are ~400 ms and these tests fire back-to-back, so borrow
+/// and repay land in the same slot and the guard correctly refuses. On devnet, network
+/// latency happened to separate them — meaning this guard passed on devnet by accident of
+/// latency, never because it was exercised. Waiting a slot is what the test always owed it.
+async function waitForNewSlot(connection: anchor.web3.Connection): Promise<void> {
+  const start = await connection.getSlot();
+  while ((await connection.getSlot()) <= start) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 
 // ── suite ────────────────────────────────────────────────────────────────────
@@ -99,6 +114,31 @@ describe("soladrome", () => {
     const state = await program.account.protocolState.fetch(statePda);
     assert.equal(state.usdcMint.toBase58(), usdcMint.toBase58(), "USDC mint matches state");
     console.log("✅ initialize — state PDA:", statePda.toBase58(), "| usdcMint:", usdcMint.toBase58().slice(0, 8) + "…");
+  });
+
+  // ── 1b. Open the closed-launch gates ──────────────────────────────────────
+  // `initialize` writes all five phase flags `false`, so buy_sola / create_pool /
+  // exercise_o_sola / deposit_bribe / the vote paths all revert FeatureDisabled on a
+  // fresh state. Until 2026-07-17 this suite only ever ran against the live devnet
+  // ProtocolState, where the authority flipped these months ago — which is why a clean
+  // localnet run was ~20 red and why a third party cloning the repo saw a red suite.
+  // Mirrors the devnet enable-all form of scripts/set_phase_flags.ts.
+  it("enables the closed-launch phase flags", async () => {
+    await program.methods
+      .setPhaseFlags(true, true, true, true, true)
+      .accounts({
+        authority:     wallet.publicKey,
+        protocolState: statePda,
+      } as any)
+      .rpc();
+
+    const state = await program.account.protocolState.fetch(statePda);
+    assert.isTrue(
+      state.lpEnabled && state.bribesEnabled && state.votingEnabled &&
+      state.exerciseEnabled && state.curveEnabled,
+      "all five closed-launch gates must be open for the rest of the suite"
+    );
+    console.log("✅ phase flags — lp/bribes/voting/exercise/curve all enabled");
   });
 
   // ── 2. Buy SOLA ───────────────────────────────────────────────────────────
@@ -231,6 +271,10 @@ describe("soladrome", () => {
         protocolState: statePda,
         solaMint:      solaM,
         hiSolaMint:    hiSolaM,
+        // usdc_mint is a test-created mint, not a PDA, so Anchor cannot derive the
+        // user_usdc ATA constrained on it — both must be passed explicitly.
+        usdcMint:      usdcMint,
+        userUsdc:      userUsdcAta,
         userSola:      userSolaAta,
         userHiSola:    userHiSolaAta,
         solaVault:     solaVault,
@@ -336,6 +380,10 @@ describe("soladrome", () => {
 
   // ── 6. Repay USDC ────────────────────────────────────────────────────────
   it("repays USDC debt", async () => {
+    // The borrow landed in the previous test; the flash-borrow guard rejects a repay in
+    // the same slot, which localnet's 400 ms slots make the default.
+    await waitForNewSlot(connection);
+
     const [positionPda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("position"), wallet.publicKey.toBuffer()],
       program.programId
@@ -388,7 +436,16 @@ describe("soladrome", () => {
         userHiSola:    userHiSolaAta,
         userSola:      userSolaAta,
         solaVault:     solaVault,
+        marketVault:   marketV,
+        // usdc_mint is test-created, not a PDA — Anchor cannot derive the user_usdc ATA
+        // constrained on it, so both go in explicitly.
+        usdcMint:      usdcMint,
+        userUsdc:      userUsdcAta,
         userPosition:  positionPda,
+        // UncheckedAccount — read only to bound the founder's unstake against vesting.
+        // Passing the PDA is correct for any caller; it need not exist yet.
+        founderHiVesting: anchor.web3.PublicKey.findProgramAddressSync(
+          [Buffer.from("founder_hi_vesting")], program.programId)[0],
         tokenProgram:  TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
@@ -418,6 +475,10 @@ describe("soladrome", () => {
       .accounts({
         user: wallet.publicKey, protocolState: statePda,
         solaMint: solaM, hiSolaMint: hiSolaM,
+        // Same as the main stake test: usdc_mint is not a PDA, so the user_usdc ATA
+        // constrained on it cannot be derived. This re-stake feeds `lock` and
+        // `vote_gauge` downstream — all three fail together without it.
+        usdcMint: usdcMint, userUsdc: userUsdcAta,
         userSola: userSolaAta, userHiSola: userHiSolaAta,
         solaVault: solaVault, marketVault: marketV,
         userPosition: positionPda,
@@ -643,6 +704,74 @@ describe("soladrome", () => {
     );
   });
 
+  // ── 12b. A second staker — precondition for any meaningful vote test ──────
+  // vote_gauge caps hiSOLA power at `min(user_snapshot, 30% of total_hi_sola)`. On a
+  // single-staker chain the wallet IS total_hi_sola, so 30% of it is always BELOW its own
+  // balance and the cap binds unconditionally — voting "beyond your raw balance" becomes
+  // mathematically unreachable, ve boost or not. This passed on devnet only because
+  // hundreds of testers had staked. Runs after claim_fees so pro-rata assertions upstream
+  // are untouched.
+  it("a second staker joins so the 30% global cap stops binding", async () => {
+    const staker2 = anchor.web3.Keypair.generate();
+    await connection.confirmTransaction(
+      await connection.requestAirdrop(staker2.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL),
+      "confirmed"
+    );
+
+    const s2Usdc = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, usdcMint, staker2.publicKey
+    );
+    await mintTo(connection, wallet.payer, usdcMint, s2Usdc.address, wallet.payer, 100_000_000);
+
+    const s2Sola   = anchor.utils.token.associatedAddress({ mint: solaM,   owner: staker2.publicKey });
+    const s2HiSola = anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: staker2.publicKey });
+    const [s2Pos]  = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), staker2.publicKey.toBuffer()], program.programId);
+
+    await program.methods
+      .buySola(new BN(50_000_000), new BN(1))
+      .accounts({
+        user: staker2.publicKey, protocolState: statePda, solaMint: solaM,
+        userUsdc: s2Usdc.address, userSola: s2Sola,
+        floorVault: floorV, marketVault: marketV,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([staker2])
+      .rpc();
+
+    const s2SolaBal = await getTokenBalance(connection, s2Sola);
+    await program.methods
+      .stakeSola(new BN(s2SolaBal.toString()))
+      .accounts({
+        user: staker2.publicKey, protocolState: statePda,
+        solaMint: solaM, hiSolaMint: hiSolaM,
+        usdcMint, userUsdc: s2Usdc.address,
+        userSola: s2Sola, userHiSola: s2HiSola,
+        solaVault, marketVault: marketV, userPosition: s2Pos,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([staker2])
+      .rpc();
+
+    const st = await program.account.protocolState.fetch(statePda);
+    const mainHiSola = await getTokenBalance(
+      connection, anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: wallet.publicKey })
+    );
+    const globalCap = (st.totalHiSola.toNumber() * 3000) / 10_000;
+    assert.isTrue(
+      globalCap > Number(mainHiSola),
+      "30% of total_hi_sola must now exceed the main wallet's balance, or the vote test is unreachable"
+    );
+    console.log(
+      `✅ second staker — total_hi_sola = ${st.totalHiSola.toNumber() / 1e6}, ` +
+      `30% cap = ${globalCap / 1e6} > main balance ${Number(mainHiSola) / 1e6}`
+    );
+  });
+
   // ── 13. Vote with ve power ────────────────────────────────────────────────
   it("vote_gauge uses ve-weighted power beyond raw hiSOLA balance", async () => {
     const userHiSolaAta = anchor.utils.token.associatedAddress({
@@ -677,10 +806,12 @@ describe("soladrome", () => {
       program.programId
     );
 
-    // User has 1 hiSOLA in ATA (1 was locked). Raw cap = 1_000_000.
-    // ve_power ≈ 153_333 (1e6 × 4 × 4weeks / 104weeks).
-    // Total power ≈ 1_153_333 → vote for 1_100_000 (impossible without ve).
-    const voteAmount = new BN(1_100_000);
+    // Vote for one unit MORE than the raw ATA balance: impossible without the ve boost,
+    // which is the whole point of this test, and valid as long as the lock contributes any
+    // power at all. The old hardcoded 1_100_000 assumed an exact 1-hiSOLA balance that the
+    // suite's stake/unstake sequence no longer produces on a clean state.
+    const rawHiSola  = await getTokenBalance(connection, userHiSolaAta);
+    const voteAmount = new BN((rawHiSola + 1n).toString());
 
     await program.methods
       .voteGauge(new BN(epoch), voteAmount)
@@ -818,10 +949,40 @@ describe("soladrome", () => {
     assert.equal(pol.polSplitBps, 1000, "split bps stored");
     assert.equal(pol.targetPool.toBase58(), poolPda.toBase58(), "target pool set");
 
-    // ── collect_to_pol: redirect 0.1 USDC from market_vault ──────────────
+    // ── collect_to_pol: redirect uncredited fees from market_vault ──────────────
+    // Buy first so market_vault holds fresh, uncredited fees — a prior stake/claim may
+    // have advanced the accumulator to the full balance, leaving nothing to skim.
+    const polUserUsdc = anchor.utils.token.associatedAddress({ mint: usdcMint, owner: wallet.publicKey });
+    const polUserSola = anchor.utils.token.associatedAddress({ mint: solaM, owner: wallet.publicKey });
+    await program.methods
+      .buySola(TEN, new BN(1))
+      .accounts({
+        user: wallet.publicKey, protocolState: statePda,
+        solaMint: solaM, userUsdc: polUserUsdc,
+        userSola: polUserSola, floorVault: floorV, marketVault: marketV,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any).rpc();
+
     const marketBefore       = await getTokenBalance(connection, marketV);
     const polVaultBefore     = await getTokenBalance(connection, polUsdcVault);
-    const COLLECT_AMOUNT     = new BN(100_000); // 0.1 USDC
+    // Collect half of whatever fees actually exist, rather than a fixed 0.1 USDC.
+    // market_vault only receives the spread between price paid and floor. At the curve's
+    // real depth (N = 1M) a 10 USDC buy sends ~0.0001 USDC there; the old 100/100 curve
+    // sent ~0.9 USDC because its price rocketed within a few dollars. The hardcoded
+    // amount silently depended on that broken curve.
+    //
+    // Collect the ENTIRE uncredited growth — the worst case. Fixed 2026-07-18: the
+    // accumulator now advances on (balance − amount), so the skim comes out of the
+    // stakers' share instead of promising them fees the vault no longer holds, and a
+    // solvency guard refuses to skim anything already credited (everything at or below
+    // last_market_vault_balance is spoken for). Collecting 50% of the raw balance used
+    // to brick claim_fees/stake_sola with a raw SPL "insufficient funds".
+    const stBefore = await program.account.protocolState.fetch(statePda);
+    const uncredited = marketBefore - BigInt(stBefore.lastMarketVaultBalance.toString());
+    assert.isTrue(uncredited > 0n, "there must be uncredited fee growth to collect");
+    const COLLECT_AMOUNT     = new BN(uncredited.toString());
     // Snapshot existing lifetime accumulator before this collect (may be non-zero on re-run)
     const polBefore          = await program.account.polState.fetch(polStatePda);
     const accumulatedBefore  = polBefore.usdcAccumulated.toNumber();
@@ -901,8 +1062,12 @@ describe("soladrome", () => {
     const solaBefore = await getTokenBalance(connection, polSolaAta);
     const usdcBefore = await getTokenBalance(connection, polUsdcVault);
 
-    // Phase 1 only: spend 50_000 USDC units to buy SOLA; skip LP (sola_for_lp=0)
-    const USDC_FOR_SOLA = new BN(50_000);
+    // Phase 1 only: spend the vault's USDC on SOLA; skip LP (sola_for_lp=0).
+    // Sized off the actual vault balance rather than a fixed 50_000: what lands here is
+    // half the market_vault, which at the curve's real depth is the thin floor-to-price
+    // spread, not the fat one the old 100/100 curve produced.
+    assert.isTrue(usdcBefore > 0n, "pol_usdc_vault must be funded by the collect above");
+    const USDC_FOR_SOLA = new BN(usdcBefore.toString());
     await program.methods
       .deployPol(
         USDC_FOR_SOLA, // usdc_for_sola
@@ -1058,6 +1223,7 @@ describe("soladrome", () => {
     await program.methods.stakeSola(ONE.muln(2)).accounts({
       user: wallet.publicKey, protocolState: statePda,
       solaMint: solaM, hiSolaMint: hiSolaM,
+      usdcMint, userUsdc: userUsdcAta,
       userSola: userSolaAta, userHiSola: userHiSolaAta,
       solaVault, marketVault: marketV, userPosition,
       tokenProgram: TOKEN_PROGRAM_ID,
@@ -1167,6 +1333,7 @@ describe("soladrome", () => {
       await program.methods.stakeSola(ONE.muln(2)).accounts({
         user: wallet.publicKey, protocolState: statePda,
         solaMint: solaM, hiSolaMint: hiSolaM,
+        usdcMint, userUsdc: userUsdcAta,
         userSola: userSolaAta, userHiSola: userHiSolaAta,
         solaVault: solaVault, marketVault: marketV, userPosition,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -1260,7 +1427,12 @@ describe("soladrome", () => {
     );
     assert.equal(posAfterBorrow.usdcBorrowed.toString(), borrowAmount.toString(), "debt recorded");
 
-    // TX 2: repay — different transaction → different slot → guard passes
+    // TX 2: repay in a later slot → guard passes.
+    // A separate transaction does NOT imply a separate slot — that assumption only held
+    // on devnet, where network latency happened to straddle a slot boundary. Localnet
+    // lands both in the same 400 ms slot, so the wait must be explicit.
+    await waitForNewSlot(connection);
+
     await program.methods.repayUsdc(borrowAmount).accounts({
       user: wallet.publicKey, protocolState: statePda,
       userUsdc: userUsdcAta, floorVault: floorV,
@@ -1347,5 +1519,456 @@ describe("soladrome", () => {
       `✅ [invariant] total_purchased_sola: +${solaBought/1e6} on buy, -${Number(ONE.toString())/1e6} on sell` +
       ` | floor ratio: ${(Number(floorAfterSell) / purchasedAfterSell).toFixed(4)}`
     );
+  });
+
+  // ── Founder guards ────────────────────────────────────────────────────────
+  // Only reachable on a `devnet`-feature build, where FOUNDER_WALLET resolves to
+  // tests/keys/founder-devnet.json. On a mainnet build (--no-default-features) it is
+  // a Ledger address no test can sign for — which is why this path had zero coverage.
+  it("[founder] burn_o_sola_for_votes rejects the founder wallet", async () => {
+    const founder = anchor.web3.Keypair.fromSecretKey(
+      Uint8Array.from(JSON.parse(fs.readFileSync("tests/keys/founder-devnet.json", "utf8")))
+    );
+
+    const sig = await connection.requestAirdrop(
+      founder.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL
+    );
+    await connection.confirmTransaction(sig, "confirmed");
+
+    // Give the founder oSOLA so the burn path is actually reachable — otherwise a
+    // missing ATA would fail account validation and mask the guard.
+    const founderOSola = anchor.utils.token.associatedAddress({
+      mint: oSolaM, owner: founder.publicKey,
+    });
+    await program.methods
+      .distributeOSola(ONE.muln(5))
+      .accounts({
+        authority:       wallet.publicKey,
+        recipient:       founder.publicKey,
+        protocolState:   statePda,
+        oSolaMint:       oSolaM,
+        recipientOSola:  founderOSola,
+        tokenProgram:    TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram:   anchor.web3.SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    // The context constrains a hiSOLA ATA; empty is fine.
+    const founderHiSola = await getOrCreateAssociatedTokenAccount(
+      connection, founder, hiSolaM, founder.publicKey
+    );
+
+    const epoch = new BN(Math.floor(Date.now() / 1000 / 604_800));
+    const [uev] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("uev"), founder.publicKey.toBuffer(), epoch.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .burnOSolaForVotes(ONE, epoch)
+        .accounts({
+          user:           founder.publicKey,
+          protocolState:  statePda,
+          oSolaMint:      oSolaM,
+          userOSola:      founderOSola,
+          hiSolaMint:     hiSolaM,
+          userHiSola:     founderHiSola.address,
+          // "Pass any account when not using a ve lock" — per the context doc.
+          lockPosition:   anchor.web3.SystemProgram.programId,
+          userEpochVotes: uev,
+          tokenProgram:   TOKEN_PROGRAM_ID,
+          systemProgram:  anchor.web3.SystemProgram.programId,
+          rent:           anchor.web3.SYSVAR_RENT_PUBKEY,
+        } as any)
+        .signers([founder])
+        .rpc();
+      assert.fail("founder must not be able to convert oSOLA into voting power");
+    } catch (e: any) {
+      // The oSOLA bonus bypasses the per-address vote cap by design, so without this
+      // guard the founder's 5M oSOLA would be an uncapped vote path around the muzzle
+      // on the 7M reserve.
+      assert.include(
+        e.toString(), "FounderVotingDisabled",
+        `expected the founder guard to fire, got: ${e}`
+      );
+      console.log("✅ [founder] burn_o_sola_for_votes — guard fired (FounderVotingDisabled)");
+    }
+  });
+
+  it("[founder] claim_founder_hi_sola escrows into the ve lock, never the wallet", async () => {
+    const founder = anchor.web3.Keypair.fromSecretKey(
+      Uint8Array.from(JSON.parse(fs.readFileSync("tests/keys/founder-devnet.json", "utf8")))
+    );
+
+    const [hiVesting] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("founder_hi_vesting")], program.programId);
+    const [oVesting] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("founder_vesting")], program.programId);
+
+    await program.methods
+      .mintFounderAllocation()
+      .accounts({
+        authority:        wallet.publicKey,
+        protocolState:    statePda,
+        founder:          founder.publicKey,
+        founderHiVesting: hiVesting,
+        founderVesting:   oVesting,
+        systemProgram:    anchor.web3.SystemProgram.programId,
+        rent:             anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    // start_ts is stamped from the Clock here, so the only way past the cliff is to wait it out.
+    await new Promise((r) => setTimeout(r, 6_000));
+
+    const [lockPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("velock"), founder.publicKey.toBuffer()], program.programId);
+    const [veVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("ve_vault"), founder.publicKey.toBuffer()], program.programId);
+    const [founderPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), founder.publicKey.toBuffer()], program.programId);
+
+    const before = await program.account.protocolState.fetch(statePda);
+
+    await program.methods
+      .claimFounderHiSola()
+      .accounts({
+        founder:          founder.publicKey,
+        protocolState:    statePda,
+        solaMint:         solaM,
+        hiSolaMint:       hiSolaM,
+        solaVault:        solaVault,
+        marketVault:      marketV,
+        lockPosition:     lockPos,
+        veLockVault:      veVault,
+        founderPosition:  founderPos,
+        founderHiVesting: hiVesting,
+        tokenProgram:     TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram:    anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([founder])
+      .rpc();
+
+    const after = await program.account.protocolState.fetch(statePda);
+    const escrowed = await getTokenBalance(connection, veVault);
+
+    // The reserve landed in escrow, not in a spendable balance.
+    assert.isTrue(escrowed > 0n, "hiSOLA must be minted into the ve lock vault");
+
+    // The wallet ATA exists (created by the previous test) — it must stay empty, which is
+    // what makes borrow_usdc blind to the 7M and unstake → sell_sola unreachable.
+    const founderHiAta = anchor.utils.token.associatedAddress({
+      mint: hiSolaM, owner: founder.publicKey,
+    });
+    assert.equal(
+      (await getTokenBalance(connection, founderHiAta)).toString(), "0",
+      "founder wallet must never hold hiSOLA"
+    );
+
+    // The whole point: locked hiSOLA stays out of the fee accumulator denominator, so the
+    // 7M reserve cannot capture protocol fees.
+    assert.equal(
+      after.totalHiSola.toString(), before.totalHiSola.toString(),
+      "total_hi_sola must not grow → reserve earns no fees"
+    );
+
+    console.log(
+      `✅ [founder] escrow — ${Number(escrowed) / 1e6} hiSOLA locked, wallet 0, ` +
+      `total_hi_sola unchanged (${after.totalHiSola.toString()})`
+    );
+  });
+
+  it("[founder] unlock_hi_sola rejects the founder — locked for life", async () => {
+    const founder = anchor.web3.Keypair.fromSecretKey(
+      Uint8Array.from(JSON.parse(fs.readFileSync("tests/keys/founder-devnet.json", "utf8")))
+    );
+
+    const [lockPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("velock"), founder.publicKey.toBuffer()], program.programId);
+    const [veVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("ve_vault"), founder.publicKey.toBuffer()], program.programId);
+    const [founderPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), founder.publicKey.toBuffer()], program.programId);
+    const founderHiAta = anchor.utils.token.associatedAddress({
+      mint: hiSolaM, owner: founder.publicKey,
+    });
+
+    try {
+      await program.methods
+        .unlockHiSola()
+        .accounts({
+          user:          founder.publicKey,
+          protocolState: statePda,
+          hiSolaMint:    hiSolaM,
+          userHiSola:    founderHiAta,
+          lockPosition:  lockPos,
+          veLockVault:   veVault,
+          marketVault:   marketV,
+          userPosition:  founderPos,
+          tokenProgram:  TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([founder])
+        .rpc();
+      assert.fail("the founder reserve must never leave escrow");
+    } catch (e: any) {
+      // Unlocking would undo all three guarantees at once: fee accrual resumes,
+      // borrow_usdc regains sight of the 7M, and unstake → sell_sola becomes a floor drain.
+      assert.include(
+        e.toString(), "FounderVestingLocked",
+        `expected the lock-for-life guard to fire, got: ${e}`
+      );
+      console.log("✅ [founder] unlock_hi_sola — guard fired (FounderVestingLocked)");
+    }
+  });
+
+  it("[team] ecosystem allocation locks the 250K into a ve position, never a wallet", async () => {
+    const TEAM_WALLET = new anchor.web3.PublicKey(
+      "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3"
+    );
+    // No signature needed from the team: it is an address-checked UncheckedAccount and the
+    // authority is the caller.
+    const [teamLock] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("velock"), TEAM_WALLET.toBuffer()], program.programId);
+    const [teamVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("ve_vault"), TEAM_WALLET.toBuffer()], program.programId);
+    const [teamPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), TEAM_WALLET.toBuffer()], program.programId);
+
+    const before = await program.account.protocolState.fetch(statePda);
+    const authoritySolaBefore = await getTokenBalance(
+      connection, anchor.utils.token.associatedAddress({ mint: solaM, owner: wallet.publicKey })
+    );
+
+    await program.methods
+      .mintEcosystemAllocation()
+      .accounts({
+        authority:        wallet.publicKey,
+        protocolState:    statePda,
+        solaMint:         solaM,
+        hiSolaMint:       hiSolaM,
+        solaVault,
+        marketVault:      marketV,
+        teamWallet:       TEAM_WALLET,
+        teamLockPosition: teamLock,
+        teamVeLockVault:  teamVault,
+        teamPosition:     teamPos,
+        tokenProgram:     TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram:    anchor.web3.SystemProgram.programId,
+        rent:             anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    const after    = await program.account.protocolState.fetch(statePda);
+    const escrowed = await getTokenBalance(connection, teamVault);
+    const TEAM_AMOUNT = 250_000_000_000n;
+
+    assert.equal(escrowed.toString(), TEAM_AMOUNT.toString(),
+      "the full 250K must land in the team's ve lock vault");
+
+    // The team wallet must hold no hiSOLA: that is what keeps borrow_usdc blind to it (so
+    // the 20% cap can't be sidestepped) and unstake → sell_sola out of reach.
+    const teamHiAta = anchor.utils.token.associatedAddress({
+      mint: hiSolaM, owner: TEAM_WALLET,
+    });
+    const teamWalletBal = await connection.getAccountInfo(teamHiAta);
+    assert.isNull(teamWalletBal, "team wallet must have no hiSOLA ATA at all");
+
+    // Locked hiSOLA stays out of the fee denominator — the team earns nothing during the lock.
+    assert.equal(after.totalHiSola.toString(), before.totalHiSola.toString(),
+      "total_hi_sola must not grow → team tranche earns no fees while locked");
+
+    // Locked for LIFE: the whole tranche is permanent, so even after lock_end_ts passes,
+    // unlock_hi_sola releases amount_locked − permanent_amount = 0. The 4-year deferred
+    // drain (unlock → unstake → sell_sola) is closed; only the 20% borrow channel remains.
+    const lock = await program.account.veLockPosition.fetch(teamLock);
+    assert.equal(lock.permanentAmount.toString(), TEAM_AMOUNT.toString(),
+      "the entire team tranche must be permanent — never releasable");
+    const nowTs = Math.floor(Date.now() / 1000);
+    assert.isTrue(lock.lockEndTs.toNumber() - nowTs > 200 * 604_800,
+      "lock_end_ts is ~4 years out, but permanent_amount overrides it forever");
+
+    // The 1.75M ecosystem budget must NOT be minted as liquid SOLA anymore — that was the
+    // largest floor-drain vector in the protocol. It is issued as oSOLA via
+    // distribute_o_sola instead, where the holder pays 1 USDC into the floor to exercise.
+    const authoritySolaAfter = await getTokenBalance(
+      connection, anchor.utils.token.associatedAddress({ mint: solaM, owner: wallet.publicKey })
+    );
+    assert.equal(
+      authoritySolaAfter.toString(), authoritySolaBefore.toString(),
+      "authority must receive ZERO liquid SOLA — the ecosystem budget is oSOLA now"
+    );
+
+    console.log(
+      `✅ [team] 250K hiSOLA locked until epoch-time ${lock.lockEndTs.toString()}, ` +
+      `wallet has no ATA, total_hi_sola unchanged, 0 unfinanced SOLA minted`
+    );
+  });
+
+  it("[ecosystem] distribute_o_sola is capped at ECOSYSTEM_TOTAL", async () => {
+    const ECOSYSTEM_TOTAL = 1_750_000_000_000n;
+    const st = await program.account.protocolState.fetch(statePda);
+    const alreadyMinted = BigInt(st.ecosystemOSolaMinted.toString());
+
+    // Earlier tests minted a few oSOLA through this same path, so the counter tracks them.
+    assert.isTrue(alreadyMinted > 0n, "the counter must track prior distribute_o_sola calls");
+
+    const recipient = anchor.web3.Keypair.generate().publicKey;
+    const recipientOSola = anchor.utils.token.associatedAddress({
+      mint: oSolaM, owner: recipient,
+    });
+
+    // One unit past the remaining budget must be refused. Until 2026-07-18 the only check
+    // was `amount > 0`: the published 1.75M constrained nothing and the authority could
+    // dilute every holder's upside without limit.
+    const overBudget = new BN((ECOSYSTEM_TOTAL - alreadyMinted + 1n).toString());
+    try {
+      await program.methods
+        .distributeOSola(overBudget)
+        .accounts({
+          authority:      wallet.publicKey,
+          recipient,
+          protocolState:  statePda,
+          oSolaMint:      oSolaM,
+          recipientOSola,
+          tokenProgram:   TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram:  anchor.web3.SystemProgram.programId,
+        } as any)
+        .rpc();
+      assert.fail("minting past ECOSYSTEM_TOTAL must be refused");
+    } catch (e: any) {
+      assert.include(e.toString(), "EcosystemBudgetExceeded",
+        `expected the budget cap to fire, got: ${e}`);
+    }
+
+    console.log(
+      `✅ [ecosystem] cap holds — ${Number(alreadyMinted) / 1e6} oSOLA minted of ` +
+      `${Number(ECOSYSTEM_TOTAL) / 1e6} budget; overspend refused`
+    );
+  });
+
+  it("[partner] the welcome bag can never be unlocked — permanent voting power", async () => {
+    const partner = anchor.web3.Keypair.generate();
+    await connection.confirmTransaction(
+      await connection.requestAirdrop(partner.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL),
+      "confirmed"
+    );
+
+    const [alloc] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("partner"), partner.publicKey.toBuffer()], program.programId);
+    const [lockPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("velock"), partner.publicKey.toBuffer()], program.programId);
+    const [veVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("ve_vault"), partner.publicKey.toBuffer()], program.programId);
+    const [partnerPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), partner.publicKey.toBuffer()], program.programId);
+
+    // Welcome bag only in practice: cap_hi_sola must be > 0 (register_partner refuses a
+    // deal without a bribe commitment), but this partner never deposits a single bribe, so
+    // bribe_earned stays 0 and everything claimed is the unfinanced bag.
+    // lock_duration = MIN_LOCK_DURATION (5 s on devnet).
+    await program.methods
+      .registerPartner(usdcMint, new BN(1), new BN(1), ONE, ONE, new BN(5))
+      .accounts({
+        authority:         wallet.publicKey,
+        protocolState:     statePda,
+        partnerWallet:     partner.publicKey,
+        partnerAllocation: alloc,
+        systemProgram:     anchor.web3.SystemProgram.programId,
+        rent:              anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    // Let a slice of the bag vest (BASE_BAG_VEST_SECS = 6 h on devnet → linear).
+    await new Promise((r) => setTimeout(r, 6_000));
+
+    await program.methods
+      .claimPartnerAllocation()
+      .accounts({
+        partner:           partner.publicKey,
+        protocolState:     statePda,
+        solaMint:          solaM,
+        hiSolaMint:        hiSolaM,
+        solaVault,
+        marketVault:       marketV,
+        partnerAllocation: alloc,
+        lockPosition:      lockPos,
+        veLockVault:       veVault,
+        partnerPosition:   partnerPos,
+        tokenProgram:      TOKEN_PROGRAM_ID,
+        systemProgram:     anchor.web3.SystemProgram.programId,
+        rent:              anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .signers([partner])
+      .rpc();
+
+    const lock = await program.account.veLockPosition.fetch(lockPos);
+    assert.isTrue(lock.amountLocked.toNumber() > 0, "some of the bag must have vested");
+    assert.equal(
+      lock.permanentAmount.toString(), lock.amountLocked.toString(),
+      "the whole bag must be marked permanent — it is unfinanced, no USDC ever backed it"
+    );
+
+    // Wait out the 5 s lock so the ONLY thing standing between the bag and a wallet is
+    // permanent_amount, not the timer.
+    await new Promise((r) => setTimeout(r, 6_000));
+
+    const partnerHiAta = anchor.utils.token.associatedAddress({
+      mint: hiSolaM, owner: partner.publicKey,
+    });
+    try {
+      await program.methods
+        .unlockHiSola()
+        .accounts({
+          user:          partner.publicKey,
+          protocolState: statePda,
+          hiSolaMint:    hiSolaM,
+          userHiSola:    partnerHiAta,
+          lockPosition:  lockPos,
+          veLockVault:   veVault,
+          marketVault:   marketV,
+          userPosition:  partnerPos,
+          tokenProgram:  TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([partner])
+        .rpc();
+      assert.fail("the welcome bag must never leave the ve lock, expired or not");
+    } catch (e: any) {
+      // releasable = amount_locked − permanent_amount = 0 → NothingToClaim.
+      assert.include(e.toString(), "NothingToClaim",
+        `expected the permanent bag to block unlock, got: ${e}`);
+    }
+
+    // Still locked, still voting, and still borrowable at 20% via borrow_against_locked.
+    const after = await program.account.veLockPosition.fetch(lockPos);
+    assert.equal(after.amountLocked.toString(), lock.amountLocked.toString(),
+      "the bag must remain in the vault after the failed unlock");
+
+    console.log(
+      `✅ [partner] bag of ${after.amountLocked.toNumber() / 1e6} hiSOLA is permanent — ` +
+      `lock expired, unlock refused, voting power retained`
+    );
+  });
+
+  it("[curve] k is mainnet-scale, not the Beradrome doc example", async () => {
+    const st = await program.account.protocolState.fetch(statePda);
+
+    // N = INIT_VIRTUAL_* = 1M tokens at 6 dec = 1e12 base units; k = N² = 1e24.
+    // The old value was 100/100 (k = 1e16) — Beradrome's illustrative doc example,
+    // under which $10k of buys priced SOLA at $10,201 against a $1 floor.
+    const N = new BN(1_000_000).mul(ONE);
+    assert.equal(st.k.toString(), N.mul(N).toString(), "k must be 1e24");
+
+    // k is set once at initialize and never recomputed, so this assertion holds for the
+    // life of the protocol — unlike the virtual reserves, which drift with every buy.
+    console.log(`✅ [curve] k = ${st.k.toString()} | ×2 needs ~414k USDC of buys`);
   });
 });

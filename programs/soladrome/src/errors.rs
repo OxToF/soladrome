@@ -99,4 +99,10 @@ pub enum SoladromeError {
     // ── Phase gating (private mainnet launch) ─────────────────────────────────
     #[msg("This feature is disabled during the closed launch phase — authority has not enabled it yet")]
     FeatureDisabled,
+    // ── Ecosystem budget ──────────────────────────────────────────────────────
+    // ⚠️ Anchor error codes are positional: append new variants HERE, at the end.
+    // Inserting above renumbers every following code and silently breaks the tests,
+    // the runbook and the frontend, which reference raw numbers (6023, 6037, …).
+    #[msg("Ecosystem oSOLA budget exhausted — cumulative distribute_o_sola would exceed ECOSYSTEM_TOTAL")]
+    EcosystemBudgetExceeded,
 }

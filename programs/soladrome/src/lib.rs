@@ -60,8 +60,12 @@ pub const FLOOR_VAULT_SEED: &[u8] = b"floor_vault";
 pub const MARKET_VAULT_SEED: &[u8] = b"market_vault";
 pub const SOLA_VAULT_SEED: &[u8] = b"sola_vault";
 
-pub const INIT_VIRTUAL_USDC: u64 = 100_000_000; // 100 USDC (6 dec)
-pub const INIT_VIRTUAL_SOLA: u64 = 100_000_000; // 100 SOLA (6 dec)  – floor = 1:1
+// Market-curve depth. Must stay equal so the start price = floor = 1 USDC/SOLA.
+// N = 1M sizes price discovery, NOT supply: exercise_o_sola mints outside the curve.
+// price = (1 + U/N)² and SOLA emitted = N × (1 − 1/√price), U = cumulative USDC bought.
+// At N = 1M: ×2 needs 414k USDC, ×10 needs 2.16M. k = 1e24, set once at `initialize`.
+pub const INIT_VIRTUAL_USDC: u64 = 1_000_000_000_000; // 1 000 000 USDC (6 dec)
+pub const INIT_VIRTUAL_SOLA: u64 = 1_000_000_000_000; // 1 000 000 SOLA (6 dec)  – floor = 1:1
 
 /// Total oSOLA minted per epoch, split proportionally across voted pools (legacy gauge system).
 pub const LP_EMISSION_PER_EPOCH: u64 = 10_000 * 1_000_000; // 10 000 oSOLA (6 dec)
@@ -94,9 +98,11 @@ pub const FOUNDER_STAKE: u64 = 7_000_000_000_000; //  7 000 000 SOLA → hiSOLA 
 /// 5 000 000 oSOLA — held in vesting vault, released linearly after cliff.
 pub const FOUNDER_LIQUID: u64 = 5_000_000_000_000; //  5 000 000 oSOLA vesting tranche
 pub const ECOSYSTEM_TOTAL: u64 = 1_750_000_000_000; //  1 750 000 SOLA — marketing + airdrop
-/// Liquid SOLA sent directly to the founder wallet at ecosystem allocation time.
-/// Separate from the 7M hiSOLA vesting — provides immediate income while vesting cliff runs.
-pub const FOUNDER_IMMEDIATE_SOLA: u64 = 250_000_000_000; //    250 000 SOLA — liquid, no lock
+/// Team tranche, delivered at ecosystem-allocation time as hiSOLA locked FOR LIFE into a ve
+/// position (`permanent_amount` = full tranche — never liquid SOLA, see
+/// mint_ecosystem_allocation). Pays the people who worked unpaid until launch. Votes as an
+/// ordinary user; borrows 20% via borrow_against_locked.
+pub const FOUNDER_IMMEDIATE_SOLA: u64 = 250_000_000_000; //    250 000 → hiSOLA, lifetime ve lock
 /// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
 pub const BORROW_FEE_BPS: u64 = 200; //  2 % of borrowed amount
 /// Founder borrow cap: max 20 % of total *claimed* hiSOLA ever borrowed.
@@ -105,15 +111,38 @@ pub const FOUNDER_BORROW_CAP_BPS: u64 = 2_000; // 20 %
 
 pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
-// ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
-// Ledger Nano S — dedicated Soladrome wallet, never used on any other chain.
-// Holds the 7M hiSOLA governance vesting + 5M oSOLA. NON-VOTING (anti-capture reserve).
+// ☢️ THE MOST DANGEROUS CONSTANT IN THIS PROGRAM ☢️
+//
+// `devnet` is a DEFAULT feature (see Cargo.toml), so a plain `anchor build` selects the
+// TEST wallet below — whose private key is COMMITTED at tests/keys/founder-devnet.json.
+// Shipping that build to mainnet hands the entire 12.25M founder allocation to a keypair
+// anyone can read out of this repo. The mainnet build is NOT the default:
+//
+//     anchor build --no-default-features      ← mainnet, real Ledger 46Aqf…
+//     anchor build                            ← devnet/localnet, throwaway test key
+//
+// Before ANY mainnet deploy, verify the built artifact resolves to 46Aqf… (runbook §2b):
+//   strings target/deploy/soladrome.so | grep -q DJZFZ && STOP
+// The cliff (`VESTING_CLIFF_SECS`) rides the same feature, so a wrong build gives away the
+// wallet AND the timelock at once.
+
+/// Devnet/localnet only — throwaway key committed at tests/keys/founder-devnet.json.
+/// Exists so the founder path (escrow, guards, vesting) is testable at all: the mainnet
+/// wallet is a Ledger and no test can sign for it.
+#[cfg(feature = "devnet")]
+pub const FOUNDER_WALLET: &str = "DJZFZSBGCuo3X79hEVqPjzdkKF5aVDVNCaFyW8g5QS6i";
+
+/// ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
+/// Ledger Nano S — dedicated Soladrome wallet, never used on any other chain.
+/// Holds the 7M hiSOLA governance vesting + 5M oSOLA. NON-VOTING (anti-capture reserve).
+#[cfg(not(feature = "devnet"))]
 pub const FOUNDER_WALLET: &str = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
-// Founder operational wallet — receives the 250k liquid SOLA tranche.
-// Distinct from FOUNDER_WALLET so it can stake and vote as an ordinary user
-// (the founder-voting guard blocks only FOUNDER_WALLET, not this ops wallet).
-pub const FOUNDER_OPS_WALLET: &str = "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3";
+// Team wallet — receives the 250k tranche as hiSOLA locked FOR LIFE (not liquid SOLA).
+// Distinct from FOUNDER_WALLET so it can vote as an ordinary user: the founder-voting
+// guard blocks only FOUNDER_WALLET, never this one. That asymmetry is deliberate — the 7M
+// is a dormant anti-capture reserve, this is contributor compensation.
+pub const TEAM_WALLET: &str = "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3";
 
 // ── Contributor / marketing allocation ────────────────────────────────────────
 pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
@@ -997,29 +1026,43 @@ pub mod soladrome {
         let bump = ctx.accounts.protocol_state.bump;
         let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
 
-        // 1 750 000 SOLA → authority ATA (marketing + airdrop budget).
-        token::mint_to(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                MintTo {
-                    mint: ctx.accounts.sola_mint.to_account_info(),
-                    to: ctx.accounts.authority_sola.to_account_info(),
-                    authority: ctx.accounts.protocol_state.to_account_info(),
-                },
-                &[seeds],
-            ),
-            ECOSYSTEM_TOTAL,
-        )?;
+        // ── The 1.75M ecosystem budget is NOT minted here (changed 2026-07-17) ──
+        // It used to be minted as liquid SOLA into the authority's ATA, which made it the
+        // single largest floor-drain vector: 1.75M of supply never added to
+        // `total_purchased_sola`, yet redeemable 1:1 against a floor funded by real buyers.
+        // The budget is now issued as **oSOLA** via `distribute_o_sola`, capped by
+        // ECOSYSTEM_TOTAL. Recipients pay 1 USDC into the floor to exercise, so every SOLA
+        // that reaches circulation through this path is financed. Same as Beradrome (oBERO).
 
-        // 250 000 SOLA → founder OPS wallet (separate from FOUNDER_WALLET), liquid, no vesting.
-        // Provides immediate income while the 7M hiSOLA vesting cliff runs (6 months),
-        // and can be staked + voted as an ordinary user (FOUNDER_WALLET itself is non-voting).
+        // ── 250 000 → TEAM_WALLET, as hiSOLA locked FOR LIFE (never liquid SOLA) ──
+        // Pays the people who worked unpaid until launch. Delivered via the
+        // claim_partner_allocation pattern: wallet balance stays 0 → borrow_usdc blind
+        // (20% cap not sidesteppable), excluded from total_hi_sola → earns no fees,
+        // never liquid SOLA → sell_sola unreachable → cannot drain the floor. permanent_amount
+        // covers the whole tranche, so unlock_hi_sola can never release it. Unlike the 7M it
+        // DOES vote (up to 4×): the vote guard keys on FOUNDER_WALLET, and this is a distinct
+        // wallet. Liquidity: borrow_against_locked (20%, any ve-locker).
+        let now_ts = Clock::get()?.unix_timestamp;
+        let team_lock_end_ts = (now_ts as u64)
+            .checked_add(MAX_LOCK_DURATION)
+            .ok_or(SoladromeError::Overflow)? as i64;
+
+        // Snapshot the accumulator before any hiSOLA supply change (stake_sola invariant).
+        let market_balance = ctx.accounts.market_vault.amount;
+        let acc = math::advance_accumulator(
+            ctx.accounts.protocol_state.fees_per_hi_sola,
+            market_balance,
+            ctx.accounts.protocol_state.last_market_vault_balance,
+            ctx.accounts.protocol_state.total_hi_sola,
+        );
+
+        // SOLA backing for the hiSOLA, locked in sola_vault.
         token::mint_to(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
                     mint: ctx.accounts.sola_mint.to_account_info(),
-                    to: ctx.accounts.founder_ops_sola.to_account_info(),
+                    to: ctx.accounts.sola_vault.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
@@ -1027,11 +1070,52 @@ pub mod soladrome {
             FOUNDER_IMMEDIATE_SOLA,
         )?;
 
+        // hiSOLA minted straight into the ve lock vault — bypasses the wallet entirely.
+        token::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint: ctx.accounts.hi_sola_mint.to_account_info(),
+                    to: ctx.accounts.team_ve_lock_vault.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            FOUNDER_IMMEDIATE_SOLA,
+        )?;
+
+        {
+            let lock = &mut ctx.accounts.team_lock_position;
+            lock.owner = ctx.accounts.team_wallet.key();
+            lock.bump = ctx.bumps.team_lock_position;
+            lock.amount_locked = lock
+                .amount_locked
+                .checked_add(FOUNDER_IMMEDIATE_SOLA)
+                .ok_or(SoladromeError::Overflow)?;
+            lock.lock_end_ts = team_lock_end_ts;
+            // Locked for LIFE: the whole tranche is permanent, so the deferred drain
+            // (unlock → unstake → sell_sola) is closed for good. Only borrow_against_locked
+            // at 20% remains. Voting stays fully active (wallet ≠ FOUNDER_WALLET).
+            lock.permanent_amount = FOUNDER_IMMEDIATE_SOLA;
+        }
+
+        // fees_debt snapshotted so the team earns fees only from unlock forward (never, here).
+        {
+            let pos = &mut ctx.accounts.team_position;
+            if pos.owner == Pubkey::default() {
+                pos.owner = ctx.accounts.team_wallet.key();
+                pos.bump = ctx.bumps.team_position;
+            }
+            pos.fees_debt = acc;
+        }
+
         let s = &mut ctx.accounts.protocol_state;
+        s.fees_per_hi_sola = acc;
+        s.last_market_vault_balance = market_balance;
+        // total_hi_sola: UNCHANGED — locked hiSOLA is out of the fee denominator.
         s.total_sola = s
             .total_sola
-            .checked_add(ECOSYSTEM_TOTAL)
-            .and_then(|v| v.checked_add(FOUNDER_IMMEDIATE_SOLA))
+            .checked_add(FOUNDER_IMMEDIATE_SOLA)
             .ok_or(SoladromeError::Overflow)?;
         s.ecosystem_allocated = true;
 
@@ -1101,19 +1185,44 @@ pub mod soladrome {
             claimable,
         )?;
 
-        // Mint hiSOLA to founder
+        // ── Mint hiSOLA directly into the ve lock vault — never the wallet ────
+        // Identical to claim_partner_allocation. The wallet balance stays 0, which is what
+        // makes the reserve inert: borrow_usdc cannot see it (so the 20% cap is not
+        // bypassable), and unstake → sell_sola is unreachable. Combined with the
+        // FOUNDER_WALLET guards on vote_gauge / replay_vote / burn_o_sola_for_votes and on
+        // unlock_hi_sola, the 7M cannot vote, cannot earn, cannot be sold. Liquidity comes
+        // solely from borrow_against_locked (20%, any ve-locker).
         token::mint_to(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
                     mint: ctx.accounts.hi_sola_mint.to_account_info(),
-                    to: ctx.accounts.founder_hi_sola.to_account_info(),
+                    to: ctx.accounts.ve_lock_vault.to_account_info(),
                     authority: ctx.accounts.protocol_state.to_account_info(),
                 },
                 &[seeds],
             ),
             claimable,
         )?;
+
+        // ── Create / extend the VeLockPosition ────────────────────────────────
+        // MAX_LOCK_DURATION (4 y) is the ve ceiling; "locked for life" is enforced by the
+        // FOUNDER_WALLET guard in unlock_hi_sola, not by this timestamp.
+        let lock_end_ts = (clock.unix_timestamp as u64)
+            .checked_add(MAX_LOCK_DURATION)
+            .ok_or(SoladromeError::Overflow)? as i64;
+        {
+            let lock = &mut ctx.accounts.lock_position;
+            if lock.owner == Pubkey::default() {
+                lock.owner = ctx.accounts.founder.key();
+                lock.bump = ctx.bumps.lock_position;
+            }
+            lock.amount_locked = lock
+                .amount_locked
+                .checked_add(claimable)
+                .ok_or(SoladromeError::Overflow)?;
+            lock.lock_end_ts = lock_end_ts;
+        }
 
         // Init/update founder position debt snapshot
         let pos = &mut ctx.accounts.founder_position;
@@ -1123,15 +1232,14 @@ pub mod soladrome {
         }
         pos.fees_debt = acc;
 
+        // total_hi_sola: UNCHANGED — locked hiSOLA is excluded from the fee accumulator
+        // denominator, matching claim_partner_allocation and lock_hi_sola. This is what
+        // stops the 7M from capturing ~89% of protocol fees.
         let s = &mut ctx.accounts.protocol_state;
         s.fees_per_hi_sola = acc;
         s.last_market_vault_balance = market_balance;
         s.total_sola = s
             .total_sola
-            .checked_add(claimable)
-            .ok_or(SoladromeError::Overflow)?;
-        s.total_hi_sola = s
-            .total_hi_sola
             .checked_add(claimable)
             .ok_or(SoladromeError::Overflow)?;
 
@@ -1821,6 +1929,16 @@ pub mod soladrome {
                 .checked_add(amount)
                 .ok_or(SoladromeError::Overflow)?;
             lock.lock_end_ts = lock_end_ts;
+
+            // ── The welcome bag is permanent; the bribe-earned portion is not ──
+            // Every claim sets hi_sola_claimed = entitled = base_vested + bribe_earned, so
+            // after this call the position holds exactly `base_vested` of bag. Assigning
+            // (not adding) is therefore exact and idempotent across repeated claims, and
+            // monotonic because base_vested only grows with elapsed time.
+            // Releasable at expiry = amount_locked − permanent_amount = bribe_earned.
+            // The bag can never be sold — it is unfinanced. It keeps full voting power
+            // forever and stays borrowable at 20%. That is the deal: permanent voting power.
+            lock.permanent_amount = base_vested;
         }
 
         // ── Snapshot fees_debt at current accumulator ─────────────────────────
@@ -2485,6 +2603,14 @@ pub mod soladrome {
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
         );
+        // Founder break-glass: mirrors vote_gauge / replay_vote. Without this, the
+        // founder's 5M oSOLA would be an UNCAPPED vote path (the oSOLA bonus bypasses
+        // the per-address cap by design), defeating the muzzle on the 7M reserve.
+        require!(
+            ctx.accounts.user.key() != FOUNDER_WALLET.parse::<Pubkey>().unwrap()
+                || ctx.accounts.protocol_state.founder_voting_enabled,
+            SoladromeError::FounderVotingDisabled
+        );
         // Phase gate: banking oSOLA-bonus voting power only has meaning once votes
         // can be cast, and burning is irreversible — block it while voting is
         // closed so a user can't destroy oSOLA for power they can't yet use.
@@ -2940,6 +3066,21 @@ pub mod soladrome {
             SoladromeError::ProtocolPaused
         );
         require!(amount > 0, SoladromeError::InvalidAmount);
+
+        // ── ECOSYSTEM_TOTAL cap ───────────────────────────────────────────────
+        // This is the ecosystem/airdrop budget, issued as oSOLA rather than SOLA so it
+        // is self-financing: the recipient pays 1 USDC into the floor to exercise, so no
+        // unfinanced supply can ever be redeemed against backing it never contributed.
+        // Until 2026-07-17 the only check here was `amount > 0` — the published 1.75M was
+        // a constant that constrained nothing, and the authority could dilute without limit.
+        let minted = ctx
+            .accounts
+            .protocol_state
+            .ecosystem_o_sola_minted
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(minted <= ECOSYSTEM_TOTAL, SoladromeError::EcosystemBudgetExceeded);
+
         let bump = ctx.accounts.protocol_state.bump;
 
         let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
@@ -2955,6 +3096,8 @@ pub mod soladrome {
             ),
             amount,
         )?;
+
+        ctx.accounts.protocol_state.ecosystem_o_sola_minted = minted;
         Ok(())
     }
 
@@ -3007,7 +3150,19 @@ pub mod soladrome {
     }
 
     /// Return locked hiSOLA after expiry. Restores tokens to the fee pool.
+    /// Locked for life — the founder can never unlock.
+    ///
+    /// The 7M are minted straight into a ve lock by `claim_founder_hi_sola` and must
+    /// never return to a wallet. Unlocking would undo all three guarantees at once:
+    /// the hiSOLA re-enters `total_hi_sola` (fee accrual resumes), `borrow_usdc`
+    /// regains sight of it (the 20% cap becomes bypassable), and unstake → sell_sola
+    /// turns the reserve into a floor drain. The guard is on FOUNDER_WALLET only —
+    /// TEAM_WALLET and partners release their non-permanent portions normally.
     pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
+        require!(
+            ctx.accounts.user.key() != FOUNDER_WALLET.parse::<Pubkey>().unwrap(),
+            SoladromeError::FounderVestingLocked
+        );
         ve::unlock_hi_sola(ctx)
     }
 
@@ -3689,7 +3844,11 @@ pub struct DistributeOSola<'info> {
     /// CHECK: Recipient wallet — validated implicitly by ATA derivation below.
     pub recipient: UncheckedAccount<'info>,
 
+    /// `mut` is load-bearing: without it Anchor never serializes the account back, so
+    /// `ecosystem_o_sola_minted` would silently stay 0 and the ECOSYSTEM_TOTAL cap would
+    /// never fire — a cap reading a counter that never increments.
     #[account(
+        mut,
         seeds = [STATE_SEED],
         bump = protocol_state.bump,
         has_one = authority @ SoladromeError::Unauthorized,
@@ -3806,28 +3965,54 @@ pub struct MintEcosystemAllocation<'info> {
     #[account(mut, address = protocol_state.sola_mint)]
     pub sola_mint: Box<Account<'info, Mint>>,
 
-    /// Authority's SOLA ATA — receives the ecosystem allocation (1 750 000 SOLA).
+    #[account(mut, address = protocol_state.hi_sola_mint)]
+    pub hi_sola_mint: Box<Account<'info, Mint>>,
+
+    /// Receives the SOLA backing the team's locked hiSOLA.
+    #[account(mut, address = protocol_state.sola_vault)]
+    pub sola_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Read-only — accumulator snapshot before the hiSOLA supply changes.
+    #[account(address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: hardcoded team wallet — receives the 250K tranche as a lifetime ve lock.
+    /// Distinct from FOUNDER_WALLET by design: the vote_gauge guard keys on FOUNDER_WALLET,
+    /// so this tranche votes as an ordinary user.
+    #[account(address = TEAM_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized)]
+    pub team_wallet: UncheckedAccount<'info>,
+
+    /// Team ve lock metadata. Mirrors ClaimPartnerAllocation.
     #[account(
         init_if_needed,
         payer = authority,
-        associated_token::mint = sola_mint,
-        associated_token::authority = authority,
+        space = 8 + VeLockPosition::LEN,
+        seeds = [VELOCK_SEED, team_wallet.key().as_ref()],
+        bump,
     )]
-    pub authority_sola: Box<Account<'info, TokenAccount>>,
+    pub team_lock_position: Box<Account<'info, VeLockPosition>>,
 
-    /// CHECK: hardcoded founder OPS wallet — receives FOUNDER_IMMEDIATE_SOLA (250 000 SOLA).
-    /// Separate from FOUNDER_WALLET so this tranche can vote as an ordinary user.
-    #[account(address = FOUNDER_OPS_WALLET.parse::<Pubkey>().unwrap() @ SoladromeError::Unauthorized)]
-    pub founder_ops: UncheckedAccount<'info>,
-
-    /// Founder ops wallet's SOLA ATA — created here if it doesn't exist yet.
+    /// Vault holding the team's locked hiSOLA. Minted directly here — the team wallet's
+    /// balance stays 0, which keeps borrow_usdc blind and sell_sola unreachable.
     #[account(
         init_if_needed,
         payer = authority,
-        associated_token::mint = sola_mint,
-        associated_token::authority = founder_ops,
+        token::mint      = hi_sola_mint,
+        token::authority = team_lock_position,
+        seeds = [VE_VAULT_SEED, team_wallet.key().as_ref()],
+        bump,
     )]
-    pub founder_ops_sola: Box<Account<'info, TokenAccount>>,
+    pub team_ve_lock_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Team fee-share position — fees_debt snapshotted at allocation.
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + UserPosition::LEN,
+        seeds = [POSITION_SEED, team_wallet.key().as_ref()],
+        bump,
+    )]
+    pub team_position: Box<Account<'info, UserPosition>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -3863,16 +4048,30 @@ pub struct ClaimFounderHiSola<'info> {
     #[account(address = protocol_state.market_vault)]
     pub market_vault: Box<Account<'info, TokenAccount>>,
 
-    /// Founder's hiSOLA ATA — created on first claim if needed.
+    /// Lifetime ve lock metadata — created on first claim. Mirrors ClaimPartnerAllocation.
     #[account(
         init_if_needed,
         payer = founder,
-        associated_token::mint = hi_sola_mint,
-        associated_token::authority = founder,
+        space = 8 + VeLockPosition::LEN,
+        seeds = [VELOCK_SEED, founder.key().as_ref()],
+        bump,
     )]
-    pub founder_hi_sola: Box<Account<'info, TokenAccount>>,
+    pub lock_position: Box<Account<'info, VeLockPosition>>,
 
-    /// Founder's fee-share position — tracks fees_debt for claim_fees.
+    /// Vault holding the locked hiSOLA. Minted directly here — the founder's wallet
+    /// balance stays 0, which is what makes borrow_usdc blind to the 7M reserve.
+    #[account(
+        init_if_needed,
+        payer = founder,
+        token::mint      = hi_sola_mint,
+        token::authority = lock_position,
+        seeds = [VE_VAULT_SEED, founder.key().as_ref()],
+        bump,
+    )]
+    pub ve_lock_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Founder's fee-share position — fees_debt snapshotted at claim. The reserve never
+    /// unlocks, so this never becomes a fee claim; it exists for symmetry with partners.
     #[account(
         init_if_needed,
         payer = founder,
