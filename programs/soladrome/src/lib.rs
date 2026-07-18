@@ -25,9 +25,8 @@ pub use pol::*;
 use state::{
     current_epoch, BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting,
     GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint,
-    PartnerAllocation, ProtocolState, UserBribeClaim, UserEpochVotes, UserPosition,
-    UserVoteConfig, UserVoteReceipt, VeLockPosition, BASE_BAG_VEST_SECS,
-    EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS,
+    PartnerAllocation, ProtocolState, UserBribeClaim, UserEpochVotes, UserPosition, UserVoteConfig,
+    UserVoteReceipt, VeLockPosition, BASE_BAG_VEST_SECS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS,
     MAX_LOCK_DURATION, MIN_LOCK_DURATION, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
 };
 #[allow(ambiguous_glob_reexports)]
@@ -76,10 +75,10 @@ pub const LP_EMISSION_PER_EPOCH: u64 = 10_000 * 1_000_000; // 10 000 oSOLA (6 de
 /// remaining more restrictive than Aerodrome/Velodrome (which have no cap).
 pub const VOTE_WEIGHT_CAP_BPS: u64 = 3_000;
 
-/// Continuous Masterchef-style oSOLA emission is now authority-configured at
-/// runtime (`ProtocolState.continuous_rate_per_sec`, set via
-/// `configure_continuous_emissions`) and gated by a per-pool flag + an on-chain
-/// expiry epoch. The old compile-time `OSOLA_EMISSION_PER_SEC` const was removed.
+// Continuous Masterchef-style oSOLA emission is now authority-configured at
+// runtime (`ProtocolState.continuous_rate_per_sec`, set via
+// `configure_continuous_emissions`) and gated by a per-pool flag + an on-chain
+// expiry epoch. The old compile-time `OSOLA_EMISSION_PER_SEC` const was removed.
 
 /// Precision factor for the oSOLA-per-LP accumulator.
 pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
@@ -105,8 +104,8 @@ pub const ECOSYSTEM_TOTAL: u64 = 1_750_000_000_000; //  1 750 000 SOLA — marke
 pub const FOUNDER_IMMEDIATE_SOLA: u64 = 250_000_000_000; //    250 000 → hiSOLA, lifetime ve lock
 /// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
 pub const BORROW_FEE_BPS: u64 = 200; //  2 % of borrowed amount
-// (FOUNDER_BORROW_CAP_BPS removed 2026-07-18 with founder_borrow_usdc — the 7M are ve-escrowed,
-//  so the founder's only borrow path is borrow_against_locked at PARTNER_BORROW_CAP_BPS, 20%.)
+                                     // (FOUNDER_BORROW_CAP_BPS removed 2026-07-18 with founder_borrow_usdc — the 7M are ve-escrowed,
+                                     //  so the founder's only borrow path is borrow_against_locked at PARTNER_BORROW_CAP_BPS, 20%.)
 
 pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
@@ -181,8 +180,8 @@ pub mod soladrome {
         // Timeline: ~616k at 6 months, ~474k at 1 year, ~150k floor at ~3.2 years.
         // Override at any time via `configure_emissions` (Squads multisig).
         s.osola_emission_initial = 800_000_000_000; // 800 000 oSOLA (6 dec)
-        s.osola_emission_decay_bps = 9_900;         // −1 % per epoch
-        s.osola_emission_floor_bps = 1_875;         // floor = 150 000 oSOLA (18.75 %)
+        s.osola_emission_decay_bps = 9_900; // −1 % per epoch
+        s.osola_emission_floor_bps = 1_875; // floor = 150 000 oSOLA (18.75 %)
         s.osola_emission_start_epoch = current_epoch(clock.unix_timestamp);
         // Continuous (Masterchef) bootstrap stream OFF until the authority calls
         // `configure_continuous_emissions`. rate 0 + end_epoch 0 => never accrues.
@@ -321,7 +320,10 @@ pub mod soladrome {
         }
         let new_len = ProtocolState::LEN;
         if info.data_len() >= new_len {
-            msg!("protocol_state already {} bytes — nothing to do", info.data_len());
+            msg!(
+                "protocol_state already {} bytes — nothing to do",
+                info.data_len()
+            );
             return Ok(());
         }
         // Top up rent-exemption for the new size before growing.
@@ -1418,7 +1420,9 @@ pub mod soladrome {
         // be sold, and cannot drain the floor; it votes (up to 4×) and borrows 20% via
         // borrow_against_locked. This is unfinanced supply, so locking it for life keeps
         // the only exposure at the protocol's 20% ceiling.
-        let claimable = vesting.hi_sola_amount.saturating_sub(vesting.hi_sola_claimed);
+        let claimable = vesting
+            .hi_sola_amount
+            .saturating_sub(vesting.hi_sola_claimed);
         require!(claimable > 0, SoladromeError::NothingToClaim);
 
         // Advance accumulator before adding to hiSOLA supply (same pattern as stake_sola)
@@ -1572,11 +1576,11 @@ pub mod soladrome {
         lock_duration_secs: u64,
     ) -> Result<()> {
         require!(cap_hi_sola > 0, SoladromeError::InvalidAmount);
-        require!(bribe_mint != Pubkey::default(), SoladromeError::InvalidAmount);
         require!(
-            rate_num > 0 && rate_den > 0,
-            SoladromeError::InvalidRate
+            bribe_mint != Pubkey::default(),
+            SoladromeError::InvalidAmount
         );
+        require!(rate_num > 0 && rate_den > 0, SoladromeError::InvalidRate);
         require!(
             lock_duration_secs >= MIN_LOCK_DURATION,
             SoladromeError::InvalidAmount
@@ -1776,7 +1780,10 @@ pub mod soladrome {
     /// `PARTNER_BORROW_CAP_BPS` (20%). Repay via the standard `repay_usdc` (same
     /// UserPosition PDA). 2% origination fee → market_vault, 75% floor buffer, no
     /// interest, no liquidation. Available to any ve-locker, not just partners.
-    pub fn borrow_against_locked(ctx: Context<BorrowAgainstLocked>, usdc_amount: u64) -> Result<()> {
+    pub fn borrow_against_locked(
+        ctx: Context<BorrowAgainstLocked>,
+        usdc_amount: u64,
+    ) -> Result<()> {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
@@ -2141,7 +2148,7 @@ pub mod soladrome {
     ) -> Result<()> {
         require!(initial > 0, SoladromeError::InvalidAmount);
         require!(
-            decay_bps >= 1 && decay_bps <= 10_000,
+            (1..=10_000).contains(&decay_bps),
             SoladromeError::InvalidAmount
         );
         require!(floor_bps <= 10_000, SoladromeError::InvalidAmount);
@@ -2416,8 +2423,8 @@ pub mod soladrome {
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 token::Burn {
-                    mint:      ctx.accounts.o_sola_mint.to_account_info(),
-                    from:      ctx.accounts.user_o_sola.to_account_info(),
+                    mint: ctx.accounts.o_sola_mint.to_account_info(),
+                    from: ctx.accounts.user_o_sola.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
                 },
             ),
@@ -2428,19 +2435,21 @@ pub mod soladrome {
         // vote_gauge. Without this, burning oSOLA before the first vote_gauge call
         // would leave total_power_snapshot at 0 — zeroing the user's hiSOLA vote cap
         // for the epoch (the vote_gauge init block is skipped once uev.epoch != 0).
-        let total_power = ctx.accounts.user_hi_sola.amount.saturating_add(
-            ve::try_load_ve_power(
+        let total_power = ctx
+            .accounts
+            .user_hi_sola
+            .amount
+            .saturating_add(ve::try_load_ve_power(
                 &ctx.accounts.lock_position,
                 &ctx.accounts.user.key(),
                 clock.unix_timestamp,
-            ),
-        );
+            ));
 
         // Credit voting power for this epoch only.
         let uev = &mut ctx.accounts.user_epoch_votes;
         if uev.epoch == 0 {
             uev.epoch = epoch;
-            uev.bump  = ctx.bumps.user_epoch_votes;
+            uev.bump = ctx.bumps.user_epoch_votes;
             uev.total_power_snapshot = total_power;
         }
         uev.o_sola_bonus = uev
@@ -2570,9 +2579,7 @@ pub mod soladrome {
         require!(pool_votes > 0, SoladromeError::NoVotes);
 
         // Compute decayed epoch emission for this specific epoch.
-        let elapsed = epoch.saturating_sub(
-            ctx.accounts.protocol_state.osola_emission_start_epoch,
-        );
+        let elapsed = epoch.saturating_sub(ctx.accounts.protocol_state.osola_emission_start_epoch);
         let epoch_total = math::decayed_emission(
             ctx.accounts.protocol_state.osola_emission_initial,
             ctx.accounts.protocol_state.osola_emission_decay_bps,
@@ -2865,7 +2872,10 @@ pub mod soladrome {
             .ecosystem_o_sola_minted
             .checked_add(amount)
             .ok_or(SoladromeError::Overflow)?;
-        require!(minted <= ECOSYSTEM_TOTAL, SoladromeError::EcosystemBudgetExceeded);
+        require!(
+            minted <= ECOSYSTEM_TOTAL,
+            SoladromeError::EcosystemBudgetExceeded
+        );
 
         let bump = ctx.accounts.protocol_state.bump;
 
@@ -4295,9 +4305,9 @@ pub struct BurnOSolaForVotes<'info> {
     )]
     pub user_epoch_votes: Box<Account<'info, UserEpochVotes>>,
 
-    pub token_program:  Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
-    pub rent:           Sysvar<'info, Rent>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 // ── LP Emission contexts ──────────────────────────────────────────────────────
@@ -4804,7 +4814,6 @@ pub struct ClaimPartnerAllocation<'info> {
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
-
 
 // ── Vote carry-over ───────────────────────────────────────────────────────────
 

@@ -72,7 +72,8 @@ pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
     // Solvency guard: never skim fees that stakers were already credited. Everything at
     // or below last_market_vault_balance is spoken for; only growth above it is available.
     require!(
-        market_balance.saturating_sub(amount) >= ctx.accounts.protocol_state.last_market_vault_balance,
+        market_balance.saturating_sub(amount)
+            >= ctx.accounts.protocol_state.last_market_vault_balance,
         SoladromeError::InvalidAmount
     );
 

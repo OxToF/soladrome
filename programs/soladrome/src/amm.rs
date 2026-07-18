@@ -69,7 +69,7 @@ pub fn advance_pool_rewards(pool: &mut AmmPool, now: i64, rate: u32, active: boo
 
 /// Whether the continuous emission window is open at `now` for the given state.
 pub fn continuous_active(state: &ProtocolState, now: i64) -> bool {
-    (crate::state::current_epoch(now) as u64) < (state.continuous_end_epoch as u64)
+    crate::state::current_epoch(now) < u64::from(state.continuous_end_epoch)
 }
 
 /// Authority-only: approve or revoke a pool's eligibility for continuous oSOLA
@@ -82,11 +82,7 @@ pub fn set_pool_rewards(ctx: Context<SetPoolRewards>, enabled: bool) -> Result<(
     let pool = &mut ctx.accounts.pool;
     advance_pool_rewards(pool, now, rate, active);
     pool.rewards_enabled = enabled;
-    msg!(
-        "Pool {} rewards_enabled = {}",
-        pool.key(),
-        enabled,
-    );
+    msg!("Pool {} rewards_enabled = {}", pool.key(), enabled,);
     Ok(())
 }
 
