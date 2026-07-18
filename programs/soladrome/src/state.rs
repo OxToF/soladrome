@@ -52,18 +52,8 @@ pub const BASE_BAG_VEST_SECS: u64 = 6 * 3_600;
 #[cfg(not(feature = "devnet"))]
 pub const BASE_BAG_VEST_SECS: u64 = 180 * 24 * 3_600;
 
-// ── Contributor vesting schedule ──────────────────────────────────────────────
-
-/// Fraction of contributor allocation unlocked immediately at TGE (25%).
-/// Remaining 75 % vests linearly over CONTRIBUTOR_DURATION_SECS.
-pub const CONTRIBUTOR_TGE_BPS: u64 = 2_500;
-
-/// Linear vesting window for the remaining 75 % of contributor allocation.
-/// devnet: 6 h  |  mainnet: 6 months
-#[cfg(feature = "devnet")]
-pub const CONTRIBUTOR_DURATION_SECS: u64 = 6 * 3_600;
-#[cfg(not(feature = "devnet"))]
-pub const CONTRIBUTOR_DURATION_SECS: u64 = 6 * 30 * 24 * 3_600;
+// (Contributor vesting schedule removed 2026-07-18 — contributors now claim their whole
+//  allocation at launch: hiSOLA into a lifetime ve lock + oSOLA. No cliff, no linear vest.)
 
 // ── Ve-layer constants ────────────────────────────────────────────────────────
 /// Minimum lock duration: 1 epoch on mainnet, 5 s on devnet/localnet.
