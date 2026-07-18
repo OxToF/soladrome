@@ -1713,96 +1713,58 @@
           ]
         },
         {
-          "name": "contributor_hi_sola",
+          "name": "lock_position",
           "docs": [
-            "Contributor's hiSOLA ATA — created on first claim if needed."
+            "Lifetime ve lock metadata — created on claim. Mirrors the team/partner pattern."
           ],
           "writable": true,
           "pda": {
             "seeds": [
               {
-                "kind": "account",
-                "path": "contributor"
-              },
-              {
                 "kind": "const",
                 "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
+                  118,
                   101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
+                  108,
+                  111,
+                  99,
+                  107
                 ]
               },
               {
                 "kind": "account",
-                "path": "hi_sola_mint"
+                "path": "contributor"
               }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
+            ]
+          }
+        },
+        {
+          "name": "ve_lock_vault",
+          "docs": [
+            "Vault holding the locked hiSOLA. Minted directly here — the contributor's wallet",
+            "balance stays 0, keeping borrow_usdc blind and sell_sola unreachable."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "contributor"
+              }
+            ]
           }
         },
         {
@@ -1879,8 +1841,9 @@
     {
       "name": "claim_contributor_vesting",
       "docs": [
-        "Contributor-only: claim vested oSOLA (25 % TGE + 75 % linear over 6 months).",
-        "Mints oSOLA to contributor wallet — floor-neutral until exercised."
+        "Contributor-only: claim the full oSOLA tranche at once (no cliff, no vesting).",
+        "Mints oSOLA to the contributor wallet — floor-neutral until exercised, like the",
+        "founder's 5M oSOLA. Exercising pays 1 USDC into the floor, so it is self-financing."
       ],
       "discriminator": [
         151,
@@ -3431,240 +3394,6 @@
       ]
     },
     {
-      "name": "contributor_borrow_usdc",
-      "docs": [
-        "Contributor borrow: draw USDC from floor_vault against hiSOLA collateral.",
-        "Max cumulative borrow = 10 % of total *claimed* hiSOLA (dynamic, mirrors founder logic).",
-        "2% origination fee → market_vault. Flash-borrow guard included."
-      ],
-      "discriminator": [
-        191,
-        82,
-        144,
-        27,
-        109,
-        56,
-        16,
-        50
-      ],
-      "accounts": [
-        {
-          "name": "contributor",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "protocol_state",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  116,
-                  97,
-                  116,
-                  101
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "hi_sola_mint"
-        },
-        {
-          "name": "contributor_hi_sola",
-          "docs": [
-            "Contributor's hiSOLA balance — collateral ceiling for the borrow.",
-            "Mirrors founder_borrow_usdc: borrow cannot exceed real on-chain hiSOLA held."
-          ]
-        },
-        {
-          "name": "floor_vault",
-          "writable": true
-        },
-        {
-          "name": "market_vault",
-          "writable": true
-        },
-        {
-          "name": "usdc_mint",
-          "docs": [
-            "USDC mint — needed to init contributor_usdc ATA on first borrow."
-          ]
-        },
-        {
-          "name": "contributor_usdc",
-          "docs": [
-            "Contributor's USDC ATA — created on first borrow if needed."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "contributor"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "usdc_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "contributor_position",
-          "docs": [
-            "Shared UserPosition PDA — same seed as regular users, enables repay_usdc."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  111,
-                  115,
-                  105,
-                  116,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "contributor"
-              }
-            ]
-          }
-        },
-        {
-          "name": "contributor_vesting",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  116,
-                  114,
-                  105,
-                  98,
-                  117,
-                  116,
-                  111,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "contributor"
-              }
-            ]
-          }
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "usdc_amount",
-          "type": "u64"
-        }
-      ]
-    },
-    {
       "name": "create_pool",
       "discriminator": [
         233,
@@ -5145,249 +4874,6 @@
         },
         {
           "name": "min_profit_usdc",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "founder_borrow_usdc",
-      "docs": [
-        "Founder-only variant of borrow_usdc with a 10 % cap.",
-        "Max cumulative borrow = FOUNDER_BORROW_CAP_BPS (10 %) × total hiSOLA claimed.",
-        "With 7 M hiSOLA vesting linearly over 24 months (~291 k/mo), the founder",
-        "can borrow at most ~29 k USDC per month — enough for running costs while",
-        "the floor vault grows from organic user activity."
-      ],
-      "discriminator": [
-        5,
-        196,
-        173,
-        39,
-        65,
-        107,
-        159,
-        237
-      ],
-      "accounts": [
-        {
-          "name": "founder",
-          "docs": [
-            "Only the hardcoded founder wallet may call this."
-          ],
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "protocol_state",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  116,
-                  97,
-                  116,
-                  101
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "hi_sola_mint"
-        },
-        {
-          "name": "founder_hi_sola",
-          "docs": [
-            "Founder's hiSOLA balance — used as collateral ceiling."
-          ]
-        },
-        {
-          "name": "floor_vault",
-          "writable": true
-        },
-        {
-          "name": "market_vault",
-          "writable": true
-        },
-        {
-          "name": "usdc_mint",
-          "docs": [
-            "USDC mint — needed to init founder_usdc ATA on first borrow."
-          ]
-        },
-        {
-          "name": "founder_usdc",
-          "docs": [
-            "Founder's USDC ATA — created on first borrow if needed."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "founder"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "usdc_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "founder_position",
-          "docs": [
-            "Tracks founder's cumulative borrow (same seed as regular UserPosition)."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  111,
-                  115,
-                  105,
-                  116,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "founder"
-              }
-            ]
-          }
-        },
-        {
-          "name": "founder_hi_vesting",
-          "docs": [
-            "Vesting schedule — supplies the `claimed` amount used for the 10 % cap."
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  102,
-                  111,
-                  117,
-                  110,
-                  100,
-                  101,
-                  114,
-                  95,
-                  104,
-                  105,
-                  95,
-                  118,
-                  101,
-                  115,
-                  116,
-                  105,
-                  110,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "usdc_amount",
           "type": "u64"
         }
       ]

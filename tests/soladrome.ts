@@ -1810,6 +1810,97 @@ describe("soladrome", () => {
     );
   });
 
+  it("[contributor] claims a lifetime-locked hiSOLA bag + oSOLA, all at launch", async () => {
+    const contributor = anchor.web3.Keypair.generate();
+    await connection.confirmTransaction(
+      await connection.requestAirdrop(contributor.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL),
+      "confirmed"
+    );
+
+    const HI = new BN(5_000).mul(ONE);   // 5,000 hiSOLA
+    const OS = new BN(5_000).mul(ONE);   // 5,000 oSOLA
+    const [vesting] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("contributor"), contributor.publicKey.toBuffer()], program.programId);
+
+    // Authority registers the contributor.
+    await program.methods
+      .registerContributor(HI, OS)
+      .accounts({
+        authority:          wallet.publicKey,
+        protocolState:      statePda,
+        contributorWallet:  contributor.publicKey,
+        contributorVesting: vesting,
+        systemProgram:      anchor.web3.SystemProgram.programId,
+        rent:               anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    const [lockPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("velock"), contributor.publicKey.toBuffer()], program.programId);
+    const [veVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("ve_vault"), contributor.publicKey.toBuffer()], program.programId);
+    const [cPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), contributor.publicKey.toBuffer()], program.programId);
+
+    const before = await program.account.protocolState.fetch(statePda);
+
+    // Contributor claims the hiSOLA bag — all at once, into a lifetime ve lock.
+    await program.methods
+      .claimContributorHiSola()
+      .accounts({
+        contributor:        contributor.publicKey,
+        protocolState:      statePda,
+        solaMint:           solaM,
+        hiSolaMint:         hiSolaM,
+        solaVault,
+        marketVault:        marketV,
+        lockPosition:       lockPos,
+        veLockVault:        veVault,
+        contributorPosition: cPos,
+        contributorVesting: vesting,
+        tokenProgram:       TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram:      anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([contributor])
+      .rpc();
+
+    const after = await program.account.protocolState.fetch(statePda);
+    const escrowed = await getTokenBalance(connection, veVault);
+    const lock = await program.account.veLockPosition.fetch(lockPos);
+
+    assert.equal(escrowed.toString(), HI.toString(), "full 5K hiSOLA must land in the ve lock");
+    assert.equal(lock.permanentAmount.toString(), HI.toString(),
+      "the whole bag is permanent — locked for life");
+    const cHiAta = anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: contributor.publicKey });
+    assert.isNull(await connection.getAccountInfo(cHiAta),
+      "contributor wallet must hold no hiSOLA (escrowed, not liquid)");
+    assert.equal(after.totalHiSola.toString(), before.totalHiSola.toString(),
+      "total_hi_sola unchanged → locked bag earns no fees");
+
+    // And claims the oSOLA tranche — to the wallet, floor-neutral until exercised.
+    const cOSola = anchor.utils.token.associatedAddress({ mint: oSolaM, owner: contributor.publicKey });
+    await program.methods
+      .claimContributorVesting()
+      .accounts({
+        contributor:        contributor.publicKey,
+        protocolState:      statePda,
+        oSolaMint:          oSolaM,
+        contributorVesting: vesting,
+        contributorOSola:   cOSola,
+        tokenProgram:       TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram:      anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([contributor])
+      .rpc();
+
+    assert.equal((await getTokenBalance(connection, cOSola)).toString(), OS.toString(),
+      "full 5K oSOLA minted to the contributor wallet");
+
+    console.log("✅ [contributor] 5K hiSOLA locked for life (permanent) + 5K oSOLA claimed at launch");
+  });
+
   it("[ecosystem] distribute_o_sola is capped at ECOSYSTEM_TOTAL", async () => {
     const ECOSYSTEM_TOTAL = 1_750_000_000_000n;
     const st = await program.account.protocolState.fetch(statePda);
