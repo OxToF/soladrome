@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 import {
   getProgram, statePda, solaM, hiSolaM, oSolaM,
   solaVaultAddr, marketVault, floorVault,
@@ -12,53 +12,41 @@ import {
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
-// ── Vesting constants (devnet — must match state.rs) ─────────────────────────
-// Mainnet: cliff = 1 month, duration = 12 months
-const CONTRIBUTOR_CLIFF_SECS    = 1 * 3_600;   // 1 h devnet
-const CONTRIBUTOR_DURATION_SECS = 12 * 3_600;  // 12 h devnet
-
+// ── PDAs ────────────────────────────────────────────────────────────────────
 const CONTRIBUTOR_SEED = Buffer.from("contributor");
 
 export function contributorVestingPda(wallet: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [CONTRIBUTOR_SEED, wallet.toBuffer()],
-    PROGRAM_ID
-  )[0];
+  return PublicKey.findProgramAddressSync([CONTRIBUTOR_SEED, wallet.toBuffer()], PROGRAM_ID)[0];
+}
+// Lifetime ve lock — claim_contributor_hi_sola mints here, never to the wallet.
+function veLockPositionPda(owner: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([Buffer.from("velock"), owner.toBuffer()], PROGRAM_ID)[0];
+}
+function veLockVaultPda(owner: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([Buffer.from("ve_vault"), owner.toBuffer()], PROGRAM_ID)[0];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
 function fmt(raw: number, dec = 2) {
   return (raw / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: dec });
 }
 
-function ProgressBar({ pct, color = "bg-brand-green" }: { pct: number; color?: string }) {
-  return (
-    <div className="w-full bg-brand-border rounded-full h-2 mt-1">
-      <div className={`${color} h-2 rounded-full transition-all`}
-           style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
-    </div>
-  );
-}
-
-interface VestingData {
+interface AllocData {
   hiSolaAmount:  number;
   oSolaAmount:   number;
   hiSolaClaimed: number;
   oSolaClaimed:  number;
-  startTs:       number;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-
 export function ContributorPanel() {
   const { connection } = useConnection();
   const wallet         = useAnchorWallet();
   const { usdcMint }   = useSoladrome();
 
-  const [vesting,   setVesting]   = useState<VestingData | null>(null);
+  const [alloc,     setAlloc]     = useState<AllocData | null>(null);
+  const [locked,    setLocked]    = useState(0);   // hiSOLA in the ve lock (base units)
   const [debt,      setDebt]      = useState(0);
-  const [nowSecs,   setNowSecs]   = useState(Math.floor(Date.now() / 1000));
   const [notFound,  setNotFound]  = useState(false);
 
   const [loadingHi,  setLoadingHi]  = useState(false);
@@ -76,142 +64,133 @@ export function ContributorPanel() {
       const program  = getProgram(provider);
       const pda      = contributorVestingPda(wallet.publicKey);
 
-      const [v, pos, slot] = await Promise.allSettled([
+      const [v, lock, pos] = await Promise.allSettled([
         (program.account as any).contributorVesting.fetchNullable(pda),
+        (program.account as any).veLockPosition.fetchNullable(veLockPositionPda(wallet.publicKey)),
         (program.account as any).userPosition.fetchNullable(positionPda(wallet.publicKey)),
-        connection.getSlot(),
       ]);
 
       if (v.status === "fulfilled" && v.value) {
         const d = v.value as any;
-        setVesting({
+        setAlloc({
           hiSolaAmount:  Number(d.hiSolaAmount.toString()),
           oSolaAmount:   Number(d.oSolaAmount.toString()),
           hiSolaClaimed: Number(d.hiSolaClaimed.toString()),
           oSolaClaimed:  Number(d.oSolaClaimed.toString()),
-          startTs:       Number(d.startTs.toString()),
         });
         setNotFound(false);
       } else {
         setNotFound(true);
       }
 
+      setLocked(lock.status === "fulfilled" && lock.value
+        ? Number((lock.value as any).amountLocked.toString()) : 0);
       setDebt(pos.status === "fulfilled" && pos.value
         ? Number((pos.value as any).usdcBorrowed.toString()) : 0);
-
-      if (slot.status === "fulfilled") {
-        const bt = await connection.getBlockTime(slot.value);
-        if (bt) setNowSecs(bt);
-      }
     } catch (e) { console.error("ContributorPanel fetchData:", e); }
   }, [connection, wallet]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
-  useEffect(() => {
-    const id = setInterval(() => setNowSecs(Math.floor(Date.now() / 1000)), 30_000);
-    return () => clearInterval(id);
-  }, []);
 
-  // ── Derived values ──────────────────────────────────────────────────────────
-  const elapsed    = vesting ? Math.max(0, nowSecs - vesting.startTs) : 0;
-  const afterCliff = elapsed >= CONTRIBUTOR_CLIFF_SECS;
-  const secsLeft   = vesting ? Math.max(0, CONTRIBUTOR_CLIFF_SECS - elapsed) : 0;
+  // ── Derived values (no cliff, no vesting — claimed all at once) ───────────────
+  const hiClaimable = alloc ? Math.max(0, alloc.hiSolaAmount - alloc.hiSolaClaimed) : 0;
+  const oClaimable  = alloc ? Math.max(0, alloc.oSolaAmount  - alloc.oSolaClaimed)  : 0;
 
-  function vestedRaw(total: number) {
-    if (!afterCliff) return 0;
-    return Math.floor(total * Math.min(elapsed, CONTRIBUTOR_DURATION_SECS) / CONTRIBUTOR_DURATION_SECS);
-  }
-  const hiVested    = vesting ? vestedRaw(vesting.hiSolaAmount) : 0;
-  const oVested     = vesting ? vestedRaw(vesting.oSolaAmount)  : 0;
-  const hiClaimable = vesting ? Math.max(0, hiVested - vesting.hiSolaClaimed) : 0;
-  const oClaimable  = vesting ? Math.max(0, oVested  - vesting.oSolaClaimed)  : 0;
-
-  // Borrow cap = 10% of monthly hiSOLA = hiSolaAmount / 120
-  const monthlyHi  = vesting ? Math.floor(vesting.hiSolaAmount / 12) : 0;
-  const borrowCap  = Math.floor(monthlyHi * 0.10);
+  // Borrow cap = 20% of the ve-locked hiSOLA (borrow_against_locked), minus current debt.
+  const borrowCap   = Math.floor(locked * 0.20);
   const borrowAvail = Math.max(0, borrowCap - debt) / 1_000_000;
 
-  // ── Claim hiSOLA ────────────────────────────────────────────────────────────
+  // ── Claim hiSOLA (into a lifetime ve lock) ────────────────────────────────────
   async function claimHiSola() {
     if (!wallet) return;
     setLoadingHi(true); setStatus("");
     try {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
-      const pda      = contributorVestingPda(wallet.publicKey);
-      const ix = await program.methods.claimContributorHiSola()
+      const me       = wallet.publicKey;
+
+      // Migrate a legacy 128-byte UserPosition if one exists (from prior staking).
+      const ixs: any[] = [];
+      const posInfo = await connection.getAccountInfo(positionPda(me));
+      if (posInfo && posInfo.data.length < 136) {
+        ixs.push(await program.methods.migrateUserPosition()
+          .accounts({ user: me, userPosition: positionPda(me), systemProgram: SystemProgram.programId } as any)
+          .instruction());
+      }
+
+      ixs.push(await program.methods.claimContributorHiSola()
         .accounts({
-          contributor:          wallet.publicKey,
+          contributor:          me,
           protocolState:        statePda,
           solaMint:             solaM,
           hiSolaMint:           hiSolaM,
           solaVault:            solaVaultAddr,
           marketVault,
-          contributorHiSola:    userAta(hiSolaM, wallet.publicKey),
-          contributorPosition:  positionPda(wallet.publicKey),
-          contributorVesting:   pda,
+          lockPosition:         veLockPositionPda(me),
+          veLockVault:          veLockVaultPda(me),
+          contributorPosition:  positionPda(me),
+          contributorVesting:   contributorVestingPda(me),
           tokenProgram:         commonAccounts.tokenProgram,
           associatedTokenProgram: commonAccounts.associatedTokenProgram,
           systemProgram:        commonAccounts.systemProgram,
-        } as any).instruction();
-      const tx = await sendTx(connection, wallet, [ix]);
-      setStatus(`✅ hiSOLA claimed — tx: ${tx.slice(0,16)}…`);
+        } as any).instruction());
+
+      const tx = await sendTx(connection, wallet, ixs);
+      setStatus(`✅ hiSOLA bag claimed into your lifetime ve-lock (not your wallet — by design) — tx: ${tx.slice(0,16)}…`);
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       await fetchData();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoadingHi(false); }
   }
 
-  // ── Claim oSOLA ─────────────────────────────────────────────────────────────
+  // ── Claim oSOLA (to the wallet, exercisable) ──────────────────────────────────
   async function claimOSola() {
     if (!wallet) return;
     setLoadingO(true); setStatus("");
     try {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
-      const pda      = contributorVestingPda(wallet.publicKey);
+      const me       = wallet.publicKey;
       const ix = await program.methods.claimContributorVesting()
         .accounts({
-          contributor:          wallet.publicKey,
+          contributor:          me,
           protocolState:        statePda,
           oSolaMint:            oSolaM,
-          contributorVesting:   pda,
-          contributorOSola:     userAta(oSolaM, wallet.publicKey),
+          contributorVesting:   contributorVestingPda(me),
+          contributorOSola:     userAta(oSolaM, me),
           tokenProgram:         commonAccounts.tokenProgram,
           associatedTokenProgram: commonAccounts.associatedTokenProgram,
           systemProgram:        commonAccounts.systemProgram,
         } as any).instruction();
       const tx = await sendTx(connection, wallet, [ix]);
-      setStatus(`✅ oSOLA claimed — tx: ${tx.slice(0,16)}…`);
+      setStatus(`✅ oSOLA claimed to your wallet — exercise it in the Options tab — tx: ${tx.slice(0,16)}…`);
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       await fetchData();
     } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
     finally { setLoadingO(false); }
   }
 
-  // ── Borrow / Repay ──────────────────────────────────────────────────────────
+  // ── Borrow / Repay (against the ve-locked bag, 20% cap) ───────────────────────
   async function submitBorrow() {
     if (!wallet || !borrowAmt || !usdcMint) return;
     setLoadingBor(true); setStatus("");
     try {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
-      const pda      = contributorVestingPda(wallet.publicKey);
+      const me       = wallet.publicKey;
 
       let tx: string;
       if (borrowTab === "borrow") {
-        const ix = await program.methods.contributorBorrowUsdc(fromUi(+borrowAmt))
+        const ix = await program.methods.borrowAgainstLocked(fromUi(+borrowAmt))
           .accounts({
-            contributor:            wallet.publicKey,
+            partner:                me,
             protocolState:          statePda,
-            hiSolaMint:             hiSolaM,
-            contributorHiSola:      userAta(hiSolaM, wallet.publicKey),
+            lockPosition:           veLockPositionPda(me),
             floorVault,
             marketVault,
-            usdcMint:               usdcMint,
-            contributorUsdc:        userAta(usdcMint, wallet.publicKey),
-            contributorPosition:    positionPda(wallet.publicKey),
-            contributorVesting:     pda,
+            usdcMint,
+            partnerUsdc:            userAta(usdcMint, me),
+            partnerPosition:        positionPda(me),
             tokenProgram:           commonAccounts.tokenProgram,
             associatedTokenProgram: commonAccounts.associatedTokenProgram,
             systemProgram:          commonAccounts.systemProgram,
@@ -221,11 +200,11 @@ export function ContributorPanel() {
       } else {
         const ix = await program.methods.repayUsdc(fromUi(+borrowAmt))
           .accounts({
-            user:          wallet.publicKey,
+            user:          me,
             protocolState: statePda,
-            userPosition:  positionPda(wallet.publicKey),
+            userPosition:  positionPda(me),
             floorVault,
-            userUsdc:      userAta(usdcMint, wallet.publicKey),
+            userUsdc:      userAta(usdcMint, me),
             tokenProgram:  commonAccounts.tokenProgram,
           } as any).instruction();
         tx = await sendTx(connection, wallet, [ix]);
@@ -239,7 +218,6 @@ export function ContributorPanel() {
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
-
   if (!wallet) return (
     <div className="card text-center text-gray-500 py-12">Connect wallet to continue.</div>
   );
@@ -252,14 +230,8 @@ export function ContributorPanel() {
     </div>
   );
 
-  if (!vesting) return (
+  if (!alloc) return (
     <div className="card text-center py-12 text-gray-500 text-sm">Loading…</div>
-  );
-
-  const cliffInfo = !afterCliff && (
-    <p className="text-xs text-yellow-400 mt-3">
-      ⏳ Cliff in {Math.floor(secsLeft / 3600)}h {Math.floor((secsLeft % 3600) / 60)}m — tokens unlock progressively after cliff
-    </p>
   );
 
   return (
@@ -272,94 +244,78 @@ export function ContributorPanel() {
           <h2 className="text-xl font-black text-white">Contributor Allocation</h2>
         </div>
         <p className="text-xs text-gray-500">
-          On-chain vesting · transparent &amp; permissionless · verified on Solana
+          Claimed at launch · hiSOLA locked for life (permanent voting power) + oSOLA · verified on Solana
         </p>
       </div>
 
-      {/* ── hiSOLA Vesting ──────────────────────────────────────── */}
+      {/* ── hiSOLA bag ──────────────────────────────────────────── */}
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-bold text-white">
-            hiSOLA Vesting
-            <span className="ml-2 text-xs font-normal text-gray-500">(governance + borrow)</span>
+            hiSOLA Bag
+            <span className="ml-2 text-xs font-normal text-gray-500">(locked for life · votes · 20% borrow)</span>
           </h3>
           <span className="text-xs text-gray-400 font-mono">
-            {fmt(vesting.hiSolaClaimed)} / {fmt(vesting.hiSolaAmount)}
+            {fmt(alloc.hiSolaClaimed)} / {fmt(alloc.hiSolaAmount)}
           </span>
         </div>
 
-        <div className="flex justify-between text-[10px] text-gray-500 mb-0.5">
-          <span>Vested {vesting.hiSolaAmount > 0 ? ((hiVested / vesting.hiSolaAmount) * 100).toFixed(1) : "0"}%</span>
-          <span>Claimed {vesting.hiSolaAmount > 0 ? ((vesting.hiSolaClaimed / vesting.hiSolaAmount) * 100).toFixed(1) : "0"}%</span>
-        </div>
-        <ProgressBar pct={vesting.hiSolaAmount > 0 ? (hiVested / vesting.hiSolaAmount) * 100 : 0} />
-
-        <p className="text-xs text-gray-500 mt-2">
-          hiSOLA gives you governance rights, fee share &amp; USDC borrow power. Monthly installment: <span className="text-white font-mono">{fmt(monthlyHi)} hiSOLA</span>.
+        <p className="text-xs text-gray-500 mt-1">
+          Minted straight into a lifetime ve-lock — your wallet never holds it. It votes (up to 4×) and
+          borrows up to 20%, but can never be sold. Currently locked: <span className="text-white font-mono">{fmt(locked)} hiSOLA</span>.
         </p>
 
-        {cliffInfo}
-        {afterCliff && (
-          <div className="flex items-center justify-between gap-3 mt-3">
-            <span className="text-xs text-gray-400">
-              Claimable: <span className="text-white font-mono font-semibold">{fmt(hiClaimable)} hiSOLA</span>
-            </span>
-            <button className="btn-primary px-4 py-1.5 text-sm"
-              onClick={claimHiSola} disabled={loadingHi || hiClaimable === 0}>
-              {loadingHi ? "…" : hiClaimable === 0 ? "Up to date" : "Claim hiSOLA"}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center justify-between gap-3 mt-3">
+          <span className="text-xs text-gray-400">
+            Claimable: <span className="text-white font-mono font-semibold">{fmt(hiClaimable)} hiSOLA</span>
+          </span>
+          <button className="btn-primary px-4 py-1.5 text-sm"
+            onClick={claimHiSola} disabled={loadingHi || hiClaimable === 0}>
+            {loadingHi ? "…" : hiClaimable === 0 ? "Claimed" : "Claim hiSOLA"}
+          </button>
+        </div>
       </div>
 
-      {/* ── oSOLA Vesting ───────────────────────────────────────── */}
+      {/* ── oSOLA ───────────────────────────────────────────────── */}
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-bold text-white">
-            oSOLA Vesting
-            <span className="ml-2 text-xs font-normal text-gray-500">(liquid options)</span>
+            oSOLA
+            <span className="ml-2 text-xs font-normal text-gray-500">(upside, self-financing)</span>
           </h3>
           <span className="text-xs text-gray-400 font-mono">
-            {fmt(vesting.oSolaClaimed)} / {fmt(vesting.oSolaAmount)}
+            {fmt(alloc.oSolaClaimed)} / {fmt(alloc.oSolaAmount)}
           </span>
         </div>
 
-        <div className="flex justify-between text-[10px] text-gray-500 mb-0.5">
-          <span>Vested {vesting.oSolaAmount > 0 ? ((oVested / vesting.oSolaAmount) * 100).toFixed(1) : "0"}%</span>
-          <span>Claimed {vesting.oSolaAmount > 0 ? ((vesting.oSolaClaimed / vesting.oSolaAmount) * 100).toFixed(1) : "0"}%</span>
-        </div>
-        <ProgressBar pct={vesting.oSolaAmount > 0 ? (oVested / vesting.oSolaAmount) * 100 : 0} color="bg-blue-400" />
-
-        <p className="text-xs text-gray-500 mt-2">
-          Exercise oSOLA via the <span className="text-brand-green">Options</span> tab: pay 1 USDC → receive 1 SOLA at guaranteed floor price.
+        <p className="text-xs text-gray-500 mt-1">
+          Claimed to your wallet, then exercise it in the <span className="text-brand-green">Options</span> tab:
+          pay 1 USDC → receive 1 SOLA at the guaranteed floor price. Each exercise adds 1 USDC to the floor.
         </p>
 
-        {cliffInfo}
-        {afterCliff && (
-          <div className="flex items-center justify-between gap-3 mt-3">
-            <span className="text-xs text-gray-400">
-              Claimable: <span className="text-white font-mono font-semibold">{fmt(oClaimable)} oSOLA</span>
-            </span>
-            <button className="btn-primary px-4 py-1.5 text-sm"
-              onClick={claimOSola} disabled={loadingO || oClaimable === 0}>
-              {loadingO ? "…" : oClaimable === 0 ? "Up to date" : "Claim oSOLA"}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center justify-between gap-3 mt-3">
+          <span className="text-xs text-gray-400">
+            Claimable: <span className="text-white font-mono font-semibold">{fmt(oClaimable)} oSOLA</span>
+          </span>
+          <button className="btn-primary px-4 py-1.5 text-sm"
+            onClick={claimOSola} disabled={loadingO || oClaimable === 0}>
+            {loadingO ? "…" : oClaimable === 0 ? "Claimed" : "Claim oSOLA"}
+          </button>
+        </div>
       </div>
 
       {/* ── Borrow ──────────────────────────────────────────────── */}
       <div className="card">
         <h3 className="text-base font-bold text-white mb-1">
           Borrow USDC
-          <span className="ml-2 text-xs font-normal text-gray-500">(10% of monthly hiSOLA)</span>
+          <span className="ml-2 text-xs font-normal text-gray-500">(20% of your locked bag)</span>
         </h3>
 
         <div className="flex items-start gap-2 text-xs text-gray-500 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 mb-4">
           <span className="text-brand-green text-base leading-none shrink-0">ℹ</span>
           <span>
-            Monthly installment: <span className="text-white font-mono">{fmt(monthlyHi)} hiSOLA</span> ·{" "}
-            Cap: <span className="text-white font-mono font-semibold">{fmt(borrowCap)} USDC</span> ·{" "}
+            Locked: <span className="text-white font-mono">{fmt(locked)} hiSOLA</span> ·{" "}
+            Cap (20%): <span className="text-white font-mono font-semibold">{fmt(borrowCap)} USDC</span> ·{" "}
             Debt: <span className="text-yellow-400 font-mono">{fmt(debt)} USDC</span> ·{" "}
             Available: <span className="text-brand-green font-mono font-semibold">{borrowAvail.toFixed(4)} USDC</span>
           </span>
@@ -399,7 +355,7 @@ export function ContributorPanel() {
 
         <p className="text-xs text-gray-500 mb-4">
           {borrowTab === "borrow"
-            ? "No interest · No liquidation · 2% origination fee to market_vault"
+            ? "No interest · No liquidation · 2% origination fee to market_vault · bounded by the 75% floor buffer"
             : "Repaying frees up your borrow headroom"}
         </p>
 

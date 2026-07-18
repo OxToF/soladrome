@@ -300,14 +300,14 @@
             </div>
         </div>
 
-        <!-- Contributor Allocation + Vesting -->
+        <!-- Contributor Allocation -->
         <div class="mt-16">
                 <div class="text-center mb-10">
                     <div class="inline-block px-4 py-1.5 mb-4 rounded-full border border-[#14F195]/30 bg-[#14F195]/10 text-[#14F195] text-xs font-bold uppercase tracking-widest">
-                        On-Chain · Per-Wallet · Dual Tranche
+                        On-Chain · Claimed at Launch · Locked for Life
                     </div>
-                    <h3 class="text-2xl md:text-3xl font-bold">Contributor <span class="gradient-text">Allocation</span> &amp; Vesting</h3>
-                    <p class="text-gray-500 text-sm mt-3 max-w-xl mx-auto">Community managers, content creators, and service providers who contribute to Soladrome receive an on-chain vesting allocation — same dual-tranche structure as the founder. <strong class="text-white">Full transparency: every allocation is verifiable on-chain.</strong></p>
+                    <h3 class="text-2xl md:text-3xl font-bold">Contributor <span class="gradient-text">Allocation</span></h3>
+                    <p class="text-gray-500 text-sm mt-3 max-w-xl mx-auto">The people who worked unpaid until launch — dev, community managers, mods — are first-class members of the project. A handful of individuals, small amounts, claimed <strong class="text-white">all at once at launch</strong>. <strong class="text-white">Every allocation verifiable on-chain.</strong></p>
                 </div>
 
                 <div class="grid md:grid-cols-2 gap-6 mb-8">
@@ -316,23 +316,19 @@
                         <div class="flex items-center gap-3 mb-4">
                             <div class="w-10 h-10 rounded-xl bg-[#9945FF]/20 flex items-center justify-center text-lg">🏛</div>
                             <div>
-                                <p class="font-bold text-white">hiSOLA Tranche</p>
-                                <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest">Governance + Borrow Power</p>
+                                <p class="font-bold text-white">hiSOLA Bag</p>
+                                <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest">Permanent Voting Power</p>
                             </div>
                         </div>
                         <p class="text-gray-400 text-sm leading-relaxed mb-4">
-                            hiSOLA gives contributors governance rights, a share of protocol fees, and USDC borrow power. Tokens vest linearly after a 1-month cliff over 12 months — each monthly installment becomes claimable on-chain via <code class="text-gray-300">claim_contributor_hi_sola</code>.
+                            Claimed at launch via <code class="text-gray-300">claim_contributor_hi_sola</code> and minted <strong class="text-white">straight into a lifetime ve-lock</strong> — the wallet never holds it. It votes (up to 4×) and borrows up to 20%, but can never be sold: same structure as the team tranche and the partner welcome bag.
                         </p>
                         <div class="bg-black/40 rounded-xl p-4 border border-white/5 space-y-2 text-xs">
-                            <div class="flex justify-between"><span class="text-gray-500">Cliff</span><span class="text-white font-semibold">1 month</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Vesting</span><span class="text-white font-semibold">12 months linear</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Monthly installment</span><span class="text-white font-semibold">Total ÷ 12</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Borrow cap</span><span class="text-[#14F195] font-semibold">10% of monthly installment</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">No-interest, no liquidation</span><span class="text-white font-semibold">Floor-guaranteed</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Delivery</span><span class="text-white font-semibold">All at launch, no cliff, no vesting</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Lock</span><span class="text-[#14F195] font-semibold">For life — never liquid SOLA</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Voting</span><span class="text-white font-semibold">Active, up to 4×</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Borrow</span><span class="text-[#14F195] font-semibold">Up to 20% via borrow_against_locked</span></div>
                         </div>
-                        <p class="text-gray-500 text-xs mt-3 leading-relaxed">
-                            Example: 120 000 hiSOLA allocation → monthly = 10 000 hiSOLA → borrow cap = 1 000 USDC/month. The borrow cap is enforced on-chain by the <code class="text-gray-500">contributor_borrow_usdc</code> instruction and resets when debt is repaid.
-                        </p>
                     </div>
                     <!-- oSOLA tranche -->
                     <div class="bg-black/30 rounded-2xl p-7 border border-yellow-500/20">
@@ -340,44 +336,16 @@
                             <div class="w-10 h-10 rounded-xl bg-yellow-500/10 flex items-center justify-center text-lg">⚡</div>
                             <div>
                                 <p class="font-bold text-white">oSOLA Tranche</p>
-                                <p class="text-yellow-400 text-xs font-bold uppercase tracking-widest">Liquid Options</p>
+                                <p class="text-yellow-400 text-xs font-bold uppercase tracking-widest">Upside, Self-Financing</p>
                             </div>
                         </div>
                         <p class="text-gray-400 text-sm leading-relaxed mb-4">
-                            oSOLA is a perpetual call option exercisable at the floor price. Contributors claim it progressively via <code class="text-gray-300">claim_contributor_vesting</code>, then convert via <code class="text-gray-300">exercise_o_sola</code> — pay 1 USDC → receive 1 SOLA. Each exercise <strong class="text-white">adds USDC to the floor vault</strong>, further strengthening protocol backing.
+                            Claimed at launch via <code class="text-gray-300">claim_contributor_vesting</code> to the wallet — a perpetual call option. Convert via <code class="text-gray-300">exercise_o_sola</code> — pay 1 USDC → receive 1 SOLA. Each exercise <strong class="text-white">adds USDC to the floor vault</strong>, so contributor upside is financed, never unbacked.
                         </p>
                         <div class="bg-black/40 rounded-xl p-4 border border-white/5 space-y-2 text-xs">
-                            <div class="flex justify-between"><span class="text-gray-500">Cliff</span><span class="text-white font-semibold">1 month</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Vesting</span><span class="text-white font-semibold">12 months linear</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Delivery</span><span class="text-white font-semibold">All at launch</span></div>
                             <div class="flex justify-between"><span class="text-gray-500">Exercise</span><span class="text-white font-semibold">Pay floor price → get SOLA</span></div>
                             <div class="flex justify-between"><span class="text-gray-500">Floor impact</span><span class="text-yellow-400 font-semibold">+1 USDC per oSOLA exercised</span></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- How it works for contributors -->
-                <div class="bg-black/30 rounded-[2rem] p-8 border border-white/5 mb-8">
-                    <p class="text-xs text-gray-500 uppercase tracking-widest mb-6 text-center">How contributor vesting works</p>
-                    <div class="grid md:grid-cols-4 gap-6 text-center text-sm">
-                        <div>
-                            <div class="w-10 h-10 rounded-full bg-[#9945FF]/20 border border-[#9945FF]/40 flex items-center justify-center text-[#9945FF] font-bold text-lg mx-auto mb-3">1</div>
-                            <p class="text-white font-semibold mb-1">Registration</p>
-                            <p class="text-gray-500 text-xs">The protocol registers your wallet on-chain via <code>register_contributor</code> with exact hiSOLA &amp; oSOLA amounts</p>
-                        </div>
-                        <div>
-                            <div class="w-10 h-10 rounded-full bg-[#9945FF]/20 border border-[#9945FF]/40 flex items-center justify-center text-[#9945FF] font-bold text-lg mx-auto mb-3">2</div>
-                            <p class="text-white font-semibold mb-1">Cliff (1 month)</p>
-                            <p class="text-gray-500 text-xs">Tokens are locked. No claims possible during the cliff. Countdown visible in <span class="text-white">🤝 My Allocation</span> tab</p>
-                        </div>
-                        <div>
-                            <div class="w-10 h-10 rounded-full bg-[#14F195]/20 border border-[#14F195]/40 flex items-center justify-center text-[#14F195] font-bold text-lg mx-auto mb-3">3</div>
-                            <p class="text-white font-semibold mb-1">Monthly Claims</p>
-                            <p class="text-gray-500 text-xs">After cliff: claim hiSOLA + oSOLA progressively. Borrow USDC up to your monthly cap at any time</p>
-                        </div>
-                        <div>
-                            <div class="w-10 h-10 rounded-full bg-yellow-500/20 border border-yellow-500/40 flex items-center justify-center text-yellow-400 font-bold text-lg mx-auto mb-3">4</div>
-                            <p class="text-white font-semibold mb-1">Full Vest (12 mo)</p>
-                            <p class="text-gray-500 text-xs">100% of both tranches available. hiSOLA keeps earning fees forever. oSOLA exercisable at any time</p>
                         </div>
                     </div>
                 </div>
@@ -386,7 +354,7 @@
                 <div class="bg-[#9945FF]/5 border border-[#9945FF]/20 rounded-2xl p-6 text-sm text-gray-400 mb-8">
                     <p class="flex items-start gap-3">
                         <span class="text-[#9945FF] text-lg mt-0.5">🔍</span>
-                        <span><strong class="text-white">Fully verifiable on Solana.</strong> Every contributor allocation is stored in a public PDA (<code class="text-gray-300">[b"contributor", wallet]</code>) visible to anyone on the chain. Amounts, cliff, vesting progress, and borrow history are all readable on-chain — no trust required. Contributors can verify their allocation independently at any time.</span>
+                        <span><strong class="text-white">Fully verifiable on Solana.</strong> Every contributor allocation is stored in a public PDA (<code class="text-gray-300">[b"contributor", wallet]</code>) and the hiSOLA bag sits in a ve-lock anyone can read on-chain — amounts, lock, and borrow history are public. No trust required.</span>
                     </p>
                 </div>
         </div>
@@ -695,7 +663,7 @@
                         Solana Grants Applied
                     </span>
                 </div>
-                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing (2% fee → stakers) · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · <strong class="text-white">Ecosystem allocation enforced on-chain</strong> (250K team tranche minted straight into a lifetime ve-lock — voting active, 20% borrow, the team wallet never holds it · 1.75M issued exclusively as oSOLA, hard-capped on-chain, every exercise adds 1 USDC to the floor — zero unbacked $SOLA can ever be minted from it) · <strong class="text-white">Founder reserve escrow</strong> (7M hiSOLA vesting 6-month cliff + 24-month linear, minted directly into a lifetime ve-lock — never reaches a wallet, no vote, no fee share, unlock permanently refused by the program · 5M oSOLA progressive vesting) · <strong class="text-white">Founder borrow cap</strong> (20% of claimed hiSOLA · on-chain enforced · floor protection) · <strong class="text-white">On-chain contributor vesting</strong> (dual hiSOLA + oSOLA tranche · per-wallet PDA · 1-month cliff · 12-month linear · 20% borrow cap on claimed hiSOLA — one rule across founder, contributor and partner) · Wallet collection active (airdrop eligibility) · <span class="text-[#9945FF]">Solana Foundation Grants application submitted</span></p>
+                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing (2% fee → stakers) · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · <strong class="text-white">Ecosystem allocation enforced on-chain</strong> (250K team tranche minted straight into a lifetime ve-lock — voting active, 20% borrow, the team wallet never holds it · 1.75M issued exclusively as oSOLA, hard-capped on-chain, every exercise adds 1 USDC to the floor — zero unbacked $SOLA can ever be minted from it) · <strong class="text-white">Founder reserve escrow</strong> (7M hiSOLA vesting 6-month cliff + 24-month linear, minted directly into a lifetime ve-lock — never reaches a wallet, no vote, no fee share, unlock permanently refused by the program · 5M oSOLA progressive vesting) · <strong class="text-white">Unified 20% borrow cap</strong> (every unfinanced allocation — founder, team, contributor, partner — borrows only via borrow_against_locked at 20%; 75% floor buffer bounds the rest) · <strong class="text-white">Contributor allocation</strong> (claimed at launch — hiSOLA into a lifetime ve-lock + oSOLA · per-wallet PDA · votes, never sellable) · Wallet collection active (airdrop eligibility) · <span class="text-[#9945FF]">Solana Foundation Grants application submitted</span></p>
             </div>
             <div class="bg-solana p-8 rounded-2xl border border-[#9945FF]/30">
                 <div class="flex items-center gap-3 mb-2">
