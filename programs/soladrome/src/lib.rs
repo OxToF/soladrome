@@ -286,6 +286,64 @@ pub mod soladrome {
         Ok(())
     }
 
+    /// Authority-only: grow the `protocol_state` singleton to the current
+    /// `ProtocolState::LEN`.
+    ///
+    /// A program redeploy never changes the size of an existing account, and
+    /// `LEN` only sizes NEW accounts at `init` — so when a field is appended
+    /// past an already-allocated singleton's capacity, the account must be
+    /// resized in place or every instruction that loads it fails with
+    /// AccountDidNotDeserialize (3003).
+    ///
+    /// `protocol_state` is an `UncheckedAccount` because `Account<ProtocolState>`
+    /// would itself fail to deserialize the short account — the very bug this
+    /// fixes. Safety is preserved anyway: the seeds constraint pins the
+    /// canonical PDA, and the handler checks program ownership, the account
+    /// discriminator, and that the signer matches the stored authority (first
+    /// field after the discriminator, bytes 8..40). Grown bytes are
+    /// zero-initialized by the runtime, so appended fields read their correct
+    /// zero default. Idempotent: once the account is at LEN, calls are no-ops.
+    pub fn migrate_protocol_state(ctx: Context<MigrateProtocolState>) -> Result<()> {
+        let info = ctx.accounts.protocol_state.to_account_info();
+        require_keys_eq!(*info.owner, crate::ID, SoladromeError::Unauthorized);
+        {
+            let data = info.try_borrow_data()?;
+            require!(
+                data.len() >= 40 && data[..8] == ProtocolState::DISCRIMINATOR[..],
+                SoladromeError::Unauthorized
+            );
+            let stored_authority = Pubkey::new_from_array(data[8..40].try_into().unwrap());
+            require_keys_eq!(
+                stored_authority,
+                ctx.accounts.authority.key(),
+                SoladromeError::Unauthorized
+            );
+        }
+        let new_len = ProtocolState::LEN;
+        if info.data_len() >= new_len {
+            msg!("protocol_state already {} bytes — nothing to do", info.data_len());
+            return Ok(());
+        }
+        // Top up rent-exemption for the new size before growing.
+        let rent_needed = Rent::get()?.minimum_balance(new_len);
+        let delta = rent_needed.saturating_sub(info.lamports());
+        if delta > 0 {
+            anchor_lang::system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    anchor_lang::system_program::Transfer {
+                        from: ctx.accounts.authority.to_account_info(),
+                        to: info.clone(),
+                    },
+                ),
+                delta,
+            )?;
+        }
+        info.resize(new_len)?;
+        msg!("protocol_state resized to {} bytes", new_len);
+        Ok(())
+    }
+
     // Deposit USDC → receive SOLA via constant-product curve.
     // USDC splits: floor vault (1:1 backing) + market vault (excess fees).
     pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Result<()> {
@@ -3179,6 +3237,24 @@ pub struct TransferAuthority<'info> {
         has_one = authority @ SoladromeError::Unauthorized,
     )]
     pub protocol_state: Account<'info, ProtocolState>,
+}
+
+/// Resize the protocol_state singleton to the current ProtocolState::LEN.
+#[derive(Accounts)]
+pub struct MigrateProtocolState<'info> {
+    /// Must match the authority stored in protocol_state (checked in the
+    /// handler against the raw bytes); also pays the rent top-up.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: canonical singleton pinned by PDA seeds; program ownership,
+    /// discriminator and stored authority are verified in the handler. Cannot
+    /// be `Account<ProtocolState>`: a pre-migration account is too short to
+    /// deserialize — that is the bug this instruction fixes.
+    #[account(mut, seeds = [STATE_SEED], bump)]
+    pub protocol_state: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

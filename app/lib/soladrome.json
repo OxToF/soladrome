@@ -5385,6 +5385,77 @@
       ]
     },
     {
+      "name": "migrate_protocol_state",
+      "docs": [
+        "Authority-only: grow the `protocol_state` singleton to the current",
+        "`ProtocolState::LEN`.",
+        "",
+        "A program redeploy never changes the size of an existing account, and",
+        "`LEN` only sizes NEW accounts at `init` — so when a field is appended",
+        "past an already-allocated singleton's capacity, the account must be",
+        "resized in place or every instruction that loads it fails with",
+        "AccountDidNotDeserialize (3003).",
+        "",
+        "`protocol_state` is an `UncheckedAccount` because `Account<ProtocolState>`",
+        "would itself fail to deserialize the short account — the very bug this",
+        "fixes. Safety is preserved anyway: the seeds constraint pins the",
+        "canonical PDA, and the handler checks program ownership, the account",
+        "discriminator, and that the signer matches the stored authority (first",
+        "field after the discriminator, bytes 8..40). Grown bytes are",
+        "zero-initialized by the runtime, so appended fields read their correct",
+        "zero default. Idempotent: once the account is at LEN, calls are no-ops."
+      ],
+      "discriminator": [
+        29,
+        107,
+        8,
+        182,
+        172,
+        205,
+        210,
+        178
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Must match the authority stored in protocol_state (checked in the",
+            "handler against the raw bytes); also pays the rent top-up."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "discriminator and stored authority are verified in the handler. Cannot",
+            "be `Account<ProtocolState>`: a pre-migration account is too short to",
+            "deserialize — that is the bug this instruction fixes."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "migrate_user_position",
       "docs": [
         "One-time account migration — expands an existing UserPosition from the",
