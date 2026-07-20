@@ -18,14 +18,16 @@ const VALID_QUESTS = new Set([
   "follow_x", "like_video", "solana_id",
   "claim_lp_osola", "claim_bribe", "borrow_again", "exercise", "vote_again",
   "like_video2", "truemrr",
+  "like_bridge", "like_fbomb",
 ]);
-// "repost", "repost_video" and "repost_video2" are intentionally NOT POSTable
+// "repost", "repost_video", "repost_video2", "repost_bridge" and "repost_fbomb"
+// are intentionally NOT POSTable
 // here anymore — they used to be honor-system click-to-claim and are now only
 // credited by app/api/x-verify/route.ts after a real oEmbed-verified quote
 // tweet carrying the wallet's code (same lockdown pattern as "discord" below).
-// follow_x + like_video(2) stay honor-system: X likes are private since June
-// 2024 and follows leave nothing submittable — unverifiable without the paid
-// X API on every platform, Zealy included.
+// follow_x + like_video(2) + like_bridge/like_fbomb stay honor-system: X likes
+// are private since June 2024 and follows leave nothing submittable —
+// unverifiable without the paid X API on every platform, Zealy included.
 // "bug" is intentionally NOT POSTable through this public endpoint. It's a
 // manually-awarded bonus (verified bug reports, severity-weighted) credited only
 // via the Supabase record_quest RPC (service key / SQL editor) — so it can't be

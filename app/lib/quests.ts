@@ -18,6 +18,7 @@ export type QuestId =
   | "solana_id"
   | "claim_lp_osola" | "claim_bribe" | "borrow_again" | "exercise" | "vote_again"
   | "like_video2" | "repost_video2"
+  | "like_bridge" | "repost_bridge" | "like_fbomb" | "repost_fbomb"
   | "truemrr";
 
 export interface Quest {
@@ -147,6 +148,11 @@ const SOLADROME_X = "https://x.com/intent/follow?screen_name=soladrome";
 // Quest targets (quoted posts) live in app/lib/xcode.ts (X_VERIFIED) — the
 // genesis video URL is still needed here for the honor-system like quest.
 const GENESIS_VIDEO_URL = "https://x.com/soladrome/status/2069730059821175111";
+// July 2026 bribe-bridge push — same like/quote split as the video quests:
+// likes stay honor-system (private on X since June 2024), quotes go through
+// the verified x-verify flow (targets registered in app/lib/xcode.ts).
+const BRIDGE_THREAD_URL = "https://x.com/soladrome/status/2076109938880090568";
+const FBOMB_POST_URL    = "https://x.com/soladrome/status/2078927993976606793";
 
 const SOCIAL: QuestGroup = {
   id:    "social",
@@ -159,6 +165,10 @@ const SOCIAL: QuestGroup = {
     { id: "repost",   label: "Quote the launch thread",  desc: "Quote-post our genesis announcement with your code, then paste your post's link", points: 10, icon: "🔁", xVerify: true },
     { id: "like_video",   label: "Like the genesis video",  desc: "Like our genesis explainer video on X, then claim",   points: 5,  icon: "❤️", external: "Watch",  href: GENESIS_VIDEO_URL },
     { id: "repost_video", label: "Quote the genesis video", desc: "Quote-post our genesis explainer video with your code, then paste your post's link", points: 10, icon: "🎬", xVerify: true },
+    { id: "like_bridge",   label: "Like the bribe bridge thread",  desc: "Like our ve(3,3) bribe bridge thread on X, then claim",  points: 5,  icon: "❤️", external: "Read", href: BRIDGE_THREAD_URL },
+    { id: "repost_bridge", label: "Quote the bribe bridge thread", desc: "Quote-post our ve(3,3) bribe bridge thread with your code, then paste your post's link", points: 10, icon: "🌉", xVerify: true },
+    { id: "like_fbomb",    label: "Like the fBOMB alliance post",  desc: "Like our MLCB × fBOMB DAO alliance post on X, then claim", points: 5, icon: "❤️", external: "Read", href: FBOMB_POST_URL },
+    { id: "repost_fbomb",  label: "Quote the fBOMB alliance post", desc: "Quote-post our MLCB × fBOMB DAO alliance post with your code, then paste your post's link", points: 10, icon: "💣", xVerify: true },
     { id: "discord", label: "Register on our Discord", desc: "Join the Soladrome Discord server, then claim", points: 10, icon: "💬", external: "Join", href: DISCORD_INVITE },
     { id: "referral", label: "Refer a tester",           desc: "Share your link — friends just open it, nothing to paste. Earn when they finish the Genesis set on-chain.", points: 25, icon: "🤝", copyRef: true },
   ],

@@ -72,6 +72,10 @@ begin
     when 'vote_again'     then 20 -- genesis II: voted again (verified on-chain, see track-quest)
     when 'like_video2'    then 5  -- genesis II: like explainer video 2 on X (honor-system)
     when 'repost_video2'  then 10 -- genesis II: repost explainer video 2 on X (honor-system)
+    when 'like_bridge'    then 5  -- social: like the ve(3,3) bribe bridge thread (honor-system)
+    when 'repost_bridge'  then 10 -- social: quote the bribe bridge thread (x-verified, see x-verify route)
+    when 'like_fbomb'     then 5  -- social: like the MLCB x fBOMB alliance post (honor-system)
+    when 'repost_fbomb'   then 10 -- social: quote the fBOMB alliance post (x-verified, see x-verify route)
     when 'truemrr'        then 20 -- ecosystem: voted for Soladrome on TrueMRR (honor-system)
     -- 'referral:<wallet>' (repeatable, one per referred wallet) is handled above,
     -- before this case — awarded SERVER-SIDE only when a referred wallet becomes

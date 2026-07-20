@@ -17,6 +17,8 @@ export const X_VERIFIED: Record<string, { target: string; targetUrl: string }> =
   repost:        { target: "2067971567770804567", targetUrl: "https://x.com/soladrome/status/2067971567770804567" },
   repost_video:  { target: "2069730059821175111", targetUrl: "https://x.com/soladrome/status/2069730059821175111" },
   repost_video2: { target: "2074079950903128238", targetUrl: "https://x.com/soladrome/status/2074079950903128238" },
+  repost_bridge: { target: "2076109938880090568", targetUrl: "https://x.com/soladrome/status/2076109938880090568" },
+  repost_fbomb:  { target: "2078927993976606793", targetUrl: "https://x.com/soladrome/status/2078927993976606793" },
 };
 
 /**
