@@ -155,6 +155,12 @@ export function LpEmissions() {
       const poolPk   = new PublicKey(poolAddr);
       const lpMint   = lpMintPda(poolPk);
       const userLpAta = userAta(lpMint, wallet.publicKey);
+      // Program-recorded deposit PDA — the reward basis (min with wallet balance).
+      // Required by the checkpoint_lp context since the LP-reward accounting fix.
+      const [lpUserInfo] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_user"), poolPk.toBuffer(), wallet.publicKey.toBuffer()],
+        program.programId,
+      );
 
       const ix = await program.methods
         .checkpointLp(new BN(epoch))
@@ -164,6 +170,7 @@ export function LpEmissions() {
           pool:              poolPk,
           lpMint,
           userLp:            userLpAta,
+          lpUserInfo,
           system_program:    (await import("@solana/web3.js")).SystemProgram.programId,
           rent:              (await import("@solana/web3.js")).SYSVAR_RENT_PUBKEY,
         } as any)
