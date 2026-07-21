@@ -1154,3 +1154,38 @@ Surfaces adjacentes vérifiées pour absence d'oubli :
 - Point non-urgent déjà loggé le 07-03 toujours valable : `cargo audit`/`cargo deny` en CI pas encore ajouté.
 
 **Conclusion du jour : RAS.** Le seul changement de surface programme depuis le dernier audit (`6ff6b62`, phase gating) a été vérifié en profondeur et est sain — gating cohérent, authority-gated, compatibilité de taille de compte confirmée par calcul, IDL synchronisé. Aucune faille externe nouvellement divulguée (BonkDAO governance attack, RUSTSEC, rounding bugs) n'affecte Soladrome, pour les raisons détaillées ci-dessus.
+
+---
+
+### 2026-07-21 — Audit manuel (Opus 4.8, session interactive) : 2 findings AMM LP, dont 1 Critical CORRIGÉ + DÉPLOYÉ
+
+Reprise après deux runs planifiés avortés (interrompus avant production de rapport). Audit ciblé des 4 commits programme non journalisés depuis le 16-07 (`3b32b03` tokenomics ve, `309771f` contributeurs, `88c1ab2` migrate_protocol_state, `ef5986a` CI/fmt) **plus** revue des chemins de récompense LP de l'AMM (jamais audités en profondeur, zéro couverture de test). Les 4 commits se sont révélés sains ; le trou était dans l'AMM.
+
+**Racine commune des deux findings : les récompenses LP se calculaient sur un solde de token SPL librement transférable, jamais sur un dépôt tracké par le programme.** Exactement la leçon déjà écrite pour les tranches founder/team (« tranche restrictions must live in state or escrow, never in a token balance ») — appliquée au founder, jamais au LP. Le LP mint est un `token::Mint` standard (pas de freeze authority, pas de Token-2022), donc transférable à volonté.
+
+#### Finding B — `claim_lp_rewards` : mint oSOLA quasi-illimité — **CRITICAL — CORRIGÉ + DÉPLOYÉ**
+
+- **Surface** : `amm.rs` `claim_lp_rewards` (+ auto-harvest dans `add_liquidity`/`remove_liquidity`).
+- **Technique** : `pending = osola_reward_per_lp × solde_LP / 1e12`, et `LpUserInfo` est `init_if_needed` → un wallet neuf naît avec `reward_debt = 0` → réclame **tout l'accumulateur depuis la création du pool**. L'attaquant fournit lui-même la liquidité, transfère ses LP vers un wallet vierge, réclame, retire, recommence — répétable à l'infini, coût = frais de tx.
+- **Confirmé on-chain (devnet)** : état réel = stream continu **armé** (`continuous_rate_per_sec = 413360`, fenêtre ouverte, 5 pools `rewards_enabled`, ~986 `LpUserInfo` vivants). Mon rapport initial disait « dormant » sur la foi d'un grep de `app/`/`tests/` — faux : `configure_continuous_emissions` a été appelé depuis un script hors repo. **Leçon : lire le frontend ne dit pas l'état on-chain, toujours interroger la chaîne.**
+- **PoC exécuté (autorisé, plafonné 1000 oSOLA)** : wallet neuf `FuRgrx7AX1RsEi1BSgLw88WHdgqmWh9wf2nGaa6WijUc`, zéro dépôt, a minté **899,99 oSOLA** en une tx : `4RGNQYvmpV37abcrvKUdroQqCgFHVkkkZGbTTH3nuHifwejBPSY32KHiJb6QYVrxYwCj5AqjaRSMp5752VdnBQBe`. Sans plafond, un wallet à 10 % du LP du pool `6kaScSjP` sortait ~12,2M oSOLA (supply oSOLA totale ≈ 6,3M) en un claim.
+- **Correctif** (`amm.rs`/`lib.rs`/`state.rs`, commit `0180ca3`) : base de récompense = `reward_basis = min(lp_amount, solde_wallet)` où `lp_amount` (nouveau champ `LpUserInfo`, maintenu par add/remove) est le dépôt tracké ; `last_change_ts` (nouveau champ) redémarre la fenêtre de poids à tout changement de position ; `checkpoint_lp` accroît le poids depuis `max(dernier checkpoint, dernier changement)` au lieu de `epoch_start` ; `claim_lp_emissions` plafonne le pot par un cumulatif `osola_claimed ≤ osola_allocated`. **Aucun realloc** — champs taillés dans les octets réservés (`LEN` inchangés, comptes existants se désérialisent). Frontend `checkpoint_lp` mis à jour (compte `lp_user_info` ajouté, commit `8e4454d`).
+- **Déployé + vérifié** : pause `21dzHNMof4…` ; deploy SBPFv3 `5mAi7ozd…` (slot 477943093, prog `4d2SYx8…`) ; **preuve inverse** — même exploit rejoué post-fix par wallet neuf `9YHzCK8v…` → **`NothingToClaim` (6007)** au lieu de ~59 oSOLA ; unpause `5LgkpVJC…`.
+- **Migration sémantique (à communiquer)** : les ~986 LPs existants ont `lp_amount = 0` → ne regagnent des récompenses qu'après un `remove` puis `add`. **NE JAMAIS réamorcer `lp_amount` depuis le solde wallet — c'est exactement la faille.**
+- **Empreinte PoC non nettoyable** : wallets `FuRgrx7A…` (900 oSOLA + 3 032 609 LP) et `9YHzCK8v…` (200 000 LP) — clés éphémères (`Keypair.generate()` non sauvegardé), irrécupérables. À exclure côté leaderboard/airdrop par adresse. Liquidité résiduelle du deployer retirée (`4ucDVU8T…`).
+
+#### Finding A — `checkpoint_lp` : sur-émission oSOLA par duplication multi-wallet — défaut réel, **LATENT (non exploitable en l'état)**
+
+- **Surface** : `lib.rs` `checkpoint_lp` / `claim_lp_emissions` (émissions par epoch, vote-directed).
+- **Technique** : au 1er checkpoint, `last_update_ts = epoch_start` → back-crédit rétroactif de tout l'epoch pour des LP qui viennent d'arriver ; PDA `[b"lp_ckpt", pool, user]` par user → mêmes LP promenés sur N wallets banquent N× le poids contre un dénominateur (`total_weighted_supply`) compté une seule fois ; aucun cumulatif face à `osola_allocated`.
+- **Pourquoi latent** : `osola_emission_initial = 0` on-chain → `decayed_emission` renvoie 0 → `emit_pool_rewards` alloue 0 → `claim_lp_emissions` revert sur `require!(user_osola > 0)`. Rien à voler tant que les émissions par epoch ne sont pas configurées. **S'arme au lancement mainnet** (ou dès un `configure_emissions` avec `initial > 0`).
+- **Correctif** : couvert par le même commit `0180ca3` (fenêtre depuis le dernier changement + cap `osola_claimed`) — déployé, donc le chemin est déjà sain avant même d'être armé.
+
+#### RAS — 4 commits programme audités ce jour
+- `3b32b03` (tokenomics ve) : escrow founder/team/contributeur cohérent, `total_hi_sola` bien laissé hors dénominateur de frais, cap `ECOSYSTEM_TOTAL` réellement appliqué (`mut` présent sur `DistributeOSola`), garde de solvabilité `collect_to_pol` correcte.
+- `88c1ab2` (`migrate_protocol_state`) : owner + discriminateur + authority (octets bruts) + seeds ; grow-only, idempotent. Sain.
+- `ef5986a` (CI/clippy/fmt) : relu ligne à ligne — formatage pur, 3 correctifs clippy sémantiquement équivalents, aucun changement de comportement.
+- `309771f` (contributeurs) : conforme au pattern team/partner.
+- **Low non corrigé** : `lib.rs:~1731` `claim_partner_allocation` fait `lock.permanent_amount = base_vested` (affectation), alors que team/contributeur font `+=`. Si l'authority enregistre un jour le même wallet comme partenaire **et** contributeur, le claim partenaire écrase le verrou permanent de l'autre tranche → libérable. À corriger si le cas devient possible.
+
+**Conclusion du jour : 1 Critical trouvé, confirmé par PoC on-chain, corrigé et déployé le jour même ; 1 défaut latent de même classe corrigé au passage. Protocole unpaused, fix live, exploit neutralisé (preuve inverse `NothingToClaim`).**
