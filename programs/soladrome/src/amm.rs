@@ -86,6 +86,17 @@ pub fn set_pool_rewards(ctx: Context<SetPoolRewards>, enabled: bool) -> Result<(
     Ok(())
 }
 
+/// Reward basis for a user: the LP they deposited through the program, floored by what
+/// their wallet still holds.
+///
+/// `lp_amount` alone would keep paying someone who has since transferred their LP away;
+/// the wallet balance alone pays anyone who was transferred LP without ever depositing
+/// (fresh wallet ⇒ `reward_debt` = 0 ⇒ the whole accumulator since pool creation). Only the
+/// minimum requires both, and the same tokens cannot satisfy it in two wallets at once.
+pub fn reward_basis(info: &LpUserInfo, wallet_lp: u64) -> u64 {
+    info.lp_amount.min(wallet_lp)
+}
+
 /// Compute pending oSOLA for a user given current accumulator and their debt.
 fn pending_osola(acc: u128, debt: u128, user_lp: u64) -> u64 {
     if user_lp == 0 || acc <= debt {
@@ -231,7 +242,8 @@ pub fn add_liquidity(
 
     // ── Auto-harvest pending oSOLA for user's existing LP position ────────────
     let acc = ctx.accounts.pool.osola_reward_per_lp;
-    let pending = pending_osola(acc, ctx.accounts.lp_user_info.reward_debt, user_lp_pre);
+    let basis = reward_basis(&ctx.accounts.lp_user_info, user_lp_pre);
+    let pending = pending_osola(acc, ctx.accounts.lp_user_info.reward_debt, basis);
     if pending > 0 {
         let state_bump = ctx.accounts.protocol_state.bump;
         let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
@@ -255,6 +267,14 @@ pub fn add_liquidity(
     if lp_user_info.bump == 0 {
         lp_user_info.bump = ctx.bumps.lp_user_info;
     }
+    // Record the deposit: this is the only way lp_amount ever grows, so reward-earning
+    // LP can only be created by actually paying tokens into the vaults.
+    lp_user_info.lp_amount = lp_user_info
+        .lp_amount
+        .checked_add(lp_out)
+        .ok_or(SoladromeError::Overflow)?;
+    // Restart the epoch-weight accrual window (see LpUserInfo::last_change_ts).
+    lp_user_info.last_change_ts = now.max(0) as u32;
 
     // Mint lp_out to user
     token::mint_to(
@@ -307,7 +327,8 @@ pub fn remove_liquidity(
 
     // ── Auto-harvest pending oSOLA ────────────────────────────────────────────
     let acc = ctx.accounts.pool.osola_reward_per_lp;
-    let pending = pending_osola(acc, ctx.accounts.lp_user_info.reward_debt, user_lp_pre);
+    let basis = reward_basis(&ctx.accounts.lp_user_info, user_lp_pre);
+    let pending = pending_osola(acc, ctx.accounts.lp_user_info.reward_debt, basis);
     if pending > 0 {
         let state_bump = ctx.accounts.protocol_state.bump;
         let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
@@ -331,6 +352,12 @@ pub fn remove_liquidity(
     if lp_user_info.bump == 0 {
         lp_user_info.bump = ctx.bumps.lp_user_info;
     }
+    // Withdrawal shrinks the recorded deposit. saturating_sub, not checked_sub: a legacy
+    // position created before this field existed reads lp_amount = 0 and must still be
+    // able to withdraw — it simply earns nothing until its next add_liquidity.
+    lp_user_info.lp_amount = lp_user_info.lp_amount.saturating_sub(lp_amount);
+    // Restart the epoch-weight accrual window (see LpUserInfo::last_change_ts).
+    lp_user_info.last_change_ts = now.max(0) as u32;
 
     // ── Burn LP and return tokens ─────────────────────────────────────────────
     let pool = &ctx.accounts.pool;
@@ -423,7 +450,8 @@ pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
     }
 
     let acc = ctx.accounts.pool.osola_reward_per_lp;
-    let pending = pending_osola(acc, ctx.accounts.lp_user_info.reward_debt, user_lp);
+    let basis = reward_basis(&ctx.accounts.lp_user_info, user_lp);
+    let pending = pending_osola(acc, ctx.accounts.lp_user_info.reward_debt, basis);
     require!(pending > 0, SoladromeError::NothingToClaim);
 
     let state_bump = ctx.accounts.protocol_state.bump;
