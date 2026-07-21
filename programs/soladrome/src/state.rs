@@ -376,9 +376,20 @@ pub struct LpPoolEpochAccum {
     pub osola_allocated: u64,
     pub finalized: bool,
     pub bump: u8,
+    /// Cumulative oSOLA already minted to LPs for this (pool, epoch). Hard-caps the pot:
+    /// `claim_lp_emissions` can never mint more than `osola_allocated` in total, whatever
+    /// the sum of user weighted balances happens to be. Defence in depth behind the
+    /// checkpoint fix — the invariant "Σ user weights ≤ total_weighted_supply" is an
+    /// off-account property nothing on-chain can verify at claim time, so the pot itself
+    /// is made the ceiling.
+    ///
+    /// Appended last, carved from the 18 spare bytes → existing accums read 0, i.e. the
+    /// full allocation still claimable. No realloc.
+    pub osola_claimed: u64,
 }
 impl LpPoolEpochAccum {
-    pub const LEN: usize = 32 + 8 + 16 + 8 + 8 + 8 + 1 + 1 + 18;
+    // 32 + 8 + 16 + 8 + 8 + 8 + 1 + 1 + 8 = 90 used of 100 (10 spare).
+    pub const LEN: usize = 100;
 }
 
 /// Proof-of-claim for LP emissions — created by claim_lp_emissions, blocks replay.
@@ -401,9 +412,46 @@ impl LpEpochClaim {
 pub struct LpUserInfo {
     pub reward_debt: u128, // pool.osola_reward_per_lp snapshot at last interaction
     pub bump: u8,
+    /// LP tokens this user actually deposited through `add_liquidity`, maintained by the
+    /// program (add → +lp_out, remove → −lp_burned). This — not the wallet's LP token
+    /// balance — is the basis for every oSOLA reward computation.
+    ///
+    /// Why: LP tokens are ordinary transferable SPL tokens, while `reward_debt` lives in a
+    /// per-wallet PDA that `init_if_needed` creates at 0. Paying on the wallet balance let
+    /// anyone move LP to a fresh wallet and claim `osola_reward_per_lp × balance` — the
+    /// accumulator since pool creation — then repeat, wallet after wallet: an unbounded
+    /// oSOLA mint. Rewards are read as `min(lp_amount, wallet_balance)` so the payout needs
+    /// BOTH a program-recorded deposit AND the tokens still in hand; transferred LP earns
+    /// on neither side. Same lesson as the founder tranches: a rule enforced on a token
+    /// balance is not enforced at all.
+    ///
+    /// Appended last, carved from the 15 spare bytes → existing accounts read 0 and no
+    /// realloc is needed.
+    ///
+    /// ⚠️ MIGRATION — this is NOT free. The devnet stream is armed (rate 413 360/s, window
+    /// open, 5 pools `rewards_enabled`, ~986 `LpUserInfo` live), so the ~986 existing LPs
+    /// read `lp_amount = 0` after this upgrade and stop earning until they withdraw and
+    /// redeposit. Seeding `lp_amount` from the wallet balance would be the obvious fix and
+    /// is exactly the hole being closed — it would hand the full historical accumulator to
+    /// anyone holding transferred LP. Decide the migration before deploying.
+    pub lp_amount: u64,
+    /// Unix seconds of the last `add_liquidity` / `remove_liquidity` by this user on this
+    /// pool, as u32 (valid until 2106 — a u64 would not fit the spare bytes, and no realloc
+    /// is worth it).
+    ///
+    /// `checkpoint_lp` starts its accrual window at `max(last checkpoint, this)`, so an
+    /// interval is only ever billed at a size held for the whole interval. Without it,
+    /// `lp_amount` alone is still gameable in both directions: deposit at epoch start,
+    /// checkpoint, withdraw, redeposit and checkpoint at epoch end (the second checkpoint
+    /// bills the whole interval at the redeposited size), or simply sit at zero, deposit at
+    /// T−ε and checkpoint (the interval is billed at a size held for ε). Either buys a full
+    /// epoch of weight with an instant of capital, repeatable wallet by wallet. The rule for
+    /// honest LPs is symmetric and simple: checkpoint BEFORE changing your position.
+    pub last_change_ts: u32,
 }
 impl LpUserInfo {
-    pub const LEN: usize = 16 + 1 + 15; // = 32 with padding
+    // 16 + 1 + 8 + 4 = 29 used of 32 (3 spare).
+    pub const LEN: usize = 32;
 }
 
 // ── Founder vesting ───────────────────────────────────────────────────────────

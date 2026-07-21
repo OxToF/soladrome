@@ -24,7 +24,7 @@ use errors::SoladromeError;
 pub use pol::*;
 use state::{
     current_epoch, BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting,
-    GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint,
+    GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo,
     PartnerAllocation, ProtocolState, UserBribeClaim, UserEpochVotes, UserPosition, UserVoteConfig,
     UserVoteReceipt, VeLockPosition, BASE_BAG_VEST_SECS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS,
     MAX_LOCK_DURATION, MIN_LOCK_DURATION, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
@@ -2477,7 +2477,13 @@ pub mod soladrome {
 
         let pool_key = ctx.accounts.pool.key();
         let lp_supply = ctx.accounts.lp_mint.supply;
-        let user_lp = ctx.accounts.user_lp.amount;
+        // Program-recorded deposit, floored by the wallet balance — never the raw wallet
+        // balance. LP tokens are transferable, and this checkpoint is what the epoch pot is
+        // split on: paying on the balance let one position be walked through N fresh wallets,
+        // each banking the same weight against a denominator (`total_weighted_supply`) that
+        // only ever counts the mint supply once. See LpUserInfo::lp_amount.
+        let user_lp = amm::reward_basis(&ctx.accounts.lp_user_info, ctx.accounts.user_lp.amount);
+        let last_change_ts = ctx.accounts.lp_user_info.last_change_ts as i64;
 
         // ── Pool accumulator ────────────────────────────────────────────
         let pa = &mut ctx.accounts.pool_epoch_accum;
@@ -2503,22 +2509,34 @@ pub mod soladrome {
         pa.last_lp_supply = lp_supply;
 
         // ── User checkpoint ─────────────────────────────────────────────
+        // Weight accrues from the FIRST checkpoint of the epoch, never from `epoch_start`.
+        // Back-dating to epoch_start paid a full epoch of weight for zero holding time: add
+        // liquidity at T−ε, checkpoint, withdraw — the credit is already banked. The
+        // denominator still counts the whole epoch, so late checkpointers simply earn less
+        // and the unclaimed remainder is never minted (the pot under-distributes, which is
+        // the safe direction). Practical consequence for honest LPs: checkpoint EARLY in the
+        // epoch, and again before it ends.
         let ckpt = &mut ctx.accounts.lp_user_checkpoint;
         if ckpt.pool == Pubkey::default() {
             ckpt.user = ctx.accounts.user.key();
             ckpt.pool = pool_key;
             ckpt.last_epoch = epoch;
-            ckpt.last_update_ts = epoch_start;
+            ckpt.last_update_ts = now;
             ckpt.bump = ctx.bumps.lp_user_checkpoint;
         }
         // Reset for a new epoch
         if ckpt.last_epoch < epoch {
             ckpt.weighted_balance = 0;
-            ckpt.last_update_ts = epoch_start;
+            ckpt.last_update_ts = now;
             ckpt.last_epoch = epoch;
         }
 
-        let ckpt_elapsed = (now - ckpt.last_update_ts).max(0) as u128;
+        // Bill only an interval the position was held across in full: any change of size
+        // (deposit or withdrawal) restarts the window — see LpUserInfo::last_change_ts. A
+        // late deposit, or a withdraw-redeposit cycle, can no longer bill a whole epoch of
+        // weight for an instant of capital.
+        let window_start = ckpt.last_update_ts.max(last_change_ts);
+        let ckpt_elapsed = (now - window_start).max(0) as u128;
         ckpt.weighted_balance = ckpt
             .weighted_balance
             .checked_add(
@@ -2610,11 +2628,18 @@ pub mod soladrome {
         require!(pa.total_weighted_supply > 0, SoladromeError::NothingToClaim);
         require!(ckpt.weighted_balance > 0, SoladromeError::NothingToClaim);
 
-        let user_osola = (pa.osola_allocated as u128)
+        let share = (pa.osola_allocated as u128)
             .checked_mul(ckpt.weighted_balance)
             .ok_or(SoladromeError::Overflow)?
             .checked_div(pa.total_weighted_supply)
             .ok_or(SoladromeError::Overflow)? as u64;
+
+        // Hard cap on the pot: whatever the weighted balances say, this (pool, epoch) can
+        // never mint more than it was allocated. The pro-rata formula is only sound while
+        // Σ user weights ≤ total_weighted_supply, and no single claim can check that — so
+        // the ceiling is enforced on the running total instead.
+        let remaining = pa.osola_allocated.saturating_sub(pa.osola_claimed);
+        let user_osola = share.min(remaining);
         require!(user_osola > 0, SoladromeError::NothingToClaim);
 
         let bump = ctx.accounts.protocol_state.bump;
@@ -2631,6 +2656,13 @@ pub mod soladrome {
             ),
             user_osola,
         )?;
+
+        ctx.accounts.pool_epoch_accum.osola_claimed = ctx
+            .accounts
+            .pool_epoch_accum
+            .osola_claimed
+            .checked_add(user_osola)
+            .ok_or(SoladromeError::Overflow)?;
 
         // M-01 FIX: reset weighted_balance after a successful claim so that
         // checkpoint_lp for the next epoch does not overwrite unclaimed data.
@@ -4334,6 +4366,18 @@ pub struct CheckpointLp<'info> {
     #[account(token::mint = lp_mint, token::authority = user)]
     pub user_lp: Box<Account<'info, TokenAccount>>,
 
+    /// Program-recorded LP deposit for this (user, pool) — the reward basis, floored by
+    /// `user_lp`. `init_if_needed` so a wallet that never provided liquidity can still call
+    /// this: it lands on `lp_amount = 0` and banks no weight.
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + LpUserInfo::LEN,
+        seeds = [b"lp_user", pool.key().as_ref(), user.key().as_ref()],
+        bump,
+    )]
+    pub lp_user_info: Box<Account<'info, LpUserInfo>>,
+
     #[account(
         init_if_needed,
         payer = user,
@@ -4427,7 +4471,9 @@ pub struct ClaimLpEmissions<'info> {
     )]
     pub user_o_sola: Box<Account<'info, TokenAccount>>,
 
+    /// `mut`: the running `osola_claimed` total is what caps the pot.
     #[account(
+        mut,
         seeds = [b"lp_pool_epoch", pool.key().as_ref(), epoch.to_le_bytes().as_ref()],
         bump = pool_epoch_accum.bump,
         constraint = pool_epoch_accum.finalized @ SoladromeError::EpochNotFinalized,
