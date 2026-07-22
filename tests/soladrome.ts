@@ -4,6 +4,9 @@ import { Soladrome } from "../target/types/soladrome";
 import {
   createMint,
   getOrCreateAssociatedTokenAccount,
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountInstruction,
+  createTransferInstruction,
   mintTo,
   getAccount,
   TOKEN_PROGRAM_ID,
@@ -2061,5 +2064,154 @@ describe("soladrome", () => {
     // k is set once at initialize and never recomputed, so this assertion holds for the
     // life of the protocol — unlike the virtual reserves, which drift with every buy.
     console.log(`✅ [curve] k = ${st.k.toString()} | ×2 needs ~414k USDC of buys`);
+  });
+
+  // ── LP reward accounting (regression for the 2026-07-21 findings) ──────────
+  // Best run on localnet: `anchor test --provider.cluster localnet`. Uses an isolated
+  // pool with two throwaway mints so nothing here touches the SOLA/USDC pool or the
+  // curve/POL/invariant tests above.
+  //
+  // The full epoch-emission path (emit_pool_rewards → claim_lp_emissions, Finding A) needs
+  // a 7-day epoch boundary crossed, which this mocha/validator harness can't warp — that
+  // stays a documented gap (needs a bankrun-style clock). What IS covered here, in-epoch:
+  //   • the continuous path end-to-end (Finding B), including the exact exploit as a guard;
+  //   • the checkpoint weight basis (Finding A), where a fresh wallet must bank zero.
+  const LP_DEAD = anchor.web3.SystemProgram.programId; // = LP_DEAD_PUBKEY
+  let lpPool: anchor.web3.PublicKey;
+  let lpMintX: anchor.web3.PublicKey;
+  let mintX: anchor.web3.PublicKey;
+  let mintY: anchor.web3.PublicKey;
+  let lpVaultA: anchor.web3.PublicKey;
+  let lpVaultB: anchor.web3.PublicKey;
+
+  const lpUserInfoPda = (pool: anchor.web3.PublicKey, u: anchor.web3.PublicKey) =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("lp_user"), pool.toBuffer(), u.toBuffer()], program.programId)[0];
+
+  it("[lp-reward] sets up an isolated rewards-enabled pool with liquidity", async () => {
+    // Two fresh mints, wallet-funded on both sides.
+    mintX = await createMint(connection, wallet.payer, wallet.publicKey, null, DECIMALS);
+    mintY = await createMint(connection, wallet.payer, wallet.publicKey, null, DECIMALS);
+    const [ma, mb] = Buffer.compare(mintX.toBuffer(), mintY.toBuffer()) < 0 ? [mintX, mintY] : [mintY, mintX];
+
+    [lpPool]   = anchor.web3.PublicKey.findProgramAddressSync([Buffer.from("amm_pool"), ma.toBuffer(), mb.toBuffer()], program.programId);
+    [lpMintX]  = anchor.web3.PublicKey.findProgramAddressSync([Buffer.from("lp_mint"), lpPool.toBuffer()], program.programId);
+    [lpVaultA] = anchor.web3.PublicKey.findProgramAddressSync([Buffer.from("vault_a"), lpPool.toBuffer()], program.programId);
+    [lpVaultB] = anchor.web3.PublicKey.findProgramAddressSync([Buffer.from("vault_b"), lpPool.toBuffer()], program.programId);
+
+    await program.methods.createPool(30, 2000).accounts({
+      creator: wallet.publicKey, tokenAMint: ma, tokenBMint: mb, pool: lpPool, lpMint: lpMintX,
+      tokenAVault: lpVaultA, tokenBVault: lpVaultB, tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: anchor.web3.SystemProgram.programId, rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+    } as any).rpc();
+
+    // Fund the wallet's X/Y ATAs and provide liquidity.
+    const ax = await getOrCreateAssociatedTokenAccount(connection, wallet.payer, ma, wallet.publicKey);
+    const ay = await getOrCreateAssociatedTokenAccount(connection, wallet.payer, mb, wallet.publicKey);
+    await mintTo(connection, wallet.payer, ma, ax.address, wallet.payer, 1_000_000_000);
+    await mintTo(connection, wallet.payer, mb, ay.address, wallet.payer, 1_000_000_000);
+
+    const userLp   = getAssociatedTokenAddressSync(lpMintX, wallet.publicKey);
+    const deadLp   = getAssociatedTokenAddressSync(lpMintX, LP_DEAD, true);
+    const userOSola = getAssociatedTokenAddressSync(oSolaM, wallet.publicKey);
+    await program.methods.addLiquidity(HUNDRED, HUNDRED, new BN(0)).accounts({
+      user: wallet.publicKey, pool: lpPool, lpMint: lpMintX, tokenAVault: lpVaultA, tokenBVault: lpVaultB,
+      userTokenA: ax.address, userTokenB: ay.address, userLp, lpDeadAta: deadLp, lpDead: LP_DEAD,
+      lpUserInfo: lpUserInfoPda(lpPool, wallet.publicKey), protocolState: statePda, oSolaMint: oSolaM,
+      userOSola, rent: anchor.web3.SYSVAR_RENT_PUBKEY, tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: anchor.web3.SystemProgram.programId,
+    } as any).rpc();
+
+    const info = await program.account.lpUserInfo.fetch(lpUserInfoPda(lpPool, wallet.publicKey));
+    const lpBal = await getTokenBalance(connection, userLp);
+    assert.isTrue(lpBal > 0n, "wallet received LP");
+    assert.equal(info.lpAmount.toString(), lpBal.toString(), "lp_amount tracks the recorded deposit");
+
+    // Arm the continuous stream and enable this pool.
+    await program.methods.configureContinuousEmissions(new BN(1_000_000), new BN(100)).accounts({
+      authority: wallet.publicKey, protocolState: statePda } as any).rpc();
+    await program.methods.setPoolRewards(true).accounts({
+      authority: wallet.publicKey, protocolState: statePda, pool: lpPool } as any).rpc();
+    console.log(`✅ [lp-reward] pool ${lpPool.toBase58().slice(0, 8)}… — LP=${lpBal}, lp_amount recorded, rewards armed`);
+  });
+
+  it("[lp-reward] a real depositor claims continuous oSOLA", async () => {
+    const userLp = getAssociatedTokenAddressSync(lpMintX, wallet.publicKey);
+    const userOSola = getAssociatedTokenAddressSync(oSolaM, wallet.publicKey);
+    await waitForNewSlot(connection); // let osola_reward_per_lp accrue
+    const before = await getTokenBalance(connection, userOSola);
+    await program.methods.claimLpRewards().accounts({
+      user: wallet.publicKey, pool: lpPool, lpMint: lpMintX, userLp,
+      lpUserInfo: lpUserInfoPda(lpPool, wallet.publicKey), protocolState: statePda, oSolaMint: oSolaM,
+      userOSola, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: anchor.web3.SystemProgram.programId, rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+    } as any).rpc();
+    const gained = (await getTokenBalance(connection, userOSola)) - before;
+    assert.isTrue(gained > 0n, "legit LP earns continuous oSOLA");
+    console.log(`✅ [lp-reward] real depositor claimed ${gained} oSOLA`);
+  });
+
+  it("[lp-reward][security] a fresh wallet holding TRANSFERRED LP cannot claim (Finding B)", async () => {
+    // The exact confirmed exploit: move LP to a wallet that never deposited, then claim.
+    // Pre-fix this minted the whole accumulator since pool creation; now reward_basis =
+    // min(lp_amount, wallet_lp) = min(0, x) = 0 → require!(pending > 0) rejects it.
+    const F = anchor.web3.Keypair.generate();
+    await provider.sendAndConfirm(new anchor.web3.Transaction().add(
+      anchor.web3.SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: F.publicKey, lamports: 50_000_000 })));
+
+    const walletLp = getAssociatedTokenAddressSync(lpMintX, wallet.publicKey);
+    const fLp = getAssociatedTokenAddressSync(lpMintX, F.publicKey);
+    await provider.sendAndConfirm(new anchor.web3.Transaction()
+      .add(createAssociatedTokenAccountInstruction(wallet.publicKey, fLp, F.publicKey, lpMintX))
+      .add(createTransferInstruction(walletLp, fLp, wallet.publicKey, 10_000_000)));
+    assert.isTrue((await getTokenBalance(connection, fLp)) > 0n, "F holds transferred LP");
+
+    const fOSola = getAssociatedTokenAddressSync(oSolaM, F.publicKey);
+    await waitForNewSlot(connection); // ensure a non-zero accumulator exists
+    let reverted = false;
+    try {
+      await program.methods.claimLpRewards().accounts({
+        user: F.publicKey, pool: lpPool, lpMint: lpMintX, userLp: fLp,
+        lpUserInfo: lpUserInfoPda(lpPool, F.publicKey), protocolState: statePda, oSolaMint: oSolaM,
+        userOSola: fOSola, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId, rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any).signers([F]).rpc();
+    } catch (e: any) {
+      reverted = true;
+      assert.match(e.toString(), /NothingToClaim/, "must reject with NothingToClaim, not another error");
+    }
+    assert.isTrue(reverted, "fresh-wallet transfer-based claim MUST revert (Finding B closed)");
+    console.log("✅ [lp-reward][security] transfer-based claim rejected — Finding B closed");
+  });
+
+  it("[lp-emission][security] a fresh wallet banks zero checkpoint weight (Finding A)", async () => {
+    // checkpoint_lp weight basis is now reward_basis, not the wallet balance. A fresh wallet
+    // that was transferred LP has lp_amount = 0 → weighted_balance stays 0, so the same LP
+    // walked through N wallets can no longer inflate the epoch pot.
+    const F2 = anchor.web3.Keypair.generate();
+    await provider.sendAndConfirm(new anchor.web3.Transaction().add(
+      anchor.web3.SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: F2.publicKey, lamports: 50_000_000 })));
+    const walletLp = getAssociatedTokenAddressSync(lpMintX, wallet.publicKey);
+    const f2Lp = getAssociatedTokenAddressSync(lpMintX, F2.publicKey);
+    await provider.sendAndConfirm(new anchor.web3.Transaction()
+      .add(createAssociatedTokenAccountInstruction(wallet.publicKey, f2Lp, F2.publicKey, lpMintX))
+      .add(createTransferInstruction(walletLp, f2Lp, wallet.publicKey, 10_000_000)));
+
+    const nowEpoch = new BN(Math.floor(Date.now() / 1000 / 604800));
+    const [ckptF2] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("lp_ckpt"), lpPool.toBuffer(), F2.publicKey.toBuffer()], program.programId);
+    const [accum] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("lp_pool_epoch"), lpPool.toBuffer(), nowEpoch.toArrayLike(Buffer, "le", 8)], program.programId);
+
+    await waitForNewSlot(connection);
+    await program.methods.checkpointLp(nowEpoch).accounts({
+      user: F2.publicKey, protocolState: statePda, pool: lpPool, lpMint: lpMintX, userLp: f2Lp,
+      lpUserInfo: lpUserInfoPda(lpPool, F2.publicKey), lpUserCheckpoint: ckptF2, poolEpochAccum: accum,
+      systemProgram: anchor.web3.SystemProgram.programId, rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+    } as any).signers([F2]).rpc();
+
+    const ck = await program.account.lpUserCheckpoint.fetch(ckptF2);
+    assert.equal(ck.weightedBalance.toString(), "0", "fresh wallet must bank zero weight (Finding A closed)");
+    console.log("✅ [lp-emission][security] fresh-wallet checkpoint weight = 0 — Finding A closed");
   });
 });
