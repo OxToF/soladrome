@@ -1189,3 +1189,27 @@ Reprise après deux runs planifiés avortés (interrompus avant production de ra
 - **Low non corrigé** : `lib.rs:~1731` `claim_partner_allocation` fait `lock.permanent_amount = base_vested` (affectation), alors que team/contributeur font `+=`. Si l'authority enregistre un jour le même wallet comme partenaire **et** contributeur, le claim partenaire écrase le verrou permanent de l'autre tranche → libérable. À corriger si le cas devient possible.
 
 **Conclusion du jour : 1 Critical trouvé, confirmé par PoC on-chain, corrigé et déployé le jour même ; 1 défaut latent de même classe corrigé au passage. Protocole unpaused, fix live, exploit neutralisé (preuve inverse `NothingToClaim`).**
+
+### 2026-07-22 — Fermeture de la gate de test Finding A (harness bankrun) + IDL frontend désynchronisé
+
+Suite directe de l'entrée du 21-07. Deux points : la couverture manquante sur le cycle par epoch est écrite, et un défaut de livraison a été trouvé au passage sur l'IDL servi en production.
+
+#### Gate levée — le cycle par epoch est désormais couvert
+
+- **Le blocage était structurel** : `Anchor.toml` épingle `cluster = "devnet"`, donc la suite mocha tourne contre l'horloge réelle et ne peut pas franchir une frontière d'epoch de 7 jours. Le chemin `checkpoint_lp` → `emit_pool_rewards` → `claim_lp_emissions` restait donc non testé, ce qui interdisait d'armer `configure_emissions` avec `initial > 0` en mainnet.
+- **Correctif** : `tests/lp_emissions_bankrun.ts` (nouveau, `yarn test:bankrun`, ~1 s, sans validateur). `context.setClock()` déplace l'epoch à la demande. 7 tests verts :
+  - cycle complet sur une vraie frontière d'epoch : allocation = émission non décrue en epoch 0, puis décrue de 1 % en epoch 1 (épingle aussi `decayed_emission`) ;
+  - replay du même `(user, pool, epoch)` rejeté — et **la PDA `LpEpochClaim` (`init`) tranche en premier, à la validation des comptes**, pas le `NothingToClaim` du corps. L'hypothèse inverse a été posée puis démentie par le test ;
+  - invariant Σ claims ≤ `osola_allocated` sur un epoch à 2 LPs (le clamp lui-même ne mord pas : deux LPs honnêtes sous-souscrivent le pot, direction sûre) ;
+  - un retrait décrémente bien `lp_amount` (chemin de migration `remove` puis `add`) ;
+  - `reward_basis` suit le solde du wallet **à la baisse** — jambe inverse de Finding B, jamais couverte : dépôt tracké élevé mais LP sortis du wallet → poids banqué nul ;
+  - une position à `lp_amount = 0` (legacy ou LP reçus par transfert) peut toujours retirer.
+- **Vérifié porteur par mutation** : remettre `window_start = epoch_start` dans `checkpoint_lp` (le bug Finding A) et rebuild → le test « late depositor » échoue (poids/LP 1114620 vs 1114560, soit égalité = signature du back-crédit). **Les 6 autres tests restent verts sur cette mutation** — un test de cycle qui se contente d'asserter « gained > 0 » ne discrimine pas ; c'est l'écart entre un LP à ~7 jours et un LP à ~0,9 jour qui le fait (ratio 7,7× attendu).
+- **Piège d'outillage** : bankrun **ne charge pas** un binaire SBPFv3. `cargo build-sbf --arch v3`, obligatoire pour un deploy devnet, produit un `.so` rejeté avec le message trompeur « Program is not deployed ». Builder sans `--arch v3` pour tester, le remettre pour déployer.
+
+#### IDL frontend désynchronisé sur `checkpoint_lp` — livraison, pas exploitation
+
+- **Constat** : `app/lib/soladrome.json` committé le 21-07 contenait `lp_user_info` pour `add_liquidity`, `claim_lp_rewards` et `remove_liquidity` — **mais pas pour `checkpoint_lp`**, précisément l'objet du commit `8e4454d`. Le bundle servi en production a été inspecté : `checkpoint_lp` y expose 9 comptes, sans `lp_user_info`, alors que le programme déployé (slot 477943093) en attend 10.
+- **Pourquoi rien n'a bronché** : `LpEmissions.tsx` passe `lpUserInfo` dans un objet casté `as any`, donc TypeScript ne voit pas le compte manquant, et le composant n'est monté nulle part dans `page.tsx` — aucun testeur ne pouvait déclencher le chemin. Impact réel nul à ce jour, cassé dès que le composant est remonté.
+- **Correctif** : `app/lib/soladrome.json` resynchronisé depuis `target/idl/soladrome.json`. **L'IDL publié on-chain est stale lui aussi** (`checkpoint_lp` à 9 comptes) — cosmétique, n'affecte que les explorateurs et clients tiers, à remettre d'équerre par `anchor idl upgrade`.
+- **Leçon** : c'est le même mode de défaillance que la note « toujours rebuild l'IDL après un changement de struct », mais d'un cran plus fourbe — l'IDL avait été régénéré et partiellement committé. Vérifier l'IDL **servi**, pas l'IDL local.
