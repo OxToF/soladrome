@@ -2,14 +2,12 @@
 // Copyright (C) 2025 Soladrome Labs
 "use client";
 import { useState, useEffect } from "react";
-import dynamic from "next/dynamic";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
 
-// ssr: false évite la hydration mismatch liée à l'icône <i> du wallet adapter
-const WalletMultiButton = dynamic(
-  () => import("@solana/wallet-adapter-react-ui").then((m) => m.WalletMultiButton),
-  { ssr: false }
-);
+// Wraps WalletMultiButton (dynamic, ssr: false) and swaps it for a universal-link
+// escape hatch inside social-app in-app browsers, where the wallet modal is a
+// dead end — see lib/inAppBrowser.ts.
+import { ConnectButton } from "@/components/ConnectButton";
 import { Vote }         from "@/components/Vote";
 import { Gauge }        from "@/components/Gauge";
 import { ClaimFees }    from "@/components/ClaimFees";
@@ -254,7 +252,7 @@ export default function Home() {
             </a>
           </nav>
 
-          <WalletMultiButton className="!bg-brand-green !text-black !rounded-xl !font-bold !text-sm shrink-0" />
+          <ConnectButton variant="header" className="!bg-brand-green !text-black !rounded-xl !font-bold !text-sm shrink-0" />
         </div>
       </header>
 
@@ -298,7 +296,7 @@ export default function Home() {
             Powered by ve(3,3) tokenomics on Solana.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <WalletMultiButton className="!bg-brand-green !text-black !rounded-xl !font-bold !px-8 !py-3" />
+            <ConnectButton variant="hero" className="!bg-brand-green !text-black !rounded-xl !font-bold !px-8 !py-3" />
             <a
               href={DOCS_URL}
               target="_blank"
