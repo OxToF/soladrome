@@ -90,8 +90,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
   //
   // Everywhere else we keep Phantom/Solflare:
   //   - a wallet's in-app browser is an Android WebView (UA contains "wv") → they
-  //     inject and work; MWA reports Unsupported there and is hidden;
+  //     inject and work;
   //   - desktop & iOS have no MWA → Phantom/Solflare (extension / deeplink) are used.
+  //
+  // ⚠️ The "wv" test does NOT separate a wallet's WebView from a social app's
+  // (X/Instagram/TikTok all use one). In X's WebView every option here is a dead
+  // end: nothing injects, and MWA is offered rather than hidden — its
+  // `getIsSupported()` only tests `isSecureContext && /android/i`, it has no
+  // WebView check (@solana-mobile/wallet-adapter-mobile 2.2.9). The escape hatch
+  // for that case lives in components/ConnectButton.tsx, which gates on an
+  // injected wallet rather than on the UA alone.
   const wallets = useMemo(() => {
     const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
     const isAndroidExternalBrowser = /android/i.test(ua) && !/\bwv\b|; wv\)/i.test(ua);
