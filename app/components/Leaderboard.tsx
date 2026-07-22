@@ -65,10 +65,16 @@ export function Leaderboard() {
       <div className="flex items-center justify-between mb-1">
         <h2 className="text-lg font-bold text-white">Leaderboard</h2>
         <span className="text-xs text-gray-500">
-          <span className="text-brand-green font-semibold">{total}</span> on-chain wallets
+          {/* Locale pinned: the UI is English throughout, so a French visitor's
+              default would render "1 425" inside an English sentence. */}
+          <span className="text-brand-green font-semibold">{total.toLocaleString("en-US")}</span> verified testers
         </span>
       </div>
-      <p className="text-[11px] text-gray-600 mb-4">Wallets with at least one on-chain action — stake, borrow or vote to appear. Not sybil-filtered.</p>
+      {/* "on-chain wallets" read as "users", which this number is not: it counts
+          wallets with a chain-verified action, minus the ones the sybil scan hides.
+          And the old copy claimed "Not sybil-filtered" — false since wallet_verdicts
+          landed (app/api/leaderboard filters non-HUMAN_LIKE out of this view). */}
+      <p className="text-[11px] text-gray-600 mb-4">Wallets with at least one on-chain action (stake, borrow or vote). Obvious sybil clusters are hidden from this list.</p>
 
       {loading ? (
         <p className="text-xs text-gray-600">Loading…</p>
