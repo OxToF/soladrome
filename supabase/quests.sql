@@ -77,6 +77,9 @@ begin
     when 'like_fbomb'     then 5  -- social: like the MLCB x fBOMB alliance post (honor-system)
     when 'repost_fbomb'   then 10 -- social: quote the fBOMB alliance post (x-verified, see x-verify route)
     when 'truemrr'        then 20 -- ecosystem: voted for Soladrome on TrueMRR (honor-system)
+    when 'meme_contest'   then 10 -- contest: submitted a Soladrome meme on X (verified via /api/meme-verify).
+                                  -- PARTICIPATION points only — the 50 SOLA x5 prize is judged manually
+                                  -- (views/engagement/aesthetics) and paid out-of-band, like the bug bounty.
     -- 'referral:<wallet>' (repeatable, one per referred wallet) is handled above,
     -- before this case — awarded SERVER-SIDE only when a referred wallet becomes
     -- a verified on-chain Genesis Tester. Not a POSTable id → can't be self-farmed.
@@ -156,6 +159,70 @@ begin
   on conflict (tweet_id) do nothing;
 
   select wallet_address into v_owner from x_verifications where tweet_id = p_tweet;
+  return v_owner = p_wallet;
+end;
+$$;
+
+-- ── 4c. Meme contest submissions ────────────────────────────────────────────
+-- The meme contest is a JUDGED event, not an auto-credited quest: the tester
+-- posts a meme on X tagging @soladrome (that's what wins the 5x 50 SOLA prize,
+-- picked manually by views/engagement/aesthetics and paid out-of-band, like the
+-- bug bounty) AND shares the image in the #memes-art Discord channel with their
+-- wallet. Validation happens on the DISCORD side (app/app/api/meme-verify): an
+-- X post can't be checked for a real drawing via keyless oEmbed, but a Discord
+-- message can be fetched with the bot token and inspected for an image
+-- attachment. This table is the entry ledger the jury reviews.
+--
+-- An entry now has TWO parts: the X post (judged for the prize) and the Discord
+-- image share (validates the drawing + binds the wallet). Both are required and
+-- both links are stored: `url` = Discord message link, `x_url` = the X post link.
+-- The `tweet_id` column (kept for schema stability) holds the DISCORD MESSAGE id
+-- and is the dedup key. Unlike x_verifications (one row per wallet's single
+-- quote), a wallet MAY enter several memes, so we keep one row PER message.
+-- Points-wise, record_quest('meme_contest') is still one-shot per wallet
+-- (quest_completions' unique constraint), so extra memes don't farm points —
+-- they just add more contest entries.
+--
+-- Anti-abuse: the Discord message must carry an image attachment AND the wallet
+-- address, and each message id is bound to the FIRST wallet that claims it, so
+-- someone else's message can't be re-submitted to credit another wallet. The X
+-- post is verified (exists + tags @soladrome) but NOT wallet-bound — final
+-- winners are picked manually, so post theft is caught by the jury.
+--
+-- Jury query (Supabase SQL editor): list every entry newest first —
+--   select x_url, url as discord_link, wallet_address, created_at
+--   from meme_submissions order by created_at desc;
+create table if not exists meme_submissions (
+  tweet_id       text        primary key, -- Discord message id (name kept for stability)
+  wallet_address text        not null,
+  url            text        not null,    -- Discord message link
+  x_url          text,                    -- X post link (added 2026-07-28, two-part flow)
+  created_at     timestamptz not null default now()
+);
+create index if not exists idx_meme_submissions_wallet on meme_submissions (wallet_address);
+-- Idempotent add for tables created before the two-part flow landed.
+alter table meme_submissions add column if not exists x_url text;
+alter table meme_submissions enable row level security; -- no policy → service key only
+
+-- Claim a meme entry for a wallet. Returns true only if the message is now bound
+-- to THIS wallet (either we just inserted it, or this wallet already owned it). A
+-- different wallet having claimed it first returns false → no credit, no entry.
+-- Dropped-then-recreated because the arg list grew (added p_x_url) — a bare
+-- create-or-replace with new params would make an overload, not a replacement.
+drop function if exists claim_meme_submission(text, text, text);
+create or replace function claim_meme_submission(p_tweet text, p_wallet text, p_url text, p_x_url text)
+returns boolean
+language plpgsql
+security definer
+as $$
+declare
+  v_owner text;
+begin
+  insert into meme_submissions (tweet_id, wallet_address, url, x_url)
+  values (p_tweet, p_wallet, p_url, p_x_url)
+  on conflict (tweet_id) do nothing;
+
+  select wallet_address into v_owner from meme_submissions where tweet_id = p_tweet;
   return v_owner = p_wallet;
 end;
 $$;

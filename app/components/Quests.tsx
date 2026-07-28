@@ -3,8 +3,8 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
-import { QUEST_GROUPS, groupPoints, claimableQuests, trackQuest, findQuest, type Quest, type QuestGroup, type QuestId } from "@/lib/quests";
-import { questCode, questIntentUrl } from "@/lib/xcode";
+import { QUEST_GROUPS, groupPoints, claimableQuests, trackQuest, findQuest, DISCORD_MEME_ART, type Quest, type QuestGroup, type QuestId } from "@/lib/quests";
+import { questCode, questIntentUrl, memeIntentUrl } from "@/lib/xcode";
 import { StatusBanner } from "./ui/StatusBanner";
 
 // Jump to where a mission is performed (page + optional inner ActionPanel tab).
@@ -173,7 +173,18 @@ function GroupBody({ group, done, wallet, walletAddr, missingGates, unlockLabel,
 
   return (
     <>
-      <p className="text-xs text-gray-500 mb-4">{group.blurb}</p>
+      <p className="text-xs text-gray-500 mb-2">{group.blurb}</p>
+
+      {group.link && (
+        <a
+          href={group.link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 mb-4 text-xs text-brand-green border border-brand-green/40 hover:bg-brand-green/10 rounded-lg px-2.5 py-1 transition-colors"
+        >
+          💬 {group.link.label} →
+        </a>
+      )}
 
       {locked ? (
         <div className="mb-5 rounded-xl border border-brand-green/20 bg-brand-green/5 px-4 py-2.5 text-center">
@@ -237,25 +248,34 @@ function QuestRow({ q, n, done, live, locked, wallet, walletAddr, onClaim, onCop
   const [opened, setOpened] = useState(false);
   // Verified X quote flow (q.xVerify): submitted tweet URL + request state.
   const [xUrl, setXUrl]   = useState("");
+  // Meme contest only: the second input (the Discord #memes-art message link).
+  const [dcUrl, setDcUrl] = useState("");
   const [xBusy, setXBusy] = useState(false);
   const [xMsg, setXMsg]   = useState<string | null>(null);
   const dim = (!live || q.soon || locked) && !done;
 
-  // Real verification, not honor-system: the server checks the submitted post
-  // via X's public oEmbed (code present + quotes the right target) before
-  // crediting — see app/api/x-verify/route.ts.
+  // Real verification, not honor-system. xVerify quests hit /api/x-verify (one
+  // input: the quote-tweet url). The meme contest hits /api/meme-verify with
+  // TWO links — the X post (judged for the prize) and the Discord #memes-art
+  // message (image + wallet) — and only credits when both check out server-side.
   async function submitX() {
-    if (!walletAddr || !xUrl) return;
+    if (!walletAddr) return;
+    if (q.memeVerify ? (!xUrl.trim() || !dcUrl.trim()) : !xUrl.trim()) return;
     setXBusy(true); setXMsg(null);
     try {
-      const res  = await fetch("/api/x-verify", {
+      const endpoint = q.memeVerify ? "/api/meme-verify" : "/api/x-verify";
+      const body = q.memeVerify
+        ? { wallet: walletAddr, xUrl: xUrl.trim(), discordUrl: dcUrl.trim() }
+        : { wallet: walletAddr, quest: q.id, url: xUrl.trim() };
+      const res  = await fetch(endpoint, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ wallet: walletAddr, quest: q.id, url: xUrl.trim() }),
+        body:    JSON.stringify(body),
       });
       const data = await res.json();
       if (data.ok) {
-        setXMsg("✅ Verified!");
+        setXMsg(q.memeVerify ? "✅ Meme submitted! You're in the running." : "✅ Verified!");
+        if (q.memeVerify) { setXUrl(""); setDcUrl(""); } // clear so another meme can be entered
         window.dispatchEvent(new CustomEvent("quests:refresh"));
       } else {
         setXMsg(`❌ ${data.reason ?? "verification failed"}`);
@@ -267,7 +287,11 @@ function QuestRow({ q, n, done, live, locked, wallet, walletAddr, onClaim, onCop
     }
   }
 
-  const showXPanel = !!q.xVerify && opened && !done && live && !locked && !!walletAddr;
+  // The submission panel serves both the quote flow (xVerify) and the meme
+  // contest (memeVerify). The meme contest lets a wallet enter MORE memes even
+  // after its participation point is earned, so it stays open when `done`.
+  const showXPanel = (!!q.xVerify || !!q.memeVerify) && opened
+    && (!done || !!q.memeVerify) && live && !locked && !!walletAddr;
 
   return (
     <li
@@ -307,6 +331,22 @@ function QuestRow({ q, n, done, live, locked, wallet, walletAddr, onClaim, onCop
           className="text-xs text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
         >
           {copied ? "Copied ✓" : "Copy link"}
+        </button>
+      ) : q.memeVerify && live && !locked ? (
+        // Meme contest is repeatable — keep the compose button available even
+        // once `done` (the label turns green to signal "participation earned"),
+        // so testers can enter more memes. Opens a prefilled ORIGINAL post
+        // (tag @soladrome + code); the submission panel below appears once opened.
+        <button
+          onClick={() => {
+            if (!walletAddr) return;
+            window.open(memeIntentUrl(), "_blank", "noopener,noreferrer");
+            setOpened(true);
+          }}
+          disabled={!wallet}
+          className="text-xs text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
+        >
+          {opened ? "Re-open ↗" : done ? "Add another →" : "Post →"}
         </button>
       ) : done ? (
         <span className="text-brand-green text-sm shrink-0">✓</span>
@@ -383,26 +423,78 @@ function QuestRow({ q, n, done, live, locked, wallet, walletAddr, onClaim, onCop
 
     {showXPanel && (
       <div className="mt-2.5 ml-8 flex flex-col gap-1.5">
-        <p className="text-[11px] text-gray-500">
-          Your code{" "}
-          <span className="font-mono text-brand-green">{questCode(walletAddr!, q.id)}</span>{" "}
-          must appear in your post. Once posted, paste your post's link:
-        </p>
-        <div className="flex gap-2">
-          <input
-            value={xUrl}
-            onChange={(e) => { setXUrl(e.target.value); setXMsg(null); }}
-            placeholder="https://x.com/you/status/…"
-            className="min-w-0 flex-1 bg-brand-dark border border-brand-border focus:border-brand-green/50 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none transition-colors"
-          />
-          <button
-            onClick={submitX}
-            disabled={xBusy || !xUrl.trim()}
-            className="text-xs text-brand-green border border-brand-green/50 hover:bg-brand-green/10 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
-          >
-            {xBusy ? "Checking…" : `Verify +${q.points}`}
-          </button>
-        </div>
+        {q.memeVerify ? (
+          <>
+            {/* Step 1 — the X post (what we judge for the prize). */}
+            <p className="text-[11px] text-gray-500">
+              <span className="text-gray-400 font-semibold">1.</span> Paste your X post link (the meme you posted tagging @soladrome):
+            </p>
+            <input
+              value={xUrl}
+              onChange={(e) => { setXUrl(e.target.value); setXMsg(null); }}
+              placeholder="https://x.com/you/status/…"
+              className="bg-brand-dark border border-brand-border focus:border-brand-green/50 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none transition-colors"
+            />
+            {/* Step 2 — the Discord image share (validates the drawing + wallet). */}
+            <p className="text-[11px] text-gray-500 mt-1">
+              <span className="text-gray-400 font-semibold">2.</span> In one Discord{" "}
+              <a
+                href={DISCORD_MEME_ART}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand-green underline decoration-dotted underline-offset-2 hover:text-brand-green/80"
+              >
+                #memes-art ↗
+              </a>{" "}
+              message, post your meme <span className="text-gray-300">image</span> (or your X link) <span className="text-gray-300">and your wallet together</span>:
+            </p>
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 font-mono text-[10px] text-gray-400 truncate">{walletAddr}</span>
+              <button
+                onClick={() => { try { navigator.clipboard?.writeText(walletAddr!); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {} }}
+                className="text-[10px] text-gray-400 hover:text-brand-green border border-brand-border hover:border-brand-green/50 rounded px-1.5 py-0.5 transition-colors shrink-0"
+              >
+                {copied ? "Copied ✓" : "Copy wallet"}
+              </button>
+            </div>
+            <input
+              value={dcUrl}
+              onChange={(e) => { setDcUrl(e.target.value); setXMsg(null); }}
+              placeholder="Discord message link (right-click → Copy Message Link)"
+              className="bg-brand-dark border border-brand-border focus:border-brand-green/50 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none transition-colors"
+            />
+            <button
+              onClick={submitX}
+              disabled={xBusy || !xUrl.trim() || !dcUrl.trim()}
+              className="self-start mt-0.5 text-xs text-brand-green border border-brand-green/50 hover:bg-brand-green/10 rounded-lg px-2.5 py-1 transition-colors disabled:opacity-30"
+            >
+              {xBusy ? "Checking…" : `Verify +${q.points}`}
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-[11px] text-gray-500">
+              Your code{" "}
+              <span className="font-mono text-brand-green">{questCode(walletAddr!, q.id)}</span>{" "}
+              must appear in your post. Once posted, paste your post's link:
+            </p>
+            <div className="flex gap-2">
+              <input
+                value={xUrl}
+                onChange={(e) => { setXUrl(e.target.value); setXMsg(null); }}
+                placeholder="https://x.com/you/status/…"
+                className="min-w-0 flex-1 bg-brand-dark border border-brand-border focus:border-brand-green/50 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none transition-colors"
+              />
+              <button
+                onClick={submitX}
+                disabled={xBusy || !xUrl.trim()}
+                className="text-xs text-brand-green border border-brand-green/50 hover:bg-brand-green/10 rounded-lg px-2.5 py-1 transition-colors shrink-0 disabled:opacity-30"
+              >
+                {xBusy ? "Checking…" : `Verify +${q.points}`}
+              </button>
+            </div>
+          </>
+        )}
         {xMsg && (
           <p className={`text-[11px] ${xMsg.startsWith("✅") ? "text-brand-green" : "text-red-400"}`}>{xMsg}</p>
         )}

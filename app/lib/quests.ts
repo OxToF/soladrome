@@ -19,7 +19,8 @@ export type QuestId =
   | "claim_lp_osola" | "claim_bribe" | "borrow_again" | "exercise" | "vote_again"
   | "like_video2" | "repost_video2"
   | "like_bridge" | "repost_bridge" | "like_fbomb" | "repost_fbomb"
-  | "truemrr";
+  | "truemrr"
+  | "meme_contest";
 
 export interface Quest {
   /** Server-backed ids (QuestId) are trackable; any string is allowed for teasers. */
@@ -49,6 +50,12 @@ export interface Quest {
    *  shows the wallet's code, a prefilled "Quote" intent, and a URL submission
    *  box instead of an honor-system claim. */
   xVerify?: boolean;
+  /** Meme-contest flow (app/lib/xcode.ts memeIntentUrl + /api/meme-verify): the
+   *  row shows the wallet's code, a prefilled ORIGINAL post (tag @soladrome, no
+   *  quoted target), and a URL submission box. A valid entry credits the +10
+   *  participation points and is logged for judging; the 50 SOLA prize is
+   *  awarded manually to the 5 best (see the group blurb). */
+  memeVerify?: boolean;
 }
 
 // ── A quest GROUP = one campaign page in the Missions card ───────────────────
@@ -62,6 +69,10 @@ export interface QuestGroup {
   badge?: string;
   quests: Quest[];
   bonus?: Quest[];
+  /** Optional call-to-action link rendered under the blurb (e.g. a Discord
+   *  channel testers must also post in). Purely informational — opens in a new
+   *  tab, credits nothing. */
+  link?: { label: string; href: string };
   /** false → "Coming soon": rows are shown but disabled (no Go, no tracking). */
   live:  boolean;
   /** Requires ALL of these quest ids to be completed first — rows show locked until then. */
@@ -207,7 +218,38 @@ const ECOSYSTEM: QuestGroup = {
   ],
 };
 
-export const QUEST_GROUPS: QuestGroup[] = [GENESIS, GENESIS_2, SOCIAL, ECOSYSTEM];
+// ── Campaign #5 — Meme Contest (LIVE, time-boxed) ────────────────────────────
+// A judged contest, not an auto-credited quest: submitting a valid meme earns
+// +10 participation points and logs the entry (app/api/meme-verify + the
+// meme_submissions table), but the 50 SOLA x5 prize is picked MANUALLY from the
+// entries by views/engagement/aesthetics and paid out-of-band. Deadline lives in
+// the blurb — update MEME_DEADLINE and re-judge/close when it passes.
+const MEME_DEADLINE = "Aug 11, 2026";
+// #memes-art channel testers must also post their creation in (drives Discord
+// engagement + gives the jury a second place to review entries). Exported so the
+// submission panel (Quests.tsx) can link straight to it from the Discord step.
+export const DISCORD_MEME_ART = "https://discord.com/channels/1506249630218715218/1521055571569152040";
+
+const MEME: QuestGroup = {
+  id:    "meme",
+  title: "Meme Contest",
+  blurb: `Make a meme about Soladrome and post it on X tagging @soladrome — that's what we judge for the prize. Also share it in our Discord #memes-art channel: in ONE message, post your meme image (or your X link) together with your wallet address. Then paste BOTH links here — your X post and your Discord message — to validate. The 5 best X posts (views, engagement, aesthetics) each win 50 $SOLA. Every valid entry earns +10 points. Deadline: ${MEME_DEADLINE} — enter as many memes as you like.`,
+  link:  { label: "Open Discord #memes-art", href: DISCORD_MEME_ART },
+  badge: "Meme Lord",
+  live:  true,
+  quests: [
+    {
+      id:         "meme_contest",
+      label:      "Submit a Soladrome meme",
+      desc:       "Post on X (tag @soladrome) + share the image in Discord #memes-art with your wallet, then paste both links — top 5 win 50 $SOLA each",
+      points:     10,
+      icon:       "🎨",
+      memeVerify: true,
+    },
+  ],
+};
+
+export const QUEST_GROUPS: QuestGroup[] = [GENESIS, GENESIS_2, SOCIAL, ECOSYSTEM, MEME];
 
 /** Look up a quest (and which group it lives in) by id — used to render gate banners. */
 export function findQuest(id: QuestId): { quest: Quest; groupIndex: number } | undefined {

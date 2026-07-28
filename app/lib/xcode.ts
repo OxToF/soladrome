@@ -45,3 +45,19 @@ export function questIntentUrl(wallet: string, quest: string): string {
   const text = `Testing @soladrome on Solana devnet — bonding curve, floor price, no liquidation.\n\nGenesis code: ${code}`;
   return `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(conf.targetUrl)}`;
 }
+
+/** Official X handle mentioned/verified by the contest and social quests. */
+export const SOLADROME_HANDLE = "soladrome";
+
+/**
+ * Prefilled X compose link for the meme contest — an ORIGINAL post that tags
+ * @soladrome (the tester attaches their own meme image before posting). The X
+ * post is the contest vehicle judged for the prize (views/engagement); it needs
+ * no per-wallet code because validation now happens on Discord: the tester also
+ * shares the image in #memes-art with their wallet, and /api/meme-verify checks
+ * THAT message (see app/app/api/meme-verify/route.ts).
+ */
+export function memeIntentUrl(): string {
+  const text = `Made a meme for @${SOLADROME_HANDLE} 🎨\n\nBonding curve, floor price, no liquidations — real DeFi on Solana.\n\n#Soladrome`;
+  return `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
+}
