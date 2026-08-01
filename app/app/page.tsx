@@ -158,9 +158,17 @@ export default function Home() {
       <header className="sticky top-0 z-50 border-b border-brand-border/60 bg-brand-dark/80 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-5 h-15 flex items-center justify-between gap-4" style={{height:"60px"}}>
           {/* Logo */}
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/icons/logo-atom.png"
+              alt="Soladrome"
+              width={34}
+              height={34}
+              className="h-[34px] w-[34px] shrink-0 select-none drop-shadow-[0_0_10px_rgba(77,143,245,0.35)]"
+            />
             <span className="text-xl font-black tracking-tight">
-              <span className="text-white">SOLA</span><span className="text-brand-green">DROME</span>
+              <span className="text-white">SOLA</span><span className="text-gradient-brand">DROME</span>
             </span>
             <span className="badge-green">Devnet</span>
           </div>
@@ -286,10 +294,22 @@ export default function Home() {
       {/* ── Hero (not connected) ───────────────────────────────── */}
       {!wallet && page !== "airdrop" && (
         <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-24">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/icons/logo-atom.png"
+            alt="Soladrome"
+            width={128}
+            height={128}
+            className="h-28 w-28 md:h-36 md:w-36 mb-8 select-none drop-shadow-[0_0_40px_rgba(139,108,246,0.35)]"
+          />
+          <p className="text-lg md:text-2xl font-semibold mb-5 tracking-tight">
+            <span className="text-white/90">Fast chains deserve </span>
+            <span className="text-gradient-brand">better DeFi.</span>
+          </p>
           <h1 className="text-5xl md:text-7xl font-black mb-4 leading-tight">
             <span className="text-white">The Eternal</span>
             <br />
-            <span className="text-brand-green">Liquidity Engine</span>
+            <span className="text-gradient-brand">Liquidity Engine</span>
           </h1>
           <p className="text-gray-400 max-w-xl mb-10 text-lg">
             Bonding curve · Floor price · No liquidation<br />
