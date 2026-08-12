@@ -63,6 +63,8 @@ export function Vote() {
   // voting screen, not an afterthought.
   const [escrowed,    setEscrowed]    = useState<number>(0);
   const [escrowEpoch, setEscrowEpoch] = useState<number | null>(null);
+  // Denominator of the 30 % per-address cap — read on chain, never assumed.
+  const [totalHiSola, setTotalHiSola] = useState<number | null>(null);
 
   // Total voting power = hiSOLA cap + oSOLA burn bonus (uncapped).
   // powerCap = 0 means the user burned oSOLA before casting any vote → snapshot
@@ -71,7 +73,20 @@ export function Vote() {
   const hiSolaCap = (powerCap !== null && powerCap > 0)
     ? powerCap                  // snapshotted by vote_gauge on first vote
     : (balance ?? 0);           // not voted yet → use live balance
-  const totalPower = hiSolaCap + oSolaBonus;
+
+  // ☢️ The protocol caps ANY address at VOTE_WEIGHT_CAP_BPS (30 %) of all staked hiSOLA —
+  // `effective_hi_sola = min(snapshot, total_hi_sola × 30 %)`. Ignoring it here is what made
+  // the card promise a "Remaining" the chain then refused with VoteOverflow: with a single
+  // staker the global cap binds against their OWN stake, so a holder of 499.75 hiSOLA can
+  // vote 149.92, not 499.75. Mirror the on-chain integer maths in base units.
+  const globalCap = totalHiSola !== null
+    ? Math.floor((totalHiSola * 1e6 * 3_000) / 10_000) / 1e6
+    : null;
+  const effectiveHiSola = globalCap !== null ? Math.min(hiSolaCap, globalCap) : hiSolaCap;
+  // True when the protocol-wide ceiling, not the user's own stake, is the binding limit.
+  const cappedByGlobal  = globalCap !== null && globalCap < hiSolaCap;
+
+  const totalPower = effectiveHiSola + oSolaBonus;
   const remaining  = Math.max(0, totalPower - allocated);
 
   const fetchBalance = useCallback(async () => {
@@ -86,6 +101,13 @@ export function Vote() {
       const info = await connection.getTokenAccountBalance(ata);
       setBalance(Number(info.value.uiAmount ?? 0));
     } catch { setBalance(0); }
+
+    // total_hi_sola — the base of the 30 % per-address vote cap.
+    try {
+      const provider = new AnchorProvider(connection, wallet, {});
+      const st: any = await (getProgram(provider).account as any).protocolState.fetch(statePda);
+      setTotalHiSola(Number(st.totalHiSola.toString()) / 1e6);
+    } catch { setTotalHiSola(null); }
 
     // Read UserPosition for the vote escrow. Layout:
     // discriminator(8) + owner(32) + usdc_borrowed(8) + fees_debt(16) + bump(1)
@@ -321,7 +343,12 @@ export function Vote() {
       } else if (msg.includes("VoteOverflow") || msg.includes("6011") ||
                  msg.includes("VoteWeightCapExceeded") || msg.includes("6028")) {
         const rem = remaining.toFixed(4);
-        setStatus(`❌ Vote exceeds your remaining power (${rem} hiSOLA left this epoch). Reduce the amount.`);
+        setStatus(
+          cappedByGlobal
+            ? `❌ Vote exceeds the 30% per-address cap — ${rem} hiSOLA left this epoch. ` +
+              `No address may direct more than 30% of all staked hiSOLA.`
+            : `❌ Vote exceeds your remaining power (${rem} hiSOLA left this epoch). Reduce the amount.`
+        );
         fetchBalance(); // refresh allocated count
       } else {
         setStatus(`❌ ${msg}`);
@@ -429,10 +456,19 @@ export function Vote() {
 
       {/* Voting power summary bar */}
       {(balance !== null || oSolaBonus > 0) && (
-        <div className="flex items-center gap-3 text-xs text-gray-500 px-1">
-          {balance !== null && <span>hiSOLA: <span className="text-gray-300 font-mono">{balance.toFixed(2)}</span></span>}
-          {oSolaBonus > 0 && <span>🔥 Burn bonus: <span className="text-brand-green font-mono">{oSolaBonus.toFixed(2)}</span></span>}
-          <span className="ml-auto">Remaining: <span className={`font-mono ${remaining <= 0 ? "text-red-400" : "text-white"}`}>{remaining.toFixed(4)}</span></span>
+        <div className="space-y-1 px-1">
+          <div className="flex items-center gap-3 text-xs text-gray-500">
+            {balance !== null && <span>hiSOLA: <span className="text-gray-300 font-mono">{balance.toFixed(2)}</span></span>}
+            {oSolaBonus > 0 && <span>🔥 Burn bonus: <span className="text-brand-green font-mono">{oSolaBonus.toFixed(2)}</span></span>}
+            <span className="ml-auto">Remaining: <span className={`font-mono ${remaining <= 0 ? "text-red-400" : "text-white"}`}>{remaining.toFixed(4)}</span></span>
+          </div>
+          {/* Say WHY the number is lower than the wallet, or it reads as a bug. */}
+          {cappedByGlobal && (
+            <p className="text-[11px] text-gray-600">
+              Capped at 30% of all staked hiSOLA ({globalCap?.toFixed(4)}) — no single address
+              may direct more of the gauge. The cap rises as others stake.
+            </p>
+          )}
         </div>
       )}
 
