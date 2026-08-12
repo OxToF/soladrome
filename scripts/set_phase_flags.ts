@@ -49,11 +49,28 @@ function loadKeypair(): Keypair {
 }
 
 async function main() {
-  // Which flags to enable? Default = all (devnet). Any CLI args restrict the set.
-  const requested = process.argv.slice(2) as Flag[];
-  const bad = requested.filter((f) => !FLAGS.includes(f));
-  if (bad.length) throw new Error(`unknown flag(s): ${bad.join(", ")} — valid: ${FLAGS.join(", ")}`);
-  const enable = new Set<Flag>(requested.length ? requested : FLAGS);
+  // Args accept `flag` (enable), `flag=true`, or `flag=false`. Anything not named is left
+  // UNTOUCHED — the instruction takes Option<bool>, so silence means "keep as is", never
+  // "set to false". Bare `flag` stays equivalent to `flag=true` for backwards compatibility.
+  //
+  // The explicit `=false` form exists because closing a gate is a real operation, not just
+  // the absence of opening it: the devnet-2 sequence is `lp=true` → create the one pool →
+  // `lp=false`, which is what makes "a single farming pool" a decision of authority rather
+  // than a property of the code (`lp_enabled` is only ever read by `create_pool`).
+  const args = process.argv.slice(2);
+  const wanted = new Map<Flag, boolean>();
+  for (const a of args) {
+    const [name, val] = a.split("=") as [Flag, string | undefined];
+    if (!FLAGS.includes(name)) {
+      throw new Error(`unknown flag: ${name} — valid: ${FLAGS.join(", ")}`);
+    }
+    if (val !== undefined && val !== "true" && val !== "false") {
+      throw new Error(`flag ${name} takes true|false, got: ${val}`);
+    }
+    wanted.set(name, val !== "false");
+  }
+  // No args at all = enable everything (the historical devnet form).
+  if (wanted.size === 0) FLAGS.forEach((f) => wanted.set(f, true));
 
   const connection = new Connection(readRpc(), "confirmed");
   const wallet = new anchor.Wallet(loadKeypair());
@@ -63,11 +80,20 @@ async function main() {
     idl, new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" }));
   const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("state")], PROGRAM_ID);
 
-  // Option<bool> args: `true` to enable a gate, `null` to leave it untouched.
-  const arg = (f: Flag): boolean | null => (enable.has(f) ? true : null);
+  // Option<bool>: the value if named, `null` to leave the gate untouched.
+  const arg = (f: Flag): boolean | null => (wanted.has(f) ? wanted.get(f)! : null);
   console.log("RPC        :", readRpc());
   console.log("authority  :", wallet.publicKey.toBase58());
-  console.log("enabling   :", [...enable].join(", ") || "(none)");
+  console.log(
+    "setting    :",
+    [...wanted].map(([f, v]) => `${f}=${v}`).join(", ") || "(nothing)"
+  );
+
+  const pre: any = await (program.account as any).protocolState.fetch(statePda);
+  console.log("pre-state  :", {
+    lp: pre.lpEnabled, bribes: pre.bribesEnabled, voting: pre.votingEnabled,
+    exercise: pre.exerciseEnabled, curve: pre.curveEnabled, emissions: pre.emissionsEnabled,
+  });
 
   const sig = await (program.methods as any)
     .setPhaseFlags(arg("lp"), arg("bribes"), arg("voting"), arg("exercise"), arg("curve"), arg("emissions"))

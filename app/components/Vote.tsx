@@ -5,7 +5,8 @@ import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import { getProgram, statePda, hiSolaM, userAta, PROGRAM_ID as PROG_ID, sendTx } from "@/lib/program";
+import { getProgram, statePda, hiSolaM, marketVault, userAta, PROGRAM_ID as PROG_ID, sendTx } from "@/lib/program";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
@@ -57,6 +58,11 @@ export function Vote() {
   const [gaugeVotes,   setGaugeVotes]   = useState<number | null>(null);
   // All bribe tokens for the selected pool this epoch
   const [bribes, setBribes] = useState<{ symbol: string; amount: number; color: string }[]>([]);
+  // Voting moves the cast weight into program custody for the epoch. Without a way back the
+  // stake is simply gone from the user's point of view, so the release path is part of the
+  // voting screen, not an afterthought.
+  const [escrowed,    setEscrowed]    = useState<number>(0);
+  const [escrowEpoch, setEscrowEpoch] = useState<number | null>(null);
 
   // Total voting power = hiSOLA cap + oSOLA burn bonus (uncapped).
   // powerCap = 0 means the user burned oSOLA before casting any vote → snapshot
@@ -80,6 +86,22 @@ export function Vote() {
       const info = await connection.getTokenAccountBalance(ata);
       setBalance(Number(info.value.uiAmount ?? 0));
     } catch { setBalance(0); }
+
+    // Read UserPosition for the vote escrow. Layout:
+    // discriminator(8) + owner(32) + usdc_borrowed(8) + fees_debt(16) + bump(1)
+    //   + last_borrow_slot(8) + vote_escrowed(8) + escrow_epoch(8) + staked_amount(8)
+    try {
+      const [posPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("position"), wallet.publicKey.toBuffer()], PROG_ID
+      );
+      const posInfo = await connection.getAccountInfo(posPda);
+      if (posInfo && posInfo.data.length >= 89) {
+        setEscrowed(Number(posInfo.data.readBigUInt64LE(73)) / 1e6);
+        setEscrowEpoch(Number(posInfo.data.readBigUInt64LE(81)));
+      } else {
+        setEscrowed(0); setEscrowEpoch(null);
+      }
+    } catch { setEscrowed(0); setEscrowEpoch(null); }
 
     // Read UserEpochVotes — layout after adding o_sola_bonus field:
     // discriminator(8) + epoch(8) + allocated(8) + total_power_snapshot(8) + o_sola_bonus(8) + bump(1)
@@ -246,6 +268,12 @@ export function Vote() {
       const [globalEpochVotes] = PublicKey.findProgramAddressSync(
         [Buffer.from("epoch_votes"), epochBuf], PROG_ID
       );
+      const [voteEscrowVault] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vote_escrow")], PROG_ID
+      );
+      const [userPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("position"), wallet.publicKey.toBuffer()], PROG_ID
+      );
 
       const ix = await program.methods
         .voteGauge(new BN(ep), rawVotes)
@@ -254,12 +282,23 @@ export function Vote() {
           poolId:           pool,
           protocolState:    statePda,
           hiSolaMint:       hiSolaM,
+          // Read-only: the program stamps the caller's fee baseline from it when this vote
+          // is what first opens their UserPosition. Without it a wallet that received hiSOLA
+          // by transfer would be born reading as staked since genesis.
+          marketVault,
           userHiSola,
+          // Voting takes CUSTODY of the weight being cast — the voted hiSOLA moves into the
+          // global escrow vault for the epoch. That is what makes "you cannot vote, forward
+          // the stake, and vote again" enforceable; a `require!` never could, since a plain
+          // SPL transfer does not call this program at all.
+          voteEscrowVault,
+          userPosition,
           lockPosition,
           gaugeState,
           userVoteReceipt,
           userEpochVotes,
           globalEpochVotes,
+          tokenProgram:    TOKEN_PROGRAM_ID,
           systemProgram:   SystemProgram.programId,
           rent:            SYSVAR_RENT_PUBKEY,
         } as any)
@@ -290,8 +329,83 @@ export function Vote() {
     } finally { setLoading(false); }
   }
 
+  async function reclaimEscrow() {
+    if (!wallet) return;
+    setLoading(true); setStatus("");
+    try {
+      const provider = new AnchorProvider(connection, wallet, {});
+      const program  = getProgram(provider);
+      const userHiSola = (await import("@solana/spl-token"))
+        .getAssociatedTokenAddressSync(hiSolaM, wallet.publicKey);
+      const [voteEscrowVault] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vote_escrow")], PROG_ID
+      );
+      const [userPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("position"), wallet.publicKey.toBuffer()], PROG_ID
+      );
+      const ix = await program.methods
+        .withdrawVoteEscrow()
+        .accounts({
+          user:          wallet.publicKey,
+          protocolState: statePda,
+          hiSolaMint:    hiSolaM,
+          userHiSola,
+          voteEscrowVault,
+          userPosition,
+          tokenProgram:  TOKEN_PROGRAM_ID,
+        } as any)
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
+      setStatus(`✅ Escrow released — tx: ${tx.slice(0, 16)}…`);
+      setEscrowed(0);
+      fetchBalance();
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      setStatus(
+        /VoteEscrowLocked/.test(msg)
+          ? "⏳ Still locked — your stake is released once the epoch you voted in has ended."
+          : `❌ ${msg}`
+      );
+    } finally { setLoading(false); }
+  }
+
+  // Release opens strictly after the voted epoch: the program checks
+  // `current_epoch > escrow_epoch`, never a duration.
+  const escrowUnlocked = escrowEpoch !== null && epoch > escrowEpoch;
+
   return (
     <div className="space-y-6">
+      {/* Vote escrow — shown whenever the program holds something of the user's */}
+      {escrowed > 0 && (
+        <div className="card border border-brand-green/30">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <p className="text-xs text-gray-500 mb-1 uppercase tracking-widest">In vote escrow</p>
+              <p className="text-2xl font-black text-white">
+                {escrowed.toFixed(4)} <span className="text-sm font-normal text-gray-400">hiSOLA</span>
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                {escrowUnlocked
+                  ? "Epoch over — you can take it back."
+                  : `Held for epoch #${escrowEpoch}. Released once epoch #${escrowEpoch} ends.`}
+              </p>
+            </div>
+            <button
+              className="btn-primary disabled:opacity-40"
+              onClick={reclaimEscrow}
+              disabled={loading || !escrowUnlocked}
+            >
+              {escrowUnlocked ? "Reclaim stake" : "Locked"}
+            </button>
+          </div>
+          <p className="text-xs text-gray-600 mt-3 leading-relaxed">
+            Voting takes custody of the weight you cast, so the same stake cannot vote twice by
+            moving to another wallet. It still earns your fees and still counts as collateral
+            while it is held — voting costs you nothing but the ability to move it.
+          </p>
+        </div>
+      )}
+
       {/* Epoch banner */}
       <div className="card flex items-center justify-between">
         <div>
