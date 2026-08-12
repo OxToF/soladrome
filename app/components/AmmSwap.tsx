@@ -321,9 +321,29 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
 
       {/* ── Error / price info ──────────────────────────────── */}
       {noPool && (
-        <p className="text-xs text-yellow-500 mb-3">
-          No pool found for {tokIn?.symbol}/{tokOut?.symbol}. Create one in the Pools tab.
-        </p>
+        // SOLA has no AMM pair by design — its price comes from the bonding curve alone, so
+        // that it cannot be moved by trading. Telling a user to "create a pool" here sent
+        // them at a wall twice over: pool creation is closed by the authority, and a SOLA
+        // pool is not something the protocol wants to exist.
+        (tokIn?.symbol === "SOLA" || tokOut?.symbol === "SOLA") ? (
+          <div className="text-xs text-yellow-500 mb-3 space-y-1">
+            <p>SOLA is not traded on the AMM.</p>
+            <p className="text-gray-500">
+              It is bought and sold on the bonding curve, at a price no pool can move.{" "}
+              <button
+                type="button"
+                className="text-brand-green underline underline-offset-2"
+                onClick={() => window.dispatchEvent(new CustomEvent("action:tab", { detail: "buy" }))}
+              >
+                Go to Buy
+              </button>
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-yellow-500 mb-3">
+            No pool found for {tokIn?.symbol}/{tokOut?.symbol}.
+          </p>
+        )
       )}
 
       {/* Spot price — always visible when pool exists */}

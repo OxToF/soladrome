@@ -2,28 +2,35 @@
 // Copyright (C) 2025 Soladrome Labs
 "use client";
 import { useState, useEffect } from "react";
+import { BuySell }  from "./BuySell";
 import { AmmSwap }  from "./AmmSwap";
 import { Exercise } from "./Exercise";
 import { Stake }    from "./Stake";
 import { Borrow }   from "./Borrow";
 
-type ActionTab = "swap" | "options" | "earn" | "lend";
+type ActionTab = "buy" | "swap" | "options" | "earn" | "lend";
 
+// ☢️ "Buy" is the bonding curve (`buy_sola` / `sell_sola`), NOT the AMM. It is the only way
+// to acquire SOLA at launch: there is deliberately no SOLA-paired pool, so the Swap tab can
+// never route USDC → SOLA. BuySell existed but was rendered by nothing — the entry point of
+// the whole protocol was unreachable from the UI, and every mission depends on holding SOLA.
+// It leads the tab bar and is the default for that reason.
 const TABS: { id: ActionTab; label: string; hint: string }[] = [
-  { id: "swap",    label: "Swap",    hint: "AMM multi-pools" },
+  { id: "buy",     label: "Buy",     hint: "Bonding curve — the only way to get SOLA" },
+  { id: "swap",    label: "Swap",    hint: "AMM multi-pools (no SOLA pair)" },
   { id: "options", label: "Options", hint: "Exercise oSOLA"  },
   { id: "earn",    label: "Earn",    hint: "Stake → hiSOLA"  },
   { id: "lend",    label: "Lend",    hint: "Borrow USDC"     },
 ];
 
 export function ActionPanel() {
-  const [tab, setTab] = useState<ActionTab>("swap");
+  const [tab, setTab] = useState<ActionTab>("buy");
 
   // Let the Airdrop missions deep-link into a specific action tab.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail as ActionTab;
-      if (["swap", "options", "earn", "lend"].includes(detail)) setTab(detail);
+      if (["buy", "swap", "options", "earn", "lend"].includes(detail)) setTab(detail);
     };
     window.addEventListener("action:tab", handler);
     return () => window.removeEventListener("action:tab", handler);
@@ -50,6 +57,7 @@ export function ActionPanel() {
       </div>
 
       {/* ── Tab content ─────────────────────────────────── */}
+      {tab === "buy"     && <BuySell />}
       {tab === "swap"    && <AmmSwap  embedded />}
       {tab === "options" && <Exercise embedded />}
       {tab === "earn"    && <Stake    embedded />}
