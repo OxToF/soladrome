@@ -59,6 +59,25 @@ pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
     let market_balance = ctx.accounts.market_vault.amount;
     require!(market_balance >= amount, SoladromeError::InvalidAmount);
 
+    // ── The split the field advertises, finally enforced ──────────────────────
+    // `pol_split_bps` was written and validated by `initialize_pol` ("max 50 %") and then
+    // read by nothing: `amount` was a free parameter of the authority, bounded only by the
+    // solvency guard below. So the published policy — POL takes a *portion* of fees — was
+    // documentation, not code, and an authority key could route 100 % of every uncredited
+    // USDC into POL while the docs promised half.
+    //
+    // The base is the uncredited growth, not the whole vault: everything at or below
+    // `last_market_vault_balance` is already promised to stakers and is not POL's to split.
+    let growth = market_balance.saturating_sub(ctx.accounts.protocol_state.last_market_vault_balance);
+    let max_skim = (growth as u128)
+        .checked_mul(ctx.accounts.pol_state.pol_split_bps as u128)
+        .ok_or(SoladromeError::Overflow)?
+        / 10_000;
+    require!(
+        amount as u128 <= max_skim,
+        SoladromeError::PolSplitExceeded
+    );
+
     // Credit stakers only on what the skim leaves behind. saturating_sub also covers the
     // case where `amount` digs into fees already credited in a previous advance: the
     // accumulator simply doesn't move (it can never move backwards), and the guard below
@@ -71,6 +90,14 @@ pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
     );
     // Solvency guard: never skim fees that stakers were already credited. Everything at
     // or below last_market_vault_balance is spoken for; only growth above it is available.
+    //
+    // Redundant today — the split cap above allows at most `growth × 50 %`, which implies
+    // `amount <= growth`, which is exactly this. Kept anyway, and it must stay: the split cap
+    // is only tighter while `pol_split_bps <= 5_000`, and that bound is validated in a
+    // DIFFERENT instruction (`initialize_pol`). This guard is the one that does not depend on
+    // another instruction having done its job — it is the safety property, the split is the
+    // policy. Delete it and a future `set_pol_split` taking 20 000 bps silently drains the
+    // stakers' credited fees.
     require!(
         market_balance.saturating_sub(amount)
             >= ctx.accounts.protocol_state.last_market_vault_balance,

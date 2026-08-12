@@ -1,5 +1,5 @@
 {
-  "address": "4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd",
+  "address": "DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe",
   "metadata": {
     "name": "soladrome",
     "version": "0.1.0",
@@ -4563,6 +4563,14 @@
           "writable": true
         },
         {
+          "name": "market_vault",
+          "docs": [
+            "Destination of the exercise fee (a share of the gain, paid on top of the strike).",
+            "Feeds `fees_per_hi_sola` → hiSOLA stakers via the existing lazy accumulator."
+          ],
+          "writable": true
+        },
+        {
           "name": "user_usdc",
           "writable": true
         },
@@ -6663,6 +6671,13 @@
           "name": "hi_sola_mint"
         },
         {
+          "name": "market_vault",
+          "docs": [
+            "Read-only. Needed to stamp `fees_debt` at the live accumulator when a replay is what",
+            "first opens the owner's UserPosition — see the security note in the body."
+          ]
+        },
+        {
           "name": "user_hi_sola",
           "docs": [
             "Owner's hiSOLA ATA — read-only, authority = user."
@@ -6673,6 +6688,63 @@
           "docs": [
             "Pass SystemProgram when owner has no lock."
           ]
+        },
+        {
+          "name": "vote_escrow_vault",
+          "docs": [
+            "Global vote-escrow vault. Read-only on this path: a replay never debits the owner's",
+            "ATA (only `caller` signs), it can merely confirm the standing escrow still covers",
+            "the weight. Not `init_if_needed` — if the vault does not exist yet, nobody has ever",
+            "escrowed anything, so there is nothing for a replay to ride on."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  116,
+                  101,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_position",
+          "docs": [
+            "Owner's position — holds `vote_escrowed` and the epoch stamp the replay extends."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
         },
         {
           "name": "vote_config",
@@ -6826,6 +6898,10 @@
               }
             ]
           }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "system_program",
@@ -7129,6 +7205,64 @@
       ]
     },
     {
+      "name": "set_exercise_fee",
+      "docs": [
+        "Authority-only: set the oSOLA exercise fee, in basis points **of the gain**.",
+        "",
+        "`fee = bps × (curve_price − 1) × amount`, charged on top of the 1 USDC strike and",
+        "routed to `market_vault` → hiSOLA stakers. Because the fee scales with the gain,",
+        "any value below 10 000 leaves exercise profitable by construction; the",
+        "`MAX_EXERCISE_FEE_BPS` cap exists so the authority cannot destroy oSOLA's value as",
+        "an LP incentive, not to protect solvency (the floor is untouched either way).",
+        "",
+        "`bps = 0` disables the fee and restores the pre-2026-08-05 behaviour exactly.",
+        "This is also what a live singleton reads before this instruction is ever called,",
+        "so the upgrade is a no-op until the authority arms it — unlike the phase flags,",
+        "nothing bricks if it is forgotten."
+      ],
+      "discriminator": [
+        126,
+        199,
+        196,
+        231,
+        172,
+        58,
+        5,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "set_founder_voting",
       "docs": [
         "Authority-only break-glass: enable/disable founder gauge voting.",
@@ -7250,6 +7384,12 @@
         },
         {
           "name": "curve_enabled",
+          "type": {
+            "option": "bool"
+          }
+        },
+        {
+          "name": "emissions_enabled",
           "type": {
             "option": "bool"
           }
@@ -8425,10 +8565,76 @@
           "name": "hi_sola_mint"
         },
         {
+          "name": "market_vault",
+          "docs": [
+            "Read-only. Needed to stamp `fees_debt` at the live accumulator when this instruction",
+            "is what first opens the caller's UserPosition — see the security note in the body."
+          ]
+        },
+        {
           "name": "user_hi_sola",
           "docs": [
-            "Caller's hiSOLA balance determines base vote power."
-          ]
+            "Caller's hiSOLA balance determines base vote power.",
+            "`mut` — the weight being voted is moved into `vote_escrow_vault` for the epoch."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vote_escrow_vault",
+          "docs": [
+            "Global custody vault for voted hiSOLA. `init_if_needed` rather than created in",
+            "`initialize`, so deployments already initialised before escrow existed pick it up",
+            "on the first vote instead of needing a migration."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  116,
+                  101,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_position",
+          "docs": [
+            "Tracks how much of the vault belongs to this user, and until when it is locked."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
         },
         {
           "name": "lock_position",
@@ -8557,6 +8763,10 @@
           }
         },
         {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
         },
@@ -8575,6 +8785,115 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "withdraw_vote_escrow",
+      "docs": [
+        "Release hiSOLA held in vote escrow, once the epoch it backed has ended.",
+        "",
+        "This is the instruction that makes \"you cannot unstake or move the stake you voted",
+        "with before the epoch ends\" real. `unstake_hi_sola` burns from the ATA and a raw SPL",
+        "transfer bypasses this program entirely — neither can touch tokens sitting in a",
+        "program-owned vault. Custody, not a `require!`, is the enforcement.",
+        "",
+        "Deliberately NOT gated on `paused`: withdrawing your own collateral is an exit path,",
+        "and exit paths stay open (same rule as `sell_sola` / `unstake_hi_sola`)."
+      ],
+      "discriminator": [
+        157,
+        14,
+        20,
+        12,
+        52,
+        136,
+        197,
+        83
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "hi_sola_mint"
+        },
+        {
+          "name": "user_hi_sola",
+          "writable": true
+        },
+        {
+          "name": "vote_escrow_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  116,
+                  101,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
@@ -9034,6 +9353,31 @@
       "code": 6038,
       "name": "EcosystemBudgetExceeded",
       "msg": "Ecosystem oSOLA budget exhausted — cumulative distribute_o_sola would exceed ECOSYSTEM_TOTAL"
+    },
+    {
+      "code": 6039,
+      "name": "VoteEscrowLocked",
+      "msg": "Escrowed hiSOLA is locked until the voted epoch ends — reset is only possible from the next epoch"
+    },
+    {
+      "code": 6040,
+      "name": "NothingEscrowed",
+      "msg": "Nothing held in vote escrow for this account"
+    },
+    {
+      "code": 6041,
+      "name": "InsufficientVoteBacking",
+      "msg": "Insufficient liquid hiSOLA to back this vote — the voted weight must be escrowed"
+    },
+    {
+      "code": 6042,
+      "name": "EpochAlreadyFinalized",
+      "msg": "This pool epoch is already finalized — its reward pot has been sized and cannot take more weight"
+    },
+    {
+      "code": 6043,
+      "name": "PolSplitExceeded",
+      "msg": "POL skim exceeds pol_split_bps of the uncredited fee growth"
     }
   ],
   "types": [
@@ -9738,7 +10082,16 @@
             "name": "osola_emission_floor_bps",
             "docs": [
               "Minimum emission as % of initial (basis points).",
-              "Default: 1 000 (10 % floor — emissions never reach zero)."
+              "Default: 2 500 (25 % of 20 000 = a 5 000 oSOLA/epoch steady state).",
+              "",
+              "Think of the FLOOR in absolute terms and the ratio as the taper speed: the pair",
+              "(initial, floor_bps) fixes both the launch pull and where it lands. 20 000 @ 25 %",
+              "and 10 000 @ 50 % settle at the same 5 000/epoch — the first just starts twice as",
+              "high and takes 2.6 y instead of 1.3 y to get there.",
+              "",
+              "This doc said \"1 000 (10 %)\" until 2026-08-09 while `initialize` actually wrote",
+              "1 875 — the published emission schedule was wrong by nearly 2× on the perpetual",
+              "tail for months. Keep this line and `initialize` in sync."
             ],
             "type": "u16"
           },
@@ -9827,6 +10180,46 @@
               "read 0 and no realloc is needed (same trick as the phase flags above)."
             ],
             "type": "u64"
+          },
+          {
+            "name": "emissions_enabled",
+            "docs": [
+              "Master switch for ALL oSOLA emission. Gates BOTH the epoch/gauge path",
+              "(`emit_pool_rewards`) and the continuous-stream path (`continuous_active`",
+              "in amm.rs). Default `false` at `initialize`: nothing emits until the",
+              "authority explicitly arms it via `set_phase_flags`. Makes \"emissions are",
+              "dormant\" provable at a glance instead of inferred from the transitive",
+              "no-votes coupling in `emit_pool_rewards` — so the untested per-epoch",
+              "cycle can stay descoped from the launch audit and be reviewed pre-Genesis",
+              "when it is actually armed. Appended last, carved from the spare bytes so",
+              "existing accounts read `false` with no realloc (same trick as above)."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "exercise_fee_bps",
+            "docs": [
+              "Exercise fee, in basis points **of the GAIN** — never of the strike, and never flat.",
+              "",
+              "`fee = exercise_fee_bps × (curve_price − 1) × amount`, where",
+              "`curve_price = virtual_usdc / virtual_sola`. A flat fee would be regressive",
+              "backwards: it makes exercise unprofitable exactly when the gain is thin (killing",
+              "oSOLA as an LP incentive) and is trivial when the gain is large. Charging a",
+              "fraction of the gain keeps exercise profitable at every price by construction,",
+              "so no \"exercise is now underwater\" failure mode exists for any value below 10 000.",
+              "",
+              "☢️ The fee is paid **on top of** the 1 USDC strike and is routed to `market_vault`.",
+              "It is NEVER carved out of the strike — see the comment in `exercise_o_sola`.",
+              "",
+              "Capped at `MAX_EXERCISE_FEE_BPS` (50%) by `set_exercise_fee` so a compromised or",
+              "careless authority cannot set 100% and silently kill the emission incentive.",
+              "",
+              "Appended last, carved from the spare bytes so existing accounts read 0 — i.e. the",
+              "live devnet singleton keeps today's zero-fee behaviour until the authority arms it",
+              "via `set_exercise_fee`. Same no-realloc trick as the fields above; see the 3003",
+              "incident for what happens when a live singleton is grown instead."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -9876,6 +10269,19 @@
             "type": "u64"
           },
           {
+            "name": "ve_power_snapshot",
+            "docs": [
+              "The ve-weighted share of `total_power_snapshot`, frozen at first vote.",
+              "",
+              "Splitting the snapshot matters for escrow: ve power is already immobilised in",
+              "the ve vault, so only the portion of the allocation exceeding it needs backing",
+              "by escrowed hiSOLA. Frozen rather than recomputed because `ve_power` decays",
+              "continuously — a live read would make the required escrow creep upward within",
+              "the same epoch and fail otherwise-valid votes."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "o_sola_bonus",
             "docs": [
               "Extra voting power earned by burning oSOLA this epoch.",
@@ -9918,6 +10324,64 @@
               "Slot at which the most recent borrow was executed.",
               "repay_usdc requires current_slot > last_borrow_slot — blocks same-tx",
               "flash-borrow attacks where USDC is borrowed and repaid atomically."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "vote_escrowed",
+            "docs": [
+              "hiSOLA held in the global vote-escrow vault on this user's behalf.",
+              "",
+              "WHY THIS EXISTS: hiSOLA is a plain SPL token in a user-owned ATA with no",
+              "freeze authority, so the program is never invoked on a transfer and cannot",
+              "block one. Without custody, the same balance votes once, moves to a fresh",
+              "wallet, and votes again — `UserEpochVotes` is seeded per (user, epoch), so a",
+              "new wallet gets a new snapshot and the immutable `UserVoteReceipt` from the",
+              "first wallet still counts. That duplicates gauge weight without limit and",
+              "drains third-party bribes via `claim_bribe`'s pro-rata split.",
+              "",
+              "`vote_gauge` therefore escrows exactly the hiSOLA backing the votes cast.",
+              "Escrowed tokens still belong to the user: `claim_fees` and `borrow_usdc`",
+              "add this back to the ATA balance, so voting never costs fees or credit.",
+              "",
+              "Appended in spare bytes — legacy positions read 0 and behave as before."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "escrow_epoch",
+            "docs": [
+              "Epoch the escrow was last topped up for. `withdraw_vote_escrow` requires",
+              "`current_epoch > escrow_epoch`, which is what makes \"you cannot unstake or",
+              "move the stake you voted with before the epoch ends\" actually enforceable."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "staked_amount",
+            "docs": [
+              "hiSOLA this wallet obtained by actually paying into the protocol — incremented by",
+              "`stake_sola`, decremented by `unstake_hi_sola`. This, not the ATA balance, is the",
+              "ceiling on `borrow_usdc`.",
+              "",
+              "WHY THIS EXISTS: the borrow cap used to read `user_hi_sola.amount` directly. hiSOLA is",
+              "a transferable SPL token with no freeze authority, so the same balance could be walked",
+              "through fresh wallets — each one seeing a full cap against collateral that already",
+              "backed someone else's debt. Blocking `unstake_hi_sola` on outstanding debt never",
+              "stopped that: it gates the burn, not the transfer. With no interest and no",
+              "liquidation, nothing was ever repaid, so each hop was a permanent floor withdrawal.",
+              "",
+              "The cap is now `staked_amount.min(ata_balance + vote_escrowed)`: a payout needs BOTH a",
+              "program-recorded deposit AND the tokens still in hand, and the same tokens cannot",
+              "satisfy both halves in two wallets at once. Identical shape to `reward_basis` on the",
+              "LP side (amm.rs) — same defect, same remedy.",
+              "",
+              "Deliberately NOT credited by `unlock_hi_sola`: hiSOLA leaving a ve lock was never",
+              "financed through the curve (partner bribe-earned tranches), and the 20% valve for",
+              "unfinanced supply is `borrow_against_locked`, not this instruction.",
+              "",
+              "Appended in spare bytes — legacy positions read 0 and simply cannot open a NEW borrow",
+              "until they stake again. Existing debt, repayment and unstaking are unaffected."
             ],
             "type": "u64"
           }

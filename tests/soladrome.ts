@@ -6,6 +6,7 @@ import {
   getOrCreateAssociatedTokenAccount,
   mintTo,
   getAccount,
+  transfer as splTransfer,
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
@@ -62,17 +63,22 @@ describe("soladrome", () => {
   let usdcMint: anchor.web3.PublicKey;
   let userUsdcAta: anchor.web3.PublicKey;
 
-  // ── 1. Initialize ─────────────────────────────────────────────────────────
-  it("initializes the protocol", async () => {
-    // On devnet, the protocol state may already exist from a prior test run.
-    // If so, reuse the existing USDC mint — never create a new mint mid-protocol.
+  // ── 0. Shared setup (runs before EVERY test in this describe) ───────────────
+  // Must be a `before()` hook, not a leading `it()`: a fresh `initialize` writes
+  // all six phase flags `false`, so buy_sola / create_pool / exercise_o_sola /
+  // deposit_bribe / the vote paths revert FeatureDisabled until the gates are
+  // opened. Putting init+funding+flags here (idempotent) guarantees they run even
+  // for a filtered/`.only` run of a single test — a plain `it()` would be skipped
+  // by the grep and the isolated test would fail FeatureDisabled. This is what a
+  // third party (an auditor) hits when they run one test to investigate.
+  // Mirrors the devnet enable-all form of scripts/set_phase_flags.ts.
+  before("initialize + fund USDC + open the closed-launch gates", async () => {
+    // 1. Initialize (idempotent — on devnet/re-run the state PDA already exists,
+    //    so reuse its USDC mint; never create a new mint mid-protocol).
     const existingState = await program.account.protocolState.fetchNullable(statePda);
-
     if (existingState) {
-      // Re-run: state PDA already exists. Reuse its USDC mint.
       usdcMint = existingState.usdcMint;
     } else {
-      // First run: create a fresh USDC mint and initialize the protocol.
       usdcMint = await createMint(
         connection,
         wallet.payer,
@@ -99,7 +105,7 @@ describe("soladrome", () => {
         .rpc();
     }
 
-    // Ensure user has an ATA for the USDC mint with at least 1 000 USDC.
+    // 2. Ensure the user has an ATA for the USDC mint with at least 1 000 USDC.
     const ata = await getOrCreateAssociatedTokenAccount(
       connection,
       wallet.payer,
@@ -111,27 +117,27 @@ describe("soladrome", () => {
       await mintTo(connection, wallet.payer, usdcMint, userUsdcAta, wallet.payer, 10_000_000_000);
     }
 
-    const state = await program.account.protocolState.fetch(statePda);
-    assert.equal(state.usdcMint.toBase58(), usdcMint.toBase58(), "USDC mint matches state");
-    console.log("✅ initialize — state PDA:", statePda.toBase58(), "| usdcMint:", usdcMint.toBase58().slice(0, 8) + "…");
-  });
-
-  // ── 1b. Open the closed-launch gates ──────────────────────────────────────
-  // `initialize` writes all five phase flags `false`, so buy_sola / create_pool /
-  // exercise_o_sola / deposit_bribe / the vote paths all revert FeatureDisabled on a
-  // fresh state. Until 2026-07-17 this suite only ever ran against the live devnet
-  // ProtocolState, where the authority flipped these months ago — which is why a clean
-  // localnet run was ~20 red and why a third party cloning the repo saw a red suite.
-  // Mirrors the devnet enable-all form of scripts/set_phase_flags.ts.
-  it("enables the closed-launch phase flags", async () => {
+    // 3. Open the closed-launch gates (idempotent — authority-only, all-true).
     await program.methods
-      .setPhaseFlags(true, true, true, true, true)
+      .setPhaseFlags(true, true, true, true, true, true)
       .accounts({
         authority:     wallet.publicKey,
         protocolState: statePda,
       } as any)
       .rpc();
+  });
 
+  // ── 1. Initialize (assertion only — the work is done in before()) ───────────
+  it("initializes the protocol", async () => {
+    const state = await program.account.protocolState.fetch(statePda);
+    assert.equal(state.usdcMint.toBase58(), usdcMint.toBase58(), "USDC mint matches state");
+    const ata = await getAccount(connection, userUsdcAta);
+    assert.isAtLeast(Number(ata.amount), 1_000_000_000, "user USDC funded to >= 1000");
+    console.log("✅ initialize — state PDA:", statePda.toBase58(), "| usdcMint:", usdcMint.toBase58().slice(0, 8) + "…");
+  });
+
+  // ── 1b. The closed-launch gates are open (assertion only) ───────────────────
+  it("enables the closed-launch phase flags", async () => {
     const state = await program.account.protocolState.fetch(statePda);
     assert.isTrue(
       state.lpEnabled && state.bribesEnabled && state.votingEnabled &&
@@ -378,6 +384,171 @@ describe("soladrome", () => {
     );
   });
 
+  // Third instance of the same defect class as the vote duplication and the fee-history
+  // drain: an entitlement priced off a token balance. The borrow cap used to read
+  // `user_hi_sola.amount` alone, and `unstake_hi_sola`'s debt guard gates the burn, not a
+  // transfer — so the same collateral could be walked wallet to wallet, each hop drawing the
+  // floor down again, with no interest and no liquidation to ever bring it back.
+  it("[security] borrow capacity cannot be recycled through a fresh wallet", async () => {
+    const borrower = anchor.web3.Keypair.generate();
+    await connection.confirmTransaction(
+      await connection.requestAirdrop(borrower.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL),
+      "confirmed"
+    );
+    const bUsdc = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, usdcMint, borrower.publicKey
+    );
+    await mintTo(connection, wallet.payer, usdcMint, bUsdc.address, wallet.payer, 100_000_000);
+
+    const bSola   = anchor.utils.token.associatedAddress({ mint: solaM,   owner: borrower.publicKey });
+    const bHiSola = anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: borrower.publicKey });
+    const [bPos]  = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), borrower.publicKey.toBuffer()], program.programId);
+
+    await program.methods
+      .buySola(new BN(10_000_000), new BN(1))
+      .accounts({
+        user: borrower.publicKey, protocolState: statePda, solaMint: solaM,
+        userUsdc: bUsdc.address, userSola: bSola,
+        floorVault: floorV, marketVault: marketV,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([borrower])
+      .rpc();
+
+    const bought = await getTokenBalance(connection, bSola);
+    await program.methods
+      .stakeSola(new BN(bought.toString()))
+      .accounts({
+        user: borrower.publicKey, protocolState: statePda,
+        solaMint: solaM, hiSolaMint: hiSolaM,
+        usdcMint, userUsdc: bUsdc.address,
+        userSola: bSola, userHiSola: bHiSola,
+        solaVault, marketVault: marketV, userPosition: bPos,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([borrower])
+      .rpc();
+
+    const collateral = await getTokenBalance(connection, bHiSola);
+    assert.isAbove(Number(collateral), 0, "the borrower must hold real, financed hiSOLA");
+
+    // A modest draw: this test is about who may borrow, not about the floor buffer.
+    const draw = new BN(1_000_000);
+    await program.methods
+      .borrowUsdc(draw)
+      .accounts({
+        user: borrower.publicKey, protocolState: statePda, hiSolaMint: hiSolaM,
+        userHiSola: bHiSola, floorVault: floorV, marketVault: marketV,
+        userUsdc: bUsdc.address, userPosition: bPos,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([borrower])
+      .rpc();
+
+    // The collateral walks away while the debt stays behind. Nothing in the protocol can
+    // stop this transfer — that is the premise, not the bug.
+    const accomplice = anchor.web3.Keypair.generate();
+    await connection.confirmTransaction(
+      await connection.requestAirdrop(accomplice.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL),
+      "confirmed"
+    );
+    const aHiSola = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, hiSolaM, accomplice.publicKey
+    );
+    const aUsdc = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, usdcMint, accomplice.publicKey
+    );
+    await splTransfer(
+      connection, wallet.payer, bHiSola, aHiSola.address, borrower, Number(collateral)
+    );
+    assert.equal(
+      await getTokenBalance(connection, aHiSola.address), collateral,
+      "the accomplice now holds collateral that already backs someone else's debt"
+    );
+
+    const [aPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), accomplice.publicKey.toBuffer()], program.programId);
+
+    const floorBefore = await getTokenBalance(connection, floorV);
+    let secondDrawSucceeded = false;
+    try {
+      await program.methods
+        .borrowUsdc(draw)
+        .accounts({
+          user: accomplice.publicKey, protocolState: statePda, hiSolaMint: hiSolaM,
+          userHiSola: aHiSola.address, floorVault: floorV, marketVault: marketV,
+          userUsdc: aUsdc.address, userPosition: aPos,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([accomplice])
+        .rpc();
+      secondDrawSucceeded = true;
+    } catch (e: any) {
+      assert.include(
+        e.toString(), "BorrowLimitExceeded",
+        `expected the cap to refuse unfinanced collateral, got: ${e}`
+      );
+    }
+
+    assert.isFalse(
+      secondDrawSucceeded,
+      "the same hiSOLA financed one borrow and was recycled into a second"
+    );
+    assert.equal(
+      await getTokenBalance(connection, floorV), floorBefore,
+      "floor_vault must not fund a borrow against recycled collateral"
+    );
+
+    // And the original borrower cannot draw again either: they no longer hold the tokens.
+    let thirdDrawSucceeded = false;
+    try {
+      await program.methods
+        .borrowUsdc(draw)
+        .accounts({
+          user: borrower.publicKey, protocolState: statePda, hiSolaMint: hiSolaM,
+          userHiSola: bHiSola, floorVault: floorV, marketVault: marketV,
+          userUsdc: bUsdc.address, userPosition: bPos,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([borrower])
+        .rpc();
+      thirdDrawSucceeded = true;
+    } catch { /* expected: possession is gone, so the minimum is 0 */ }
+    assert.isFalse(
+      thirdDrawSucceeded,
+      "a wallet that handed its collateral away must not keep drawing on it"
+    );
+
+    // Clean up: hand the draw back. An unrepaid borrow leaves floor_vault permanently short,
+    // which later trips the narrower `floor_vault >= total_purchased_sola` invariant assertion
+    // — a real effect of this test, not a protocol defect (the program's own invariant counts
+    // total_usdc_borrowed and held throughout).
+    await waitForNewSlot(connection);
+    await program.methods
+      .repayUsdc(draw)
+      .accounts({
+        user: borrower.publicKey, protocolState: statePda, userPosition: bPos,
+        floorVault: floorV, userUsdc: bUsdc.address,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .signers([borrower])
+      .rpc();
+    assert.equal(
+      (await program.account.userPosition.fetch(bPos)).usdcBorrowed.toNumber(), 0,
+      "the PoC returns the protocol to a zero-debt state"
+    );
+
+    console.log("✅ security — borrow cap needs both a recorded deposit and the tokens in hand");
+  });
+
   // ── 6. Repay USDC ────────────────────────────────────────────────────────
   it("repays USDC debt", async () => {
     // The borrow landed in the previous test; the flash-borrow guard rejects a repay in
@@ -526,6 +697,177 @@ describe("soladrome", () => {
     console.log(`✅ claim_fees — ${claimed / 1e6} USDC claimed from treasury (no admin wallet)`);
   });
 
+  // Found by the guided Trident target (invariant I-3), then reduced to this deterministic
+  // case. Unlike the two bugs fixed earlier, this one needs no unstamped position: both
+  // wallets are stamped correctly. It is the transfer itself that breaks the accounting —
+  // hiSOLA carries its unclaimed accrual to a recipient whose `fees_debt` baseline is OLDER,
+  // so the moved tokens are credited fees from before they ever sat in that wallet.
+  it("[security] moving hiSOLA to an older fee baseline cannot over-promise the vault", async () => {
+    const PRECISION = new BN("1000000000000");
+
+    const mkUser = async () => {
+      const kp = anchor.web3.Keypair.generate();
+      await connection.confirmTransaction(
+        await connection.requestAirdrop(kp.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL),
+        "confirmed"
+      );
+      const usdc = await getOrCreateAssociatedTokenAccount(
+        connection, wallet.payer, usdcMint, kp.publicKey
+      );
+      await mintTo(connection, wallet.payer, usdcMint, usdc.address, wallet.payer, 200_000_000);
+      return {
+        kp,
+        usdc: usdc.address,
+        sola: anchor.utils.token.associatedAddress({ mint: solaM, owner: kp.publicKey }),
+        hi: anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: kp.publicKey }),
+        pos: anchor.web3.PublicKey.findProgramAddressSync(
+          [Buffer.from("position"), kp.publicKey.toBuffer()], program.programId)[0],
+      };
+    };
+
+    const buyAndStake = async (u: any, usdcIn: number) => {
+      await program.methods
+        .buySola(new BN(usdcIn), new BN(1))
+        .accounts({
+          user: u.kp.publicKey, protocolState: statePda, solaMint: solaM,
+          userUsdc: u.usdc, userSola: u.sola, floorVault: floorV, marketVault: marketV,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([u.kp])
+        .rpc();
+      const bought = await getTokenBalance(connection, u.sola);
+      await program.methods
+        .stakeSola(new BN(bought.toString()))
+        .accounts({
+          user: u.kp.publicKey, protocolState: statePda,
+          solaMint: solaM, hiSolaMint: hiSolaM, usdcMint,
+          userUsdc: u.usdc, userSola: u.sola, userHiSola: u.hi,
+          solaVault, marketVault: marketV, userPosition: u.pos,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([u.kp])
+        .rpc();
+      return getTokenBalance(connection, u.hi);
+    };
+
+    // `old` stakes FIRST, so its fees_debt baseline is the older, lower one.
+    const older = await mkUser();
+    const oldStake = await buyAndStake(older, 40_000_000);
+    assert.isAbove(Number(oldStake), 0, "the early staker must hold hiSOLA");
+
+    // Fees accrue while only `older` is staked, then `newer` joins at a higher baseline.
+    await program.methods
+      .buySola(new BN(60_000_000), new BN(1))
+      .accounts({
+        user: wallet.publicKey, protocolState: statePda, solaMint: solaM,
+        userUsdc: userUsdcAta,
+        userSola: anchor.utils.token.associatedAddress({ mint: solaM, owner: wallet.publicKey }),
+        floorVault: floorV, marketVault: marketV,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    const newer = await mkUser();
+    const newStake = await buyAndStake(newer, 40_000_000);
+    assert.isAbove(Number(newStake), 0, "the late staker must hold hiSOLA");
+
+    // More fees AFTER the late staker joined, so its honest entitlement is genuinely
+    // non-zero and the assertion compares two real terms rather than one.
+    await program.methods
+      .buySola(new BN(50_000_000), new BN(1))
+      .accounts({
+        user: wallet.publicKey, protocolState: statePda, solaMint: solaM,
+        userUsdc: userUsdcAta,
+        userSola: anchor.utils.token.associatedAddress({ mint: solaM, owner: wallet.publicKey }),
+        floorVault: floorV, marketVault: marketV,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    const posOld = await program.account.userPosition.fetch(older.pos);
+    const posNew = await program.account.userPosition.fetch(newer.pos);
+    assert.isTrue(
+      (posNew.feesDebt as BN).gt(posOld.feesDebt as BN),
+      "the late staker must carry a strictly higher baseline for this test to bite"
+    );
+
+    // The move: the late staker hands its stake to the early one, whose baseline is older.
+    await splTransfer(
+      connection, wallet.payer, newer.hi, older.hi, newer.kp, Number(newStake)
+    );
+
+    // Compare against the HONEST entitlement rather than the vault balance. Measuring
+    // solvency alone is too blunt here: the other stakers' unclaimed fees leave slack that
+    // silently absorbs a modest over-claim, which is exactly why the first version of this
+    // test passed while the defect was live. What the two baselines owe is computable:
+    //   the early stake earned (acc2 − acc0) on itself,
+    //   the late stake earned only (acc2 − acc1) — never the stretch before it existed.
+    const st: any = await program.account.protocolState.fetch(statePda);
+    const marketBalance = new BN((await getTokenBalance(connection, marketV)).toString());
+    const lastBal = new BN(st.lastMarketVaultBalance.toString());
+    const totalHi = new BN(st.totalHiSola.toString());
+    let acc2 = st.feesPerHiSola as BN;
+    if (marketBalance.gt(lastBal) && totalHi.gtn(0)) {
+      acc2 = acc2.add(marketBalance.sub(lastBal).mul(PRECISION).div(totalHi));
+    }
+
+    const acc0 = posOld.feesDebt as BN;
+    const acc1 = posNew.feesDebt as BN;
+    const sA = new BN(oldStake.toString());
+    const sB = new BN(newStake.toString());
+
+    const honest = acc2.sub(acc0).mul(sA).div(PRECISION)
+      .add(acc2.sub(acc1).mul(sB).div(PRECISION));
+
+    // Measure what the recipient can actually draw by drawing it — never by re-deriving the
+    // formula here, which would silently track any change to the program and prove nothing.
+    const usdcBefore = await getTokenBalance(connection, older.usdc);
+    let drew: BN;
+    try {
+      await program.methods
+        .claimFees()
+        .accounts({
+          user: older.kp.publicKey, protocolState: statePda, hiSolaMint: hiSolaM,
+          userHiSola: older.hi, marketVault: marketV, userUsdc: older.usdc,
+          userPosition: older.pos, tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .signers([older.kp])
+        .rpc();
+      drew = new BN(((await getTokenBalance(connection, older.usdc)) - usdcBefore).toString());
+    } catch (e: any) {
+      // A claim the vault cannot honour is the same defect seen from the other side.
+      if (/insufficient funds/i.test(e.toString())) {
+        assert.fail(
+          `claim_fees promised more than market_vault holds — the fee accounting is ` +
+          `insolvent once hiSOLA moves onto an older baseline: ${e}`
+        );
+      }
+      // NothingToClaim is a legitimate outcome: the cap can leave the recipient owed zero.
+      if (!/NothingToClaim/.test(e.toString())) throw e;
+      drew = new BN(0);
+    }
+
+    assert.isTrue(
+      drew.lte(honest),
+      `the recipient drew ${drew.toString()} but only earned ${honest.toString()} ` +
+      `(over-claim ${drew.sub(honest).toString()}): hiSOLA carried its accrual onto an older ` +
+      `fees_debt baseline and was credited history that predates its arrival`
+    );
+    const actual = drew;
+    console.log(
+      `✅ security — transferred hiSOLA earns nothing on the older baseline ` +
+      `(draws ${actual.toString()} of an honest ${honest.toString()})`
+    );
+  });
+
   // ── 9. Distribute oSOLA (admin LP reward) ────────────────────────────────
   it("admin distributes oSOLA to a recipient", async () => {
     const userOSolaAta = anchor.utils.token.associatedAddress({
@@ -552,7 +894,41 @@ describe("soladrome", () => {
   });
 
   // ── 9. Exercise oSOLA ────────────────────────────────────────────────────
-  it("exercises oSOLA: pay floor USDC → receive SOLA", async () => {
+
+  /// Mirror of the on-chain fee math (lib.rs `exercise_o_sola`), kept as an
+  /// independent reimplementation on purpose: if the contract's ordering or
+  /// rounding ever changes, this diverges and the test fails rather than
+  /// silently agreeing with whatever the program now does.
+  ///   fee = (amount × (vu − vs) / vs) × fee_bps / 10_000
+  function expectedExerciseFee(
+    amount: bigint, virtualUsdc: bigint, virtualSola: bigint, feeBps: bigint,
+  ): bigint {
+    if (virtualUsdc <= virtualSola || virtualSola === 0n || feeBps === 0n) return 0n;
+    const gain = (amount * (virtualUsdc - virtualSola)) / virtualSola;
+    return (gain * feeBps) / 10_000n;
+  }
+
+  /// Mint oSOLA to the test wallet so each exercise test stands on its own instead of
+  /// consuming whatever the previous one left behind — a filtered/`.only` run must pass
+  /// in isolation (same reasoning as the top-level `before()` hook).
+  async function topUpOSola(amount: BN) {
+    const userOSolaAta = anchor.utils.token.associatedAddress({ mint: oSolaM, owner: wallet.publicKey });
+    await program.methods
+      .distributeOSola(amount)
+      .accounts({
+        authority:      wallet.publicKey,
+        recipient:      wallet.publicKey,
+        protocolState:  statePda,
+        oSolaMint:      oSolaM,
+        recipientOSola: userOSolaAta,
+        tokenProgram:   TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram:  anchor.web3.SystemProgram.programId,
+      } as any)
+      .rpc();
+  }
+
+  it("exercises oSOLA: strike to floor IN FULL, gain-based fee on top to market_vault", async () => {
     const userOSolaAta = anchor.utils.token.associatedAddress({
       mint: oSolaM, owner: wallet.publicKey,
     });
@@ -560,13 +936,28 @@ describe("soladrome", () => {
       mint: solaM, owner: wallet.publicKey,
     });
 
+    await topUpOSola(ONE.muln(3));
+
+    const st = await program.account.protocolState.fetch(statePda);
+    const feeBps = BigInt(st.exerciseFeeBps);
+    assert.equal(Number(feeBps), 1000, "initialize sets the 10%-of-gain default");
+
     const oSolaBefore  = await getTokenBalance(connection, userOSolaAta);
     const solaBefore   = await getTokenBalance(connection, userSolaAta);
     const usdcBefore   = await getTokenBalance(connection, userUsdcAta);
     const floorBefore  = await getTokenBalance(connection, floorV);
+    const marketBefore = await getTokenBalance(connection, marketV);
 
-    // Exercise 3 oSOLA: pay 3 USDC → receive 3 SOLA
+    // Exercise 3 oSOLA: strike = 3 USDC, plus 10% of the gain at the curve price.
     const exerciseAmt = ONE.muln(3);
+    const amt = BigInt(exerciseAmt.toString());
+    const fee = expectedExerciseFee(
+      amt,
+      BigInt(st.virtualUsdc.toString()),
+      BigInt(st.virtualSola.toString()),
+      feeBps,
+    );
+
     await program.methods
       .exerciseOSola(exerciseAmt)
       .accounts({
@@ -577,6 +968,7 @@ describe("soladrome", () => {
         userOSola:     userOSolaAta,
         userSola:      userSolaAta,
         floorVault:    floorV,
+        marketVault:   marketV,
         userUsdc:      userUsdcAta,
         tokenProgram:  TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -588,24 +980,142 @@ describe("soladrome", () => {
     const solaAfter   = await getTokenBalance(connection, userSolaAta);
     const usdcAfter   = await getTokenBalance(connection, userUsdcAta);
     const floorAfter  = await getTokenBalance(connection, floorV);
+    const marketAfter = await getTokenBalance(connection, marketV);
+    const stAfter     = await program.account.protocolState.fetch(statePda);
+
+    assert.equal(oSolaBefore - oSolaAfter, amt, "oSOLA burned");
+    assert.equal(solaAfter - solaBefore,   amt, "SOLA received");
+
+    // ☢️ The load-bearing assertion. The floor must receive the FULL strike — if the
+    // fee were ever carved out of it, the floor would grow by less than
+    // total_purchased_sola and every exercised SOLA would be under-backed. This is the
+    // unfinanced-supply defect closed on 2026-07-17, in a new location.
+    assert.equal(floorAfter - floorBefore, amt, "floor receives the FULL strike, fee not carved out");
+    assert.equal(marketAfter - marketBefore, fee, "fee landed in market_vault, exactly");
+    assert.equal(usdcBefore - usdcAfter, amt + fee, "user paid strike + fee");
+
+    // Backing invariant: the counter grew by exactly what the floor received.
+    assert.equal(
+      BigInt(stAfter.totalPurchasedSola.toString()) - BigInt(st.totalPurchasedSola.toString()),
+      amt,
+      "total_purchased_sola incremented by the financed amount only",
+    );
+
+    // The fee must never make exercise unprofitable — that is the whole point of
+    // pricing it off the gain rather than flat.
+    assert.isTrue(fee < amt, "fee stays far below the strike; exercise remains profitable");
+
+    console.log(
+      `✅ exercise_o_sola — 3 oSOLA, floor +3 USDC, fee ${Number(fee) / 1e6} USDC → market_vault`,
+    );
+  });
+
+  it("[exercise-fee] fee accrues to hiSOLA stakers through the lazy accumulator", async () => {
+    // Rule 4: the accumulator is advanced on USDC that actually landed, never on a
+    // computed figure. exercise_o_sola deliberately does NOT advance it — the next
+    // staker interaction picks the growth up. Prove the fee is neither lost nor
+    // double-counted: uncredited growth must rise by exactly the fee.
+    const userOSolaAta = anchor.utils.token.associatedAddress({ mint: oSolaM, owner: wallet.publicKey });
+    const userSolaAta  = anchor.utils.token.associatedAddress({ mint: solaM,  owner: wallet.publicKey });
+
+    await topUpOSola(ONE.muln(2));
+
+    const stBefore = await program.account.protocolState.fetch(statePda);
+    const marketBefore = await getTokenBalance(connection, marketV);
+    const uncreditedBefore = marketBefore - BigInt(stBefore.lastMarketVaultBalance.toString());
+
+    const exerciseAmt = ONE.muln(2);
+    const fee = expectedExerciseFee(
+      BigInt(exerciseAmt.toString()),
+      BigInt(stBefore.virtualUsdc.toString()),
+      BigInt(stBefore.virtualSola.toString()),
+      BigInt(stBefore.exerciseFeeBps),
+    );
+    assert.isTrue(fee > 0n, "curve must be above floor for this test to mean anything");
+
+    await program.methods
+      .exerciseOSola(exerciseAmt)
+      .accounts({
+        user: wallet.publicKey, protocolState: statePda,
+        solaMint: solaM, oSolaMint: oSolaM,
+        userOSola: userOSolaAta, userSola: userSolaAta,
+        floorVault: floorV, marketVault: marketV, userUsdc: userUsdcAta,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    const stAfter = await program.account.protocolState.fetch(statePda);
+    const marketAfter = await getTokenBalance(connection, marketV);
+    const uncreditedAfter = marketAfter - BigInt(stAfter.lastMarketVaultBalance.toString());
 
     assert.equal(
-      Number(oSolaBefore - oSolaAfter),
-      Number(exerciseAmt.toString()),
-      "oSOLA burned"
+      BigInt(stAfter.lastMarketVaultBalance.toString()),
+      BigInt(stBefore.lastMarketVaultBalance.toString()),
+      "exercise must NOT touch last_market_vault_balance (that would hide the fee from stakers)",
     );
     assert.equal(
-      Number(solaAfter - solaBefore),
-      Number(exerciseAmt.toString()),
-      "SOLA received"
+      BigInt(stAfter.feesPerHiSola.toString()),
+      BigInt(stBefore.feesPerHiSola.toString()),
+      "exercise must NOT advance the accumulator itself (lazy pattern, same as buy_sola)",
     );
+    assert.equal(uncreditedAfter - uncreditedBefore, fee, "the fee is claimable by stakers, in full");
     assert.equal(
-      Number(usdcBefore - usdcAfter),
-      Number(exerciseAmt.toString()),
-      "USDC paid at floor"
+      BigInt(stAfter.accumulatedFees.toString()) - BigInt(stBefore.accumulatedFees.toString()),
+      fee,
+      "lifetime inflow counter tracks the fee",
     );
-    assert.isTrue(floorAfter > floorBefore, "floor reserve strengthened");
-    console.log("✅ exercise_o_sola — 3 oSOLA exercised, floor reserve +3 USDC");
+    console.log(`✅ exercise fee ${Number(fee) / 1e6} USDC is uncredited growth → claimable by stakers`);
+  });
+
+  it("[exercise-fee] set_exercise_fee: caps at 50%, and 0 restores the pre-fee behaviour", async () => {
+    // Above the cap → rejected. The cap is not a solvency bound (the floor is untouched
+    // either way); it stops an authority from making oSOLA worthless as an LP incentive.
+    await topUpOSola(ONE.muln(1));
+
+    let rejected = false;
+    try {
+      await program.methods.setExerciseFee(5_001)
+        .accounts({ authority: wallet.publicKey, protocolState: statePda } as any).rpc();
+    } catch { rejected = true; }
+    assert.isTrue(rejected, "fee above MAX_EXERCISE_FEE_BPS must revert");
+
+    // Set to 0 and prove exercise is byte-for-byte the old behaviour: strike only.
+    await program.methods.setExerciseFee(0)
+      .accounts({ authority: wallet.publicKey, protocolState: statePda } as any).rpc();
+
+    const userOSolaAta = anchor.utils.token.associatedAddress({ mint: oSolaM, owner: wallet.publicKey });
+    const userSolaAta  = anchor.utils.token.associatedAddress({ mint: solaM,  owner: wallet.publicKey });
+    const usdcBefore   = await getTokenBalance(connection, userUsdcAta);
+    const marketBefore = await getTokenBalance(connection, marketV);
+    const floorBefore  = await getTokenBalance(connection, floorV);
+
+    const exerciseAmt = ONE.muln(1);
+    await program.methods
+      .exerciseOSola(exerciseAmt)
+      .accounts({
+        user: wallet.publicKey, protocolState: statePda,
+        solaMint: solaM, oSolaMint: oSolaM,
+        userOSola: userOSolaAta, userSola: userSolaAta,
+        floorVault: floorV, marketVault: marketV, userUsdc: userUsdcAta,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    const amt = BigInt(exerciseAmt.toString());
+    assert.equal(await getTokenBalance(connection, marketV) - marketBefore, 0n, "fee 0 → nothing to market_vault");
+    assert.equal(await getTokenBalance(connection, floorV) - floorBefore, amt, "floor still receives the full strike");
+    assert.equal(usdcBefore - await getTokenBalance(connection, userUsdcAta), amt, "user pays the strike only");
+
+    // Restore the default so later tests see the launch configuration.
+    await program.methods.setExerciseFee(1_000)
+      .accounts({ authority: wallet.publicKey, protocolState: statePda } as any).rpc();
+    const st = await program.account.protocolState.fetch(statePda);
+    assert.equal(st.exerciseFeeBps, 1000, "default restored");
+    console.log("✅ set_exercise_fee — cap enforced, 0 is a clean no-op, default restored");
   });
 
   // ── 9. Slippage protection ────────────────────────────────────────────────
@@ -805,6 +1315,14 @@ describe("soladrome", () => {
       [Buffer.from("uev"), wallet.publicKey.toBuffer(), epochLE],
       program.programId
     );
+    const [voteEscrowVault] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("vote_escrow")],
+      program.programId
+    );
+    const [userPosition] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), wallet.publicKey.toBuffer()],
+      program.programId
+    );
 
     // Vote for one unit MORE than the raw ATA balance: impossible without the ve boost,
     // which is the whole point of this test, and valid as long as the lock contributes any
@@ -820,7 +1338,10 @@ describe("soladrome", () => {
         poolId:        poolId,
         protocolState: statePda,
         hiSolaMint:    hiSolaM,
+        marketVault:   marketV,
         userHiSola:    userHiSolaAta,
+        voteEscrowVault: voteEscrowVault,
+        userPosition:  userPosition,
         lockPosition:  veLockPda,
         gaugeState:    gaugeState,
         userVoteReceipt: voteReceipt,
@@ -830,6 +1351,32 @@ describe("soladrome", () => {
         rent:          anchor.web3.SYSVAR_RENT_PUBKEY,
       } as any)
       .rpc();
+
+    // Escrow is derived from the ve snapshot the program itself froze, not from a constant:
+    // only the share of the vote NOT covered by ve power needs collateral, and ve_power
+    // decays with the clock. On this wallet the suite's earlier ve lock covers the whole
+    // vote, so the expected escrow is 0 — asserting the formula rather than a literal keeps
+    // the test honest either way. (An earlier version asserted only conservation, which
+    // passed vacuously at zero escrow and proved nothing.)
+    const posAfterVote = await program.account.userPosition.fetch(userPosition);
+    const uev          = await program.account.userEpochVotes.fetch(epochVotes);
+    const escrowed     = BigInt(posAfterVote.voteEscrowed.toString());
+    const vePower      = BigInt(uev.vePowerSnapshot.toString());
+    const expected     = voteAmount.toNumber() > Number(vePower)
+      ? BigInt(voteAmount.toString()) - vePower
+      : 0n;
+
+    assert.equal(escrowed, expected, "escrow = vote − ve power, exactly");
+    assert.equal(
+      await getTokenBalance(connection, userHiSolaAta) + escrowed,
+      rawHiSola,
+      "conservation: hiSOLA is moved into custody, never created or destroyed"
+    );
+    assert.equal(
+      posAfterVote.escrowEpoch.toNumber(),
+      epoch,
+      "escrow is stamped with the voted epoch — this is what gates withdrawal"
+    );
 
     const gauge = await program.account.gaugeState.fetch(gaugeState);
     assert.equal(
@@ -841,6 +1388,356 @@ describe("soladrome", () => {
     console.log(
       `✅ vote_gauge_ve — voted ${voteAmount.toNumber() / 1e6} units (raw cap = 1, ve boost ≈ 0.15)`
     );
+  });
+
+  // ── 13b. Vote escrow — the wallet-splitting vote duplication is closed ─────
+  //
+  // THE BUG THIS PINS (found 2026-08-09, pre-fix behaviour):
+  //   hiSOLA is a plain SPL token in a user-owned ATA with no freeze authority, so the
+  //   program is never invoked on a transfer and cannot block one. `UserEpochVotes` is
+  //   seeded [user, epoch], so a FRESH wallet gets a fresh power snapshot — while the first
+  //   wallet's `UserVoteReceipt` is created with `init` and stays counted forever. So:
+  //   vote with X → send X to a new wallet → vote X again → repeat. Gauge weight became
+  //   unbounded for ~0.005 SOL of rent per hop, and `claim_bribe` pays pro-rata on that
+  //   weight, i.e. it drained bribes deposited by third parties.
+  //
+  //   Snapshotting could never fix this (it only ever guarded one wallet against itself).
+  //   Custody does: voted hiSOLA leaves the ATA, so there is nothing left to send.
+  it("[escrow] voted hiSOLA cannot be forwarded to a second wallet", async () => {
+    const voter = anchor.web3.Keypair.generate();
+    await connection.confirmTransaction(
+      await connection.requestAirdrop(voter.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL),
+      "confirmed"
+    );
+
+    // Fund → buy → stake, so the voter holds real hiSOLA and no ve lock (the ve share of
+    // the vote needs no collateral, and a zero ve power makes the escrow exactly the vote).
+    const vUsdc = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, usdcMint, voter.publicKey
+    );
+    await mintTo(connection, wallet.payer, usdcMint, vUsdc.address, wallet.payer, 100_000_000);
+
+    const vSola   = anchor.utils.token.associatedAddress({ mint: solaM,   owner: voter.publicKey });
+    const vHiSola = anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: voter.publicKey });
+    const [vPos]  = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), voter.publicKey.toBuffer()], program.programId);
+
+    await program.methods
+      .buySola(new BN(20_000_000), new BN(1))
+      .accounts({
+        user: voter.publicKey, protocolState: statePda, solaMint: solaM,
+        userUsdc: vUsdc.address, userSola: vSola,
+        floorVault: floorV, marketVault: marketV,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([voter])
+      .rpc();
+
+    const boughtSola = await getTokenBalance(connection, vSola);
+    await program.methods
+      .stakeSola(new BN(boughtSola.toString()))
+      .accounts({
+        user: voter.publicKey, protocolState: statePda,
+        solaMint: solaM, hiSolaMint: hiSolaM,
+        usdcMint, userUsdc: vUsdc.address,
+        userSola: vSola, userHiSola: vHiSola,
+        solaVault, marketVault: marketV, userPosition: vPos,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([voter])
+      .rpc();
+
+    const staked = await getTokenBalance(connection, vHiSola);
+    assert.isAbove(Number(staked), 0, "voter must hold hiSOLA for this test to mean anything");
+
+    const slot      = await connection.getSlot();
+    const blockTime = await connection.getBlockTime(slot);
+    const epoch     = Math.floor(blockTime / 604_800);
+    const epochLE   = Buffer.alloc(8);
+    epochLE.writeBigUInt64LE(BigInt(epoch));
+
+    const poolId = anchor.web3.Keypair.generate().publicKey;
+    const pda = (seeds: (Buffer | Uint8Array)[]) =>
+      anchor.web3.PublicKey.findProgramAddressSync(seeds, program.programId)[0];
+
+    const voteAccounts = {
+      user: voter.publicKey,
+      poolId,
+      protocolState: statePda,
+      hiSolaMint: hiSolaM,
+      marketVault: marketV,
+      userHiSola: vHiSola,
+      voteEscrowVault: pda([Buffer.from("vote_escrow")]),
+      userPosition: vPos,
+      // No ve lock: SystemProgram is the documented "absent lock" placeholder.
+      lockPosition: anchor.web3.SystemProgram.programId,
+      gaugeState: pda([Buffer.from("gauge"), poolId.toBuffer(), epochLE]),
+      userVoteReceipt: pda([Buffer.from("vote"), voter.publicKey.toBuffer(), poolId.toBuffer(), epochLE]),
+      userEpochVotes: pda([Buffer.from("uev"), voter.publicKey.toBuffer(), epochLE]),
+      globalEpochVotes: pda([Buffer.from("epoch_votes"), epochLE]),
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: anchor.web3.SystemProgram.programId,
+      rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+    };
+
+    await program.methods
+      .voteGauge(new BN(epoch), new BN(staked.toString()))
+      .accounts(voteAccounts as any)
+      .signers([voter])
+      .rpc();
+
+    // The whole point: the stake is gone from the wallet the moment it votes.
+    assert.equal(
+      await getTokenBalance(connection, vHiSola), 0n,
+      "voted hiSOLA no longer sits in the voter's ATA"
+    );
+    const pos = await program.account.userPosition.fetch(vPos);
+    assert.equal(
+      pos.voteEscrowed.toString(), staked.toString(),
+      "the full voted weight is under custody"
+    );
+
+    // The attack itself: forward the stake to a virgin wallet and vote a second time.
+    // It cannot even reach the vote — the transfer fails first, for lack of balance.
+    const accomplice = anchor.web3.Keypair.generate();
+    const accompliceAta = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, hiSolaM, accomplice.publicKey
+    );
+
+    let forwarded = false;
+    try {
+      await splTransfer(
+        connection, wallet.payer, vHiSola, accompliceAta.address,
+        voter, Number(staked)
+      );
+      forwarded = true;
+    } catch {
+      /* expected: nothing left to send */
+    }
+    assert.isFalse(forwarded, "escrowed hiSOLA must not be transferable to a second wallet");
+    assert.equal(
+      await getTokenBalance(connection, accompliceAta.address), 0n,
+      "the second wallet never receives voting power"
+    );
+
+    // ── Release is gated on the epoch ending ───────────────────────────────
+    // Asserted here rather than in its own `it`: this voter is the one that actually holds
+    // escrow, and reaching for it across test boundaries made the assertion depend on which
+    // wallet the suite happened to leave collateralised.
+    try {
+      await program.methods
+        .withdrawVoteEscrow()
+        .accounts({
+          user: voter.publicKey,
+          protocolState: statePda,
+          hiSolaMint: hiSolaM,
+          userHiSola: vHiSola,
+          voteEscrowVault: voteAccounts.voteEscrowVault,
+          userPosition: vPos,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .signers([voter])
+        .rpc();
+      assert.fail("withdrawal should be locked until the voted epoch is over");
+    } catch (e: any) {
+      assert.include(
+        e.toString(), "VoteEscrowLocked",
+        `expected the epoch guard to fire, got: ${e}`
+      );
+    }
+    assert.equal(
+      await getTokenBalance(connection, vHiSola), 0n,
+      "the refused withdrawal returned nothing"
+    );
+
+    // Epochs are 7 days with no devnet override, so the successful release cannot be
+    // exercised in-suite — only its refusal. Covering the happy path needs a bankrun
+    // harness with a warped clock.
+    console.log("✅ escrow — vote duplication closed; release refused inside the voted epoch");
+  });
+
+  // Same defect class as the vote duplication above, on the fee accumulator instead of the
+  // gauge: hiSOLA is a plain SPL token with no freeze authority, so a balance can always walk
+  // to a wallet the protocol has never seen. `stake_sola`, `unstake_hi_sola` and `borrow_usdc`
+  // all defend against that by stamping `fees_debt = acc` when they lazily create a
+  // UserPosition. `vote_gauge` creates the very same account and does not — so the position is
+  // born with `fees_debt = 0` and `claim_fees` reads it as "staked since genesis".
+  it("[security] a virgin wallet cannot vote its way into the whole fee history", async () => {
+    const PRECISION = new BN("1000000000000"); // 1e12, matches state.rs
+
+    // ── The holder: buys and stakes normally, so their own position is stamped correctly ──
+    const holder = anchor.web3.Keypair.generate();
+    await connection.confirmTransaction(
+      await connection.requestAirdrop(holder.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL),
+      "confirmed"
+    );
+    const hUsdc = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, usdcMint, holder.publicKey
+    );
+    await mintTo(connection, wallet.payer, usdcMint, hUsdc.address, wallet.payer, 100_000_000);
+
+    const hSola   = anchor.utils.token.associatedAddress({ mint: solaM,   owner: holder.publicKey });
+    const hHiSola = anchor.utils.token.associatedAddress({ mint: hiSolaM, owner: holder.publicKey });
+    const [hPos]  = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), holder.publicKey.toBuffer()], program.programId);
+
+    await program.methods
+      .buySola(new BN(20_000_000), new BN(1))
+      .accounts({
+        user: holder.publicKey, protocolState: statePda, solaMint: solaM,
+        userUsdc: hUsdc.address, userSola: hSola,
+        floorVault: floorV, marketVault: marketV,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([holder])
+      .rpc();
+
+    const bought = await getTokenBalance(connection, hSola);
+    await program.methods
+      .stakeSola(new BN(bought.toString()))
+      .accounts({
+        user: holder.publicKey, protocolState: statePda,
+        solaMint: solaM, hiSolaMint: hiSolaM,
+        usdcMint, userUsdc: hUsdc.address,
+        userSola: hSola, userHiSola: hHiSola,
+        solaVault, marketVault: marketV, userPosition: hPos,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .signers([holder])
+      .rpc();
+
+    const stake = await getTokenBalance(connection, hHiSola);
+    assert.isAbove(Number(stake), 0, "the holder must actually hold hiSOLA");
+
+    // The accumulator has to carry history, otherwise there is nothing to steal and the
+    // test would pass for the wrong reason.
+    const stateBefore = await program.account.protocolState.fetch(statePda);
+    const acc = stateBefore.feesPerHiSola as BN;
+    assert.isTrue(acc.gtn(0), "fees_per_hi_sola must be non-zero for this PoC to mean anything");
+
+    // What a position born with fees_debt = 0 would be handed on a balance of `stake`.
+    const stealable = acc.mul(new BN(stake.toString())).div(PRECISION);
+    assert.isTrue(stealable.gtn(0), "the history must be worth at least 1 base unit");
+
+    // ── The attack: move the balance to a wallet the protocol has never seen ──────────
+    const virgin = anchor.web3.Keypair.generate();
+    await connection.confirmTransaction(
+      await connection.requestAirdrop(virgin.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL),
+      "confirmed"
+    );
+    const vHiSolaAta = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, hiSolaM, virgin.publicKey
+    );
+    const vUsdcAta = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, usdcMint, virgin.publicKey
+    );
+    await splTransfer(
+      connection, wallet.payer, hHiSola, vHiSolaAta.address, holder, Number(stake)
+    );
+    assert.equal(
+      await getTokenBalance(connection, vHiSolaAta.address), stake,
+      "the virgin wallet now holds the stake, having done nothing"
+    );
+
+    const [vPos] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), virgin.publicKey.toBuffer()], program.programId);
+    assert.isNull(
+      await program.account.userPosition.fetchNullable(vPos),
+      "the virgin wallet must have no position yet — vote_gauge is what creates it"
+    );
+
+    // vote_gauge is the only instruction that will open a UserPosition for this wallet
+    // without stamping fees_debt.
+    const slot      = await connection.getSlot();
+    const blockTime = await connection.getBlockTime(slot);
+    const epoch     = Math.floor(blockTime / 604_800);
+    const epochLE   = Buffer.alloc(8);
+    epochLE.writeBigUInt64LE(BigInt(epoch));
+    const poolId = anchor.web3.Keypair.generate().publicKey;
+    const pda = (seeds: (Buffer | Uint8Array)[]) =>
+      anchor.web3.PublicKey.findProgramAddressSync(seeds, program.programId)[0];
+
+    // Stay under both caps so the vote itself is never what fails.
+    const globalCap = new BN(stateBefore.totalHiSola.toString()).muln(3_000).divn(10_000);
+    const votes     = BN.min(new BN(stake.toString()), globalCap);
+    assert.isTrue(votes.gtn(0), "the vote must be castable");
+
+    await program.methods
+      .voteGauge(new BN(epoch), votes)
+      .accounts({
+        user: virgin.publicKey,
+        poolId,
+        protocolState: statePda,
+        hiSolaMint: hiSolaM,
+        marketVault: marketV,
+        userHiSola: vHiSolaAta.address,
+        voteEscrowVault: pda([Buffer.from("vote_escrow")]),
+        userPosition: vPos,
+        lockPosition: anchor.web3.SystemProgram.programId,
+        gaugeState: pda([Buffer.from("gauge"), poolId.toBuffer(), epochLE]),
+        userVoteReceipt: pda([Buffer.from("vote"), virgin.publicKey.toBuffer(), poolId.toBuffer(), epochLE]),
+        userEpochVotes: pda([Buffer.from("uev"), virgin.publicKey.toBuffer(), epochLE]),
+        globalEpochVotes: pda([Buffer.from("epoch_votes"), epochLE]),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .signers([virgin])
+      .rpc();
+
+    // The stamp is the fix. Before it this read "0" and the claim below drained the vault.
+    const born = await program.account.userPosition.fetch(vPos);
+    assert.isTrue(
+      (born.feesDebt as BN).gte(acc),
+      `REGRESSION: vote_gauge must stamp fees_debt at the live accumulator on a freshly ` +
+      `created position — got ${(born.feesDebt as BN).toString()}, accumulator was ${acc.toString()}`
+    );
+
+    // ── The payout: claim_fees reads fees_debt = 0 and pays the entire history ────────
+    const vaultBefore = await getTokenBalance(connection, marketV);
+    let claimed = 0n;
+    try {
+      await program.methods
+        .claimFees()
+        .accounts({
+          user: virgin.publicKey,
+          protocolState: statePda,
+          hiSolaMint: hiSolaM,
+          userHiSola: vHiSolaAta.address,
+          marketVault: marketV,
+          userUsdc: vUsdcAta.address,
+          userPosition: vPos,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .signers([virgin])
+        .rpc();
+      claimed = await getTokenBalance(connection, vUsdcAta.address);
+    } catch (e: any) {
+      // NothingToClaim is the fixed behaviour: a wallet that just arrived is owed nothing.
+      assert.include(
+        e.toString(), "NothingToClaim",
+        `expected the virgin wallet to be owed nothing, got: ${e}`
+      );
+    }
+
+    assert.equal(
+      claimed, 0n,
+      `a wallet that never staked drained ${claimed} USDC of other stakers' fees ` +
+      `(history was worth ${stealable.toString()})`
+    );
+    assert.equal(
+      await getTokenBalance(connection, marketV), vaultBefore,
+      "market_vault must be untouched by a virgin wallet's claim"
+    );
+    console.log("✅ security — a voted-in position cannot claim fee history it never earned");
   });
 
   // ── POL Engine ────────────────────────────────────────────────────────────
@@ -973,16 +1870,45 @@ describe("soladrome", () => {
     // sent ~0.9 USDC because its price rocketed within a few dollars. The hardcoded
     // amount silently depended on that broken curve.
     //
-    // Collect the ENTIRE uncredited growth — the worst case. Fixed 2026-07-18: the
-    // accumulator now advances on (balance − amount), so the skim comes out of the
-    // stakers' share instead of promising them fees the vault no longer holds, and a
-    // solvency guard refuses to skim anything already credited (everything at or below
-    // last_market_vault_balance is spoken for). Collecting 50% of the raw balance used
-    // to brick claim_fees/stake_sola with a raw SPL "insufficient funds".
+    // Collect the MAXIMUM the configured split allows. Until 2026-08-12 this test took the
+    // entire uncredited growth, because nothing stopped it: `pol_split_bps` was stored,
+    // validated as "max 50 %", and then read by no instruction — the authority could route
+    // 100 % of fresh fees into POL while the docs promised a fraction. The split is now
+    // enforced in `collect_to_pol`, so the worst case a test can exercise is the cap itself.
+    //
+    // The solvency property this test used to guard still holds and is asserted below: the
+    // accumulator advances on (balance − amount), so the skim comes out of the stakers'
+    // share rather than promising them fees the vault no longer holds.
     const stBefore = await program.account.protocolState.fetch(statePda);
     const uncredited = marketBefore - BigInt(stBefore.lastMarketVaultBalance.toString());
     assert.isTrue(uncredited > 0n, "there must be uncredited fee growth to collect");
-    const COLLECT_AMOUNT     = new BN(uncredited.toString());
+    const splitBps = BigInt(pol.polSplitBps);
+    const maxSkim = (uncredited * splitBps) / 10_000n;
+    assert.isTrue(maxSkim > 0n, "the split must allow a non-zero skim for this test to bite");
+    const COLLECT_AMOUNT     = new BN(maxSkim.toString());
+
+    // One base unit past the cap must be refused — otherwise "max 50 %" is decoration again.
+    let overSkimmed = false;
+    try {
+      await program.methods
+        .collectToPol(new BN((maxSkim + 1n).toString()))
+        .accounts({
+          authority:     wallet.publicKey,
+          protocolState: statePda,
+          polState:      polStatePda,
+          marketVault:   marketV,
+          polUsdcVault,
+          tokenProgram:  TOKEN_PROGRAM_ID,
+        } as any)
+        .rpc();
+      overSkimmed = true;
+    } catch (e: any) {
+      assert.include(
+        e.toString(), "PolSplitExceeded",
+        `expected the split cap to fire, got: ${e}`
+      );
+    }
+    assert.isFalse(overSkimmed, "POL must not skim beyond pol_split_bps of the growth");
     // Snapshot existing lifetime accumulator before this collect (may be non-zero on re-run)
     const polBefore          = await program.account.polState.fetch(polStatePda);
     const accumulatedBefore  = polBefore.usdcAccumulated.toNumber();
@@ -1728,7 +2654,7 @@ describe("soladrome", () => {
 
   it("[team] ecosystem allocation locks the 250K into a ve position, never a wallet", async () => {
     const TEAM_WALLET = new anchor.web3.PublicKey(
-      "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3"
+      "BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA"
     );
     // No signature needed from the team: it is an address-checked UncheckedAccount and the
     // authority is the caller.

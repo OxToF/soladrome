@@ -3,6 +3,6 @@ enabled = true
 
 
 [[fuzz.programs]]
-address = "4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd"
+address = "DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe"
 program = "../target/deploy/soladrome.so"
  

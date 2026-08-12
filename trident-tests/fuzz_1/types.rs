@@ -26,7 +26,7 @@ pub mod soladrome {
 
     /// Returns the program ID for soladrome
     pub fn program_id() -> Pubkey {
-        pubkey!("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd")
+        pubkey!("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe")
     }
 
     // ------------------------------------------------------------------------

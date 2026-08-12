@@ -24,32 +24,21 @@ pub const MAX_PROTOCOL_FEE: u16 = 5_000; // 50% of fee max to protocol
 
 // ── Reward accumulator helpers ────────────────────────────────────────────────
 
-/// Advance pool's oSOLA-per-LP accumulator using elapsed seconds.
-/// Inlined to avoid borrow checker conflicts with Anchor account references.
-macro_rules! update_pool_rewards {
-    ($pool:expr, $now:expr, $rate:expr, $active:expr) => {{
-        if $pool.last_reward_ts == 0 {
-            $pool.last_reward_ts = $now;
-        } else {
-            let elapsed = ($now - $pool.last_reward_ts).max(0) as u128;
-            // Accrue only when: this pool is authority-approved (`rewards_enabled`),
-            // the continuous window is still open (`$active` = current_epoch <
-            // continuous_end_epoch), and a rate is configured. The timestamp still
-            // advances otherwise so re-enabling later never back-pays.
-            if elapsed > 0 && $pool.total_lp > 0 && $pool.rewards_enabled && $active {
-                let new_rewards = ($rate as u128).saturating_mul(elapsed);
-                let delta =
-                    new_rewards.saturating_mul(LP_REWARD_PRECISION) / ($pool.total_lp as u128);
-                $pool.osola_reward_per_lp = $pool.osola_reward_per_lp.saturating_add(delta);
-            }
-            $pool.last_reward_ts = $now;
-        }
-    }};
-}
-
 /// Advance the per-pool oSOLA reward accumulator.
-/// Identical to the `update_pool_rewards!` macro but callable from other modules
-/// (e.g. `flash_arbitrage` in lib.rs which manipulates pool reserves directly).
+///
+/// THE single implementation — every path that touches pool rewards goes through here:
+/// `add_liquidity`, `remove_liquidity`, `swap`, `claim_lp_rewards`, `set_pool_rewards` and
+/// `flash_arbitrage`. Until 2026-08-12 this logic existed twice, the other copy being an
+/// `update_pool_rewards!` macro said to be inlined "to avoid borrow checker conflicts". That
+/// justification did not hold: every call site copies `rate` (u32) and `active` (bool) out of
+/// `protocol_state` before borrowing the pool, so nothing is still borrowed by then —
+/// `set_pool_rewards` always called this function from exactly that shape.
+///
+/// Why the duplication had to go: the two copies were live on different paths (macro on
+/// swap/liquidity/claim, function on set_pool_rewards/flash_arb), so a fix applied to one
+/// left the other exposed. Removing the back-payment guard from the macro alone left the
+/// whole suite green — the protection was silently path-dependent.
+///
 /// `rate` = oSOLA base units/sec; `active` = continuous window still open.
 pub fn advance_pool_rewards(pool: &mut AmmPool, now: i64, rate: u32, active: bool) {
     if pool.last_reward_ts == 0 {
@@ -68,8 +57,12 @@ pub fn advance_pool_rewards(pool: &mut AmmPool, now: i64, rate: u32, active: boo
 }
 
 /// Whether the continuous emission window is open at `now` for the given state.
+/// Gated by the master emission switch (`ProtocolState::emissions_enabled`) so
+/// the continuous-stream path stops accruing the instant emission is disabled,
+/// mirroring the epoch/gauge path's `emit_pool_rewards` gate. Off by default.
 pub fn continuous_active(state: &ProtocolState, now: i64) -> bool {
-    crate::state::current_epoch(now) < u64::from(state.continuous_end_epoch)
+    state.emissions_enabled
+        && crate::state::current_epoch(now) < u64::from(state.continuous_end_epoch)
 }
 
 /// Authority-only: approve or revoke a pool's eligibility for continuous oSOLA
@@ -235,10 +228,7 @@ pub fn add_liquidity(
     let now = Clock::get()?.unix_timestamp;
     let cont_rate = ctx.accounts.protocol_state.continuous_rate_per_sec;
     let cont_active = continuous_active(&ctx.accounts.protocol_state, now);
-    {
-        let pool = &mut ctx.accounts.pool;
-        update_pool_rewards!(pool, now, cont_rate, cont_active);
-    }
+    advance_pool_rewards(&mut ctx.accounts.pool, now, cont_rate, cont_active);
 
     // ── Auto-harvest pending oSOLA for user's existing LP position ────────────
     let acc = ctx.accounts.pool.osola_reward_per_lp;
@@ -320,10 +310,7 @@ pub fn remove_liquidity(
     let now = Clock::get()?.unix_timestamp;
     let cont_rate = ctx.accounts.protocol_state.continuous_rate_per_sec;
     let cont_active = continuous_active(&ctx.accounts.protocol_state, now);
-    {
-        let pool = &mut ctx.accounts.pool;
-        update_pool_rewards!(pool, now, cont_rate, cont_active);
-    }
+    advance_pool_rewards(&mut ctx.accounts.pool, now, cont_rate, cont_active);
 
     // ── Auto-harvest pending oSOLA ────────────────────────────────────────────
     let acc = ctx.accounts.pool.osola_reward_per_lp;
@@ -444,10 +431,7 @@ pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let cont_rate = ctx.accounts.protocol_state.continuous_rate_per_sec;
     let cont_active = continuous_active(&ctx.accounts.protocol_state, now);
-    {
-        let pool = &mut ctx.accounts.pool;
-        update_pool_rewards!(pool, now, cont_rate, cont_active);
-    }
+    advance_pool_rewards(&mut ctx.accounts.pool, now, cont_rate, cont_active);
 
     let acc = ctx.accounts.pool.osola_reward_per_lp;
     let basis = reward_basis(&ctx.accounts.lp_user_info, user_lp);

@@ -35,7 +35,7 @@ pub use ve::*;
 /// Canonical dead address for MINIMUM_LIQUIDITY lock (System Program address).
 pub const LP_DEAD_PUBKEY: Pubkey = anchor_lang::system_program::ID;
 
-declare_id!("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+declare_id!("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 
 // ── Security contact (https://github.com/neodyme-labs/solana-security-txt) ────
 // Published on-chain so security researchers can find our contact info.
@@ -58,6 +58,9 @@ pub const POSITION_SEED: &[u8] = b"position";
 pub const FLOOR_VAULT_SEED: &[u8] = b"floor_vault";
 pub const MARKET_VAULT_SEED: &[u8] = b"market_vault";
 pub const SOLA_VAULT_SEED: &[u8] = b"sola_vault";
+/// Global custody vault for hiSOLA immobilised by voting. Per-user amounts live in
+/// `UserPosition.vote_escrowed`; the vault itself is a single protocol-owned account.
+pub const VOTE_ESCROW_SEED: &[u8] = b"vote_escrow";
 
 // Market-curve depth. Must stay equal so the start price = floor = 1 USDC/SOLA.
 // N = 1M sizes price discovery, NOT supply: exercise_o_sola mints outside the curve.
@@ -104,6 +107,24 @@ pub const ECOSYSTEM_TOTAL: u64 = 1_750_000_000_000; //  1 750 000 SOLA — marke
 pub const FOUNDER_IMMEDIATE_SOLA: u64 = 250_000_000_000; //    250 000 → hiSOLA, lifetime ve lock
 /// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
 pub const BORROW_FEE_BPS: u64 = 200; //  2 % of borrowed amount
+
+/// Default oSOLA exercise fee — 10 % **of the gain**, not of the notional.
+///
+/// ⚠️ Do NOT read this as "the same 2 % as BORROW_FEE_BPS with a different number".
+/// The two fees have unrelated bases: `BORROW_FEE_BPS` is a share of the amount
+/// borrowed, while this is a share of `(curve_price − 1) × amount`, i.e. of the
+/// arbitrage spread the option holder captures. At a curve price of 2, 10 % here is
+/// 0.10 USDC per SOLA and the exerciser still pays 1.10 for an asset worth 2 (+82 %).
+/// The equivalent number on the notional would be ~2 000 bps of the strike.
+///
+/// Only written by `initialize`; live singletons read 0 (no fee) until the authority
+/// calls `set_exercise_fee`.
+pub const DEFAULT_EXERCISE_FEE_BPS: u16 = 1_000; // 10 % of the gain
+/// Hard ceiling on `exercise_fee_bps`. Below 10 000 exercise stays profitable by
+/// construction (the fee is a fraction of the gain), so this is not a solvency bound —
+/// it is a guard against an authority setting a value that makes oSOLA worthless as an
+/// LP incentive, which would be an economic self-inflicted wound, not an exploit.
+pub const MAX_EXERCISE_FEE_BPS: u16 = 5_000; // 50 % of the gain
                                      // (FOUNDER_BORROW_CAP_BPS removed 2026-07-18 with founder_borrow_usdc — the 7M are ve-escrowed,
                                      //  so the founder's only borrow path is borrow_against_locked at PARTNER_BORROW_CAP_BPS, 20%.)
 
@@ -124,11 +145,17 @@ pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 // The cliff (`VESTING_CLIFF_SECS`) rides the same feature, so a wrong build gives away the
 // wallet AND the timelock at once.
 
-/// Devnet/localnet only — throwaway key committed at tests/keys/founder-devnet.json.
+/// Devnet/localnet only — throwaway key at tests/keys/founder-devnet.json, which is
+/// **gitignored, not committed**: the previous one leaked to the public repo and forced
+/// the 2026-07-21 filter-repo purge. Regenerate locally when missing (the `[founder]`
+/// tests are the only consumer) and update this constant to match:
+///     solana-keygen new -o tests/keys/founder-devnet.json --no-bip39-passphrase --force
 /// Exists so the founder path (escrow, guards, vesting) is testable at all: the mainnet
-/// wallet is a Ledger and no test can sign for it.
+/// wallet is a Ledger and no test can sign for it. Rotated 2026-08-10 — the prior key
+/// `DJZFZSBGCuo3X79hEVqPjzdkKF5aVDVNCaFyW8g5QS6i` was destroyed by the purge, and a
+/// public key cannot be un-derived into its secret, so those tests were dead until now.
 #[cfg(feature = "devnet")]
-pub const FOUNDER_WALLET: &str = "DJZFZSBGCuo3X79hEVqPjzdkKF5aVDVNCaFyW8g5QS6i";
+pub const FOUNDER_WALLET: &str = "J8Ww4yejqLHJxgQDnWKd5njK7i2seJbkukrm4pybHkro";
 
 /// ⚠️ Mainnet founder wallet — hardcoded for security (cannot be redirected).
 /// Ledger Nano S — dedicated Soladrome wallet, never used on any other chain.
@@ -140,7 +167,7 @@ pub const FOUNDER_WALLET: &str = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 // Distinct from FOUNDER_WALLET so it can vote as an ordinary user: the founder-voting
 // guard blocks only FOUNDER_WALLET, never this one. That asymmetry is deliberate — the 7M
 // is a dormant anti-capture reserve, this is contributor compensation.
-pub const TEAM_WALLET: &str = "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3";
+pub const TEAM_WALLET: &str = "BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA";
 
 // ── Contributor / marketing allocation ────────────────────────────────────────
 pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
@@ -176,12 +203,38 @@ pub mod soladrome {
         s.virtual_sola = INIT_VIRTUAL_SOLA;
         s.k = INIT_VIRTUAL_USDC as u128 * INIT_VIRTUAL_SOLA as u128;
         s.bump = ctx.bumps.protocol_state;
-        // Epoch emission decay — 800 000 oSOLA/epoch at launch, −1%/epoch, floor 150 000.
-        // Timeline: ~616k at 6 months, ~474k at 1 year, ~150k floor at ~3.2 years.
-        // Override at any time via `configure_emissions` (Squads multisig).
-        s.osola_emission_initial = 800_000_000_000; // 800 000 oSOLA (6 dec)
+        // ── Epoch emission decay — recalibrated 2026-08-09 ───────────────────
+        // 20 000 oSOLA/epoch, −1%/epoch, floor 25% (5 000). Reaches the floor at epoch 137
+        // (~2.6 y); ~0.81M emitted in year 1, ~1.5M by the floor, then 0.26M/year forever.
+        //
+        // The 20 000 start is a deliberate launch incentive to pull liquidity in: at the
+        // $2-5M TVL a gated launch actually opens with, it pays 4-20% APR. The DECAY is what
+        // makes it a launch boost rather than a permanent level — which is why the floor is
+        // 25% and not 50%. Same starting pull, but it tapers 4× over 2.6 years and settles
+        // at 5 000/epoch, the same steady-state a flat 10 000/epoch would have reached. A
+        // 50% floor would have locked in 10 000/epoch forever — doubling the perpetual
+        // commitment for no extra launch effect.
+        //
+        // WHY SO MUCH LOWER THAN THE PREVIOUS 800 000: emissions are a SUPPORT yield for
+        // partner pools (LSTs, stables); the real partner return comes from bribes. An oSOLA
+        // is an option struck at the 1 USDC floor, so its value is `price − 1` and the APR is
+        // `annual_emission × (price − 1) / TVL`. At 800 000/epoch a $10M TVL paid 163% APR on
+        // a mere ×1.5 move and 1 303% at ×5 — the "5 000% farm" profile this protocol
+        // explicitly does not sell. The modelled band for 1-2% support yield over a
+        // 10M→100M TVL path is 5 000–15 000/epoch. See `scripts/emissions/`.
+        //
+        // WHY THE FLOOR MOVED OFF 1 875: with TVL growing while emission decays, the two
+        // compressions multiply (TVL ×10 and emission ÷10 = APR ÷100), so a low floor lets
+        // the support yield collapse to noise. What matters is the floor in ABSOLUTE terms —
+        // 5 000 oSOLA/epoch — not the ratio; the ratio only sets how fast the launch boost
+        // decays into it.
+        //
+        // Adjustable at any time via `configure_emissions` (Squads multisig). Note the
+        // asymmetry: raising reads as a gift, cutting reads as a nerf and drives LPs away —
+        // so the perpetual tail is the number to keep conservative, not the starting point.
+        s.osola_emission_initial = 20_000_000_000; // 20 000 oSOLA (6 dec)
         s.osola_emission_decay_bps = 9_900; // −1 % per epoch
-        s.osola_emission_floor_bps = 1_875; // floor = 150 000 oSOLA (18.75 %)
+        s.osola_emission_floor_bps = 2_500; // floor = 5 000 oSOLA (25 %)
         s.osola_emission_start_epoch = current_epoch(clock.unix_timestamp);
         // Continuous (Masterchef) bootstrap stream OFF until the authority calls
         // `configure_continuous_emissions`. rate 0 + end_epoch 0 => never accrues.
@@ -198,6 +251,13 @@ pub mod soladrome {
         s.voting_enabled = false;
         s.exercise_enabled = false;
         s.curve_enabled = false;
+        // oSOLA emission (both the epoch/gauge path and the continuous stream)
+        // starts disabled — armed only via set_phase_flags, and only once the
+        // per-epoch cycle has been audited (pre-Genesis, not pre-launch).
+        s.emissions_enabled = false;
+        // oSOLA exercise fee: 10 % of the gain (never of the strike — see
+        // DEFAULT_EXERCISE_FEE_BPS). Tunable post-launch via `set_exercise_fee`.
+        s.exercise_fee_bps = DEFAULT_EXERCISE_FEE_BPS;
         Ok(())
     }
 
@@ -235,6 +295,7 @@ pub mod soladrome {
         voting_enabled: Option<bool>,
         exercise_enabled: Option<bool>,
         curve_enabled: Option<bool>,
+        emissions_enabled: Option<bool>,
     ) -> Result<()> {
         let state = &mut ctx.accounts.protocol_state;
         if let Some(v) = lp_enabled {
@@ -252,13 +313,17 @@ pub mod soladrome {
         if let Some(v) = curve_enabled {
             state.curve_enabled = v;
         }
+        if let Some(v) = emissions_enabled {
+            state.emissions_enabled = v;
+        }
         msg!(
-            "Phase flags: lp={} bribes={} voting={} exercise={} curve={}",
+            "Phase flags: lp={} bribes={} voting={} exercise={} curve={} emissions={}",
             state.lp_enabled,
             state.bribes_enabled,
             state.voting_enabled,
             state.exercise_enabled,
             state.curve_enabled,
+            state.emissions_enabled,
         );
         Ok(())
     }
@@ -586,13 +651,31 @@ pub mod soladrome {
                 position.owner = ctx.accounts.user.key();
                 position.bump = ctx.bumps.user_position;
             }
+            // Fee basis includes vote-escrowed hiSOLA for the same reason the comment above
+            // gives: `fees_debt` jumps to `acc` on the next line, so anything not credited
+            // here is forfeited to the other stakers. A voter topping up their stake must
+            // not pay for having voted. (`is_new` positions hold no escrow, hence 0.)
             let pending = if is_new {
                 0
             } else {
-                math::pending_fees(acc, position.fees_debt, old_balance)
+                // `staked_amount` is still the pre-stake figure here: this harvest settles
+                // what the OLD position earned, before the new deposit is recorded below.
+                let basis = math::fee_basis(
+                    position.staked_amount,
+                    old_balance,
+                    position.vote_escrowed,
+                );
+                math::pending_fees(acc, position.fees_debt, basis)
             };
             // Entry/exit point: debt = current accumulator (no retroactive claim).
             position.fees_debt = acc;
+            // Record the financed deposit — this is what `borrow_usdc` caps against, so that
+            // credit follows the wallet that actually paid into the floor rather than
+            // whichever wallet is currently holding the (freely transferable) tokens.
+            position.staked_amount = position
+                .staked_amount
+                .checked_add(sola_amount)
+                .ok_or(SoladromeError::Overflow)?;
             pending
         };
 
@@ -712,7 +795,21 @@ pub mod soladrome {
         // Compute on the FULL pre-unstake balance so the staker captures every
         // fee earned up to this moment — then set fees_debt = acc so future
         // claim_fees only credits post-unstake earnings on the residual balance.
-        let pending = math::pending_fees(acc, ctx.accounts.user_position.fees_debt, balance);
+        //
+        // ☢️ The fee basis MUST include vote-escrowed hiSOLA, even though only the ATA
+        // portion can be burned here. `fees_debt` is reset to `acc` a few lines down, which
+        // permanently closes the window on everything not credited now — so paying on the
+        // ATA alone would silently confiscate the fees earned by the escrowed stake. Keep
+        // `balance` for the burn/debt arithmetic and use this wider figure only for fees.
+        // Capped by the financed stake for the reason given on `math::fee_basis`: a balance
+        // topped up by transfer must not collect the history it did not earn. The escrowed
+        // term stays inside the minimum, so voting still costs the staker nothing.
+        let fee_basis = math::fee_basis(
+            ctx.accounts.user_position.staked_amount,
+            balance,
+            ctx.accounts.user_position.vote_escrowed,
+        );
+        let pending = math::pending_fees(acc, ctx.accounts.user_position.fees_debt, fee_basis);
         if pending > 0 {
             let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
             token::transfer(
@@ -758,6 +855,14 @@ pub mod soladrome {
             hi_sola_amount,
         )?;
 
+        // The financed deposit shrinks with the burn. `saturating_sub` because legacy
+        // positions predate the field and read 0 — they must not underflow on exit.
+        ctx.accounts.user_position.staked_amount = ctx
+            .accounts
+            .user_position
+            .staked_amount
+            .saturating_sub(hi_sola_amount);
+
         let s = &mut ctx.accounts.protocol_state;
         s.fees_per_hi_sola = acc;
         // Use post-payout balance as snapshot so the auto-paid USDC is not
@@ -770,7 +875,7 @@ pub mod soladrome {
         Ok(())
     }
 
-    // Borrow USDC from floor reserve. Max = hiSOLA balance × 1 USDC (1:1 floor). No liquidation.
+    // Borrow USDC from floor reserve. Max = financed stake still in hand. No liquidation.
     pub fn borrow_usdc(ctx: Context<BorrowUsdc>, usdc_amount: u64) -> Result<()> {
         require!(
             !ctx.accounts.protocol_state.paused,
@@ -793,7 +898,29 @@ pub mod soladrome {
             );
         }
 
-        let hi_sola_balance = ctx.accounts.user_hi_sola.amount;
+        // Collateral counts escrowed hiSOLA: the stake is the user's, it is simply in custody
+        // for the epoch they voted in. Ignoring it would make voting cancel your borrowing
+        // capacity, which would push anyone who borrows to abstain — the last thing a
+        // vote-directed emission system should encourage. The escrow cannot be withdrawn
+        // while debt is outstanding either, since `unstake_hi_sola` still gates on
+        // `usdc_borrowed <= remaining` once the tokens are back in the ATA.
+        let hi_sola_balance = ctx
+            .accounts
+            .user_hi_sola
+            .amount
+            .saturating_add(ctx.accounts.user_position.vote_escrowed);
+        // ☢️ The cap needs BOTH halves. `hi_sola_balance` alone is a token balance, and hiSOLA
+        // transfers freely (no freeze authority), so the same collateral could be walked
+        // wallet to wallet, each hop seeing a full cap and drawing the floor down again —
+        // gating `unstake_hi_sola` on outstanding debt never stopped that, it gates the burn,
+        // not the transfer. `staked_amount` alone is not enough either: it would keep paying
+        // a wallet that has already handed the tokens away. The minimum requires a recorded
+        // deposit AND possession, and one set of tokens cannot satisfy that twice at once.
+        let borrow_cap = ctx
+            .accounts
+            .user_position
+            .staked_amount
+            .min(hi_sola_balance);
         let new_borrowed = ctx
             .accounts
             .user_position
@@ -801,7 +928,7 @@ pub mod soladrome {
             .checked_add(usdc_amount)
             .ok_or(SoladromeError::Overflow)?;
         require!(
-            new_borrowed <= hi_sola_balance,
+            new_borrowed <= borrow_cap,
             SoladromeError::BorrowLimitExceeded
         );
         require!(
@@ -938,6 +1065,51 @@ pub mod soladrome {
         let bump = ctx.accounts.protocol_state.bump;
         let usdc_cost = o_sola_amount;
 
+        // ── Exercise fee: a share of the GAIN, priced off the curve ───────────────
+        // Reference price = virtual_usdc / virtual_sola. This needs no oracle and is
+        // structurally manipulation-resistant in the direction that matters: to inflate
+        // it an attacker must buy through the curve with real USDC (expensive, and it
+        // moves the price against their own position), and to DEFLATE it — the direction
+        // that would cut their own fee — there is no lever at all, because `sell_sola`
+        // never touches the virtual reserves. Only `buy_sola` and `deploy_pol` do.
+        //
+        // fee = fee_bps × (vu/vs − 1) × amount, evaluated as
+        //       (amount × (vu − vs) / vs) × fee_bps / 10_000.
+        // Dividing by `vs` before applying the bps keeps every intermediate small (the
+        // first product is bounded by amount × vu) and rounds the gain DOWN, so the
+        // truncation error is sub-base-unit and always in the user's favour — the
+        // protocol can never overcharge through rounding.
+        let fee = {
+            let vu = ctx.accounts.protocol_state.virtual_usdc as u128;
+            let vs = ctx.accounts.protocol_state.virtual_sola as u128;
+            let fee_bps = ctx.accounts.protocol_state.exercise_fee_bps as u128;
+            // Out of the money (or exactly at the floor) => no gain => no fee. vs is
+            // never 0 while k > 0, but guard anyway rather than divide blindly.
+            if vu <= vs || vs == 0 || fee_bps == 0 {
+                0u64
+            } else {
+                let gain = (o_sola_amount as u128)
+                    .checked_mul(vu - vs)
+                    .ok_or(SoladromeError::Overflow)?
+                    / vs;
+                let f = gain
+                    .checked_mul(fee_bps)
+                    .ok_or(SoladromeError::Overflow)?
+                    / 10_000;
+                u64::try_from(f).map_err(|_| error!(SoladromeError::Overflow))?
+            }
+        };
+
+        // ☢️ RULE: the strike goes to floor_vault IN FULL, and the fee is an ADDITIONAL
+        // ☢️ payment on top of it. Never carve the fee out of `usdc_cost`.
+        //
+        // Carving it out would credit `total_purchased_sola` by the full amount while the
+        // floor received only `usdc_cost − fee` — a counter incremented beyond what the
+        // vault actually holds. That is precisely the unfinanced-supply defect closed on
+        // 2026-07-17: cumulative, permanent, and invisible in tests because the accounting
+        // stays self-consistent while the backing evaporates. Here the user pays 1 + fee,
+        // backing per exercised SOLA stays exactly 1:1, and the invariant
+        // `floor_vault + total_usdc_borrowed >= total_purchased_sola` is untouched.
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -949,6 +1121,20 @@ pub mod soladrome {
             ),
             usdc_cost,
         )?;
+
+        if fee > 0 {
+            token::transfer(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.user_usdc.to_account_info(),
+                        to: ctx.accounts.market_vault.to_account_info(),
+                        authority: ctx.accounts.user.to_account_info(),
+                    },
+                ),
+                fee,
+            )?;
+        }
 
         token::burn(
             CpiContext::new(
@@ -986,6 +1172,19 @@ pub mod soladrome {
             .total_purchased_sola
             .checked_add(o_sola_amount)
             .ok_or(SoladromeError::Overflow)?;
+        // Lifetime market_vault inflow counter, same as buy_sola's market_amount.
+        //
+        // The staker accumulator is deliberately NOT advanced here. It is lazy: the next
+        // staker interaction (`claim_fees`, `stake_sola`, `unstake_hi_sola`, …) reads the
+        // real `market_vault` balance and credits the growth above
+        // `last_market_vault_balance`. Advancing it here — or, worse, touching
+        // `last_market_vault_balance` — would either double-count the fee or hide it from
+        // stakers entirely. Crediting is therefore driven by USDC that has actually landed
+        // in the vault, never by a computed figure. Same pattern as `buy_sola`.
+        s.accumulated_fees = s
+            .accumulated_fees
+            .checked_add(fee)
+            .ok_or(SoladromeError::Overflow)?;
         Ok(())
     }
 
@@ -1002,9 +1201,21 @@ pub mod soladrome {
             ctx.accounts.protocol_state.total_hi_sola,
         );
 
-        let hi_sola_balance = ctx.accounts.user_hi_sola.amount;
-        let claimable =
-            math::pending_fees(acc, ctx.accounts.user_position.fees_debt, hi_sola_balance);
+        // Escrowed hiSOLA still earns: it is the user's stake, merely held in custody while
+        // their vote stands. Counting only the ATA would make voting silently forfeit the fee
+        // share for the whole epoch — a penalty nobody agreed to, and the exact opposite of
+        // the incentive we want. `total_hi_sola` is untouched by escrow (nothing is burned),
+        // so the accumulator denominator stays correct and no other staker is diluted.
+        //
+        // Capped by `staked_amount` — see `math::fee_basis`. Without the cap a wallet whose
+        // baseline is older than the tokens it now holds claims the whole history on them,
+        // which is insolvency, not generosity.
+        let basis = math::fee_basis(
+            ctx.accounts.user_position.staked_amount,
+            ctx.accounts.user_hi_sola.amount,
+            ctx.accounts.user_position.vote_escrowed,
+        );
+        let claimable = math::pending_fees(acc, ctx.accounts.user_position.fees_debt, basis);
         require!(claimable > 0, SoladromeError::NothingToClaim);
 
         let bump = ctx.accounts.protocol_state.bump;
@@ -2043,7 +2254,14 @@ pub mod soladrome {
         );
 
         // Total power = unlocked hiSOLA (1×) + ve-weighted locked hiSOLA (up to 4×).
-        let hi_sola_balance = ctx.accounts.user_hi_sola.amount;
+        //
+        // Balance counted = liquid ATA + whatever this user already has in vote escrow.
+        // Without the escrowed term a returning voter would lose power every epoch: their
+        // stake is sitting in the escrow vault, not in their ATA, so a bare `.amount` read
+        // would price it at zero and their cap would collapse to their ve power alone.
+        let liquid_hi_sola = ctx.accounts.user_hi_sola.amount;
+        let already_escrowed = ctx.accounts.user_position.vote_escrowed;
+        let hi_sola_balance = liquid_hi_sola.saturating_add(already_escrowed);
         let ve_power = ve::try_load_ve_power(
             &ctx.accounts.lock_position,
             &ctx.accounts.user.key(),
@@ -2056,9 +2274,15 @@ pub mod soladrome {
         // then voting again with fresh hiSOLA balance that exceeds the original cap; or
         // (b) transferring hiSOLA out between two separate vote_gauge calls in the same epoch.
         // The snapshot is immutable once set; subsequent votes check against it, not live power.
+        //
+        // Note (b) only ever covered transfers made BETWEEN two calls by the same wallet. It
+        // could not stop the balance moving to a FRESH wallet, which gets its own snapshot and
+        // votes the same tokens again while the first wallet's `init`-created receipt still
+        // counts. Custody — not snapshotting — is what closes that; see the escrow below.
         if ctx.accounts.user_epoch_votes.epoch == 0 {
             ctx.accounts.user_epoch_votes.epoch = epoch;
             ctx.accounts.user_epoch_votes.total_power_snapshot = total_power;
+            ctx.accounts.user_epoch_votes.ve_power_snapshot = ve_power;
             ctx.accounts.user_epoch_votes.bump = ctx.bumps.user_epoch_votes;
         }
 
@@ -2085,6 +2309,38 @@ pub mod soladrome {
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
         require!(new_total <= power_cap, SoladromeError::VoteOverflow);
+
+        // Take custody of the backing stake before any tally is written.
+        if ctx.accounts.user_position.owner == Pubkey::default() {
+            ctx.accounts.user_position.owner = ctx.accounts.user.key();
+            ctx.accounts.user_position.bump = ctx.bumps.user_position;
+            // SECURITY: stamp the accumulator, exactly as stake_sola / unstake_hi_sola /
+            // borrow_usdc do when they lazily open a position. Without it the position is
+            // born with `fees_debt = 0` and `claim_fees` reads this wallet as having been
+            // staked since genesis. hiSOLA is a plain SPL token with no freeze authority, so
+            // any balance can be walked to a wallet the protocol has never seen — and
+            // vote_gauge was the one instruction that would open its position unstamped.
+            // The accumulator is deliberately NOT persisted here (nor is
+            // last_market_vault_balance touched): we only need the highest value it could
+            // legitimately hold right now, so that nothing accrued before this moment is
+            // claimable. Same treatment as borrow_usdc.
+            ctx.accounts.user_position.fees_debt = math::advance_accumulator(
+                ctx.accounts.protocol_state.fees_per_hi_sola,
+                ctx.accounts.market_vault.amount,
+                ctx.accounts.protocol_state.last_market_vault_balance,
+                ctx.accounts.protocol_state.total_hi_sola,
+            );
+        }
+        escrow_vote_backing(
+            &mut ctx.accounts.user_position,
+            &ctx.accounts.user_hi_sola,
+            &ctx.accounts.vote_escrow_vault,
+            Some(&ctx.accounts.user),
+            &ctx.accounts.token_program,
+            new_total,
+            ctx.accounts.user_epoch_votes.ve_power_snapshot,
+            epoch,
+        )?;
 
         // Init GaugeState if first vote for this pool this epoch
         if ctx.accounts.gauge_state.pool_id == Pubkey::default() {
@@ -2120,6 +2376,46 @@ pub mod soladrome {
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
 
+        Ok(())
+    }
+
+    /// Release hiSOLA held in vote escrow, once the epoch it backed has ended.
+    ///
+    /// This is the instruction that makes "you cannot unstake or move the stake you voted
+    /// with before the epoch ends" real. `unstake_hi_sola` burns from the ATA and a raw SPL
+    /// transfer bypasses this program entirely — neither can touch tokens sitting in a
+    /// program-owned vault. Custody, not a `require!`, is the enforcement.
+    ///
+    /// Deliberately NOT gated on `paused`: withdrawing your own collateral is an exit path,
+    /// and exit paths stay open (same rule as `sell_sola` / `unstake_hi_sola`).
+    pub fn withdraw_vote_escrow(ctx: Context<WithdrawVoteEscrow>) -> Result<()> {
+        let amount = ctx.accounts.user_position.vote_escrowed;
+        require!(amount > 0, SoladromeError::NothingEscrowed);
+
+        let clock = Clock::get()?;
+        require!(
+            current_epoch(clock.unix_timestamp) > ctx.accounts.user_position.escrow_epoch,
+            SoladromeError::VoteEscrowLocked
+        );
+
+        let bump = ctx.accounts.protocol_state.bump;
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vote_escrow_vault.to_account_info(),
+                    to: ctx.accounts.user_hi_sola.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[&[STATE_SEED, &[bump]]],
+            ),
+            amount,
+        )?;
+
+        // Zero before returning: the votes it backed belong to a closed epoch and are already
+        // immutable in their receipts, so releasing the collateral cannot retro-alter a tally.
+        ctx.accounts.user_position.vote_escrowed = 0;
+        msg!("Vote escrow released: {} hiSOLA", amount);
         Ok(())
     }
 
@@ -2167,6 +2463,27 @@ pub mod soladrome {
             floor_bps,
             s.osola_emission_start_epoch,
         );
+        Ok(())
+    }
+
+    /// Authority-only: set the oSOLA exercise fee, in basis points **of the gain**.
+    ///
+    /// `fee = bps × (curve_price − 1) × amount`, charged on top of the 1 USDC strike and
+    /// routed to `market_vault` → hiSOLA stakers. Because the fee scales with the gain,
+    /// any value below 10 000 leaves exercise profitable by construction; the
+    /// `MAX_EXERCISE_FEE_BPS` cap exists so the authority cannot destroy oSOLA's value as
+    /// an LP incentive, not to protect solvency (the floor is untouched either way).
+    ///
+    /// `bps = 0` disables the fee and restores the pre-2026-08-05 behaviour exactly.
+    /// This is also what a live singleton reads before this instruction is ever called,
+    /// so the upgrade is a no-op until the authority arms it — unlike the phase flags,
+    /// nothing bricks if it is forgotten.
+    pub fn set_exercise_fee(ctx: Context<SetExerciseFee>, bps: u16) -> Result<()> {
+        require!(bps <= MAX_EXERCISE_FEE_BPS, SoladromeError::InvalidAmount);
+        let s = &mut ctx.accounts.protocol_state;
+        let previous = s.exercise_fee_bps;
+        s.exercise_fee_bps = bps;
+        msg!("Exercise fee set: {} bps of gain (was {})", bps, previous);
         Ok(())
     }
 
@@ -2296,8 +2613,14 @@ pub mod soladrome {
             .ok_or(SoladromeError::PoolNotInConfig)?;
         let pool_bps = ctx.accounts.vote_config.bps[pool_idx] as u128;
 
-        // Compute voting power — same formula as vote_gauge
-        let hi_sola_balance = ctx.accounts.user_hi_sola.amount;
+        // Compute voting power — same formula as vote_gauge, escrowed stake included.
+        // On this path the escrowed term is the one that usually carries the weight: a
+        // recurring voter's hiSOLA lives in the vault, not in their ATA.
+        let hi_sola_balance = ctx
+            .accounts
+            .user_hi_sola
+            .amount
+            .saturating_add(ctx.accounts.user_position.vote_escrowed);
         let ve_power = ve::try_load_ve_power(
             &ctx.accounts.lock_position,
             &ctx.accounts.user.key(),
@@ -2309,6 +2632,7 @@ pub mod soladrome {
         if ctx.accounts.user_epoch_votes.epoch == 0 {
             ctx.accounts.user_epoch_votes.epoch = epoch;
             ctx.accounts.user_epoch_votes.total_power_snapshot = total_power;
+            ctx.accounts.user_epoch_votes.ve_power_snapshot = ve_power;
             ctx.accounts.user_epoch_votes.bump = ctx.bumps.user_epoch_votes;
         }
 
@@ -2338,6 +2662,36 @@ pub mod soladrome {
             .checked_add(votes)
             .ok_or(SoladromeError::Overflow)?;
         require!(new_total <= power_cap, SoladromeError::VoteOverflow);
+
+        // Same custody rule as vote_gauge, minus the ability to pull: only the CALLER signs
+        // here, so the owner's ATA cannot be debited. A replay therefore rides entirely on
+        // collateral the owner escrowed themselves, and fails with InsufficientVoteBacking if
+        // their standing escrow no longer covers the weight (e.g. they withdrew it last epoch).
+        // Re-voting manually via vote_gauge is the way to re-arm.
+        if ctx.accounts.user_position.owner == Pubkey::default() {
+            ctx.accounts.user_position.owner = ctx.accounts.user.key();
+            ctx.accounts.user_position.bump = ctx.bumps.user_position;
+            // SECURITY: same accumulator stamp as vote_gauge — a position opened by a replay
+            // must not be born claiming the whole fee history either. Cheaper to reach here
+            // (no ATA debit is possible on this path, so a fresh position needs standing
+            // escrow to get anywhere), but the stamp costs nothing and closes the variant.
+            ctx.accounts.user_position.fees_debt = math::advance_accumulator(
+                ctx.accounts.protocol_state.fees_per_hi_sola,
+                ctx.accounts.market_vault.amount,
+                ctx.accounts.protocol_state.last_market_vault_balance,
+                ctx.accounts.protocol_state.total_hi_sola,
+            );
+        }
+        escrow_vote_backing(
+            &mut ctx.accounts.user_position,
+            &ctx.accounts.user_hi_sola,
+            &ctx.accounts.vote_escrow_vault,
+            None,
+            &ctx.accounts.token_program,
+            new_total,
+            ctx.accounts.user_epoch_votes.ve_power_snapshot,
+            epoch,
+        )?;
 
         // Init GaugeState if first vote for this pool this epoch
         if ctx.accounts.gauge_state.pool_id == Pubkey::default() {
@@ -2494,7 +2848,20 @@ pub mod soladrome {
             pa.last_lp_supply = lp_supply;
             pa.bump = ctx.bumps.pool_epoch_accum;
         }
-        require!(!pa.finalized, SoladromeError::EpochNotFinalized);
+        // Weight must never be added to a pot that has already been sized. ⚠️ This check is
+        // UNREACHABLE as the code stands, and the error it used to raise said the opposite of
+        // the condition (`EpochNotFinalized` when the epoch IS finalized), which is how it
+        // read as load-bearing. What actually refuses the call is the window guard above:
+        // `checkpoint_lp` only runs while `now < epoch_end`, `emit_pool_rewards` only once
+        // `now >= epoch_end`, so no call can see a finalized accumulator inside its own
+        // window — the caller gets `EpochNotEnded` first.
+        //
+        // Kept deliberately, not deleted: it costs one comparison and it is the DIRECT
+        // statement of the invariant, whereas the window guard enforces it only as a
+        // consequence of the clock. Widen `checkpoint_lp`'s window — allow a grace period
+        // after the epoch, say — and this line is what stops weight being billed against a
+        // pot that is already closed. Do not remove it on the grounds that it never fires.
+        require!(!pa.finalized, SoladromeError::EpochAlreadyFinalized);
 
         let pa_elapsed = (now - pa.last_update_ts).max(0) as u128;
         pa.total_weighted_supply = pa
@@ -2556,6 +2923,14 @@ pub mod soladrome {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
+        );
+        // Master emission switch (ProtocolState::emissions_enabled). While off,
+        // the epoch/gauge path can allocate no oSOLA, so the "emissions dormant"
+        // launch guarantee holds explicitly — not via the transitive no-votes
+        // coupling below (which the pre-Genesis audit still validates).
+        require!(
+            ctx.accounts.protocol_state.emissions_enabled,
+            SoladromeError::FeatureDisabled
         );
         let clock = Clock::get()?;
         let epoch_end = ((epoch + 1) * EPOCH_DURATION) as i64;
@@ -3244,6 +3619,67 @@ pub mod soladrome {
     }
 }
 
+// ── Vote escrow helper ────────────────────────────────────────────────────────
+
+/// Immobilise the hiSOLA backing a user's cumulative vote allocation for this epoch.
+///
+/// Shared by `vote_gauge` and `replay_vote` so the two can never drift apart — they cast
+/// identical weight through different entry points and must lock identical collateral.
+///
+/// Only the portion of `new_total` exceeding the frozen ve snapshot needs custody: ve power
+/// already sits immobilised in the ve vault, and double-locking it would make voting cost
+/// more collateral than the user actually has.
+///
+/// Tops up rather than re-transfers, so voting a second pool in the same epoch moves only
+/// the incremental difference. Never returns tokens — release goes through
+/// `withdraw_vote_escrow`, which is gated on the epoch having ended.
+///
+/// `owner_signer` is `None` on the permissionless `replay_vote` path. Moving tokens out of
+/// the owner's ATA requires the owner's signature, and on that path only the CALLER signs —
+/// so a replay may never pull new collateral. It can only ride on what the owner already
+/// escrowed, and is rejected outright if that no longer covers the weight being cast. This
+/// is what keeps "anyone can replay my vote" from becoming "anyone can move my stake".
+fn escrow_vote_backing<'info>(
+    user_position: &mut Account<'info, UserPosition>,
+    user_hi_sola: &Account<'info, TokenAccount>,
+    vote_escrow_vault: &Account<'info, TokenAccount>,
+    owner_signer: Option<&Signer<'info>>,
+    token_program: &Program<'info, Token>,
+    new_total: u64,
+    ve_power_snapshot: u64,
+    epoch: u64,
+) -> Result<()> {
+    let required = new_total.saturating_sub(ve_power_snapshot);
+    let held = user_position.vote_escrowed;
+
+    if required > held {
+        let owner = owner_signer.ok_or(SoladromeError::InsufficientVoteBacking)?;
+        let top_up = required - held;
+        require!(
+            user_hi_sola.amount >= top_up,
+            SoladromeError::InsufficientVoteBacking
+        );
+        token::transfer(
+            CpiContext::new(
+                token_program.to_account_info(),
+                Transfer {
+                    from: user_hi_sola.to_account_info(),
+                    to: vote_escrow_vault.to_account_info(),
+                    authority: owner.to_account_info(),
+                },
+            ),
+            top_up,
+        )?;
+        user_position.vote_escrowed = required;
+    }
+
+    // Stamp every vote, including top-up-free ones: re-voting the same weight in a later
+    // epoch must still extend the lock, otherwise the stake becomes withdrawable while
+    // the freshly cast votes are live.
+    user_position.escrow_epoch = epoch;
+    Ok(())
+}
+
 // ── Account Contexts ──────────────────────────────────────────────────────────
 
 /// Shared context for pause / unpause — authority-only.
@@ -3670,6 +4106,11 @@ pub struct ExerciseOSola<'info> {
     #[account(mut, address = protocol_state.floor_vault)]
     pub floor_vault: Box<Account<'info, TokenAccount>>,
 
+    /// Destination of the exercise fee (a share of the gain, paid on top of the strike).
+    /// Feeds `fees_per_hi_sola` → hiSOLA stakers via the existing lazy accumulator.
+    #[account(mut, address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
     #[account(
         mut,
         constraint = user_usdc.mint == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
@@ -3680,6 +4121,19 @@ pub struct ExerciseOSola<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+}
+
+/// Authority-only: set the oSOLA exercise fee (basis points **of the gain**).
+#[derive(Accounts)]
+pub struct SetExerciseFee<'info> {
+    #[account(
+        mut,
+        address = protocol_state.authority @ SoladromeError::Unauthorized,
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
 }
 
 #[derive(Accounts)]
@@ -4092,9 +4546,38 @@ pub struct VoteGauge<'info> {
     #[account(address = protocol_state.hi_sola_mint)]
     pub hi_sola_mint: Box<Account<'info, Mint>>,
 
+    /// Read-only. Needed to stamp `fees_debt` at the live accumulator when this instruction
+    /// is what first opens the caller's UserPosition — see the security note in the body.
+    #[account(address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
     /// Caller's hiSOLA balance determines base vote power.
-    #[account(constraint = user_hi_sola.mint == hi_sola_mint.key() && user_hi_sola.owner == user.key())]
+    /// `mut` — the weight being voted is moved into `vote_escrow_vault` for the epoch.
+    #[account(mut, constraint = user_hi_sola.mint == hi_sola_mint.key() && user_hi_sola.owner == user.key())]
     pub user_hi_sola: Box<Account<'info, TokenAccount>>,
+
+    /// Global custody vault for voted hiSOLA. `init_if_needed` rather than created in
+    /// `initialize`, so deployments already initialised before escrow existed pick it up
+    /// on the first vote instead of needing a migration.
+    #[account(
+        init_if_needed,
+        payer = user,
+        token::mint = hi_sola_mint,
+        token::authority = protocol_state,
+        seeds = [VOTE_ESCROW_SEED],
+        bump,
+    )]
+    pub vote_escrow_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Tracks how much of the vault belongs to this user, and until when it is locked.
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + UserPosition::LEN,
+        seeds = [POSITION_SEED, user.key().as_ref()],
+        bump,
+    )]
+    pub user_position: Box<Account<'info, UserPosition>>,
 
     /// CHECK: Optional VeLockPosition [b"velock", user].
     /// Pass any account (e.g. SystemProgram) when not using a ve lock.
@@ -4141,6 +4624,7 @@ pub struct VoteGauge<'info> {
     )]
     pub global_epoch_votes: Box<Account<'info, GlobalEpochVotes>>,
 
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
@@ -4904,6 +5388,11 @@ pub struct ReplayVote<'info> {
     #[account(address = protocol_state.hi_sola_mint)]
     pub hi_sola_mint: Box<Account<'info, Mint>>,
 
+    /// Read-only. Needed to stamp `fees_debt` at the live accumulator when a replay is what
+    /// first opens the owner's UserPosition — see the security note in the body.
+    #[account(address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
     /// Owner's hiSOLA ATA — read-only, authority = user.
     #[account(
         constraint = user_hi_sola.mint == hi_sola_mint.key()
@@ -4914,6 +5403,26 @@ pub struct ReplayVote<'info> {
     /// CHECK: Optional VeLockPosition [b"velock", user].
     /// Pass SystemProgram when owner has no lock.
     pub lock_position: UncheckedAccount<'info>,
+
+    /// Global vote-escrow vault. Read-only on this path: a replay never debits the owner's
+    /// ATA (only `caller` signs), it can merely confirm the standing escrow still covers
+    /// the weight. Not `init_if_needed` — if the vault does not exist yet, nobody has ever
+    /// escrowed anything, so there is nothing for a replay to ride on.
+    #[account(
+        seeds = [VOTE_ESCROW_SEED],
+        bump,
+    )]
+    pub vote_escrow_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Owner's position — holds `vote_escrowed` and the epoch stamp the replay extends.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + UserPosition::LEN,
+        seeds = [POSITION_SEED, user.key().as_ref()],
+        bump,
+    )]
+    pub user_position: Box<Account<'info, UserPosition>>,
 
     /// Owner's persistent vote config — must have auto_replay = true.
     #[account(
@@ -4966,8 +5475,42 @@ pub struct ReplayVote<'info> {
     )]
     pub global_epoch_votes: Box<Account<'info, GlobalEpochVotes>>,
 
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+// ── Vote escrow release ───────────────────────────────────────────────────────
+
+/// Return hiSOLA immobilised by voting, once the voted epoch has closed.
+#[derive(Accounts)]
+pub struct WithdrawVoteEscrow<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(address = protocol_state.hi_sola_mint)]
+    pub hi_sola_mint: Box<Account<'info, Mint>>,
+
+    #[account(
+        mut,
+        constraint = user_hi_sola.mint == hi_sola_mint.key() && user_hi_sola.owner == user.key(),
+    )]
+    pub user_hi_sola: Box<Account<'info, TokenAccount>>,
+
+    #[account(mut, seeds = [VOTE_ESCROW_SEED], bump)]
+    pub vote_escrow_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [POSITION_SEED, user.key().as_ref()],
+        bump = user_position.bump,
+    )]
+    pub user_position: Box<Account<'info, UserPosition>>,
+
+    pub token_program: Program<'info, Token>,
 }
 
 // ── Emission decay configuration ──────────────────────────────────────────────

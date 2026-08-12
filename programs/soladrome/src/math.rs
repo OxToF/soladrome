@@ -43,6 +43,28 @@ pub fn advance_accumulator(
     fees_per_hi_sola.saturating_add(new_fees.saturating_mul(PRECISION) / total_hi_sola as u128)
 }
 
+/// Fee basis for a staker: the financed stake that is still in their hands.
+///
+/// WHY THE MINIMUM. `fees_debt` is a per-wallet baseline, while hiSOLA is an ordinary SPL
+/// token with no freeze authority — so a balance can move to a wallet whose baseline is
+/// OLDER than the one the tokens accrued under. Paying on the raw balance then credits the
+/// moved tokens with the entire fee history preceding their arrival: a wallet holding a
+/// `fees_debt` of 0 was measured claiming 5 576 222 718 496 against a `market_vault` of
+/// 385 829 347 023 — fourteen times the vault — with both positions correctly stamped.
+/// Stamping on creation (the `vote_gauge` fix) does not help here; the defect is the
+/// transfer, not the position.
+///
+/// The minimum requires BOTH a program-recorded deposit (`staked_amount`, written only by
+/// `stake_sola`) AND possession, and one set of tokens cannot satisfy both halves in two
+/// wallets at once. Identical shape and rationale to `amm::reward_basis` on the LP side.
+///
+/// Consequence, deliberate and matching the LP decision: hiSOLA acquired by transfer earns
+/// no fees for the recipient — it earns on neither side. Escrowed hiSOLA still counts, since
+/// it is the holder's own stake merely held in custody while their vote stands.
+pub fn fee_basis(staked_amount: u64, hi_sola_balance: u64, vote_escrowed: u64) -> u64 {
+    staked_amount.min(hi_sola_balance.saturating_add(vote_escrowed))
+}
+
 /// Pending claimable USDC for a user (rounded down).
 pub fn pending_fees(fees_per_hi_sola: u128, fees_debt: u128, hi_sola_balance: u64) -> u64 {
     let delta = fees_per_hi_sola.saturating_sub(fees_debt);

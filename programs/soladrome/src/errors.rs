@@ -105,4 +105,17 @@ pub enum SoladromeError {
     // the runbook and the frontend, which reference raw numbers (6023, 6037, …).
     #[msg("Ecosystem oSOLA budget exhausted — cumulative distribute_o_sola would exceed ECOSYSTEM_TOTAL")]
     EcosystemBudgetExceeded,
+    // ── Vote escrow ───────────────────────────────────────────────────────────
+    // ⚠️ Still append at the END — see the note above.
+    #[msg("Escrowed hiSOLA is locked until the voted epoch ends — reset is only possible from the next epoch")]
+    VoteEscrowLocked,
+    #[msg("Nothing held in vote escrow for this account")]
+    NothingEscrowed,
+    #[msg("Insufficient liquid hiSOLA to back this vote — the voted weight must be escrowed")]
+    InsufficientVoteBacking,
+    // ── Still append at the END — see the note above. ─────────────────────────
+    #[msg("This pool epoch is already finalized — its reward pot has been sized and cannot take more weight")]
+    EpochAlreadyFinalized,
+    #[msg("POL skim exceeds pol_split_bps of the uncredited fee growth")]
+    PolSplitExceeded,
 }

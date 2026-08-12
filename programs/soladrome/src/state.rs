@@ -129,7 +129,16 @@ pub struct ProtocolState {
     /// Default: 9 900 (−1 %/epoch ≈ −40 %/year).
     pub osola_emission_decay_bps: u16,
     /// Minimum emission as % of initial (basis points).
-    /// Default: 1 000 (10 % floor — emissions never reach zero).
+    /// Default: 2 500 (25 % of 20 000 = a 5 000 oSOLA/epoch steady state).
+    ///
+    /// Think of the FLOOR in absolute terms and the ratio as the taper speed: the pair
+    /// (initial, floor_bps) fixes both the launch pull and where it lands. 20 000 @ 25 %
+    /// and 10 000 @ 50 % settle at the same 5 000/epoch — the first just starts twice as
+    /// high and takes 2.6 y instead of 1.3 y to get there.
+    ///
+    /// This doc said "1 000 (10 %)" until 2026-08-09 while `initialize` actually wrote
+    /// 1 875 — the published emission schedule was wrong by nearly 2× on the perpetual
+    /// tail for months. Keep this line and `initialize` in sync.
     pub osola_emission_floor_bps: u16,
     /// Epoch at which the decay clock started (reset by `configure_emissions`).
     pub osola_emission_start_epoch: u64,
@@ -184,6 +193,38 @@ pub struct ProtocolState {
     /// claim false. Appended last and carved from the spare bytes, so existing accounts
     /// read 0 and no realloc is needed (same trick as the phase flags above).
     pub ecosystem_o_sola_minted: u64,
+
+    /// Master switch for ALL oSOLA emission. Gates BOTH the epoch/gauge path
+    /// (`emit_pool_rewards`) and the continuous-stream path (`continuous_active`
+    /// in amm.rs). Default `false` at `initialize`: nothing emits until the
+    /// authority explicitly arms it via `set_phase_flags`. Makes "emissions are
+    /// dormant" provable at a glance instead of inferred from the transitive
+    /// no-votes coupling in `emit_pool_rewards` — so the untested per-epoch
+    /// cycle can stay descoped from the launch audit and be reviewed pre-Genesis
+    /// when it is actually armed. Appended last, carved from the spare bytes so
+    /// existing accounts read `false` with no realloc (same trick as above).
+    pub emissions_enabled: bool,
+
+    /// Exercise fee, in basis points **of the GAIN** — never of the strike, and never flat.
+    ///
+    /// `fee = exercise_fee_bps × (curve_price − 1) × amount`, where
+    /// `curve_price = virtual_usdc / virtual_sola`. A flat fee would be regressive
+    /// backwards: it makes exercise unprofitable exactly when the gain is thin (killing
+    /// oSOLA as an LP incentive) and is trivial when the gain is large. Charging a
+    /// fraction of the gain keeps exercise profitable at every price by construction,
+    /// so no "exercise is now underwater" failure mode exists for any value below 10 000.
+    ///
+    /// ☢️ The fee is paid **on top of** the 1 USDC strike and is routed to `market_vault`.
+    /// It is NEVER carved out of the strike — see the comment in `exercise_o_sola`.
+    ///
+    /// Capped at `MAX_EXERCISE_FEE_BPS` (50%) by `set_exercise_fee` so a compromised or
+    /// careless authority cannot set 100% and silently kill the emission incentive.
+    ///
+    /// Appended last, carved from the spare bytes so existing accounts read 0 — i.e. the
+    /// live devnet singleton keeps today's zero-fee behaviour until the authority arms it
+    /// via `set_exercise_fee`. Same no-realloc trick as the fields above; see the 3003
+    /// incident for what happens when a live singleton is grown instead.
+    pub exercise_fee_bps: u16,
 }
 
 impl ProtocolState {
@@ -193,6 +234,9 @@ impl ProtocolState {
     // Founder:    bool(1) = 1
     // Continuous: u32(4) + u16(2) = 6    ← carved from the prior 16 spare bytes
     // Phase gate: bool×5 = 5              ← carved from the remaining spare bytes
+    // Ecosystem:  u64(8) = 8              ← ecosystem_o_sola_minted, appended
+    // Emissions:  bool(1) = 1             ← emissions_enabled, appended last
+    // Exercise:   u16(2) = 2              ← exercise_fee_bps, appended last
     // ⚠️ Update this value whenever a field is added or removed.
     pub const LEN: usize = 416;
 }
@@ -215,11 +259,65 @@ pub struct UserPosition {
     /// repay_usdc requires current_slot > last_borrow_slot — blocks same-tx
     /// flash-borrow attacks where USDC is borrowed and repaid atomically.
     pub last_borrow_slot: u64,
+
+    /// hiSOLA held in the global vote-escrow vault on this user's behalf.
+    ///
+    /// WHY THIS EXISTS: hiSOLA is a plain SPL token in a user-owned ATA with no
+    /// freeze authority, so the program is never invoked on a transfer and cannot
+    /// block one. Without custody, the same balance votes once, moves to a fresh
+    /// wallet, and votes again — `UserEpochVotes` is seeded per (user, epoch), so a
+    /// new wallet gets a new snapshot and the immutable `UserVoteReceipt` from the
+    /// first wallet still counts. That duplicates gauge weight without limit and
+    /// drains third-party bribes via `claim_bribe`'s pro-rata split.
+    ///
+    /// `vote_gauge` therefore escrows exactly the hiSOLA backing the votes cast.
+    /// Escrowed tokens still belong to the user: `claim_fees` and `borrow_usdc`
+    /// add this back to the ATA balance, so voting never costs fees or credit.
+    ///
+    /// Appended in spare bytes — legacy positions read 0 and behave as before.
+    pub vote_escrowed: u64,
+    /// Epoch the escrow was last topped up for. `withdraw_vote_escrow` requires
+    /// `current_epoch > escrow_epoch`, which is what makes "you cannot unstake or
+    /// move the stake you voted with before the epoch ends" actually enforceable.
+    pub escrow_epoch: u64,
+
+    /// hiSOLA this wallet obtained by actually paying into the protocol — incremented by
+    /// `stake_sola`, decremented by `unstake_hi_sola`. This, not the ATA balance, is the
+    /// ceiling on `borrow_usdc`.
+    ///
+    /// WHY THIS EXISTS: the borrow cap used to read `user_hi_sola.amount` directly. hiSOLA is
+    /// a transferable SPL token with no freeze authority, so the same balance could be walked
+    /// through fresh wallets — each one seeing a full cap against collateral that already
+    /// backed someone else's debt. Blocking `unstake_hi_sola` on outstanding debt never
+    /// stopped that: it gates the burn, not the transfer. With no interest and no
+    /// liquidation, nothing was ever repaid, so each hop was a permanent floor withdrawal.
+    ///
+    /// The cap is now `staked_amount.min(ata_balance + vote_escrowed)`: a payout needs BOTH a
+    /// program-recorded deposit AND the tokens still in hand, and the same tokens cannot
+    /// satisfy both halves in two wallets at once. Identical shape to `reward_basis` on the
+    /// LP side (amm.rs) — same defect, same remedy.
+    ///
+    /// Deliberately NOT credited by `unlock_hi_sola`: hiSOLA leaving a ve lock was never
+    /// financed through the curve (partner bribe-earned tranches), and the 20% valve for
+    /// unfinanced supply is `borrow_against_locked`, not this instruction.
+    ///
+    /// Appended in spare bytes — legacy positions read 0 and simply cannot open a NEW borrow
+    /// until they stake again. Existing debt, repayment and unstaking are unaffected.
+    pub staked_amount: u64,
 }
 
 impl UserPosition {
-    pub const LEN: usize = 128; // still fits: 32+8+16+1+8 = 65 bytes used, 63 spare
+    pub const LEN: usize = 128; // 32+8+16+1+8+8+8+8 = 89 bytes used, 39 spare
 }
+
+// Same guard as ProtocolState: `vote_escrowed` / `escrow_epoch` were carved from spare
+// bytes, so LEN is unchanged and no realloc is needed — but only while the struct still
+// fits. Without this the overflow would surface as a runtime deserialisation failure on
+// every vote, not a build error.
+const _: () = assert!(
+    UserPosition::LEN >= 8 + std::mem::size_of::<UserPosition>(),
+    "UserPosition::LEN is too small — update it to fit the struct"
+);
 
 // ── Bribe system ──────────────────────────────────────────────────────────────
 
@@ -280,6 +378,14 @@ pub struct UserEpochVotes {
     pub epoch: u64,
     pub allocated: u64, // cumulative votes cast this epoch across all pools
     pub total_power_snapshot: u64, // hiSOLA + ve-power at time of first vote (immutable after init)
+    /// The ve-weighted share of `total_power_snapshot`, frozen at first vote.
+    ///
+    /// Splitting the snapshot matters for escrow: ve power is already immobilised in
+    /// the ve vault, so only the portion of the allocation exceeding it needs backing
+    /// by escrowed hiSOLA. Frozen rather than recomputed because `ve_power` decays
+    /// continuously — a live read would make the required escrow creep upward within
+    /// the same epoch and fail otherwise-valid votes.
+    pub ve_power_snapshot: u64,
     /// Extra voting power earned by burning oSOLA this epoch.
     /// Resets every epoch (new PDA). Not subject to the 30% hiSOLA cap —
     /// burning oSOLA is a deflationary act that justifies uncapped influence.
@@ -288,7 +394,12 @@ pub struct UserEpochVotes {
 }
 impl UserEpochVotes {
     pub const LEN: usize = 64;
-} // 8+8+8+8+1 = 33 bytes used, 31 spare
+} // 8+8+8+8+8+1 = 41 bytes used, 23 spare (ve_power_snapshot added 2026-08-09)
+
+const _: () = assert!(
+    UserEpochVotes::LEN >= 8 + std::mem::size_of::<UserEpochVotes>(),
+    "UserEpochVotes::LEN is too small — update it to fit the struct"
+);
 
 /// Created during claim_bribe — its existence proves the claim was made.
 /// PDA: [b"bribe_claim", user, pool_id, reward_mint, epoch_le8]
