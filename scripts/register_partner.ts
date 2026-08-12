@@ -30,7 +30,7 @@ const KNOWN_PARTNERS: Record<string, string> = {
   marinade: "B56RWQGf9RFw7t8gxPzrRvk5VRmB5DoF94aLoJ25YtvG",
 };
 
-const PROGRAM_ID     = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID     = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const PARTNER_SEED   = Buffer.from("partner");
 const EPOCH_DURATION = 7 * 24 * 60 * 60; // 604 800 s — mirrors state.rs EPOCH_DURATION
 const DECIMALS       = 6;

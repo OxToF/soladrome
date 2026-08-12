@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import idl from "../target/idl/soladrome.json";
 
-const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const connection  = new anchor.web3.Connection("https://api.devnet.solana.com", "confirmed");
 const provider    = new anchor.AnchorProvider(connection, {} as any, {});
 const program     = new anchor.Program(idl as any, provider);

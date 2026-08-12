@@ -23,6 +23,7 @@ import { PartnerPanel, partnerAllocationPda }      from "@/components/PartnerPan
 import { Bridge }          from "@/components/Bridge";
 import { Airdrop }         from "@/components/Airdrop";
 import { useConnection }   from "@solana/wallet-adapter-react";
+import { useSoladrome }    from "@/lib/SoladromeContext";
 
 // Founder wallet — must match FOUNDER_WALLET in programs/soladrome/src/lib.rs
 const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
@@ -75,6 +76,7 @@ const EMAIL = "info@soladrome.finance";
 export default function Home() {
   const wallet         = useAnchorWallet();
   const { connection } = useConnection();
+  const { protocolState } = useSoladrome();
   const [page, setPage]           = useState<Page>("home");
   const [isContributor, setIsContributor] = useState(false);
   const [isPartner,     setIsPartner]     = useState(false);
@@ -104,10 +106,47 @@ export default function Home() {
     if (n.partnerOnly)     return isPartner;
     return true;
   };
+
+  // ── Points-phase gating ───────────────────────────────────────────────────
+  // The ve(3,3) surface (Vote / Bribe / Claim) and the oSOLA exercise pathway
+  // (Arb) are hidden until their on-chain phase flag is armed — the Gigadex-style
+  // launch: community deposits LP for points first, governance unlocks at Genesis.
+  // The nav MIRRORS ProtocolState, so flipping a flag on-chain reveals the page
+  // with no redeploy (single source of truth). `NEXT_PUBLIC_FORCE_POINTS_PHASE=1`
+  // forces them hidden regardless — lets us stage the points-phase look while the
+  // devnet flags are still `true` from earlier testing. While ProtocolState is
+  // still loading (null) the gated pages stay hidden (conservative = closed).
+  const forcePointsPhase = process.env.NEXT_PUBLIC_FORCE_POINTS_PHASE === "1";
+  const flagOn = (key: string): boolean =>
+    !forcePointsPhase && !!protocolState && !!protocolState[key];
+  const governanceLive = flagOn("votingEnabled") || flagOn("bribesEnabled");
+  // Pages not listed here are always visible (home/pools/bridge/airdrop).
+  const pageEnabled = (id: Page): boolean => {
+    switch (id) {
+      case "vote":  return flagOn("votingEnabled");
+      case "bribe": return flagOn("bribesEnabled");
+      case "claim": return governanceLive;             // governance reward claims
+      case "arb":   return flagOn("exerciseEnabled");  // flash arb burns oSOLA
+      default:      return true;
+    }
+  };
+
   const visibleNavGroups = NAV_GROUPS
-    .map((g) => ({ ...g, items: g.items.filter(visibleRoleFilter) }))
+    .map((g) => ({ ...g, items: g.items.filter(visibleRoleFilter).filter((n) => pageEnabled(n.id)) }))
     .filter((g) => g.items.length > 0);
   const visibleRoleNav = ROLE_NAV.filter(visibleRoleFilter);
+
+  // If the active page gets gated off (flag flipped, or still loading), fall back
+  // to home so a hidden page is never left rendered underneath the nav.
+  useEffect(() => {
+    if (!pageEnabled(page)) setPage("home");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, protocolState, forcePointsPhase]);
+
+  // Show the "unlocks at Genesis" teaser only once we KNOW governance is off
+  // (forced, or ProtocolState loaded with the flags false) — never during the
+  // brief null-loading window, to avoid a flash on a fully-open protocol.
+  const showGenesisTeaser = forcePointsPhase || (!!protocolState && !governanceLive);
 
   // First-touch referral capture: stash ?ref=<wallet> once, before any connect.
   // We also surface it (referredBy) so the invited user gets a visible "you're
@@ -210,6 +249,18 @@ export default function Home() {
                 <span className="absolute top-1.5 right-1.5 w-1 h-1 rounded-full bg-brand-green opacity-70" />
               </button>
             ))}
+            {showGenesisTeaser && (
+              <span
+                className="hidden lg:flex items-center gap-1.5 ml-0.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap text-brand-muted/70 border border-dashed border-brand-border/70 cursor-default select-none"
+                title="Vote, Bribe and Claim activate at Genesis. Deposit liquidity now to earn points toward the airdrop."
+              >
+                <svg className="w-3.5 h-3.5 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <rect x="5" y="11" width="14" height="9" rx="2" />
+                  <path d="M8 11V7a4 4 0 0 1 8 0v4" strokeLinecap="round" />
+                </svg>
+                Governance unlocks at Genesis
+              </span>
+            )}
             <a
               href={DOCS_URL}
               target="_blank"
@@ -402,6 +453,18 @@ export default function Home() {
                 {label}
               </button>
             ))}
+            {showGenesisTeaser && (
+              <span
+                className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-brand-muted/70 border border-dashed border-brand-border/70 cursor-default select-none"
+                title="Vote, Bribe and Claim activate at Genesis. Deposit liquidity now to earn points toward the airdrop."
+              >
+                <svg className="w-3.5 h-3.5 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <rect x="5" y="11" width="14" height="9" rx="2" />
+                  <path d="M8 11V7a4 4 0 0 1 8 0v4" strokeLinecap="round" />
+                </svg>
+                Genesis soon
+              </span>
+            )}
             <a href={DOCS_URL} target="_blank" rel="noreferrer"
               className="shrink-0 px-3 py-2 rounded-lg text-sm font-medium text-gray-400 border border-brand-border">
               Docs ↗
@@ -432,10 +495,10 @@ export default function Home() {
 
           {/* ── Dedicated pages ───────────────────────────────── */}
           {page === "pools" && <Pools />}
-          {page === "vote"  && <div className="max-w-xl mx-auto"><Vote /></div>}
-          {page === "bribe" && <div className="max-w-xl mx-auto"><Gauge /></div>}
-          {page === "arb"   && <div className="max-w-xl mx-auto"><FlashArb /></div>}
-          {page === "claim" && (
+          {page === "vote"  && pageEnabled("vote")  && <div className="max-w-xl mx-auto"><Vote /></div>}
+          {page === "bribe" && pageEnabled("bribe") && <div className="max-w-xl mx-auto"><Gauge /></div>}
+          {page === "arb"   && pageEnabled("arb")   && <div className="max-w-xl mx-auto"><FlashArb /></div>}
+          {page === "claim" && pageEnabled("claim") && (
             <div className="max-w-xl mx-auto flex flex-col gap-6">
               <ClaimFees />
               <ClaimBribe />

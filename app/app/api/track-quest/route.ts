@@ -15,7 +15,7 @@ const supabase = createClient(
 
 const VALID_QUESTS = new Set([
   "connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote",
-  "follow_x", "like_video", "solana_id",
+  "follow_x", "like_video",
   "claim_lp_osola", "claim_bribe", "borrow_again", "exercise", "vote_again",
   "like_video2", "truemrr",
   "like_bridge", "like_fbomb",
@@ -47,7 +47,7 @@ const VALID_QUESTS = new Set([
 // borrow, vote, LP, repay, claim and exercise on-chain. Only the cheap quests
 // (connect/faucet/swap) stay unverified; they don't qualify anyone on their own.
 const GATED = new Set([
-  "stake", "borrow", "borrow_again", "vote", "vote_again", "solana_id",
+  "stake", "borrow", "borrow_again", "vote", "vote_again",
   "liquidity", "repay", "claim_bribe", "exercise",
 ]);
 const EPOCH_DURATION = 604_800;
@@ -96,10 +96,10 @@ function txIsExerciseBy(tx: any, user: PublicKey): boolean {
 }
 
 // Genesis Missions II quests require a TrueMRR vote first (free distribution ask).
-// Minting a Solana ID is deliberately NOT gated — it costs 0.1 SOL, so it stays
-// an incentive (its own +50 pt quest) rather than a hard requirement. Mirrors
-// `gate: ["truemrr"]` on the GENESIS_2 group in app/lib/quests.ts — kept as its
-// own consts here since this route doesn't import the client quest catalog.
+// It is the group's only prerequisite since the Solana ID quest was retired
+// 2026-08-10. Mirrors `gate: ["truemrr"]` on the GENESIS_2 group in
+// app/lib/quests.ts — kept as its own consts here since this route doesn't
+// import the client quest catalog.
 const GENESIS2_QUESTS = new Set([
   "claim_lp_osola", "claim_bribe", "borrow_again", "exercise", "vote_again",
   "like_video2", // repost_video2 is x-verify only now — its gate lives there
@@ -283,28 +283,6 @@ async function checkOnce(quest: string, user: PublicKey, meta?: Record<string, u
       )[0];
       const ev: any = await (program.account as any).userEpochVotes.fetchNullable(uev);
       return !!ev && BigInt(ev.allocated.toString()) >= MIN_UNITS;
-    }
-    case "solana_id": {
-      // Verify via Solana ID Score API — isSolanaIdUser = true means the wallet
-      // has minted its Solana ID NFT. API key is server-side only (never exposed).
-      try {
-        const apiKey = process.env.SOLANA_ID_API_KEY;
-        if (!apiKey) return false;
-        // Endpoint shape per Solana ID docs: /api/solid-score/address/<wallet>
-        // (the bare /solid-score/<wallet> path 404s). Response is nested under
-        // `solidUser`, so the flag is json.solidUser.isSolanaIdUser — reading
-        // json.isSolanaIdUser is always undefined and never credits the quest.
-        const res = await fetch(
-          `https://score.solana.id/api/solid-score/address/${user.toBase58()}`,
-          { headers: { "Content-Type": "application/json", "x-api-key": apiKey } },
-        );
-        if (!res.ok) {
-          console.error("[track-quest solana_id] score API", res.status, await res.text().catch(() => ""));
-          return false;
-        }
-        const json = await res.json();
-        return json?.solidUser?.isSolanaIdUser === true;
-      } catch { return false; }
     }
     default:
       return true; // not gated on-chain

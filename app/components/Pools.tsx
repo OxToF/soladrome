@@ -276,19 +276,15 @@ export function Pools() {
           ratePerSec: Number(st.continuousRatePerSec ?? 0),
           endEpoch:   Number(st.continuousEndEpoch ?? 0),
         });
-      } catch { setEmissionCfg(EMISSIONS_OFF); }
-
-      // oSOLA spot price from oSOLA/USDC pool (used for emission APR)
-      if (usdcMint) {
-        try {
-          const osolaPoolAddr = poolPda(oSolaM, usdcMint);
-          const op = await (program.account as any).ammPool.fetch(osolaPoolAddr);
-          const mA = op.tokenAMint.toString();
-          const ra = toUi(op.reserveA as BN);
-          const rb = toUi(op.reserveB as BN);
-          setOsolaPrice(mA === oSolaM.toString() ? rb / ra : ra / rb);
-        } catch { setOsolaPrice(null); }
-      }
+        // oSOLA is valued off the bonding curve, never off an AMM pool. It is an
+        // option struck at the $1 floor, so it is worth curve − 1, floored at 0.
+        // No oSOLA/USDC pool exists to quote against, and quoting one would have
+        // made this APR manipulable by skewing a thin reserve. Note this reads 0
+        // while SOLA sits at the floor, which is correct but makes the emission
+        // APR display 0% until the curve moves.
+        const curvePrice = toUi(st.virtualUsdc as BN) / toUi(st.virtualSola as BN);
+        setOsolaPrice(Math.max(0, curvePrice - 1));
+      } catch { setEmissionCfg(EMISSIONS_OFF); setOsolaPrice(null); }
     } catch { } finally { setPoolsLoading(false); }
   }, [connection, wallet, usdcMint]);
 

@@ -16,7 +16,7 @@ import fs from "fs";
 import path from "path";
 import idl from "../target/idl/soladrome.json";
 
-const PROGRAM_ID  = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID  = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const STATE_SEED  = Buffer.from("state");
 const RPC_URL     = process.env.ANCHOR_PROVIDER_URL ?? "http://127.0.0.1:8899";
 

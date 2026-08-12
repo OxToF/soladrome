@@ -242,3 +242,58 @@ create table if not exists referrals (
 );
 create index if not exists idx_referrals_referrer on referrals (referrer_wallet);
 alter table referrals enable row level security; -- no policy → service key only
+
+-- ── 6. Faucet rate limit ────────────────────────────────────────────────────
+-- The devnet faucet mints 500 mock USDC per call with no cost and no cooldown.
+-- Left open it is not just an abuse vector, it is the leaderboard: LP points
+-- accrue on the USD value of a position, and mock USDC is priced at $1, so a
+-- caller looping this endpoint buys an unbounded score for free. One claim per
+-- wallet per 24 h turns the faucet into a trickle that time-weighting can no
+-- longer be outrun by. Service key only (the faucet route holds it); the window
+-- is a parameter so it can be tightened without a migration.
+create table if not exists faucet_claims (
+  wallet_address text        primary key,
+  last_claim_at  timestamptz not null default now(),
+  claim_count    int         not null default 1
+);
+
+-- Atomically take a claim slot. Returns true when the caller may mint (and the
+-- window is reset), false when they are still inside their cooldown. The insert
+-- and the check are one statement so two concurrent calls cannot both win:
+-- the conditional DO UPDATE only fires for an expired window, and RETURNING
+-- reports whether this call is the one that wrote.
+create or replace function claim_faucet(p_wallet text, p_window_seconds int default 86400)
+returns boolean language plpgsql security definer as $$
+declare
+  v_ok boolean;
+begin
+  if p_wallet is null or length(p_wallet) < 32 or length(p_wallet) > 44 then
+    return false;
+  end if;
+
+  insert into faucet_claims (wallet_address, last_claim_at, claim_count)
+  values (p_wallet, now(), 1)
+  on conflict (wallet_address) do update
+    set last_claim_at = now(),
+        claim_count   = faucet_claims.claim_count + 1
+    where faucet_claims.last_claim_at
+          < now() - make_interval(secs => greatest(p_window_seconds, 1))
+  returning true into v_ok;
+
+  return coalesce(v_ok, false);
+end;
+$$;
+
+alter table faucet_claims enable row level security; -- no policy → service key only
+
+-- Give a consumed slot back when the mint itself failed. Only ever called right
+-- after a successful claim_faucet, so the window had already expired — resetting
+-- to epoch 0 restores exactly the pre-call state rather than granting a bonus.
+create or replace function release_faucet_claim(p_wallet text)
+returns void language plpgsql security definer as $$
+begin
+  update faucet_claims
+     set last_claim_at = to_timestamp(0)
+   where wallet_address = p_wallet;
+end;
+$$;

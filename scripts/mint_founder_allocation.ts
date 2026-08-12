@@ -13,7 +13,7 @@ import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import idl from "../target/idl/soladrome.json";
 
-const PROGRAM_ID     = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID     = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const FOUNDER_WALLET = new PublicKey("46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4");
 
 describe("mint_founder_allocation (one-shot)", () => {

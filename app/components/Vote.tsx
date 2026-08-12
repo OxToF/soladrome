@@ -13,7 +13,7 @@ import { trackQuest } from "@/lib/quests";
 import { StatusBanner } from "./ui/StatusBanner";
 
 // ── PDA helpers ───────────────────────────────────────────────────────────────
-const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 function lockPositionPda(user: PublicKey) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("velock"), user.toBuffer()], PROG_ID

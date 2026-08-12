@@ -19,7 +19,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, TOKEN_PROGRAM_ID, SystemProgram } from "@solana/web3.js";
 import { ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
-const PROGRAM_ID        = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID        = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const CONTRIBUTOR_SEED  = Buffer.from("contributor");
 const POSITION_SEED     = Buffer.from("position");
 

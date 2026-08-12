@@ -35,7 +35,7 @@ import fs from "fs";
 import path from "path";
 import idl from "../target/idl/soladrome.json";
 
-const PROGRAM_ID     = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID     = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const STATE_SEED     = Buffer.from("state");
 const AMM_POOL_SEED  = Buffer.from("amm_pool");
 const EPOCH_DURATION = 604_800; // seconds (7 days) — must match on-chain

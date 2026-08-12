@@ -15,7 +15,6 @@ export type QuestId =
   | "stake" | "borrow" | "repay" | "vote" | "bug"
   | "follow_x" | "repost" | "like_video" | "repost_video"
   | "discord"
-  | "solana_id"
   | "claim_lp_osola" | "claim_bribe" | "borrow_again" | "exercise" | "vote_again"
   | "like_video2" | "repost_video2"
   | "like_bridge" | "repost_bridge" | "like_fbomb" | "repost_fbomb"
@@ -126,9 +125,8 @@ const GENESIS_2: QuestGroup = {
   badge: "Protocol Native",
   live:  true,
   // Requires a TrueMRR vote first (the distribution ask, costs nothing — see
-  // ECOSYSTEM below). Minting a Solana ID is NOT gated here on purpose: it's a
-  // paid action (0.1 SOL), so it stays an incentive (its own +50 pt quest)
-  // rather than a hard requirement to reach the rest of the campaign.
+  // ECOSYSTEM below). That vote is now the group's only prerequisite: the Solana
+  // ID quest that used to sit beside it was retired 2026-08-10.
   // Enforced server-side too, see GENESIS2_GATE in app/api/track-quest/route.ts.
   gate:  ["truemrr"],
   quests: [
@@ -197,15 +195,11 @@ const ECOSYSTEM: QuestGroup = {
   badge: "Ecosystem Pioneer",
   live:  true,
   quests: [
-    {
-      id:       "solana_id",
-      label:    "Mint your Solana ID",
-      desc:     "Create your on-chain identity at solana.id — your SOLID Score becomes your sybil shield on Soladrome.",
-      points:   50,
-      icon:     "🪪",
-      external: "Mint",
-      href:     "https://solana.id",
-    },
+    // The Solana ID quest was retired 2026-08-10: its verifier needs a partner
+    // API key we no longer hold, and an unverifiable quest is a self-claim
+    // exploit (see the honour-system incident this file's GATED set exists for).
+    // Wallets that completed it keep their credit — quest_completions is history,
+    // not a live definition.
     {
       id:       "truemrr",
       label:    "Vote for Soladrome on TrueMRR",

@@ -14,7 +14,7 @@ import { EmptyState } from "./ui/EmptyState";
 import { ButtonHint } from "./ui/ButtonHint";
 
 // ── PDA helpers ───────────────────────────────────────────────────────────────
-const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("state")], PROGRAM_ID);
 function epochBuf(epoch: number) {
   const b = Buffer.alloc(8);

@@ -34,7 +34,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 
-const PROGRAM_ID        = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID        = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const CONTRIBUTOR_SEED  = Buffer.from("contributor");
 const DECIMALS          = 6;
 

@@ -501,19 +501,22 @@ Users can never be trapped. The worst case in a pause scenario is that entry is 
 
 ### 14.3 Launch Phase Gating (`set_phase_flags`)
 
-Mainnet launches in two stages, enforced on-chain by five independent feature flags on `ProtocolState` (all `false` at `initialize`, each toggled individually by the authority via `set_phase_flags`):
+Mainnet launches in two stages, enforced on-chain by six independent feature flags on `ProtocolState` (all `false` at `initialize`, each toggled individually by the authority via `set_phase_flags`):
 
 | Flag | Gates |
 |---|---|
 | `lp_enabled` | `create_pool` |
 | `bribes_enabled` | `deposit_bribe`, `partner_deposit_bribe` |
-| `voting_enabled` | `vote_gauge` |
+| `voting_enabled` | `vote_gauge`, `replay_vote`, `burn_o_sola_for_votes` |
 | `exercise_enabled` | `exercise_o_sola`, `flash_arbitrage` |
 | `curve_enabled` | `buy_sola` |
+| `emissions_enabled` | `emit_pool_rewards` (epoch/gauge emission) **and** the continuous oSOLA stream (`continuous_active`) — master switch for all emission |
 
 **Stage 1 — partner-only window.** Founding partners are onboarded via `register_partner`, seed their pools, configure gauges, and begin accumulating locked hiSOLA before public access. The bonding curve stays closed (`curve_enabled = false`): the curve price is monotonically increasing, so an open curve before the public event would let snipers buy the cheapest SOLA ahead of the community airdrop. Partners do not need the curve — their hiSOLA is minted through the partner program and their liquidity sits in non-SOLA pools.
 
 **Stage 2 — public open.** The authority flips `curve_enabled`; curve opening, TGE, and the on-chain airdrop distribution happen as a single event, on a protocol that already has liquidity depth and active incentives.
+
+**Emissions stay off across both stages.** `emissions_enabled` is armed only at Genesis, once the per-epoch emission cycle has been independently audited. Until then the protocol runs a points phase: the community deposits liquidity and earns off-chain points toward the airdrop, while no oSOLA is emitted on-chain. Keeping emission behind an explicit flag lets the launch audit scope the live surface (AMM, curve, staking) and defer the emission-cycle review to Genesis, when it is actually armed.
 
 As with the emergency pause, gating applies to entry paths only. `sell_sola` (floor redemption) and every other exit path are never gated by any phase flag.
 

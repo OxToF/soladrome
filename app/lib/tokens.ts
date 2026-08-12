@@ -52,8 +52,34 @@ export function getTokenList(usdcMint: PublicKey | null): TokenInfo[] {
     });
   }
 
+  list.push(...LAUNCH_TOKENS);
   return list;
 }
+
+// Mainnet launch pool tokens — classic SPL only (the AMM's `Account<Mint>` /
+// `Program<Token>` reject Token-2022, so USDG/CASH/PYUSD and the xStocks are
+// intentionally NOT here: they cannot be pooled without an AMM upgrade).
+// Decimals verified against mainnet 2026-07-24 (getMultipleAccounts). The
+// points snapshot job reads decimals on-chain and does not rely on these, but
+// the Pools/Points UI does — so keep them correct.
+export const LAUNCH_TOKENS: TokenInfo[] = [
+  // LSTs (9 decimals)
+  { symbol: "jitoSOL", name: "Jito Staked SOL",     mint: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", decimals: 9 },
+  { symbol: "mSOL",    name: "Marinade Staked SOL",  mint: "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So", decimals: 9 },
+  { symbol: "jupSOL",  name: "Jupiter Staked SOL",   mint: "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v", decimals: 9 },
+  { symbol: "bSOL",    name: "BlazeStake Staked SOL", mint: "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1", decimals: 9 },
+  { symbol: "hubSOL",  name: "Hub Staked SOL",       mint: "HUBsveNpjo5pWqNkH57QzxjQASdTVXcSK7bVKTSZtcSX", decimals: 9 },
+  // Stables (6 decimals)
+  { symbol: "USDS",      name: "Sky USDS",       mint: "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA", decimals: 6 },
+  { symbol: "USDT",      name: "Tether USD",     mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", decimals: 6 },
+  { symbol: "syrupUSDC", name: "Maple syrupUSDC", mint: "AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj", decimals: 6 },
+  // BTC / ETH (8 decimals)
+  { symbol: "cbBTC",  name: "Coinbase Wrapped BTC", mint: "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij", decimals: 8 },
+  { symbol: "ETH",    name: "Ether (Portal)",       mint: "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs", decimals: 8 },
+  { symbol: "wstETH", name: "Wrapped stETH",        mint: "ZScHuTtqZukUrtZS43teTKGs2VqkKL8k4QCouR2n6Uo", decimals: 8 },
+  // Tether Gold (6 decimals)
+  { symbol: "xAUt", name: "Tether Gold", mint: "AymATz4TCL9sWNEEV9Kvyz45CHVhDZ6kUgjTJPzLpU9P", decimals: 6 },
+];
 
 export function symbolByMint(mint: string, usdcMint: PublicKey | null): string {
   return getTokenList(usdcMint).find((t) => t.mint === mint)?.symbol
@@ -89,6 +115,8 @@ export const TRUSTED_MINTS = new Set([
   "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTa3CbChoKBRP",        // MNDE (Marinade)
   "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",        // mSOL
   "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",        // bSOL (Blaze)
+  // ── Mainnet launch pool tokens (classic SPL — Token-2022 excluded, see LAUNCH_TOKENS) ──
+  ...LAUNCH_TOKENS.map((t) => t.mint),
 ]);
 
 /**

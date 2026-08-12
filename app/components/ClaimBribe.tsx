@@ -16,7 +16,7 @@ import { useSoladrome } from "@/lib/SoladromeContext";
 import { StatusBanner } from "./ui/StatusBanner";
 import { currentEpoch, epochLabel } from "@/lib/epoch";
 
-const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 
 function epochBuf(epoch: number) {
   const b = Buffer.alloc(8);

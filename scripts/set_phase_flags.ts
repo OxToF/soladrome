@@ -3,14 +3,15 @@
 //
 // Post-upgrade phase-flag setter.
 //
-// WHY THIS EXISTS: the five phase-gate flags (lp/bribes/voting/exercise/curve)
-// are written ONLY inside `initialize`, which is one-time and already ran on the
-// live devnet ProtocolState. After a program upgrade the existing account's
-// spare bytes read `false`, so buy_sola / create_pool / exercise_o_sola /
-// deposit_bribe / vote_gauge / replay_vote / burn_o_sola_for_votes /
-// flash_arbitrage all revert with `FeatureDisabled` until the authority flips
-// them. On DEVNET we want everything open so the tester flow keeps working, so
-// run this immediately after `solana program deploy`.
+// WHY THIS EXISTS: the six phase-gate flags (lp/bribes/voting/exercise/curve/
+// emissions) are written ONLY inside `initialize`, which is one-time and already
+// ran on the live devnet ProtocolState. After a program upgrade the existing
+// account's spare bytes read `false`, so buy_sola / create_pool / exercise_o_sola
+// / deposit_bribe / vote_gauge / replay_vote / burn_o_sola_for_votes /
+// flash_arbitrage all revert with `FeatureDisabled`, AND both emission paths
+// (emit_pool_rewards + the continuous stream) stay dormant, until the authority
+// flips them. On DEVNET we want everything open so the tester flow keeps working
+// (emission included), so run this immediately after `solana program deploy`.
 //
 // Usage:
 //   RPC read from app/.env.local (NEXT_PUBLIC_RPC_URL); authority keypair from
@@ -26,8 +27,8 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
-const FLAGS = ["lp", "bribes", "voting", "exercise", "curve"] as const;
+const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
+const FLAGS = ["lp", "bribes", "voting", "exercise", "curve", "emissions"] as const;
 type Flag = (typeof FLAGS)[number];
 
 function readRpc(): string {
@@ -69,7 +70,7 @@ async function main() {
   console.log("enabling   :", [...enable].join(", ") || "(none)");
 
   const sig = await (program.methods as any)
-    .setPhaseFlags(arg("lp"), arg("bribes"), arg("voting"), arg("exercise"), arg("curve"))
+    .setPhaseFlags(arg("lp"), arg("bribes"), arg("voting"), arg("exercise"), arg("curve"), arg("emissions"))
     .accounts({ authority: wallet.publicKey, protocolState: statePda })
     .rpc();
   console.log("set_phase_flags tx:", sig);
@@ -77,7 +78,7 @@ async function main() {
   const st: any = await (program.account as any).protocolState.fetch(statePda);
   console.log("post-state :", {
     lp: st.lpEnabled, bribes: st.bribesEnabled, voting: st.votingEnabled,
-    exercise: st.exerciseEnabled, curve: st.curveEnabled,
+    exercise: st.exerciseEnabled, curve: st.curveEnabled, emissions: st.emissionsEnabled,
   });
 }
 

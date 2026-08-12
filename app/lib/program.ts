@@ -15,7 +15,7 @@ import {
 } from "@solana/spl-token";
 import idl from "./soladrome.json";
 
-export const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+export const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 
 // wSOL mint is the same on all clusters
 export const WSOL_MINT_STR = "So11111111111111111111111111111111111111112";

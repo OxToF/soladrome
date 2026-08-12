@@ -25,7 +25,7 @@ import {
   getMint,
 } from "@solana/spl-token";
 
-const PROGRAM_ID   = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID   = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const PARTNER_SEED = Buffer.from("partner");
 const STATE_SEED   = Buffer.from("state");
 const EPOCH_SECS   = parseInt(process.env.EPOCH_SECS ?? "604800", 10); // must match on-chain EPOCH_DURATION

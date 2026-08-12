@@ -4,14 +4,17 @@ import { readFileSync } from "fs";
 import { homedir } from "os";
 import idl from "../app/lib/soladrome.json";
 
-const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
-const USDC_MINT  = new PublicKey("8SvQXTGjygYUSpMFrdCRSByZe397nn78bJ7ebJasnKMg");
+const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
+// Mock USDC, reminted 2026-08-08: the previous mint (8SvQXTG…) had its mint authority on the
+// compromised deployer key. Authority is now the faucet keypair — the only key that needs to mint.
+const USDC_MINT  = new PublicKey("3N8EKeBPF8Gp9ayQ3WJzcxmDcWAMYKjwnuZXWC71FLtd");
 
 async function main() {
   const kp = Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(readFileSync(`${homedir()}/.config/solana/id.json`, "utf8")))
   );
-  const conn = new anchor.web3.Connection("https://api.devnet.solana.com", "confirmed");
+  const RPC = process.env.DEVNET_RPC_URL ?? "https://api.devnet.solana.com";
+  const conn = new anchor.web3.Connection(RPC, "confirmed");
   const wallet = new anchor.Wallet(kp);
   const provider = new anchor.AnchorProvider(conn, wallet, { commitment: "confirmed" });
   const program = new anchor.Program(idl as any, provider);

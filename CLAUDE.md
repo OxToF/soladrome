@@ -85,11 +85,27 @@ Read this first: the economic design is **not** original. It ports [Beradrome](h
 (which does **not** touch the virtual reserves). Emissions are a **separate schedule** — they are
 not the curve. Confusing the two leads to wrong conclusions about supply caps.
 
-**Divergence from Beradrome:** `osola_emission_floor_bps = 1_000` puts a 10% floor under emission
-decay. Beradrome has none, so its emissions converge (80k/week × Σ0.99ⁿ = **8M total, ever**).
-Soladrome's reach the floor at ~epoch 229 (≈4.4 y) and then emit `initial × 0.10` **forever** —
-supply does not converge. Defensible (each exercised oSOLA adds 1 USDC to the floor), but it is a
-deliberate choice and an auditor will ask.
+**Divergence from Beradrome:** `osola_emission_floor_bps` puts a floor under emission decay.
+Beradrome has none, so its emissions converge (80k/week × Σ0.99ⁿ = **8M total, ever**).
+Soladrome's do not — they reach the floor and then emit `initial × floor_bps` **forever**.
+Defensible (each exercised oSOLA adds 1 USDC to the floor), but deliberate, and an auditor
+will ask.
+
+**Recalibrated 2026-08-09** — `initialize` now writes **20 000/epoch, −1%/epoch, floor 25%**:
+floor at epoch 137 (~2.6 y), ~0.81M in year 1, ~1.5M by the floor, then 0.26M/year in
+perpetuity. The previous 800 000/epoch with an 18.75% floor emitted 32.6M in year 1 and
+7.8M/year forever — which at $10M TVL is 163% APR on a ×1.5 move and 1 303% at ×5.
+
+The 20 000 start is a deliberate launch pull (4-20% APR at the $2-5M TVL a gated launch
+opens with); the decay is what keeps it a *boost* rather than a level. The floor is set in
+absolute terms — **5 000 oSOLA/epoch steady-state** — and the ratio (25%) only controls how
+fast the boost tapers into it. A 50% floor would have locked 10 000/epoch in forever for no
+extra launch effect. Emissions are a **support** yield for partner pools; the partner return
+comes from bribes. Full derivation and sensitivity tables: `scripts/emissions/`.
+
+⚠️ Both this paragraph and the `osola_emission_floor_bps` doc comment in `state.rs` claimed
+`1_000` (10%) while `initialize` actually wrote `1_875` — the published tail was wrong by
+nearly 2× for months. Two docs and one constant: keep all three in sync.
 
 ### Program layout (`programs/soladrome/src/`)
 
@@ -159,9 +175,13 @@ dormant anti-capture reserve: `founder_voting_enabled = false` by default, flipp
 `set_founder_voting` only as a break-glass against governance capture. `ECOSYSTEM_TOTAL` = 1.75M.
 
 **☢️ `FOUNDER_WALLET` is feature-gated (added 2026-07-17)** — `devnet` is a **default** feature, so
-a plain `anchor build` resolves the founder to `DJZFZSBGCuo3X79hEVqPjzdkKF5aVDVNCaFyW8g5QS6i`,
-whose key is committed at `tests/keys/founder-devnet.json`. Shipping that build to mainnet hands
-12.25M to anyone who reads the repo. `VESTING_CLIFF_SECS` rides the same flag (5 s vs 180 days), so
+a plain `anchor build` resolves the founder to a throwaway devnet key (`J8Ww4yej…` since
+2026-08-10). Its keypair lives at `tests/keys/founder-devnet.json`, which is **gitignored, not
+committed** — the previous one leaked to the public repo and forced the 2026-07-21 purge, which
+destroyed it and left the three `[founder]` tests failing on a missing file until the key was
+rotated. Regenerate it locally (`solana-keygen new -o tests/keys/founder-devnet.json
+--no-bip39-passphrase --force`) and update the constant to match. Shipping a devnet build to
+mainnet still hands 12.25M to whoever holds that throwaway key. `VESTING_CLIFF_SECS` rides the same flag (5 s vs 180 days), so
 a wrong build gives away the wallet *and* the timelock together.
 
 ```
@@ -264,8 +284,9 @@ protocol sells a partner is: permanent voting power on the bag + a 20% borrow va
 1. **Stale comments**: `lib.rs` founder-borrow doc and the "~29k USDC/month" figure assume a 10%
    founder cap; the constant is 20% (real figure ~58k/month). about.html publishes "20%" as a
    guarantee the code did not enforce until the ve escrow landed.
-2. **`collect_to_pol` over-credits stakers** — see MAINNET_RUNBOOK §2. Same class as the drain above.
+2. ~~**`collect_to_pol` over-credits stakers**~~ — **resolved 2026-07-18** (commit `3b32b03`); this entry stayed stale until 2026-08-05. The accumulator now advances on `market_balance - amount` and a solvency guard refuses to skim anything at or below `last_market_vault_balance`, so POL is junior to already-credited fees and senior only within fresh growth. See MAINNET_RUNBOOK §2.
 3. ~~The team lock expiry~~ — **resolved 2026-07-17**: the team tranche is permanently locked (`permanent_amount`), so no expiry ever reopens the drain. Remaining scheduled exposure: partner **bribe-earned** hiSOLA at 4-year expiry, capped per deal.
+4. **`PolState.pol_split_bps` is dead state** — written and validated (`<= 5_000`, "max 50%") by `initialize_pol`, then **read by nothing**. `collect_to_pol` takes an explicit `amount` from the authority and bounds it only by the solvency guard, so the "max 50%" the field advertises is not enforced anywhere. Same class as the stale comments in item 1: a documented policy the code does not apply. Decide before audit — either wire it (`amount <= growth × pol_split_bps / 10_000`) or drop the field.
 
 Root cause shared by all of these: **fungibility defeats per-tranche rules**. Tranche restrictions must
 live in state or escrow, never in a token balance.

@@ -17,7 +17,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, TOKEN_PROGRAM_ID, SystemProgram } from "@solana/web3.js";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 
-const PROGRAM_ID    = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID    = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const PARTNER_SEED  = Buffer.from("partner");
 const VELOCK_SEED   = Buffer.from("velock");
 const VE_VAULT_SEED = Buffer.from("ve_vault");

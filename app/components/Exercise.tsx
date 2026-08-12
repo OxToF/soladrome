@@ -6,7 +6,7 @@ import { useAnchorWallet, useWallet, useConnection } from "@solana/wallet-adapte
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
 import {
-  getProgram, statePda, solaM, oSolaM, floorVault,
+  getProgram, statePda, solaM, oSolaM, floorVault, marketVault,
   userAta, poolPda, vaultAPda, vaultBPda,
   fromUi, toUi, commonAccounts, ensureAtaIx, sendTx,
 } from "@/lib/program";
@@ -26,6 +26,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
   const [oSolaBal, setOSolaBal]   = useState<number | null>(null);
   const [usdcBal,  setUsdcBal]    = useState<number | null>(null);
   const [mktPrice, setMktPrice]   = useState<number | null>(null);
+  const [feeBps,   setFeeBps]     = useState<number>(0);
   const [poolPrice, setPoolPrice] = useState<number | null>(null);
   const [poolExists, setPoolExists] = useState<boolean | null>(null);
   const [amount, setAmount]       = useState("");
@@ -59,6 +60,9 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
       const vUsdc = toUi(s.virtualUsdc as BN);
       const vSola = toUi(s.virtualSola as BN);
       setMktPrice(vSola > 0 ? vUsdc / vSola : 1);
+      // Live singletons predating the fee read 0 from the spare bytes — that is the
+      // no-fee path, not a missing value, so default to 0 rather than to the constant.
+      setFeeBps(Number(s.exerciseFeeBps ?? 0));
     }
 
     // Check if oSOLA/USDC pool exists and get its price
@@ -116,6 +120,7 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
           userSola,
           floorVault,
           userUsdc,
+          marketVault,
           ...commonAccounts,
         } as any)
         .instruction();
@@ -136,7 +141,12 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
 
   const intrinsicValue = mktPrice !== null ? Math.max(0, mktPrice - 1) : null;
   const usdcCost = amount ? parseFloat(amount) || 0 : 0;
-  const canExercise = usdcBal !== null && usdcCost > 0 && usdcBal >= usdcCost;
+  // Fee is a share of the GAIN and is charged ON TOP of the strike — never carved out
+  // of it, so the floor always receives the full 1 USDC per SOLA (see exercise_o_sola).
+  const exerciseFee = intrinsicValue !== null ? (intrinsicValue * usdcCost * feeBps) / 10_000 : 0;
+  const totalCost = usdcCost + exerciseFee;
+  // Balance check must cover strike + fee, otherwise the transfer reverts on-chain.
+  const canExercise = usdcBal !== null && usdcCost > 0 && usdcBal >= totalCost;
 
   if (embedded) return (
     <div>
@@ -209,15 +219,27 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
             <span>SOLA received</span>
             <span className="text-white font-mono">{usdcCost.toLocaleString(undefined, { maximumFractionDigits: 6 })} SOLA</span>
           </div>
+          {feeBps > 0 && (
+            <div className="flex justify-between text-gray-400">
+              <span>Exercise fee ({(feeBps / 100).toFixed(feeBps % 100 === 0 ? 0 : 2)}% of gain)</span>
+              <span className="text-white font-mono">{exerciseFee.toFixed(6)} USDC</span>
+            </div>
+          )}
+          {feeBps > 0 && (
+            <div className="flex justify-between border-t border-brand-border pt-1 mt-1">
+              <span className="text-gray-400">Total to pay</span>
+              <span className="text-white font-mono font-bold">{totalCost.toFixed(6)} USDC</span>
+            </div>
+          )}
           {intrinsicValue !== null && (
             <div className="flex justify-between border-t border-brand-border pt-1 mt-1">
               <span className="text-gray-400">Estimated profit</span>
-              <span className={`font-mono font-bold ${intrinsicValue * usdcCost > 0 ? "text-brand-green" : "text-gray-500"}`}>
-                ${(intrinsicValue * usdcCost).toFixed(4)}
+              <span className={`font-mono font-bold ${intrinsicValue * usdcCost - exerciseFee > 0 ? "text-brand-green" : "text-gray-500"}`}>
+                ${(intrinsicValue * usdcCost - exerciseFee).toFixed(4)}
               </span>
             </div>
           )}
-          {usdcBal !== null && usdcCost > usdcBal && (
+          {usdcBal !== null && totalCost > usdcBal && (
             <p className="text-red-400 pt-1">Insufficient USDC balance ({usdcBal.toFixed(2)} available)</p>
           )}
         </div>
@@ -328,15 +350,27 @@ export function Exercise({ embedded = false }: { embedded?: boolean }) {
               <span>SOLA received</span>
               <span className="text-white font-mono">{usdcCost.toLocaleString(undefined, { maximumFractionDigits: 6 })} SOLA</span>
             </div>
+            {feeBps > 0 && (
+              <div className="flex justify-between text-gray-400">
+                <span>Exercise fee ({(feeBps / 100).toFixed(feeBps % 100 === 0 ? 0 : 2)}% of gain)</span>
+                <span className="text-white font-mono">{exerciseFee.toFixed(6)} USDC</span>
+              </div>
+            )}
+            {feeBps > 0 && (
+              <div className="flex justify-between border-t border-brand-border pt-1 mt-1">
+                <span className="text-gray-400">Total to pay</span>
+                <span className="text-white font-mono font-bold">{totalCost.toFixed(6)} USDC</span>
+              </div>
+            )}
             {intrinsicValue !== null && (
               <div className="flex justify-between border-t border-brand-border pt-1 mt-1">
                 <span className="text-gray-400">Estimated profit</span>
-                <span className={`font-mono font-bold ${intrinsicValue * usdcCost > 0 ? "text-brand-green" : "text-gray-500"}`}>
-                  ${(intrinsicValue * usdcCost).toFixed(4)}
+                <span className={`font-mono font-bold ${intrinsicValue * usdcCost - exerciseFee > 0 ? "text-brand-green" : "text-gray-500"}`}>
+                  ${(intrinsicValue * usdcCost - exerciseFee).toFixed(4)}
                 </span>
               </div>
             )}
-            {usdcBal !== null && usdcCost > usdcBal && (
+            {usdcBal !== null && totalCost > usdcBal && (
               <p className="text-red-400 pt-1">Insufficient USDC balance ({usdcBal.toFixed(2)} USDC available)</p>
             )}
           </div>

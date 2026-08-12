@@ -58,3 +58,4 @@ app/.env.*.local
 *.log
 .vercel
 tests/keys/
+.env*

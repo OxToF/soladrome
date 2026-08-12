@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import fs from "fs";
 
-const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const PRECISION  = BigInt("1000000000000"); // 1e12
 const statePda   = PublicKey.findProgramAddressSync([Buffer.from("state")], PROGRAM_ID)[0];
 
@@ -34,7 +34,7 @@ async function main() {
   // ── Wallets ────────────────────────────────────────────────────────────────
   const wallets: Record<string, string> = {
     "JAfXUr5": "JAfXUr5WNpj4wTeWAQ9KXmj9zRjBESTdgviAo1LLNrFn",
-    "CL4yt4" : "CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3",
+    "BVaJbgw": "BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA",
     "FOUNDER": "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4",
   };
 

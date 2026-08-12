@@ -31,11 +31,11 @@ import idl from "../app/lib/soladrome.json";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const PROGRAM_ID     = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID     = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const USDC_MINT      = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"); // mainnet USDC
 const FOUNDER_WALLET = new PublicKey("46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4");
 // Separate ops wallet that receives the 250k liquid SOLA (votes as an ordinary user).
-const FOUNDER_OPS_WALLET = new PublicKey("CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3");
+const FOUNDER_OPS_WALLET = new PublicKey("BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA");
 const SQUADS_VAULT   = new PublicKey("BxYTiKyDxWpK4hPDZEiYVW9qBj8YpzhSHEBCWpaZbWQ4");
 
 // ── PDAs ──────────────────────────────────────────────────────────────────────

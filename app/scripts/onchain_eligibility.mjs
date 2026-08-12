@@ -21,7 +21,7 @@ const env = Object.fromEntries(
   readFileSync(".env.local", "utf8").split("\n").filter((l) => l.includes("="))
     .map((l) => { const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; })
 );
-const PROGRAM_ID = new PublicKey("4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd");
+const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const hiSolaMint = PublicKey.findProgramAddressSync([Buffer.from("hi_sola_mint")], PROGRAM_ID)[0];
 
 const conn = new Connection(env.NEXT_PUBLIC_RPC_URL || "https://api.devnet.solana.com", "confirmed");

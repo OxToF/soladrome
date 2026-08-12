@@ -59,7 +59,7 @@ Each `claim_founder_hi_sola` call mints SOLA to `sola_vault` AND hiSOLA 1:1 to t
 Each exercise of `exercise_o_sola` adds 1 USDC to `floor_vault` — every option conversion structurally strengthens the floor for all users.
 
 **Liquid tranche (250k SOLA):**
-Minted by `mint_ecosystem_allocation` to a **separate founder ops wallet** (`CL4yt4Ep6N3AKbbHhQaidjVLNzQrdgT5NobQSE6FGHr3`), distinct from the governance wallet. It provides operational income (KOL rewards, community managers, contest prizes) during the 6-month vesting cliff, and — being a normal wallet, not `FOUNDER_WALLET` — it can be staked and voted as an ordinary user position. The governance wallet (`FOUNDER_WALLET`, holding the 7M hiSOLA) is itself non-voting by default.
+Minted by `mint_ecosystem_allocation` to a **separate founder ops wallet** (`BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA`), distinct from the governance wallet. It provides operational income (KOL rewards, community managers, contest prizes) during the 6-month vesting cliff, and — being a normal wallet, not `FOUNDER_WALLET` — it can be staked and voted as an ordinary user position. The governance wallet (`FOUNDER_WALLET`, holding the 7M hiSOLA) is itself non-voting by default.
 
 ### 2.2 Protocol Partner Allocations
 

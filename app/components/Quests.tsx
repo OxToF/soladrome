@@ -63,7 +63,7 @@ export function Quests() {
   const group  = groups[page];
   const missingGates = (group.gate ?? []).filter((id) => !done.has(id));
   const locked = missingGates.length > 0;
-  // Which tab holds the first unmet prerequisite (Solana ID + TrueMRR both live in Ecosystem).
+  // Which tab holds the first unmet prerequisite (TrueMRR lives in Ecosystem).
   const unlockTargetIndex = locked ? (findQuest(missingGates[0])?.groupIndex ?? -1) : -1;
   const unlockLabel = unlockTargetIndex >= 0 ? groups[unlockTargetIndex].title : undefined;
 
