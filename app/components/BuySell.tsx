@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Soladrome Labs
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { BN } from "@coral-xyz/anchor";
@@ -14,6 +14,8 @@ import { trackQuest } from "@/lib/quests";
 
 type Tab = "buy" | "sell";
 
+const PCT_SHORTCUTS = [25, 50, 75, 100] as const;
+
 export function BuySell() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
@@ -23,6 +25,43 @@ export function BuySell() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [faucetLoading, setFaucetLoading] = useState(false);
+  const [balance, setBalance] = useState<number | null>(null);
+
+  // The side you spend from: USDC when buying, SOLA when selling.
+  const spendMint   = tab === "buy" ? usdcMint : solaM;
+  const spendSymbol = tab === "buy" ? "USDC"   : "SOLA";
+
+  const fetchBalance = useCallback(async () => {
+    if (!wallet || !spendMint) { setBalance(null); return; }
+    try {
+      const info = await connection.getTokenAccountBalance(userAta(spendMint, wallet.publicKey));
+      setBalance(Number(info.value.uiAmount ?? 0));
+    } catch {
+      // No ATA yet — a brand-new wallet before its first faucet claim. Zero, not unknown.
+      setBalance(0);
+    }
+  }, [connection, wallet, spendMint]);
+
+  useEffect(() => { fetchBalance(); }, [fetchBalance]);
+
+  // Buy/sell/faucet all dispatch this, and Portfolio and Stats already listen to it, so the
+  // card refreshes itself instead of showing a balance the last trade already invalidated.
+  useEffect(() => {
+    const h = () => { fetchBalance(); };
+    window.addEventListener("soladrome:refresh", h);
+    return () => window.removeEventListener("soladrome:refresh", h);
+  }, [fetchBalance]);
+
+  const insufficient =
+    balance !== null && amount !== "" && Number(amount) > balance;
+
+  function applyPct(pct: number) {
+    if (balance === null || balance <= 0) return;
+    // Floor to 6 decimals — the token precision. Anything finer is dust the input would
+    // round anyway, and `Max` must never produce more than the wallet actually holds.
+    const v = Math.floor(balance * (pct / 100) * 1e6) / 1e6;
+    setAmount(v > 0 ? String(v) : "");
+  }
 
   async function claimFaucet() {
     if (!wallet) return;
@@ -38,6 +77,9 @@ export function BuySell() {
       if (!res.ok) throw new Error(data.error);
       setStatus(`✅ Got ${data.amount} test USDC!`);
       trackQuest(wallet.publicKey.toBase58(), "faucet");
+      // Without this the card still reads 0 right after a successful claim, which looks
+      // exactly like a failed faucet — the first impression every new tester gets.
+      window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) {
       setStatus(`❌ Faucet: ${e?.message ?? e}`);
     } finally {
@@ -119,17 +161,47 @@ export function BuySell() {
         ))}
       </div>
 
-      <label className="text-xs text-gray-400 mb-1 block">
-        {tab === "buy" ? "USDC amount" : "SOLA amount"}
-      </label>
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-xs text-gray-400">
+          {tab === "buy" ? "USDC amount" : "SOLA amount"}
+        </label>
+        {balance !== null && (
+          <span className="text-xs text-gray-500">
+            Balance:{" "}
+            <button
+              type="button"
+              className="text-gray-300 hover:text-brand-green transition-colors font-mono"
+              onClick={() => applyPct(100)}
+            >
+              {balance.toLocaleString(undefined, { maximumFractionDigits: 4 })} {spendSymbol}
+            </button>
+          </span>
+        )}
+      </div>
       <input
-        className="input mb-4"
+        className="input"
         type="number"
         min="0"
         placeholder="0.00"
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
       />
+
+      <div className="flex gap-2 mt-3 mb-4">
+        {PCT_SHORTCUTS.map((pct) => (
+          <button
+            key={pct}
+            type="button"
+            onClick={() => applyPct(pct)}
+            disabled={!balance}
+            className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-400
+                       hover:border-brand-green hover:text-brand-green transition-colors
+                       disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            {pct === 100 ? "Max" : `${pct}%`}
+          </button>
+        ))}
+      </div>
 
       {tab === "buy" && (
         <p className="text-xs text-gray-500 mb-4">
@@ -142,10 +214,19 @@ export function BuySell() {
         </p>
       )}
 
+      {/* Refuse a trade the wallet cannot fund rather than letting the chain reject it —
+          an on-chain failure costs the user a signature and reads as a broken app. */}
+      {insufficient && (
+        <p className="text-xs text-yellow-500 mb-2">
+          Not enough {spendSymbol} — you hold{" "}
+          {(balance ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}.
+        </p>
+      )}
+
       <button
         className="btn-primary w-full"
         onClick={submit}
-        disabled={loading || !wallet || !amount || !usdcMint}
+        disabled={loading || !wallet || !amount || !usdcMint || insufficient}
       >
         {loading ? "Processing…" : tab === "buy" ? "Buy SOLA" : "Sell SOLA"}
       </button>
