@@ -535,8 +535,18 @@ export function Vote() {
                 </button>
               )}
               {allocated > 0 && (
+                // "Remaining: 0" alone reads as "you spent your whole balance", which is
+                // wrong whenever the 30% cap binds: the wallet still holds the rest, it is
+                // simply not votable this epoch. Show the allowance as a fraction so the
+                // number the user is measured against is never implicit.
                 <p className="text-[10px] text-gray-600 mt-0.5">
-                  {allocated.toLocaleString(undefined, { maximumFractionDigits: 4 })} already allocated this epoch
+                  {allocated.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                  {" / "}
+                  {totalPower.toLocaleString(undefined, { maximumFractionDigits: 4 })} votable
+                  {" "}this epoch
+                  {cappedByGlobal && balance !== null && (
+                    <> · {(balance - totalPower + oSolaBonus).toLocaleString(undefined, { maximumFractionDigits: 4 })} hiSOLA idle (30% cap)</>
+                  )}
                 </p>
               )}
             </div>
