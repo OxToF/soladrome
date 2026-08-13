@@ -103,9 +103,12 @@ fast the boost tapers into it. A 50% floor would have locked 10 000/epoch in for
 extra launch effect. Emissions are a **support** yield for partner pools; the partner return
 comes from bribes. Full derivation and sensitivity tables: `scripts/emissions/`.
 
-⚠️ Both this paragraph and the `osola_emission_floor_bps` doc comment in `state.rs` claimed
-`1_000` (10%) while `initialize` actually wrote `1_875` — the published tail was wrong by
-nearly 2× for months. Two docs and one constant: keep all three in sync.
+⚠️ History worth keeping, because it recurred: this paragraph and the `state.rs` doc comment
+once claimed `1_000` (10%) while `initialize` wrote `1_875` — the published tail was wrong by
+nearly 2× for months. It happened again in the other direction, with `scripts/emissions/` and
+the whitepaper still on 800 000/epoch a full four days after the recalibration. **Quote the
+floor in absolute terms (5 000 oSOLA/epoch), never as a bps ratio**: the ratio is a quotient of
+the launch figure, so it silently goes wrong every time the launch figure moves.
 
 ### Program layout (`programs/soladrome/src/`)
 
@@ -127,7 +130,7 @@ nearly 2× for months. Two docs and one constant: keep all three in sync.
 - `sell_sola`: burn SOLA → redeem 1:1 from `floor_vault` only (never touches curve)
 - `stake_sola` / `unstake_hi_sola`: SOLA ↔ hiSOLA 1:1, SOLA locked in `sola_vault`
 - `claim_fees`: pro-rata share of `market_vault` via reward-per-token accumulator (`PRECISION = 1e12`)
-- `borrow_usdc` / `repay_usdc`: hiSOLA collateral → USDC from `floor_vault`, max = hiSOLA balance, no interest, no liquidation
+- `borrow_usdc` / `repay_usdc`: hiSOLA collateral → USDC from `floor_vault`, max = `staked_amount.min(hi_sola balance + vote_escrowed)`, no interest, no liquidation
 - `exercise_o_sola`: burn oSOLA + pay floor USDC → mint SOLA (strengthens floor)
 
 **System 2 — Permissionless AMM multi-pool**
@@ -201,7 +204,7 @@ risk limit, it is **the drain limit**.
 
 | Instruction | Cap | Why |
 |---|---|---|
-| `borrow_usdc` | **100%** of `user_hi_sola.amount` | An ordinary user bought their SOLA — their USDC *is* in the floor vault. They borrow their own deposit back and drain nobody. Same as Beradrome. |
+| `borrow_usdc` | **100%** of `staked_amount.min(user_hi_sola.amount + vote_escrowed)` | An ordinary user bought their SOLA — their USDC *is* in the floor vault. They borrow their own deposit back and drain nobody. Same as Beradrome. ⚠️ Since 2026-08-12 the cap needs **both** a recorded deposit and possession: capping on the balance alone let the same collateral be walked wallet to wallet, each hop drawing the floor again (proven both ways in `tests/bankrun_borrow_recycle.ts`). |
 | ~~`founder_borrow_usdc`~~ | — | **Removed 2026-07-18** with `FOUNDER_BORROW_CAP_BPS`: the 7M are ve-escrowed → wallet balance 0 → its `new_borrowed <= hi_sola_balance` check could never pass. Use `borrow_against_locked`. |
 | ~~`contributor_borrow_usdc`~~ | — | **Removed 2026-07-18** with `CONTRIBUTOR_BORROW_CAP_BPS`, same reason. Use `borrow_against_locked`. |
 | `borrow_against_locked` | `PARTNER_BORROW_CAP_BPS` (**20%**) | Unfinanced. Open to **any** ve-locker, so it also serves the founder's 7M and the team's 250K. |
