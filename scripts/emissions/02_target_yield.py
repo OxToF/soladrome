@@ -8,7 +8,7 @@ APR_emissions = emission_annuelle * (P - 1) / TVL
 import math
 
 DECAY = 0.99
-FLOOR_FRAC = 0.10
+FLOOR_FRAC = 0.25
 EPOCHS_PER_YEAR = 365.25 / 7
 N = 1_000_000
 

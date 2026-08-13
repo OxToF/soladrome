@@ -1,7 +1,15 @@
 # oSOLA emission calibration
 
-Why `osola_emission_initial = 10_000` and `osola_emission_floor_bps = 5_000`
+Why `osola_emission_initial = 20_000` and `osola_emission_floor_bps = 2_500`
 (`programs/soladrome/src/lib.rs`, written by `initialize`).
+
+**Read the floor in absolute terms, not as a ratio.** What this analysis fixes is the
+steady state: **5 000 oSOLA/epoch, forever**. The ratio is only the quotient of that target
+by whatever launch figure is chosen, so it moves whenever the launch figure does — at
+`initial = 10_000` the same floor is `5_000` bps, at `initial = 20_000` it is `2_500`. The
+ratio alone controls how fast the launch boost tapers into the floor; it is not a separate
+decision. Quoting the bps without the initial it belongs to is how this file and the code
+drifted apart before.
 
 An auditor will ask where these numbers come from. They come from here. Run any script
 with plain `python3`, no dependencies.
@@ -43,10 +51,15 @@ At the previous 800 000/epoch, a $10M TVL paid **163% APR** on a ×1.5 move and 
 at ×5 — only reasonable at $1B TVL. Note $414k of cumulative buys already doubles the price
 at `N = 1M`.
 
-Holding the 1-2% band over a growing TVL requires a **high floor**: with `floor_bps = 1_875`
-the emission decays while TVL grows and the two compressions multiply (TVL ×10, emission
-÷10 = APR ÷100). `floor_bps = 5_000` was the only setting that stayed in band across both
-the conservative and base price scenarios.
+Holding the 1-2% band over a growing TVL requires a **high floor in absolute terms**: let the
+emission decay all the way down while TVL grows and the two compressions multiply (TVL ×10,
+emission ÷10 = APR ÷100). A steady state of **5 000 oSOLA/epoch** was the only setting that
+stayed in band across both the conservative and base price scenarios. Against the shipped
+`initial = 20_000`, that is `floor_bps = 2_500`; the earlier `1_875` against `800 000` left
+150 000/epoch running in perpetuity, which is the same mistake at the other end.
+
+The shipped config emits **~0.81M oSOLA in year 1** and settles at 0.26M/year — run
+`01_apr_grid.py` to reproduce both.
 
 ## Known weakness
 
