@@ -282,7 +282,11 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
     const received = (await tokenBalance(payerUsdc)) - before;
 
     // 2% origination fee is withheld from the gross borrow.
-    assert.equal(received.toString(), "980000", "A must receive the net borrow");
+    assert.equal(
+      received.toString(),
+      "980000",
+      "A must receive the net borrow"
+    );
 
     const pos: any = await program.account.userPosition.fetch(
       positionOf(payer.publicKey)
