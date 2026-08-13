@@ -606,7 +606,7 @@
                     <span class="w-8 h-8 rounded-lg bg-[#14F195]/20 flex items-center justify-center text-[#14F195] text-sm font-black">§8</span>
                     <h4 class="font-bold text-white">AMM + Emissions</h4>
                 </div>
-                <p class="text-gray-500 text-xs leading-relaxed">Permissionless xy=k · Lex-sorted PDAs · Masterchef continuous + epoch-based oSOLA rewards</p>
+                <p class="text-gray-500 text-xs leading-relaxed">Permissionless xy=k · Lex-sorted PDAs · Masterchef continuous + epoch-based oSOLA rewards · Checkpoint-weighted LP share</p>
             </div>
             <div class="bg-solana p-6 rounded-2xl border border-white/5 hover:border-[#9945FF]/30 transition-all duration-300">
                 <div class="flex items-center gap-3 mb-3">
@@ -615,6 +615,30 @@
                 </div>
                 <p class="text-gray-500 text-xs leading-relaxed">Squads multisig · Emergency pause · Floor invariant on-chain · Trident fuzzing · Hardcoded addresses</p>
             </div>
+        </div>
+
+        <!-- LP checkpoint instructions -->
+        <div class="bg-black/40 rounded-[2rem] p-8 border border-[#14F195]/20 mb-8">
+            <div class="flex items-center gap-3 mb-4">
+                <span class="w-8 h-8 rounded-lg bg-[#14F195]/20 flex items-center justify-center text-[#14F195] text-sm font-black">LP</span>
+                <h4 class="font-bold text-white">If you provide liquidity, read this</h4>
+            </div>
+            <p class="text-gray-400 text-sm leading-relaxed mb-5">Your oSOLA emissions are <strong class="text-gray-200">not</strong> computed from your LP token balance. They are computed from <strong class="text-gray-200">time-weighted</strong> deposit, and that weight only accrues between your own <code class="text-[#14F195] text-xs">checkpoint_lp</code> calls. The pool's side of the division always covers the whole epoch, so any interval you leave un-checkpointed is simply not paid. It is not paid to anyone else either — it stays unminted.</p>
+            <div class="grid md:grid-cols-3 gap-4">
+                <div class="bg-black/30 rounded-xl p-4 border border-white/5">
+                    <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest mb-2">1 · On entry</p>
+                    <p class="text-gray-500 text-xs leading-relaxed">Checkpoint as soon as you enter a pool in a new epoch. Weight is never back-dated to the start of the epoch.</p>
+                </div>
+                <div class="bg-black/30 rounded-xl p-4 border border-white/5">
+                    <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest mb-2">2 · Before the epoch ends</p>
+                    <p class="text-gray-500 text-xs leading-relaxed">Checkpoint again shortly before the 7-day epoch closes. Stop early and your own idle time dilutes you.</p>
+                </div>
+                <div class="bg-black/30 rounded-xl p-4 border border-white/5">
+                    <p class="text-yellow-400 text-xs font-bold uppercase tracking-widest mb-2">3 · Before you resize</p>
+                    <p class="text-gray-500 text-xs leading-relaxed">Checkpoint <strong class="text-gray-300">before</strong> adding or removing liquidity, never after. Resizing restarts the window and forfeits whatever was pending.</p>
+                </div>
+            </div>
+            <p class="text-gray-500 text-xs mt-5">Follow the routine and you recover 99%+ of your pro-rata share. The rule exists so that a deposit made one second before settlement cannot bill a full epoch of weight — the same protection applies to everyone else's share of the pot.</p>
         </div>
 
         <!-- Key formula highlight -->

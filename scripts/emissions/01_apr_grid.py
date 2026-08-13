@@ -4,7 +4,7 @@ Soladrome — rendement des emissions oSOLA en fonction de la TVL.
 
 Modele
 ------
-Emission par epoch (7 j) : E_n = max(INITIAL * 0.99^n, 0.10 * INITIAL)
+Emission par epoch (7 j) : E_n = max(INITIAL * 0.99^n, 0.25 * INITIAL)
 Valeur d'un oSOLA        : P_SOLA - 1  (option, strike = floor = 1 USDC)
 Prix SOLA sur la courbe  : P = (1 + U/N)^2   avec N = 1_000_000 (INIT_VIRTUAL_*)
                            => U = N * (sqrt(P) - 1)  USDC d'achats cumules requis
@@ -15,9 +15,9 @@ jaugee est mecaniquement plus elevee (diviser par la fraction jaugee).
 """
 import math
 
-INITIAL_DEFAULT = 800_000      # oSOLA par epoch, valeur actuelle on-chain
+INITIAL_DEFAULT = 20_000       # oSOLA par epoch — ce qu'ecrit `initialize` (lib.rs)
 DECAY = 0.99
-FLOOR_FRAC = 0.10
+FLOOR_FRAC = 0.25              # osola_emission_floor_bps = 2_500 => plancher 5 000/epoch
 EPOCHS_PER_YEAR = 365.25 / 7   # 52.18
 N = 1_000_000                  # profondeur de courbe (USDC virtuels)
 
@@ -84,7 +84,11 @@ for p in PRICES:
 
 print()
 print("=" * 78)
-print("TABLE 2 — regime de croisiere (plancher atteint, 80k/epoch = 4.17M/an)")
+floor_epoch = FLOOR_FRAC * INITIAL_DEFAULT
+print(
+    f"TABLE 2 — regime de croisiere (plancher atteint, {floor_epoch:,.0f}/epoch"
+    f" = {floor_epoch * EPOCHS_PER_YEAR / 1e6:.2f}M/an)"
+)
 print("=" * 78)
 floor_year = FLOOR_FRAC * INITIAL_DEFAULT * EPOCHS_PER_YEAR
 print(head)

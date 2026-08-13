@@ -202,8 +202,8 @@ risk limit, it is **the drain limit**.
 | Instruction | Cap | Why |
 |---|---|---|
 | `borrow_usdc` | **100%** of `user_hi_sola.amount` | An ordinary user bought their SOLA — their USDC *is* in the floor vault. They borrow their own deposit back and drain nobody. Same as Beradrome. |
-| `founder_borrow_usdc` | `claimed × FOUNDER_BORROW_CAP_BPS` (**20%**) | Unfinanced allocation. ⚠️ Likely dead code since the 7M are ve-escrowed → wallet balance 0 → its `new_borrowed <= hi_sola_balance` check can't pass. Use `borrow_against_locked`. |
-| `contributor_borrow_usdc` | `hi_sola_claimed × CONTRIBUTOR_BORROW_CAP_BPS` (**20%**) | Unfinanced. Was 10% until 2026-07-17; aligned. |
+| ~~`founder_borrow_usdc`~~ | — | **Removed 2026-07-18** with `FOUNDER_BORROW_CAP_BPS`: the 7M are ve-escrowed → wallet balance 0 → its `new_borrowed <= hi_sola_balance` check could never pass. Use `borrow_against_locked`. |
+| ~~`contributor_borrow_usdc`~~ | — | **Removed 2026-07-18** with `CONTRIBUTOR_BORROW_CAP_BPS`, same reason. Use `borrow_against_locked`. |
 | `borrow_against_locked` | `PARTNER_BORROW_CAP_BPS` (**20%**) | Unfinanced. Open to **any** ve-locker, so it also serves the founder's 7M and the team's 250K. |
 
 **Consequence worth publishing:** for any allocation that never paid into the floor, locking it does
@@ -281,12 +281,14 @@ protocol sells a partner is: permanent voting power on the bag + a 20% borrow va
 
 ### Open items flagged pre-audit (still not fixed)
 
-1. **Stale comments**: `lib.rs` founder-borrow doc and the "~29k USDC/month" figure assume a 10%
-   founder cap; the constant is 20% (real figure ~58k/month). about.html publishes "20%" as a
-   guarantee the code did not enforce until the ve escrow landed.
+1. ~~**Stale comments on the founder borrow cap**~~ — **moot since 2026-07-18**: `founder_borrow_usdc`
+   and `contributor_borrow_usdc` were deleted with their constants, so there is no 10%-vs-20%
+   discrepancy left to fix. `grep -rn "29k" programs/` is empty; the figure now survives only in
+   the audit-prep docs, which were corrected 2026-08-13. The single remaining valve is
+   `borrow_against_locked` at `PARTNER_BORROW_CAP_BPS` (20%), which about.html already publishes.
 2. ~~**`collect_to_pol` over-credits stakers**~~ — **resolved 2026-07-18** (commit `3b32b03`); this entry stayed stale until 2026-08-05. The accumulator now advances on `market_balance - amount` and a solvency guard refuses to skim anything at or below `last_market_vault_balance`, so POL is junior to already-credited fees and senior only within fresh growth. See MAINNET_RUNBOOK §2.
 3. ~~The team lock expiry~~ — **resolved 2026-07-17**: the team tranche is permanently locked (`permanent_amount`), so no expiry ever reopens the drain. Remaining scheduled exposure: partner **bribe-earned** hiSOLA at 4-year expiry, capped per deal.
-4. **`PolState.pol_split_bps` is dead state** — written and validated (`<= 5_000`, "max 50%") by `initialize_pol`, then **read by nothing**. `collect_to_pol` takes an explicit `amount` from the authority and bounds it only by the solvency guard, so the "max 50%" the field advertises is not enforced anywhere. Same class as the stale comments in item 1: a documented policy the code does not apply. Decide before audit — either wire it (`amount <= growth × pol_split_bps / 10_000`) or drop the field.
+4. ~~**`PolState.pol_split_bps` is dead state**~~ — **resolved 2026-08-12**: `collect_to_pol` now enforces `amount <= growth × pol_split_bps / 10_000`, the base being uncredited growth (`market_balance − last_market_vault_balance`), not the whole vault. Proven by mutation. The solvency guard is kept alongside it deliberately: the cap is only tighter while `pol_split_bps <= 5_000`, a bound validated in a *different* instruction, whereas the solvency guard depends on nothing else.
 
 Root cause shared by all of these: **fungibility defeats per-tranche rules**. Tranche restrictions must
 live in state or escrow, never in a token balance.

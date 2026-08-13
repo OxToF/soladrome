@@ -53,7 +53,11 @@ The price premium above 1.0 USDC/SOLA flows entirely to `market_vault` and is di
 | Liquid operational | 250,000 | SOLA | None | Immediate | `mint_ecosystem_allocation` |
 
 **Governance tranche (7M hiSOLA):**
-Each `claim_founder_hi_sola` call mints SOLA to `sola_vault` AND hiSOLA 1:1 to the founder wallet. The primary liquidity path is `founder_borrow_usdc` (USDC borrowed against hiSOLA collateral, 0% interest), capped at **20% of cumulative claimed hiSOLA** (`FOUNDER_BORROW_CAP_BPS = 2000`). With ~291k hiSOLA/month after the 6-month cliff, the monthly borrow ceiling is ~58k USDC — borrowing (not selling) funds operations while the floor vault grows organically. The founder wallet is also **non-voting by default** (`founder_voting_enabled = false`): the governance tranche is a dormant anti-capture reserve, votable only via the authority break-glass `set_founder_voting`.
+Each `claim_founder_hi_sola` call mints SOLA to `sola_vault` AND hiSOLA 1:1 to the founder wallet, which goes straight into a **lifetime ve escrow**. The only liquidity path is `borrow_against_locked` (USDC borrowed against the escrowed position, 0% interest, no liquidation), capped at **20%** (`PARTNER_BORROW_CAP_BPS = 2000`) — the same valve every ve-locker gets, because the tranche is unfinanced supply. Borrowing, not selling, funds operations while the floor vault grows organically.
+
+The dedicated `founder_borrow_usdc` instruction and its `FOUNDER_BORROW_CAP_BPS` constant were **removed on 2026-07-18**: once the 7M are escrowed the founder's wallet balance is zero, so a balance-based cap could never pass anyway. The same applies to `contributor_borrow_usdc`. Any borrow figure derived from those instructions is obsolete.
+
+The founder wallet is also **non-voting by default** (`founder_voting_enabled = false`): the governance tranche is a dormant anti-capture reserve, votable only via the authority break-glass `set_founder_voting`.
 
 **Options tranche (5M oSOLA):**
 Each exercise of `exercise_o_sola` adds 1 USDC to `floor_vault` — every option conversion structurally strengthens the floor for all users.
@@ -196,21 +200,25 @@ oSOLA is not pre-minted (except contributor/partner/founder vesting tranches). I
 - Split across pools proportionally to hiSOLA gauge vote weight
 - **Automatic exponential decay** each epoch: `emission × (osola_emission_decay_bps / 10_000)`
   - Default: 9,900 bps = −1 %/epoch (≈ −40 %/year)
-  - Floor: `osola_emission_floor_bps` % of initial — default 10 % (emissions never reach zero)
+  - Floor: `osola_emission_floor_bps` % of initial — default 25 % (emissions never reach zero)
 - Authority can reset the curve at any time via `configure_emissions` (Squads multisig)
 
-**Emission schedule (800,000 oSOLA launch, −1 %/epoch, floor 150,000):**
+**Emission schedule (20,000 oSOLA launch, −1 %/epoch, floor 5,000):**
 
-| Epoch | Timeline | oSOLA / epoch | Per pool (5 pools, equal votes) | APR equiv. ($5M TVL, oSOLA $0.10) |
-|---|---|---|---|---|
-| 0 | Launch | 800,000 | 160,000 | ~8.3% |
-| 13 | 3 months | 701,000 | 140,000 | ~7.3% |
-| 26 | 6 months | 616,000 | 123,000 | ~6.4% |
-| 52 | 1 year | 474,000 | 95,000 | ~4.9% |
-| 104 | 2 years | 351,000 | 70,000 | ~3.6% |
-| ~166 | ~3.2 years | 150,000 (floor) | 30,000 | ~1.6% |
+| Epoch | Timeline | oSOLA / epoch | Per pool (5 pools, equal votes) |
+|---|---|---|---|
+| 0 | Launch | 20,000 | 4,000 |
+| 13 | 3 months | 17,550 | 3,510 |
+| 26 | 6 months | 15,401 | 3,080 |
+| 52 | 1 year | 11,859 | 2,372 |
+| 104 | 2 years | 7,032 | 1,406 |
+| ~137 | ~2.6 years | 5,047 → 5,000 (floor) | ~1,000 |
 
-Early LPs capture the highest yield. The floor of 150,000 oSOLA/epoch guarantees perpetual incentives. Override via `configure_emissions` (Squads multisig) at any time.
+Early LPs capture the highest yield. The floor of 5,000 oSOLA/epoch guarantees perpetual incentives. Override via `configure_emissions` (Squads multisig) at any time.
+
+**No APR is quoted here on purpose.** An oSOLA is an option, not a token: burning it costs the 1 USDC floor, so its intrinsic value is `P − 1`, not `P`. At launch `P = 1` exactly and oSOLA is worth zero — no emission size produces any yield until the curve moves. Any APR figure is therefore a function of the SOLA price, and quoting one without the price scenario attached is meaningless. The derivation, the grids and the sensitivity to cumulative buy volume live in `scripts/emissions/`.
+
+Emissions are a **support** yield for partner pools. The partner's real return comes from bribes.
 
 ---
 
@@ -238,9 +246,9 @@ External protocol wants liquidity on Soladrome
 **Passive vote carry-over (`set_vote_config` + `replay_vote`):**
 hiSOLA holders set a persistent allocation once. Any keeper (or the holder themselves) calls `replay_vote` each epoch — votes are re-cast automatically at the current balance, with no owner signature required. This mirrors Beradrome/Velodrome behaviour: passive holders continue earning bribes without weekly re-voting.
 
-**Partner ve-power once the cap is reached (100k hiSOLA earned, 24-month lock = maximum):**
+**Partner ve-power once the cap is reached (100k hiSOLA earned, 48-month lock = maximum):**
 ```
-ve_power = 100,000 × (104 epochs / 104 max) × 4 = 400,000 per partner
+ve_power = 100,000 × (208 epochs / 208 max) × 4 = 400,000 per partner
 ```
 
 This decays linearly to 0 at lock expiry. Partners replenish by unlocking → re-locking (with oSOLA-earned hiSOLA added) or by burning oSOLA for uncapped epoch bonus.

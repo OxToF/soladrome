@@ -42,7 +42,8 @@ def apr(t, initial, decay_bps, floor_bps, frac):
 
 
 POLICIES = [
-    ("A  actuel   800k, -1%/ep, floor 10%", 800_000, 9_900, 1_000),
+    ("A  LIVRE     20k, -1%/ep, floor 25%",  20_000, 9_900, 2_500),
+    ("   rejete   800k, -1%/ep, floor 10%", 800_000, 9_900, 1_000),
     ("B  50k,      -1%/ep, floor 10%",       50_000, 9_900, 1_000),
     ("C  50k,      PAS de decay",            50_000, 10_000, 1_000),
     ("D  50k,      -1%/ep, floor 50%",       50_000, 9_900, 5_000),

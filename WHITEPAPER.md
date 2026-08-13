@@ -408,6 +408,30 @@ epoch_emission = osola_emission_initial × (osola_emission_decay_bps / 10_000) ^
 
 This creates early-LP urgency while guaranteeing perpetual incentives above the floor. The `configure_emissions` instruction (authority-only, Squads multisig) resets the curve at any time.
 
+The epoch pot is divided twice, and both divisions are bounded: `emit_pool_rewards` splits `epoch_emission` across gauges by vote share, so Σ pool allocations ≤ `epoch_emission`; `claim_lp_emissions` then splits a pool's allocation by time-weighted LP share, hard-capped by the pool's running `osola_claimed`. No epoch can mint more oSOLA than its scheduled emission, whatever the number of pools, LPs or claim orderings.
+
+#### How an LP's share is measured — and how to not lose it
+
+Weight is **not** read from an LP token balance. `checkpoint_lp` banks `recorded_deposit × elapsed`, where `elapsed` runs from the later of *(your last checkpoint, your last position change)* to now. The pool-side denominator, by contrast, covers the **entire** epoch — `emit_pool_rewards` extends it to the epoch boundary at settlement.
+
+Three consequences, all deliberate, all costly if ignored:
+
+| Behaviour | Consequence for the LP |
+|---|---|
+| Weight accrues from your **first checkpoint**, never back-dated to the epoch start | The interval before your first checkpoint pays nothing |
+| Weight is banked only up to your **latest checkpoint**, while the denominator runs to epoch end | Stop checkpointing early and you are diluted by your own idle time |
+| `add_liquidity` / `remove_liquidity` restart the accrual window without banking what was pending | Everything accrued since your last checkpoint is **forfeited** at the moment you resize |
+
+**Instructions for liquidity providers:**
+
+1. Call `checkpoint_lp` as soon as you enter a pool in a new epoch.
+2. Call it again shortly before the epoch ends (the call requires `now < epoch_end`, strictly).
+3. Call it **before** any `add_liquidity` or `remove_liquidity`, never after.
+
+Un-checkpointed weight is never paid to anyone else — the residue simply stays unminted, so the schedule is an upper bound the protocol under-shoots rather than a pot that late claimants can steal. LPs following the routine above recover ≥ 99% of their pro-rata share.
+
+Every property in this section is exercised by two bankrun harnesses under a warped clock (`tests/bankrun_emissions.ts`, `tests/bankrun_emissions_multi.ts`): the single-pool cycle, the multi-gauge and multi-LP divisions, the mint ceiling `oSOLA supply == Σ claimed ≤ Σ allocated ≤ epoch_emission`, and the forfeiture rule above. Both ceilings are proven by mutation — breaking either denominator turns the suite red.
+
 ---
 
 ## 11. Protocol-Owned Liquidity (POL)
@@ -516,7 +540,7 @@ Mainnet launches in two stages, enforced on-chain by six independent feature fla
 
 **Stage 2 — public open.** The authority flips `curve_enabled`; curve opening, TGE, and the on-chain airdrop distribution happen as a single event, on a protocol that already has liquidity depth and active incentives.
 
-**Emissions stay off across both stages.** `emissions_enabled` is armed only at Genesis, once the per-epoch emission cycle has been independently audited. Until then the protocol runs a points phase: the community deposits liquidity and earns off-chain points toward the airdrop, while no oSOLA is emitted on-chain. Keeping emission behind an explicit flag lets the launch audit scope the live surface (AMM, curve, staking) and defer the emission-cycle review to Genesis, when it is actually armed.
+**Emissions stay off across both stages.** `emissions_enabled` is armed only at Genesis, once the per-epoch emission cycle has been independently audited. Until then the protocol runs a points phase: the community deposits liquidity and earns off-chain points toward the airdrop, while no oSOLA is emitted on-chain. Keeping emission behind an explicit flag lets the launch audit scope the live surface (AMM, curve, staking) and defer the emission-cycle review to Genesis, when it is actually armed. The cycle already carries its own clock-warping test coverage in the meantime (§10.3), including the mint ceiling under several gauges and several LPs — coverage that informs the review, but does not replace it.
 
 As with the emergency pause, gating applies to entry paths only. `sell_sola` (floor redemption) and every other exit path are never gated by any phase flag.
 
@@ -662,20 +686,21 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 
 | Constant | Value | Description |
 |---|---|---|
-| `INIT_VIRTUAL_USDC` | 100,000,000 | 100 USDC virtual reserve |
-| `INIT_VIRTUAL_SOLA` | 100,000,000 | 100 SOLA virtual reserve |
+| `INIT_VIRTUAL_USDC` | 1,000,000,000,000 | 1,000,000 USDC virtual reserve (6 dec) |
+| `INIT_VIRTUAL_SOLA` | 1,000,000,000,000 | 1,000,000 SOLA virtual reserve — equal to the above, so start price = floor = 1 |
 | `EPOCH_DURATION` | 604,800 s | 7 days |
 | `MIN_LOCK_DURATION` | 604,800 s | 1 epoch |
-| `MAX_LOCK_DURATION` | 62,899,200 s | 104 epochs (~2 years) |
+| `MAX_LOCK_DURATION` | 125,798,400 s | 208 epochs (~4 years) |
 | `MAX_VE_MULTIPLIER` | 4 | Max voting power boost |
+| `VOTE_WEIGHT_CAP_BPS` | 3,000 | 30% per-address cap on hiSOLA voting power |
 | `FLOOR_RESERVE_MIN_BPS` | 7,500 | 75% floor reserve buffer |
 | `CALLER_ARB_SHARE_BPS` | 1,000 | 10% flash arb caller reward |
 | `BORROW_FEE_BPS` | 200 | 2% origination fee |
-| `FOUNDER_BORROW_CAP_BPS` | 1,000 | 10% borrow cap on founder |
+| `PARTNER_BORROW_CAP_BPS` | 2,000 | 20% borrow cap on locked (unfinanced) allocations |
 | `ROLLOVER_DELAY_EPOCHS` | 2 | 14-day rollover grace period |
-| `osola_emission_initial` | 800,000 oSOLA | Starting epoch LP rewards — calibrated for ~8% APR on $5M TVL pool |
+| `osola_emission_initial` | 20,000 oSOLA | Starting epoch LP rewards — a support yield, ~4-20% APR at the $2-5M TVL a gated launch opens with |
 | `osola_emission_decay_bps` | 9,900 | −1 % per epoch (≈ −40 %/year) |
-| `osola_emission_floor_bps` | 1,875 | Floor = 150,000 oSOLA/epoch (18.75 % of initial, reached ~epoch 166) |
+| `osola_emission_floor_bps` | 2,500 | Floor = 5,000 oSOLA/epoch (25 % of initial, reached ~epoch 137) |
 | `MINIMUM_LIQUIDITY` | 1,000 | Locked LP tokens on first deposit |
 | `PRECISION` | 1e12 | Accumulator precision |
 
