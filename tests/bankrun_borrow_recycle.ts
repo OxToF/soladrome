@@ -379,4 +379,164 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
         "trusted on its own"
     );
   });
+
+  it("[security] an unfinanced allocation cannot reach the 100% borrow channel", async () => {
+    // The rule the protocol publishes is "100% if the collateral is financed, 20% if it is
+    // not". Until 2026-07-18 that rule lived in SEPARATE instructions with their own
+    // constants (`founder_borrow_usdc` / `contributor_borrow_usdc`, capped by
+    // `FOUNDER_BORROW_CAP_BPS` / `CONTRIBUTOR_BORROW_CAP_BPS`). Those were deleted, and the
+    // rule now rests entirely on an emergent property: `staked_amount` is written in exactly
+    // two places, `stake_sola` (+) and `unstake_hi_sola` (−), so an allocation that was
+    // MINTED rather than bought can never open the 100% channel.
+    //
+    // Emergent properties are the ones that break silently — add one `staked_amount = …`
+    // anywhere in a claim path and the 7M founder tranche becomes borrowable at 100% against
+    // a floor vault it never paid into. Hence this test.
+    //
+    // The contributor path is used rather than the founder one on purpose: `FOUNDER_WALLET`
+    // is feature-gated to a throwaway key under `tests/keys/`, which is GITIGNORED. A test
+    // depending on it is dead for anyone who clones the repo — that is exactly how the three
+    // `[founder]` tests died in the 2026-07-21 history purge. `claim_contributor_hi_sola`
+    // needs nothing but the authority, and it is structurally identical: both mint hiSOLA
+    // straight into a ve lock and neither touches `staked_amount`.
+    const contributor = Keypair.generate();
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: contributor.publicKey,
+        lamports: 10 * LAMPORTS_PER_SOL,
+      }),
+    ]);
+    const contributorUsdc = getAssociatedTokenAddressSync(
+      usdcMint,
+      contributor.publicKey
+    );
+    await send([
+      createAssociatedTokenAccountInstruction(
+        payer.publicKey,
+        contributorUsdc,
+        contributor.publicKey,
+        usdcMint
+      ),
+      createAssociatedTokenAccountInstruction(
+        payer.publicKey,
+        getAssociatedTokenAddressSync(hiSolaM, contributor.publicKey),
+        contributor.publicKey,
+        hiSolaM
+      ),
+    ]);
+
+    const vesting = pda([
+      Buffer.from("contributor"),
+      contributor.publicKey.toBuffer(),
+    ]);
+    await program.methods
+      .registerContributor(new BN(100_000_000), new BN(0))
+      .accounts({
+        authority: payer.publicKey,
+        protocolState: statePda,
+        contributorWallet: contributor.publicKey,
+        contributorVesting: vesting,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    const lockPosition = pda([
+      Buffer.from("velock"),
+      contributor.publicKey.toBuffer(),
+    ]);
+    const veVault = pda([
+      Buffer.from("ve_vault"),
+      contributor.publicKey.toBuffer(),
+    ]);
+    const claimIx = await program.methods
+      .claimContributorHiSola()
+      .accounts({
+        contributor: contributor.publicKey,
+        protocolState: statePda,
+        solaMint: solaM,
+        hiSolaMint: hiSolaM,
+        solaVault,
+        marketVault: marketV,
+        lockPosition,
+        veLockVault: veVault,
+        contributorPosition: positionOf(contributor.publicKey),
+        contributorVesting: vesting,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+    await send([claimIx], [contributor]);
+
+    // The allocation really exists and really is hiSOLA — the test would be hollow if the
+    // claim had silently minted nothing.
+    const locked: any = await program.account.veLockPosition.fetch(
+      lockPosition
+    );
+    assert.isTrue(
+      BigInt(locked.amountLocked.toString()) > BigInt(0),
+      "the contributor must actually hold a funded ve lock"
+    );
+    assert.equal(
+      (await tokenBalance(veVault)).toString(),
+      locked.amountLocked.toString(),
+      "the locked hiSOLA must sit in the ve vault"
+    );
+
+    // ── the property itself, asserted before its explanations ───────────────
+    // Order matters. The two diagnostics below are each SUFFICIENT on their own to block
+    // the borrow, so testing them first would mean the outcome is never actually observed:
+    // a regression in one would fail on the proxy while the other silently kept the channel
+    // shut. The refusal is the claim; the diagnostics say why it holds.
+    const floorBefore = await tokenBalance(floorV);
+    const code = errorCode("BorrowLimitExceeded");
+    let drained = false;
+    try {
+      await borrow(contributor, 1_000_000);
+      drained = true;
+    } catch (e: any) {
+      assert.include(
+        e.toString(),
+        `0x${code.toString(16)}`,
+        `expected BorrowLimitExceeded, got: ${e.toString()}`
+      );
+    }
+    assert.isFalse(
+      drained,
+      "an unfinanced allocation borrowed through borrow_usdc at 100% — the " +
+        "financed/unfinanced split is no longer enforced anywhere"
+    );
+
+    assert.equal(
+      (await tokenBalance(floorV)).toString(),
+      floorBefore.toString(),
+      "the floor vault must be untouched"
+    );
+
+    // ── why it holds: two independent guards, either one sufficient ─────────
+    const pos: any = await program.account.userPosition.fetch(
+      positionOf(contributor.publicKey)
+    );
+    assert.equal(
+      pos.stakedAmount.toString(),
+      "0",
+      "a minted allocation must never be recorded as a financed deposit"
+    );
+    assert.equal(
+      (
+        await tokenBalance(
+          getAssociatedTokenAddressSync(hiSolaM, contributor.publicKey)
+        )
+      ).toString(),
+      "0",
+      "claim_contributor_hi_sola must leave the wallet balance at 0 — the mint goes " +
+        "straight to the ve vault"
+    );
+
+    // What remains open to them is the 20% valve, `borrow_against_locked`, which reads
+    // `amount_locked` rather than `staked_amount`. Not exercised here — it has its own
+    // coverage — but this is the channel the docs point at.
+  });
 });
