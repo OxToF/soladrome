@@ -12,9 +12,14 @@ import {
   createDefaultWalletNotFoundHandler,
 } from "@solana-mobile/wallet-adapter-mobile";
 import { SoladromeProvider } from "@/lib/SoladromeContext";
+import { resolveRpcUrl, FALLBACK_RPC_URL } from "@/lib/rpc";
 
-const ENDPOINT  = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
-const FALLBACK  = "https://api.devnet.solana.com";
+// A malformed NEXT_PUBLIC_RPC_URL is inlined at build time, so it would break
+// every wallet session at once rather than one route — validate, don't default.
+// When it is rejected ENDPOINT collapses onto FALLBACK, which the 429 retry
+// below already treats as "nowhere left to fall back to".
+const ENDPOINT  = resolveRpcUrl(process.env.NEXT_PUBLIC_RPC_URL);
+const FALLBACK  = FALLBACK_RPC_URL;
 
 // Public origin shown to the wallet in the connect/authorize dialog (and used
 // for Digital Asset Links when wrapped as an Android APK). Canonical prod domain

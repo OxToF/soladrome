@@ -7,6 +7,7 @@ import { AnchorProvider, utils } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { getProgram, positionPda, statePda, hiSolaM, PROGRAM_ID } from "@/lib/program";
 import { TRUSTED_MINTS } from "@/lib/tokens";
+import { resolveRpcUrl } from "@/lib/rpc";
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -121,7 +122,7 @@ async function missingGates(wallet: string): Promise<string[]> {
   return results.filter((r) => !r.done).map((r) => r.id);
 }
 
-const RPC = process.env.NEXT_PUBLIC_RPC_URL || process.env.RPC_URL || "https://api.devnet.solana.com";
+const RPC = resolveRpcUrl(process.env.NEXT_PUBLIC_RPC_URL, process.env.RPC_URL);
 const connection = new Connection(RPC, "confirmed");
 // Read-only provider: fetches never sign, so a dummy wallet is fine.
 const readonlyWallet = {
