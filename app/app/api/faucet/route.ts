@@ -9,10 +9,13 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import { createClient } from "@supabase/supabase-js";
+import { resolveRpcUrl } from "@/lib/rpc";
 
-// Server-side faucet: use public devnet RPC to avoid burning Helius free-tier quota
-// (the frontend throttle doesn't apply here — Connection is created raw with no gate)
-const RPC      = process.env.FAUCET_RPC_URL ?? "https://api.devnet.solana.com";
+// Server-side faucet: falls back to public devnet RPC to avoid burning Helius
+// free-tier quota (the frontend throttle doesn't apply here — Connection is
+// created raw with no gate). Validated, not just defaulted: see lib/rpc.ts for
+// the three-day production outage that motivated it.
+const RPC      = resolveRpcUrl(process.env.FAUCET_RPC_URL);
 const KP_JSON  = process.env.FAUCET_KEYPAIR!;      // JSON array of secret key bytes
 const USDC_STR = process.env.FAUCET_USDC_MINT!;    // devnet USDC mint
 const AMOUNT   = 500_000_000;                       // 500 USDC (6 decimals)

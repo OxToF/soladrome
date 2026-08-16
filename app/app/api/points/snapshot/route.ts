@@ -26,12 +26,13 @@ import {
   DEFAULT_MAX_POSITION_USD, DEFAULT_MULTIPLIER_BPS,
 } from "@/lib/points";
 import { fetchJupiterUsdPrices, fetchPythMajorsUsd } from "@/lib/prices_external";
+import { resolveRpcUrl } from "@/lib/rpc";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // ── Config (env-tunable, safe defaults) ──────────────────────────────────────
-const RPC = process.env.NEXT_PUBLIC_RPC_URL || process.env.RPC_URL || "https://api.devnet.solana.com";
+const RPC = resolveRpcUrl(process.env.NEXT_PUBLIC_RPC_URL, process.env.RPC_URL);
 const CRON_SECRET = process.env.CRON_SECRET || "";
 const RATE          = num(process.env.POINTS_RATE,          DEFAULT_RATE_POINTS_PER_USD_HOUR);
 const MIN_TVL_USD   = num(process.env.POINTS_MIN_TVL_USD,   DEFAULT_MIN_POOL_TVL_USD);
