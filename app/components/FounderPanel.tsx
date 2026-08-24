@@ -210,6 +210,55 @@ export function FounderPanel() {
   const isAuthority = !!wallet && !!authorityWallet &&
     wallet.publicKey.toBase58() === authorityWallet;
 
+  // ── The rate is not a ratio of whole tokens ─────────────────────────────────
+  // `partner_deposit_bribe` credits `total_bribed_credited += amount` in the BRIBE MINT's
+  // base units, and `claim_partner_allocation` turns that into hiSOLA base units (6 dec) with
+  // `× rate_num / rate_den`. The decimal gap therefore lands entirely inside the rate:
+  //
+  //     hiSOLA per 1 whole bribe token = 10^(decimals − 6) × num/den
+  //
+  // So the form's default 1/1 is only correct for a 6-decimal mint. Against a 9-decimal one —
+  // wSOL and most SPL tokens — it pays 1000× what it looks like. Nothing on screen said so,
+  // which is why the decimals are read from chain and the result spelled out below.
+  const [bribeDecimals, setBribeDecimals] = useState<number | null>(null);
+  const [bribeMintErr,  setBribeMintErr]  = useState<string | null>(null);
+
+  useEffect(() => {
+    const raw = regBribeMint.trim();
+    if (!raw) { setBribeDecimals(null); setBribeMintErr(null); return; }
+    let cancelled = false;
+    let key: PublicKey;
+    try { key = new PublicKey(raw); }
+    catch { setBribeDecimals(null); setBribeMintErr("Not a valid address."); return; }
+    setBribeMintErr(null);
+    connection.getParsedAccountInfo(key)
+      .then((res) => {
+        if (cancelled) return;
+        const parsed: any = res.value?.data;
+        const dec = parsed?.parsed?.info?.decimals;
+        if (typeof dec === "number") { setBribeDecimals(dec); setBribeMintErr(null); }
+        else { setBribeDecimals(null); setBribeMintErr("That address is not an SPL mint."); }
+      })
+      .catch(() => { if (!cancelled) { setBribeDecimals(null); setBribeMintErr("Could not read the mint."); } });
+    return () => { cancelled = true; };
+  }, [regBribeMint, connection]);
+
+  // hiSOLA credited per whole bribe token, and the num/den that would make it exactly 1:1.
+  const rateNumN = parseInt(regRateNum, 10);
+  const rateDenN = parseInt(regRateDen, 10);
+  const rateUsable = Number.isFinite(rateNumN) && Number.isFinite(rateDenN) &&
+                     rateNumN > 0 && rateDenN > 0;
+  const hiSolaPerToken = bribeDecimals !== null && rateUsable
+    ? Math.pow(10, bribeDecimals - 6) * (rateNumN / rateDenN)
+    : null;
+  const oneToOneDen = bribeDecimals !== null ? Math.pow(10, bribeDecimals - 6) : null;
+  // Whole bribe tokens needed before `cap_hi_sola` binds — the figure that says whether the
+  // rate is sane far better than the ratio itself does.
+  const capN = parseFloat(regCap);
+  const tokensToCap = hiSolaPerToken && hiSolaPerToken > 0 && Number.isFinite(capN)
+    ? capN / hiSolaPerToken
+    : null;
+
   // ── Fetch all vesting + position data ───────────────────────────────────────
   const fetchData = useCallback(async () => {
     if (!wallet || !isFounder) return;
@@ -820,6 +869,52 @@ export function FounderPanel() {
             Welcome bag streams into the partner&apos;s vote-locked position over 6 months. Cap
             bounds the hiSOLA their bribes can additionally earn, at rate num/den.
           </p>
+
+          {/* ── Effective rate ─────────────────────────────────────────────────
+              The rate is applied to base units, so its meaning depends on the bribe mint's
+              decimals. Spell the result out rather than leave num/den to be interpreted. */}
+          {bribeMintErr && (
+            <p className="text-[11px] text-red-400">❌ {bribeMintErr}</p>
+          )}
+
+          {bribeDecimals !== null && (
+            <div className="rounded-xl border border-brand-border bg-brand-dark/60 px-3 py-2.5 flex flex-col gap-1">
+              <p className="text-[10px] text-gray-500 uppercase tracking-widest">
+                Effective rate · mint has {bribeDecimals} decimals
+              </p>
+
+              {hiSolaPerToken === null ? (
+                <p className="text-xs text-gray-500">Enter a rate to see what it pays.</p>
+              ) : (
+                <p className="text-sm text-white font-mono">
+                  1 token bribed → {hiSolaPerToken.toLocaleString("en-US", {
+                    maximumFractionDigits: 6,
+                  })} hiSOLA
+                </p>
+              )}
+
+              {tokensToCap !== null && (
+                <p className="text-[11px] text-gray-500">
+                  Cap reached after ~{tokensToCap.toLocaleString("en-US", {
+                    maximumFractionDigits: 2,
+                  })} tokens bribed.
+                </p>
+              )}
+
+              {oneToOneDen !== null && hiSolaPerToken !== null &&
+               Math.abs(hiSolaPerToken - 1) > 1e-9 && (
+                <p className="text-[11px] text-amber-400/90 leading-relaxed">
+                  ⚠️ Not 1:1. The rate multiplies <em>base units</em>, and this mint has{" "}
+                  {bribeDecimals} decimals against hiSOLA&apos;s 6 — so num/den carries the
+                  gap. For exactly 1 token → 1 hiSOLA use{" "}
+                  <span className="font-mono text-white">
+                    {oneToOneDen >= 1 ? `1 / ${oneToOneDen.toLocaleString("en-US")}`
+                                      : `${Math.round(1 / oneToOneDen).toLocaleString("en-US")} / 1`}
+                  </span>.
+                </p>
+              )}
+            </div>
+          )}
 
           {!isAuthority && (
             <p className="text-[11px] text-amber-400/90 leading-relaxed">
