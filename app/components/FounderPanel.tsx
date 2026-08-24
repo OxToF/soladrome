@@ -16,7 +16,11 @@ import { PROGRAM_ID } from "@/lib/program";
 
 // ── Partner registration ──────────────────────────────────────────────────────
 const PARTNER_SEED        = Buffer.from("partner");
-const EPOCH_DURATION_SECS = 604_800; // 7 days mainnet (= 3 600 s on devnet — script-only concern)
+// One binary since 2026-08-23, so this is 604 800 on every cluster — there is no longer a
+// devnet variant of EPOCH_DURATION to qualify this with.
+const EPOCH_DURATION_SECS = 604_800; // state.rs: EPOCH_DURATION
+// state.rs: MAX_LOCK_DURATION = 208 * EPOCH_DURATION. The form used to say 104.
+const MAX_LOCK_EPOCHS = 208;
 
 function partnerAllocPda(partnerWallet: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
@@ -185,11 +189,26 @@ export function FounderPanel() {
   const [status,     setStatus]     = useState("");
 
   // ── Register partner form ───────────────────────────────────────────────────
+  // `register_partner` takes SIX arguments, not two. The form used to collect the welcome
+  // bag and the lock only, and passed those two to a six-argument method — Anchor then read
+  // the accounts object as a positional argument and reported "Account `authority` not
+  // provided", which points at the wrong thing entirely. All six are collected now.
   const [regWallet,    setRegWallet]    = useState("");
+  const [regBribeMint, setRegBribeMint] = useState("");
+  const [regRateNum,   setRegRateNum]   = useState("1");
+  const [regRateDen,   setRegRateDen]   = useState("1");
+  const [regCap,       setRegCap]       = useState("1000000");
   const [regAmount,    setRegAmount]    = useState("100000");
   const [regEpochs,    setRegEpochs]    = useState("52");
   const [loadingReg,   setLoadingReg]   = useState(false);
   const [statusReg,    setStatusReg]    = useState("");
+
+  // This section is authority-only (`address = protocol_state.authority`), and the panel it
+  // sits in is founder-only. Those are two different wallets on purpose, so the form was
+  // being shown to precisely the wallet that cannot submit it.
+  const authorityWallet = protocolState?.authority?.toBase58() ?? null;
+  const isAuthority = !!wallet && !!authorityWallet &&
+    wallet.publicKey.toBase58() === authorityWallet;
 
   // ── Fetch all vesting + position data ───────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -416,9 +435,22 @@ export function FounderPanel() {
     setLoadingReg(true); setStatusReg("");
     try {
       const partnerKey = new PublicKey(regWallet.trim());
-      const hiSolaBN   = new BN(Math.floor(parseFloat(regAmount) * 1_000_000));
+      const bribeMint  = new PublicKey(regBribeMint.trim());
+      const rateNumBN  = new BN(regRateNum.trim());
+      const rateDenBN  = new BN(regRateDen.trim());
+      const capBN      = new BN(Math.floor(parseFloat(regCap) * 1_000_000));
+      const baseBN     = new BN(Math.floor(parseFloat(regAmount) * 1_000_000));
       const lockBN     = new BN(parseInt(regEpochs, 10) * EPOCH_DURATION_SECS);
       const allocPda   = partnerAllocPda(partnerKey);
+
+      // Mirror the on-chain requires, so a bad input is named here rather than coming back
+      // as a generic InvalidAmount from the program.
+      if (capBN.lten(0))                    { setStatusReg("❌ Cap must be greater than 0."); return; }
+      if (rateNumBN.lten(0) || rateDenBN.lten(0)) { setStatusReg("❌ Both sides of the rate must be greater than 0."); return; }
+      const epochs = parseInt(regEpochs, 10);
+      if (epochs < 1 || epochs > MAX_LOCK_EPOCHS) {
+        setStatusReg(`❌ Lock must be between 1 and ${MAX_LOCK_EPOCHS} epochs.`); return;
+      }
 
       // Guard: already registered?
       const existing = await connection.getAccountInfo(allocPda);
@@ -431,7 +463,7 @@ export function FounderPanel() {
       const program  = getProgram(provider);
 
       const ix = await program.methods
-        .registerPartner(hiSolaBN, lockBN)
+        .registerPartner(bribeMint, rateNumBN, rateDenBN, capBN, baseBN, lockBN)
         .accounts({
           authority:         wallet.publicKey,
           protocolState:     statePda,
@@ -668,11 +700,77 @@ export function FounderPanel() {
             />
           </div>
 
-          {/* Amount + Epochs row */}
+          {/* Bribe mint */}
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+              Bribe mint
+            </label>
+            <input
+              className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+              type="text"
+              placeholder="Mint the partner will pay bribes in"
+              value={regBribeMint}
+              onChange={(e) => setRegBribeMint(e.target.value)}
+            />
+          </div>
+
+          {/* Rate + cap row */}
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+                Rate num
+              </label>
+              <input
+                className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+                type="text"
+                inputMode="numeric"
+                placeholder="1"
+                value={regRateNum}
+                onChange={(e) => {
+                  if (e.target.value === "" || /^\d+$/.test(e.target.value))
+                    setRegRateNum(e.target.value);
+                }}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+                Rate den
+              </label>
+              <input
+                className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+                type="text"
+                inputMode="numeric"
+                placeholder="1"
+                value={regRateDen}
+                onChange={(e) => {
+                  if (e.target.value === "" || /^\d+$/.test(e.target.value))
+                    setRegRateDen(e.target.value);
+                }}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+                Cap (hiSOLA)
+              </label>
+              <input
+                className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+                type="text"
+                inputMode="decimal"
+                placeholder="1000000"
+                value={regCap}
+                onChange={(e) => {
+                  if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
+                    setRegCap(e.target.value);
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Welcome bag + Epochs row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
-                hiSOLA amount
+                Welcome bag (hiSOLA)
               </label>
               <input
                 className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
@@ -706,15 +804,29 @@ export function FounderPanel() {
 
           {/* Info line */}
           <p className="text-[10px] text-gray-500">
-            1 epoch = 7 days mainnet · 52 epochs ≈ 12 months · max 104 epochs
+            1 epoch = 7 days · 52 epochs ≈ 12 months · max {MAX_LOCK_EPOCHS} epochs (≈ 4 years)
           </p>
+          <p className="text-[10px] text-gray-500">
+            Welcome bag streams into the partner&apos;s vote-locked position over 6 months. Cap
+            bounds the hiSOLA their bribes can additionally earn, at rate num/den.
+          </p>
+
+          {!isAuthority && (
+            <p className="text-[11px] text-amber-400/90 leading-relaxed">
+              ⚠️ This action is signed by the protocol <strong>authority</strong>
+              {authorityWallet ? <> (<span className="font-mono">{authorityWallet.slice(0, 8)}…</span>)</> : null},
+              which is a different wallet from the founder. Connect the authority wallet to
+              register a partner.
+            </p>
+          )}
 
           <button
             className="btn-primary w-full"
             onClick={registerPartner}
-            disabled={loadingReg || !regWallet.trim() || !regAmount || !regEpochs}
+            disabled={loadingReg || !isAuthority || !regWallet.trim() || !regBribeMint.trim() ||
+                      !regRateNum || !regRateDen || !regCap || !regAmount || !regEpochs}
           >
-            {loadingReg ? "Processing…" : "Register Partner"}
+            {loadingReg ? "Processing…" : !isAuthority ? "Authority wallet required" : "Register Partner"}
           </button>
 
           {statusReg && (
