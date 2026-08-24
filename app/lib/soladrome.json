@@ -820,12 +820,6 @@
           }
         },
         {
-          "name": "hi_sola_mint"
-        },
-        {
-          "name": "user_hi_sola"
-        },
-        {
           "name": "floor_vault",
           "writable": true
         },
@@ -947,17 +941,41 @@
           "writable": true
         },
         {
-          "name": "hi_sola_mint",
-          "docs": [
-            "hiSOLA mint — needed to snapshot governance power on first init this epoch."
-          ]
-        },
-        {
-          "name": "user_hi_sola",
+          "name": "user_position",
           "docs": [
             "Caller's hiSOLA balance — snapshotted as the epoch vote cap if this is",
-            "the first instruction to init UserEpochVotes (mirrors vote_gauge)."
-          ]
+            "the first instruction to init UserEpochVotes (mirrors vote_gauge).",
+            "",
+            "Read-only: burning oSOLA buys a bonus that is additive and uncapped, and it never",
+            "touches the hiSOLA balance, so this instruction takes no vote lock.",
+            "",
+            "Required to exist rather than `init_if_needed`, deliberately. Every route to a hiSOLA",
+            "balance now goes through an instruction that creates this account, so anyone with",
+            "power to snapshot already has one; opening a position here would only add the",
+            "unstamped-`fees_debt` variant that `vote_gauge` guards against, on a path that gains",
+            "nothing from it. A caller with no position burns nothing and keeps their oSOLA."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
         },
         {
           "name": "lock_position",
@@ -1732,10 +1750,6 @@
           "writable": true
         },
         {
-          "name": "hi_sola_mint",
-          "writable": true
-        },
-        {
           "name": "sola_vault",
           "writable": true
         },
@@ -1762,35 +1776,6 @@
                   111,
                   99,
                   107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "contributor"
-              }
-            ]
-          }
-        },
-        {
-          "name": "ve_lock_vault",
-          "docs": [
-            "Vault holding the locked hiSOLA. Minted directly here — the contributor's wallet",
-            "balance stays 0, keeping borrow_usdc blind and sell_sola unreachable."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  101,
-                  95,
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
                 ]
               },
               {
@@ -2087,15 +2072,6 @@
           }
         },
         {
-          "name": "hi_sola_mint"
-        },
-        {
-          "name": "user_hi_sola",
-          "docs": [
-            "User's hiSOLA balance determines their fee share."
-          ]
-        },
-        {
           "name": "market_vault",
           "writable": true
         },
@@ -2149,14 +2125,6 @@
       ],
       "accounts": [
         {
-          "name": "founder",
-          "docs": [
-            "Only the hardcoded founder wallet may call this."
-          ],
-          "writable": true,
-          "signer": true
-        },
-        {
           "name": "protocol_state",
           "writable": true,
           "pda": {
@@ -2175,11 +2143,15 @@
           }
         },
         {
-          "name": "sola_mint",
-          "writable": true
+          "name": "founder",
+          "docs": [
+            "Only the founder wallet recorded at `initialize` may call this."
+          ],
+          "writable": true,
+          "signer": true
         },
         {
-          "name": "hi_sola_mint",
+          "name": "sola_mint",
           "writable": true
         },
         {
@@ -2212,35 +2184,6 @@
                   111,
                   99,
                   107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "founder"
-              }
-            ]
-          }
-        },
-        {
-          "name": "ve_lock_vault",
-          "docs": [
-            "Vault holding the locked hiSOLA. Minted directly here — the founder's wallet",
-            "balance stays 0, which is what makes borrow_usdc blind to the 7M reserve."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  101,
-                  95,
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
                 ]
               },
               {
@@ -2339,14 +2282,6 @@
       ],
       "accounts": [
         {
-          "name": "founder",
-          "docs": [
-            "Only the hardcoded founder wallet may call this."
-          ],
-          "writable": true,
-          "signer": true
-        },
-        {
           "name": "protocol_state",
           "pda": {
             "seeds": [
@@ -2362,6 +2297,14 @@
               }
             ]
           }
+        },
+        {
+          "name": "founder",
+          "docs": [
+            "Only the founder wallet recorded at `initialize` may call this."
+          ],
+          "writable": true,
+          "signer": true
         },
         {
           "name": "o_sola_mint",
@@ -3063,10 +3006,6 @@
           "writable": true
         },
         {
-          "name": "hi_sola_mint",
-          "writable": true
-        },
-        {
           "name": "sola_vault",
           "docs": [
             "Locked SOLA backing — 1 SOLA minted here per hiSOLA allocated."
@@ -3123,35 +3062,6 @@
                   111,
                   99,
                   107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "partner"
-              }
-            ]
-          }
-        },
-        {
-          "name": "ve_lock_vault",
-          "docs": [
-            "Token vault holding locked hiSOLA.",
-            "hiSOLA is minted directly here — wallet balance stays 0, blocking borrow."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  101,
-                  95,
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
                 ]
               },
               {
@@ -3429,6 +3339,153 @@
           "type": "u16"
         }
       ]
+    },
+    {
+      "name": "convert_hi_sola",
+      "docs": [
+        "Convert a legacy hiSOLA token balance into the ledger position that replaced it.",
+        "",
+        "MIGRATION ONLY, and it can only be called by the holder. The program has no freeze",
+        "authority and no permanent delegate on the old mint, so it cannot reach into anyone's",
+        "ATA — a wallet that never calls this keeps a token that no instruction reads any more.",
+        "A fresh deployment never needs it.",
+        "",
+        "Sweeps both places the token era could leave hiSOLA:",
+        "- the holder's own ATA, burned with the holder's signature;",
+        "- the global vote-escrow vault, burned under the protocol PDA, for the amount this",
+        "position recorded as escrowed. Without this half, stake taken into custody by a",
+        "vote would have no way out at all — `withdraw_vote_escrow`, its only exit, is",
+        "replaced by this instruction.",
+        "",
+        "Credits `hi_sola` and nothing else. `staked_amount` is untouched (the financed figure",
+        "is already recorded and does not change hands), and so are `total_hi_sola` and the fee",
+        "accumulator: the same stake is being expressed in a different unit, not created. That",
+        "is what makes it safe to run at any time, in any order, against a live protocol.",
+        "",
+        "Deliberately NOT gated on `paused`: recovering your own stake is an exit path, and exit",
+        "paths stay open (same rule as `sell_sola` / `unstake_hi_sola`)."
+      ],
+      "discriminator": [
+        75,
+        33,
+        40,
+        144,
+        152,
+        134,
+        0,
+        242
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "hi_sola_mint",
+          "docs": [
+            "The legacy mint. Kept `mut` because this instruction burns against it — it is the only",
+            "instruction left that touches it at all."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_hi_sola",
+          "docs": [
+            "The caller's old token account. Emptied here; nothing refills it."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vote_escrow_vault",
+          "docs": [
+            "The old global escrow vault. `init_if_needed` would be wrong here — a deployment that",
+            "never escrowed anything has no vault, and creating one just to burn zero from it would",
+            "charge rent for nothing. Pinned by seeds so the only vault this can drain is the real",
+            "one, and the amount is bounded by what this position recorded as escrowed."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  116,
+                  101,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read-only. Needed to stamp `fees_debt` when this instruction is what first opens the",
+            "caller's UserPosition — a wallet holding hiSOLA it received by transfer may never have",
+            "interacted with the protocol before."
+          ]
+        },
+        {
+          "name": "user_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "create_pool",
@@ -4925,6 +4982,12 @@
     },
     {
       "name": "initialize",
+      "docs": [
+        "`founder_wallet` is write-once and has no setter — see the note at the head of this",
+        "file. On mainnet it must be the Ledger `46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4`;",
+        "verify it on-chain before calling `mint_founder_allocation`, because after that the",
+        "12.25M is committed to whatever address is stored here."
+      ],
       "discriminator": [
         175,
         175,
@@ -5118,7 +5181,12 @@
           "address": "SysvarRent111111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "founder_wallet",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "initialize_pol",
@@ -5306,19 +5374,11 @@
           }
         },
         {
-          "name": "hi_sola_mint"
-        },
-        {
-          "name": "user_hi_sola",
-          "docs": [
-            "Caller's hiSOLA ATA — source of tokens to lock."
-          ],
-          "writable": true
-        },
-        {
           "name": "lock_position",
           "docs": [
-            "Lock metadata PDA. Created on first lock, updated on subsequent ones."
+            "Lock metadata PDA. Created on first lock, updated on subsequent ones.",
+            "The source of the locked hiSOLA is `user_position.hi_sola`, so there is no token",
+            "account on either side any more — and no `ve_lock_vault`."
           ],
           "writable": true,
           "pda": {
@@ -5332,34 +5392,6 @@
                   111,
                   99,
                   107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "user"
-              }
-            ]
-          }
-        },
-        {
-          "name": "ve_lock_vault",
-          "docs": [
-            "Token account holding locked hiSOLA. Owned by the lock_position PDA."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  101,
-                  95,
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
                 ]
               },
               {
@@ -5404,10 +5436,6 @@
               }
             ]
           }
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "system_program",
@@ -5498,7 +5526,12 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "founder_wallet",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "migrate_user_position",
@@ -5597,10 +5630,6 @@
           "writable": true
         },
         {
-          "name": "hi_sola_mint",
-          "writable": true
-        },
-        {
           "name": "sola_vault",
           "docs": [
             "Receives the SOLA backing the team's locked hiSOLA."
@@ -5637,35 +5666,6 @@
                   111,
                   99,
                   107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "team_wallet"
-              }
-            ]
-          }
-        },
-        {
-          "name": "team_ve_lock_vault",
-          "docs": [
-            "Vault holding the team's locked hiSOLA. Minted directly here — the team wallet's",
-            "balance stays 0, which keeps borrow_usdc blind and sell_sola unreachable."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  101,
-                  95,
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
                 ]
               },
               {
@@ -5764,7 +5764,7 @@
         {
           "name": "founder",
           "docs": [
-            "Founder wallet — hardcoded, cannot be substituted."
+            "Founder wallet — pinned to the address `initialize` wrote, cannot be substituted."
           ]
         },
         {
@@ -6668,19 +6668,10 @@
           }
         },
         {
-          "name": "hi_sola_mint"
-        },
-        {
           "name": "market_vault",
           "docs": [
             "Read-only. Needed to stamp `fees_debt` at the live accumulator when a replay is what",
             "first opens the owner's UserPosition — see the security note in the body."
-          ]
-        },
-        {
-          "name": "user_hi_sola",
-          "docs": [
-            "Owner's hiSOLA ATA — read-only, authority = user."
           ]
         },
         {
@@ -6690,38 +6681,11 @@
           ]
         },
         {
-          "name": "vote_escrow_vault",
-          "docs": [
-            "Global vote-escrow vault. Read-only on this path: a replay never debits the owner's",
-            "ATA (only `caller` signs), it can merely confirm the standing escrow still covers",
-            "the weight. Not `init_if_needed` — if the vault does not exist yet, nobody has ever",
-            "escrowed anything, so there is nothing for a replay to ride on."
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  111,
-                  116,
-                  101,
-                  95,
-                  101,
-                  115,
-                  99,
-                  114,
-                  111,
-                  119
-                ]
-              }
-            ]
-          }
-        },
-        {
           "name": "user_position",
           "docs": [
-            "Owner's position — holds `vote_escrowed` and the epoch stamp the replay extends."
+            "Owner's position — the source of their hiSOLA balance, and where the replay writes",
+            "the vote lock. Pinned to `user` by seeds, so a caller cannot replay one wallet's",
+            "config against another wallet's balance."
           ],
           "writable": true,
           "pda": {
@@ -7628,102 +7592,8 @@
           "writable": true
         },
         {
-          "name": "hi_sola_mint",
-          "writable": true
-        },
-        {
           "name": "user_sola",
           "writable": true
-        },
-        {
-          "name": "user_hi_sola",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "user"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "hi_sola_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
         },
         {
           "name": "sola_vault",
@@ -7979,102 +7849,6 @@
           }
         },
         {
-          "name": "hi_sola_mint"
-        },
-        {
-          "name": "user_hi_sola",
-          "docs": [
-            "Destination for unlocked hiSOLA. Created if user burned their ATA previously."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "user"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "hi_sola_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
           "name": "lock_position",
           "writable": true,
           "pda": {
@@ -8088,34 +7862,6 @@
                   111,
                   99,
                   107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "user"
-              }
-            ]
-          }
-        },
-        {
-          "name": "ve_lock_vault",
-          "docs": [
-            "Source vault — tokens transferred back to user on unlock."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  101,
-                  95,
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
                 ]
               },
               {
@@ -8159,14 +7905,6 @@
               }
             ]
           }
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         },
         {
           "name": "system_program",
@@ -8254,14 +7992,6 @@
         },
         {
           "name": "sola_mint",
-          "writable": true
-        },
-        {
-          "name": "hi_sola_mint",
-          "writable": true
-        },
-        {
-          "name": "user_hi_sola",
           "writable": true
         },
         {
@@ -8493,9 +8223,13 @@
         {
           "name": "founder_hi_vesting",
           "docs": [
-            "Founder vesting schedule — required when caller is FOUNDER_WALLET to",
-            "enforce the hiSOLA vesting lock on mainnet. Non-founder callers must",
-            "pass the SystemProgram pubkey; the check is skipped for them."
+            "Founder hiSOLA vesting schedule. Read only when the caller is",
+            "`protocol_state.founder_wallet`, to bound how much UNFINANCED hiSOLA they may still",
+            "hold — see the guard in the handler. Any other caller may pass any account; it is",
+            "never dereferenced for them.",
+            "guard, before a single byte is trusted. It cannot be `Account<FounderHiSolaVesting>`:",
+            "the account legitimately does not exist until `mint_founder_allocation` runs, and",
+            "every ordinary staker must be able to unstake before then."
           ]
         },
         {
@@ -8562,9 +8296,6 @@
           }
         },
         {
-          "name": "hi_sola_mint"
-        },
-        {
           "name": "market_vault",
           "docs": [
             "Read-only. Needed to stamp `fees_debt` at the live accumulator when this instruction",
@@ -8572,46 +8303,11 @@
           ]
         },
         {
-          "name": "user_hi_sola",
-          "docs": [
-            "Caller's hiSOLA balance determines base vote power.",
-            "`mut` — the weight being voted is moved into `vote_escrow_vault` for the epoch."
-          ],
-          "writable": true
-        },
-        {
-          "name": "vote_escrow_vault",
-          "docs": [
-            "Global custody vault for voted hiSOLA. `init_if_needed` rather than created in",
-            "`initialize`, so deployments already initialised before escrow existed pick it up",
-            "on the first vote instead of needing a migration."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  111,
-                  116,
-                  101,
-                  95,
-                  101,
-                  115,
-                  99,
-                  114,
-                  111,
-                  119
-                ]
-              }
-            ]
-          }
-        },
-        {
           "name": "user_position",
           "docs": [
-            "Tracks how much of the vault belongs to this user, and until when it is locked."
+            "Carries the caller's hiSOLA balance (base vote power) and takes the vote lock on it.",
+            "There is no hiSOLA mint, ATA or escrow vault in this context any more: the balance",
+            "being voted lives here, and voting marks it rather than moving it."
           ],
           "writable": true,
           "pda": {
@@ -8785,115 +8481,6 @@
           "type": "u64"
         }
       ]
-    },
-    {
-      "name": "withdraw_vote_escrow",
-      "docs": [
-        "Release hiSOLA held in vote escrow, once the epoch it backed has ended.",
-        "",
-        "This is the instruction that makes \"you cannot unstake or move the stake you voted",
-        "with before the epoch ends\" real. `unstake_hi_sola` burns from the ATA and a raw SPL",
-        "transfer bypasses this program entirely — neither can touch tokens sitting in a",
-        "program-owned vault. Custody, not a `require!`, is the enforcement.",
-        "",
-        "Deliberately NOT gated on `paused`: withdrawing your own collateral is an exit path,",
-        "and exit paths stay open (same rule as `sell_sola` / `unstake_hi_sola`)."
-      ],
-      "discriminator": [
-        157,
-        14,
-        20,
-        12,
-        52,
-        136,
-        197,
-        83
-      ],
-      "accounts": [
-        {
-          "name": "user",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "protocol_state",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  116,
-                  97,
-                  116,
-                  101
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "hi_sola_mint"
-        },
-        {
-          "name": "user_hi_sola",
-          "writable": true
-        },
-        {
-          "name": "vote_escrow_vault",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  111,
-                  116,
-                  101,
-                  95,
-                  101,
-                  115,
-                  99,
-                  114,
-                  111,
-                  119
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "user_position",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  111,
-                  115,
-                  105,
-                  116,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "user"
-              }
-            ]
-          }
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        }
-      ],
-      "args": []
     }
   ],
   "accounts": [
@@ -9357,7 +8944,7 @@
     {
       "code": 6039,
       "name": "VoteEscrowLocked",
-      "msg": "Escrowed hiSOLA is locked until the voted epoch ends — reset is only possible from the next epoch"
+      "msg": "The hiSOLA backing this epoch's votes cannot be released until the epoch ends"
     },
     {
       "code": 6040,
@@ -9367,7 +8954,7 @@
     {
       "code": 6041,
       "name": "InsufficientVoteBacking",
-      "msg": "Insufficient liquid hiSOLA to back this vote — the voted weight must be escrowed"
+      "msg": "Insufficient hiSOLA to back this vote"
     },
     {
       "code": 6042,
@@ -9378,6 +8965,16 @@
       "code": 6043,
       "name": "PolSplitExceeded",
       "msg": "POL skim exceeds pol_split_bps of the uncredited fee growth"
+    },
+    {
+      "code": 6044,
+      "name": "NothingToConvert",
+      "msg": "No legacy hiSOLA to convert — this wallet holds no tokens and no vote escrow"
+    },
+    {
+      "code": 6045,
+      "name": "BurnBuysNoVotes",
+      "msg": "This burn would buy no votes — the oSOLA bonus is bounded by hiSOLA + ve power, and that ceiling is already reached"
     }
   ],
   "types": [
@@ -10220,6 +9817,32 @@
               "incident for what happens when a live singleton is grown instead."
             ],
             "type": "u16"
+          },
+          {
+            "name": "founder_wallet",
+            "docs": [
+              "The founder wallet — holder of the 7M ve-locked governance tranche and the 5M oSOLA",
+              "vesting, and the address every founder guard keys on (`unlock_hi_sola`, `vote_gauge`,",
+              "`burn_o_sola_for_votes`, `claim_founder_*`).",
+              "",
+              "Written once by `initialize` and **never writable again** — there is deliberately no",
+              "setter. A mutable founder address would let whoever holds the authority redirect the",
+              "whole allocation, which is precisely the property the old hardcoded constant had and",
+              "which must survive the move into state.",
+              "",
+              "☢️ THIS IS THE FIELD THAT REPLACED THE MOST DANGEROUS CONSTANT IN THE PROGRAM. It used",
+              "to be a `#[cfg]` pair — throwaway devnet key vs mainnet Ledger — selected by a feature",
+              "that was on by default, so the *safe* binary was the one you had to remember a flag",
+              "for. Devnet and mainnet therefore ran different code. They no longer do; see the long",
+              "note at the head of lib.rs.",
+              "",
+              "⚠️ The 32 bytes did NOT fit in the 9 spare bytes this singleton had left, so unlike",
+              "every field above it this one grew `LEN` (416 → 448) and needs a realloc on any live",
+              "deployment — that is what `migrate_protocol_state` is for. Legacy accounts read all",
+              "zeros here until migrated, and `Pubkey::default()` matches no signer, so every founder",
+              "guard fails closed in the interval rather than open."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -10330,30 +9953,27 @@
           {
             "name": "vote_escrowed",
             "docs": [
-              "hiSOLA held in the global vote-escrow vault on this user's behalf.",
+              "⚠️ LEGACY — hiSOLA left in the global vote-escrow vault by the token era.",
               "",
-              "WHY THIS EXISTS: hiSOLA is a plain SPL token in a user-owned ATA with no",
-              "freeze authority, so the program is never invoked on a transfer and cannot",
-              "block one. Without custody, the same balance votes once, moves to a fresh",
-              "wallet, and votes again — `UserEpochVotes` is seeded per (user, epoch), so a",
-              "new wallet gets a new snapshot and the immutable `UserVoteReceipt` from the",
-              "first wallet still counts. That duplicates gauge weight without limit and",
-              "drains third-party bribes via `claim_bribe`'s pro-rata split.",
+              "Written only by the pre-ledger `vote_gauge`, which took custody of the SPL tokens",
+              "backing a vote because a plain SPL balance could otherwise vote, move to a fresh",
+              "wallet, and vote again. hiSOLA is no longer a token, so nothing writes this field any",
+              "more: the only code that still READS it is `convert_hi_sola`, which pulls the stranded",
+              "tokens out of that vault and credits them to `hi_sola` below.",
               "",
-              "`vote_gauge` therefore escrows exactly the hiSOLA backing the votes cast.",
-              "Escrowed tokens still belong to the user: `claim_fees` and `borrow_usdc`",
-              "add this back to the ATA balance, so voting never costs fees or credit.",
-              "",
-              "Appended in spare bytes — legacy positions read 0 and behave as before."
+              "Deliberately NOT reused as the new vote-lock counter, even though the bytes are free",
+              "once conversion has run. A wallet that voted before converting would have overwritten",
+              "the amount still sitting in the vault, and its tokens would have been orphaned with no",
+              "record of who owned them. New meaning, new bytes — see `vote_locked`."
             ],
             "type": "u64"
           },
           {
             "name": "escrow_epoch",
             "docs": [
-              "Epoch the escrow was last topped up for. `withdraw_vote_escrow` requires",
-              "`current_epoch > escrow_epoch`, which is what makes \"you cannot unstake or",
-              "move the stake you voted with before the epoch ends\" actually enforceable."
+              "⚠️ LEGACY — epoch the escrow above was last topped up for. Dead: the release path it",
+              "gated (`withdraw_vote_escrow`) is gone, replaced by `convert_hi_sola`. Kept so the",
+              "byte layout of live positions is untouched."
             ],
             "type": "u64"
           },
@@ -10361,27 +9981,67 @@
             "name": "staked_amount",
             "docs": [
               "hiSOLA this wallet obtained by actually paying into the protocol — incremented by",
-              "`stake_sola`, decremented by `unstake_hi_sola`. This, not the ATA balance, is the",
-              "ceiling on `borrow_usdc`.",
+              "`stake_sola`, decremented by `unstake_hi_sola`. This is the ceiling on `borrow_usdc`.",
               "",
-              "WHY THIS EXISTS: the borrow cap used to read `user_hi_sola.amount` directly. hiSOLA is",
-              "a transferable SPL token with no freeze authority, so the same balance could be walked",
-              "through fresh wallets — each one seeing a full cap against collateral that already",
-              "backed someone else's debt. Blocking `unstake_hi_sola` on outstanding debt never",
-              "stopped that: it gates the burn, not the transfer. With no interest and no",
-              "liquidation, nothing was ever repaid, so each hop was a permanent floor withdrawal.",
+              "WHY IT IS SEPARATE FROM `hi_sola`: the two differ for unfinanced supply. hiSOLA",
+              "leaving a ve lock (`unlock_hi_sola` — partner bribe-earned tranches) lands in",
+              "`hi_sola` but never here, because no USDC ever entered the floor for it. The 20% valve",
+              "for unfinanced supply is `borrow_against_locked`, not a full-cap borrow.",
               "",
-              "The cap is now `staked_amount.min(ata_balance + vote_escrowed)`: a payout needs BOTH a",
-              "program-recorded deposit AND the tokens still in hand, and the same tokens cannot",
-              "satisfy both halves in two wallets at once. Identical shape to `reward_basis` on the",
-              "LP side (amm.rs) — same defect, same remedy.",
+              "Historical note: this field was introduced when hiSOLA was still transferable, to stop",
+              "the same balance being walked through fresh wallets, each hop drawing the floor down",
+              "again. Non-transferability removes that attack outright; the field survives for the",
+              "financed/unfinanced distinction above, which is a separate rule."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "hi_sola",
+            "docs": [
+              "The wallet's hiSOLA balance. **This is the token.**",
               "",
-              "Deliberately NOT credited by `unlock_hi_sola`: hiSOLA leaving a ve lock was never",
-              "financed through the curve (partner bribe-earned tranches), and the 20% valve for",
-              "unfinanced supply is `borrow_against_locked`, not this instruction.",
+              "hiSOLA is a position, not an SPL token: there is no mint, no ATA, no transfer. Staking",
+              "credits this number, unstaking debits it, and nothing else can move it. Everything the",
+              "token era needed to contain a transfer it could not block — vote escrow, custody",
+              "vaults, `min(recorded deposit, balance)` guards on the fee basis — exists only because",
+              "a balance could leave the wallet the protocol had accounted it to. It cannot now.",
               "",
-              "Appended in spare bytes — legacy positions read 0 and simply cannot open a NEW borrow",
-              "until they stake again. Existing debt, repayment and unstaking are unaffected."
+              "Two holes closed by construction, both live on devnet under the token model:",
+              "- hiSOLA moved to an external LP or a second wallet stopped earning fees, stopped",
+              "backing credit, and stopped voting for its holder — the Invictus failure mode.",
+              "- `vote_gauge` priced power on the balance without ever consulting `staked_amount`, so",
+              "hiSOLA bought on a secondary market voted at full weight while owing nothing to the",
+              "floor: buy at a discount, vote, collect the bribes, sell.",
+              "",
+              "ve-locked hiSOLA is NOT counted here — it moves to `VeLockPosition.amount_locked`,",
+              "which was already a ledger figure and stays one.",
+              "",
+              "Appended in spare bytes. Legacy positions read 0 until their owner calls",
+              "`convert_hi_sola`, which burns their tokens and credits the balance here."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "vote_locked",
+            "docs": [
+              "hiSOLA immobilised by the votes cast in `vote_lock_epoch`, in ledger units.",
+              "",
+              "Replaces the escrow vault: with no transfer to intercept, \"you cannot take back the",
+              "stake you voted with before the epoch ends\" is a subtraction, not a custody transfer.",
+              "`unstake_hi_sola` and `lock_hi_sola` both require `hi_sola − amount >= vote_locked`",
+              "while the stamped epoch is still current, and ignore it once it has passed.",
+              "",
+              "Only the portion of the vote NOT backed by ve power is recorded: ve-locked hiSOLA is",
+              "already immobilised in its own position, and counting it twice would make voting cost",
+              "more balance than the voter has."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "vote_lock_epoch",
+            "docs": [
+              "Epoch `vote_locked` was stamped for. A stale stamp means the lock has lapsed —",
+              "the votes it backed belong to a closed epoch and their receipts are already immutable."
             ],
             "type": "u64"
           }

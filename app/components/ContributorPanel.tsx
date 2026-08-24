@@ -6,7 +6,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import {
-  getProgram, statePda, solaM, hiSolaM, oSolaM,
+  getProgram, statePda, solaM, oSolaM,
   solaVaultAddr, marketVault, floorVault,
   positionPda, userAta, commonAccounts, fromUi, PROGRAM_ID, sendTx,
 } from "@/lib/program";
@@ -18,12 +18,10 @@ const CONTRIBUTOR_SEED = Buffer.from("contributor");
 export function contributorVestingPda(wallet: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([CONTRIBUTOR_SEED, wallet.toBuffer()], PROGRAM_ID)[0];
 }
-// Lifetime ve lock — claim_contributor_hi_sola mints here, never to the wallet.
+// Lifetime ve lock — claim_contributor_hi_sola credits this position, never the wallet.
+// There is no paired [b"ve_vault"] token account any more: both sides are ledger figures.
 function veLockPositionPda(owner: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([Buffer.from("velock"), owner.toBuffer()], PROGRAM_ID)[0];
-}
-function veLockVaultPda(owner: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([Buffer.from("ve_vault"), owner.toBuffer()], PROGRAM_ID)[0];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -123,11 +121,9 @@ export function ContributorPanel() {
           contributor:          me,
           protocolState:        statePda,
           solaMint:             solaM,
-          hiSolaMint:           hiSolaM,
           solaVault:            solaVaultAddr,
           marketVault,
           lockPosition:         veLockPositionPda(me),
-          veLockVault:          veLockVaultPda(me),
           contributorPosition:  positionPda(me),
           contributorVesting:   contributorVestingPda(me),
           tokenProgram:         commonAccounts.tokenProgram,

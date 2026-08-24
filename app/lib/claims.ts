@@ -3,7 +3,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import type { AnchorWallet } from "@solana/wallet-adapter-react";
-import { getProgram, statePda, hiSolaM, marketVault, positionPda, userAta, PROGRAM_ID } from "@/lib/program";
+import { getProgram, statePda, marketVault, positionPda, userAta, PROGRAM_ID } from "@/lib/program";
 import { currentEpoch } from "@/lib/epoch";
 
 const PRECISION = BigInt("1000000000000"); // 1e12
@@ -35,18 +35,21 @@ export async function computeClaimableFees(
   try {
     const provider = new AnchorProvider(connection, wallet, {});
     const program  = getProgram(provider);
-    const [stateRes, posRes, mktRes, hiRes] = await Promise.allSettled([
+    const [stateRes, posRes, mktRes] = await Promise.allSettled([
       (program.account as any).protocolState.fetch(statePda),
       (program.account as any).userPosition.fetch(positionPda(wallet.publicKey)),
       connection.getTokenAccountBalance(marketVault),
-      connection.getTokenAccountBalance(userAta(hiSolaM, wallet.publicKey)),
     ]);
 
     if (stateRes.status !== "fulfilled" || posRes.status !== "fulfilled") return 0;
     const s      = stateRes.value as any;
     const pos    = posRes.value as any;
     const mktBal = mktRes.status === "fulfilled" ? BigInt(mktRes.value.value.amount) : 0n;
-    const hiBal  = hiRes.status  === "fulfilled" ? BigInt(hiRes.value.value.amount)  : 0n;
+    // Mirror `math::fee_basis`: the financed part of the position, never the raw balance.
+    // hiSOLA is no longer a token, so there is no ATA to read here either.
+    const hiSola = BigInt(pos.hiSola.toString());
+    const staked = BigInt(pos.stakedAmount.toString());
+    const hiBal  = hiSola < staked ? hiSola : staked;
 
     const acc = jsAdvanceAccumulator(
       BigInt(s.feesPerHiSola.toString()),

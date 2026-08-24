@@ -7,13 +7,12 @@ import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
-  getProgram, statePda, solaM, hiSolaM,
+  getProgram, statePda, solaM,
   solaVaultAddr, marketVault, positionPda, PROGRAM_ID, sendTx,
 } from "@/lib/program";
 
 const PARTNER_SEED  = Buffer.from("partner");
 const VELOCK_SEED   = Buffer.from("velock");
-const VE_VAULT_SEED = Buffer.from("ve_vault");
 
 export function partnerAllocationPda(wallet: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
@@ -24,10 +23,6 @@ export function partnerAllocationPda(wallet: PublicKey): PublicKey {
 
 function velockPda(wallet: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([VELOCK_SEED, wallet.toBuffer()], PROGRAM_ID)[0];
-}
-
-function veVaultPda(wallet: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([VE_VAULT_SEED, wallet.toBuffer()], PROGRAM_ID)[0];
 }
 
 function fmt(raw: number, dec = 2) {
@@ -140,12 +135,10 @@ export function PartnerPanel() {
           partner:          wallet.publicKey,
           protocolState:    statePda,
           solaMint:         solaM,
-          hiSolaMint:       hiSolaM,
           solaVault:        solaVaultAddr,
           marketVault,
           partnerAllocation: partnerAllocationPda(wallet.publicKey),
           lockPosition:     velockPda(wallet.publicKey),
-          veLockVault:      veVaultPda(wallet.publicKey),
           partnerPosition:  positionPda(wallet.publicKey),
           tokenProgram:     TOKEN_PROGRAM_ID,
           systemProgram:    SystemProgram.programId,

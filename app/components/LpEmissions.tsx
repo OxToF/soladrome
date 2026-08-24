@@ -171,8 +171,9 @@ export function LpEmissions() {
           lpMint,
           userLp:            userLpAta,
           lpUserInfo,
-          system_program:    (await import("@solana/web3.js")).SystemProgram.programId,
-          rent:              (await import("@solana/web3.js")).SYSVAR_RENT_PUBKEY,
+          // lp_user_checkpoint and pool_epoch_accum are omitted on purpose: the IDL carries
+          // their seeds, so Anchor derives them. system_program and rent carry fixed
+          // addresses in the IDL and are filled the same way.
         } as any)
         .instruction();
       const tx = await sendTx(connection, wallet, [ix]);
@@ -213,8 +214,8 @@ export function LpEmissions() {
           lpMint,
           gaugeState,
           globalEpochVotes,
-          system_program:   (await import("@solana/web3.js")).SystemProgram.programId,
-          rent:             (await import("@solana/web3.js")).SYSVAR_RENT_PUBKEY,
+          // pool_epoch_accum, system_program and rent are resolved from the IDL — see the
+          // note in `checkpoint`.
         } as any)
         .instruction();
       const tx = await sendTx(connection, wallet, [ix]);

@@ -86,8 +86,22 @@ export function symbolByMint(mint: string, usdcMint: PublicKey | null): string {
     ?? mint.slice(0, 4) + "…";
 }
 
+// Scales for mints that are trusted for *display* (see TRUSTED_MINTS) but are
+// not in the picker, so `getTokenList` never carries their decimals. Without
+// this, `decimalsForMint` falls back to 6 and a 9-decimal partner token renders
+// at 1000x its real size the day a pool opens for it — silent, and only visible
+// as a number that looks plausible. Verified by `scripts/check_token_registry.ts`,
+// which fails any trusted-only entry whose chain decimals are neither 6 nor
+// listed here.
+export const TRUSTED_DECIMALS: Record<string, number> = {
+  "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL": 9,  // JTO
+  "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTGPsHuuPA5ey": 9,  // MNDE
+};
+
 export function decimalsForMint(mint: string, usdcMint: PublicKey | null): number {
-  return getTokenList(usdcMint).find((t) => t.mint === mint)?.decimals ?? 6;
+  return getTokenList(usdcMint).find((t) => t.mint === mint)?.decimals
+    ?? TRUSTED_DECIMALS[mint]
+    ?? 6;
 }
 
 // ── Pool whitelist filter ─────────────────────────────────────────────────────
@@ -103,8 +117,14 @@ export const TRUSTED_MINTS = new Set([
   // ── Soladrome protocol tokens ──
   solaM.toString(),
   oSolaM.toString(),
-  // hiSOLA mint (PDA-derived, kept as constant address)
-  "nc1errcnXjKN4aZYL7AP89op26EMn5a2VcDT82wrTwW",
+  // hiSOLA is deliberately absent: it is a position (`UserPosition.hi_sola`),
+  // not a mint, so no pool can ever hold it. The entry that stood here was
+  // `nc1errcn…`, hardcoded rather than derived — and hardcoding is what let it
+  // rot past the 2026-08-08 program-ID rotation, since `hi_sola_mint` under
+  // `DgD37Vjs` derives to `3uP7Jo1n…`. Caught by `scripts/check_token_registry.ts`.
+  // ⚠️ The same stale address still stands in `claims.ts`, `Vote.tsx`,
+  // `ClaimBribe.tsx` and `Gauge.tsx`, where it is offered as a *bribe* reward
+  // mint — a bribe deposited there lands in the old program's orphaned mint.
   // ── Infrastructure ──
   WSOL_MINT,                                              // wSOL
   // ── Partners / blue-chip ──
@@ -112,7 +132,7 @@ export const TRUSTED_MINTS = new Set([
   "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",        // JTO
   "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",        // JUP
   "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",        // ORCA
-  "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTa3CbChoKBRP",        // MNDE (Marinade)
+  "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTGPsHuuPA5ey",        // MNDE (Marinade) — 9 dec, verified on-chain
   "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",        // mSOL
   "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",        // bSOL (Blaze)
   // ── Mainnet launch pool tokens (classic SPL — Token-2022 excluded, see LAUNCH_TOKENS) ──

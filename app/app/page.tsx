@@ -25,9 +25,6 @@ import { Airdrop }         from "@/components/Airdrop";
 import { useConnection }   from "@solana/wallet-adapter-react";
 import { useSoladrome }    from "@/lib/SoladromeContext";
 
-// Founder wallet — must match FOUNDER_WALLET in programs/soladrome/src/lib.rs
-const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
-
 type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "airdrop" | "founder" | "contributor" | "partner";
 
 type NavItem = { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean; partnerOnly?: boolean };
@@ -81,7 +78,13 @@ export default function Home() {
   const [isContributor, setIsContributor] = useState(false);
   const [isPartner,     setIsPartner]     = useState(false);
 
-  const isFounder = wallet?.publicKey.toBase58() === FOUNDER_WALLET;
+  // Read from on-chain state, never hardcoded: the founder wallet moved out of the binary
+  // into `ProtocolState.founder_wallet` on 2026-08-23 so one build can serve every cluster.
+  // A hardcoded copy here would silently disagree with devnet, where the address differs.
+  const isFounder =
+    !!wallet &&
+    !!protocolState?.founderWallet &&
+    wallet.publicKey.toBase58() === protocolState.founderWallet.toBase58();
 
   // Detect ContributorVesting PDA
   useEffect(() => {
