@@ -8,62 +8,50 @@ pub const PRECISION: u128 = 1_000_000_000_000; // 1e12
 
 // ── Epoch helpers ─────────────────────────────────────────────────────────────
 //
-// ⚠️  TIME-SENSITIVE CONSTANTS — compile-time gated by the "devnet" feature.
+// ⚠️  TIME-SENSITIVE CONSTANTS — one value each, for every cluster.
 //
-//   Build for devnet  : anchor build                   (default = ["devnet"])
-//   Build for mainnet : anchor build --no-default-features
+// These were compile-time gated by a `devnet` feature that was ON BY DEFAULT, so `anchor build`
+// produced 5-second cliffs and 5-second minimum locks while the mainnet build needed
+// `--no-default-features`. Removed 2026-08-23: devnet and mainnet now run the identical binary,
+// and the paths that must cross a 180-day cliff are tested under bankrun's warped clock
+// (tests/bankrun_allocations.ts) rather than against shortened numbers.
 //
-// Never deploy the "devnet" build to mainnet — all durations are dramatically
-// shorter for testing and would allow instant cliff bypasses in production.
+// If a path is ever untestable against a real validator clock again: move the test, not the
+// constant.
 
 /// Epoch length: 7 days on both devnet and mainnet.
 pub const EPOCH_DURATION: u64 = 7 * 24 * 60 * 60; // 604 800 s
 
 // ── Founder vesting schedule ──────────────────────────────────────────────────
 
-/// Cliff before any founder tokens unlock.
-/// devnet/localnet: 5 s  |  mainnet: 6 months
+/// Cliff before any founder tokens unlock: 6 months, everywhere.
 ///
-/// 5 s (was 6 h) so a test can actually cross it — the founder escrow in
-/// `claim_founder_hi_sola` is unreachable otherwise, and `start_ts` is stamped from the
-/// Clock at allocation, so there is no way to fake elapsed time. This costs nothing on
-/// devnet: under this same feature `FOUNDER_WALLET` is a throwaway key committed in the
-/// repo, so the devnet cliff no longer protects anything real. The mainnet cliff below
-/// is on the other branch and is untouched.
-#[cfg(feature = "devnet")]
-pub const VESTING_CLIFF_SECS: u64 = 5;
-#[cfg(not(feature = "devnet"))]
+/// ⚠️ Until 2026-08-23 this was 5 s under the `devnet` feature, so that a test could cross
+/// it against a real validator clock. That made devnet a different protocol from mainnet on
+/// the single most sensitive number in the tokenomics. The cliff is now one value, and the
+/// paths that must cross it are exercised under bankrun's warped clock — the test moves, the
+/// constant does not.
 pub const VESTING_CLIFF_SECS: u64 = 180 * 24 * 3_600;
 
-/// Linear vesting window that starts after the cliff.
-/// devnet: 24 h  |  mainnet: 24 months
-#[cfg(feature = "devnet")]
-pub const VESTING_DURATION_SECS: u64 = 24 * 3_600;
-#[cfg(not(feature = "devnet"))]
+/// Linear vesting window that starts after the cliff. 24 months.
 pub const VESTING_DURATION_SECS: u64 = 720 * 24 * 3_600;
 
 // ── Partner welcome-bag streaming window ──────────────────────────────────────
 /// The one-time partner welcome bag streams linearly over the first 6 months
 /// from `register_partner` (no cliff). Mirrors the founder cliff window so partner
-/// governance ramps in step with the founder's, not instantly on day 1.
-/// devnet: 6 h  |  mainnet: 6 months
-#[cfg(feature = "devnet")]
-pub const BASE_BAG_VEST_SECS: u64 = 6 * 3_600;
-#[cfg(not(feature = "devnet"))]
+/// governance ramps in step with the founder's, not instantly on day 1. 6 months, everywhere.
 pub const BASE_BAG_VEST_SECS: u64 = 180 * 24 * 3_600;
 
 // (Contributor vesting schedule removed 2026-07-18 — contributors now claim their whole
 //  allocation at launch: hiSOLA into a lifetime ve lock + oSOLA. No cliff, no linear vest.)
 
 // ── Ve-layer constants ────────────────────────────────────────────────────────
-/// Minimum lock duration: 1 epoch on mainnet, 5 s on devnet/localnet.
+/// Minimum lock duration: 1 epoch (7 days), everywhere.
 ///
-/// 7 days made the whole ve lock/unlock cycle untestable — which is why the partner path
-/// had zero coverage until 2026-07-17. A 5 s floor costs nothing on devnet: ve voting power
-/// scales with lock duration, so a 5 s lock earns a boost of 5/(208×604800) ≈ 0.
-#[cfg(feature = "devnet")]
-pub const MIN_LOCK_DURATION: u64 = 5;
-#[cfg(not(feature = "devnet"))]
+/// ⚠️ Was 5 s under the `devnet` feature, because 7 days made the ve lock/unlock cycle
+/// untestable against a real validator — which is why the partner path had zero coverage
+/// until 2026-07-17. The answer to "untestable against a real clock" is a warped clock, not
+/// a different constant: the lock/unlock cycle now lives in the bankrun suite.
 pub const MIN_LOCK_DURATION: u64 = EPOCH_DURATION;
 /// Maximum lock duration: 208 epochs (4 years) → full 4× ve-power at max lock.
 pub const MAX_LOCK_DURATION: u64 = 208 * EPOCH_DURATION;
@@ -225,6 +213,28 @@ pub struct ProtocolState {
     /// via `set_exercise_fee`. Same no-realloc trick as the fields above; see the 3003
     /// incident for what happens when a live singleton is grown instead.
     pub exercise_fee_bps: u16,
+
+    /// The founder wallet — holder of the 7M ve-locked governance tranche and the 5M oSOLA
+    /// vesting, and the address every founder guard keys on (`unlock_hi_sola`, `vote_gauge`,
+    /// `burn_o_sola_for_votes`, `claim_founder_*`).
+    ///
+    /// Written once by `initialize` and **never writable again** — there is deliberately no
+    /// setter. A mutable founder address would let whoever holds the authority redirect the
+    /// whole allocation, which is precisely the property the old hardcoded constant had and
+    /// which must survive the move into state.
+    ///
+    /// ☢️ THIS IS THE FIELD THAT REPLACED THE MOST DANGEROUS CONSTANT IN THE PROGRAM. It used
+    /// to be a `#[cfg]` pair — throwaway devnet key vs mainnet Ledger — selected by a feature
+    /// that was on by default, so the *safe* binary was the one you had to remember a flag
+    /// for. Devnet and mainnet therefore ran different code. They no longer do; see the long
+    /// note at the head of lib.rs.
+    ///
+    /// ⚠️ The 32 bytes did NOT fit in the 9 spare bytes this singleton had left, so unlike
+    /// every field above it this one grew `LEN` (416 → 448) and needs a realloc on any live
+    /// deployment — that is what `migrate_protocol_state` is for. Legacy accounts read all
+    /// zeros here until migrated, and `Pubkey::default()` matches no signer, so every founder
+    /// guard fails closed in the interval rather than open.
+    pub founder_wallet: Pubkey,
 }
 
 impl ProtocolState {
@@ -237,8 +247,15 @@ impl ProtocolState {
     // Ecosystem:  u64(8) = 8              ← ecosystem_o_sola_minted, appended
     // Emissions:  bool(1) = 1             ← emissions_enabled, appended last
     // Exercise:   u16(2) = 2              ← exercise_fee_bps, appended last
+    // Founder pk: Pubkey(32) = 32         ← founder_wallet, 2026-08-23
+    //
     // ⚠️ Update this value whenever a field is added or removed.
-    pub const LEN: usize = 416;
+    //
+    // ⚠️ 416 → 448 (2026-08-23). Every field before `founder_wallet` was carved from spare
+    // bytes precisely to avoid this, but 9 spare bytes cannot hold a 32-byte key. Growing a
+    // live singleton is what caused the 3003 devnet brick in July, so the growth goes through
+    // `migrate_protocol_state` (realloc, zero-filled) and nothing else.
+    pub const LEN: usize = 448;
 }
 
 // Compile-time guard: if ProtocolState grows past LEN the program will fail to
@@ -249,7 +266,7 @@ const _: () = assert!(
 );
 
 #[account]
-#[derive(Default)]
+#[derive(Default, InitSpace)]
 pub struct UserPosition {
     pub owner: Pubkey,
     pub usdc_borrowed: u64,
@@ -260,62 +277,112 @@ pub struct UserPosition {
     /// flash-borrow attacks where USDC is borrowed and repaid atomically.
     pub last_borrow_slot: u64,
 
-    /// hiSOLA held in the global vote-escrow vault on this user's behalf.
+    /// ⚠️ LEGACY — hiSOLA left in the global vote-escrow vault by the token era.
     ///
-    /// WHY THIS EXISTS: hiSOLA is a plain SPL token in a user-owned ATA with no
-    /// freeze authority, so the program is never invoked on a transfer and cannot
-    /// block one. Without custody, the same balance votes once, moves to a fresh
-    /// wallet, and votes again — `UserEpochVotes` is seeded per (user, epoch), so a
-    /// new wallet gets a new snapshot and the immutable `UserVoteReceipt` from the
-    /// first wallet still counts. That duplicates gauge weight without limit and
-    /// drains third-party bribes via `claim_bribe`'s pro-rata split.
+    /// Written only by the pre-ledger `vote_gauge`, which took custody of the SPL tokens
+    /// backing a vote because a plain SPL balance could otherwise vote, move to a fresh
+    /// wallet, and vote again. hiSOLA is no longer a token, so nothing writes this field any
+    /// more: the only code that still READS it is `convert_hi_sola`, which pulls the stranded
+    /// tokens out of that vault and credits them to `hi_sola` below.
     ///
-    /// `vote_gauge` therefore escrows exactly the hiSOLA backing the votes cast.
-    /// Escrowed tokens still belong to the user: `claim_fees` and `borrow_usdc`
-    /// add this back to the ATA balance, so voting never costs fees or credit.
-    ///
-    /// Appended in spare bytes — legacy positions read 0 and behave as before.
+    /// Deliberately NOT reused as the new vote-lock counter, even though the bytes are free
+    /// once conversion has run. A wallet that voted before converting would have overwritten
+    /// the amount still sitting in the vault, and its tokens would have been orphaned with no
+    /// record of who owned them. New meaning, new bytes — see `vote_locked`.
     pub vote_escrowed: u64,
-    /// Epoch the escrow was last topped up for. `withdraw_vote_escrow` requires
-    /// `current_epoch > escrow_epoch`, which is what makes "you cannot unstake or
-    /// move the stake you voted with before the epoch ends" actually enforceable.
+    /// ⚠️ LEGACY — epoch the escrow above was last topped up for. Dead: the release path it
+    /// gated (`withdraw_vote_escrow`) is gone, replaced by `convert_hi_sola`. Kept so the
+    /// byte layout of live positions is untouched.
     pub escrow_epoch: u64,
 
     /// hiSOLA this wallet obtained by actually paying into the protocol — incremented by
-    /// `stake_sola`, decremented by `unstake_hi_sola`. This, not the ATA balance, is the
-    /// ceiling on `borrow_usdc`.
+    /// `stake_sola`, decremented by `unstake_hi_sola`. This is the ceiling on `borrow_usdc`.
     ///
-    /// WHY THIS EXISTS: the borrow cap used to read `user_hi_sola.amount` directly. hiSOLA is
-    /// a transferable SPL token with no freeze authority, so the same balance could be walked
-    /// through fresh wallets — each one seeing a full cap against collateral that already
-    /// backed someone else's debt. Blocking `unstake_hi_sola` on outstanding debt never
-    /// stopped that: it gates the burn, not the transfer. With no interest and no
-    /// liquidation, nothing was ever repaid, so each hop was a permanent floor withdrawal.
+    /// WHY IT IS SEPARATE FROM `hi_sola`: the two differ for unfinanced supply. hiSOLA
+    /// leaving a ve lock (`unlock_hi_sola` — partner bribe-earned tranches) lands in
+    /// `hi_sola` but never here, because no USDC ever entered the floor for it. The 20% valve
+    /// for unfinanced supply is `borrow_against_locked`, not a full-cap borrow.
     ///
-    /// The cap is now `staked_amount.min(ata_balance + vote_escrowed)`: a payout needs BOTH a
-    /// program-recorded deposit AND the tokens still in hand, and the same tokens cannot
-    /// satisfy both halves in two wallets at once. Identical shape to `reward_basis` on the
-    /// LP side (amm.rs) — same defect, same remedy.
-    ///
-    /// Deliberately NOT credited by `unlock_hi_sola`: hiSOLA leaving a ve lock was never
-    /// financed through the curve (partner bribe-earned tranches), and the 20% valve for
-    /// unfinanced supply is `borrow_against_locked`, not this instruction.
-    ///
-    /// Appended in spare bytes — legacy positions read 0 and simply cannot open a NEW borrow
-    /// until they stake again. Existing debt, repayment and unstaking are unaffected.
+    /// Historical note: this field was introduced when hiSOLA was still transferable, to stop
+    /// the same balance being walked through fresh wallets, each hop drawing the floor down
+    /// again. Non-transferability removes that attack outright; the field survives for the
+    /// financed/unfinanced distinction above, which is a separate rule.
     pub staked_amount: u64,
+
+    /// The wallet's hiSOLA balance. **This is the token.**
+    ///
+    /// hiSOLA is a position, not an SPL token: there is no mint, no ATA, no transfer. Staking
+    /// credits this number, unstaking debits it, and nothing else can move it. Everything the
+    /// token era needed to contain a transfer it could not block — vote escrow, custody
+    /// vaults, `min(recorded deposit, balance)` guards on the fee basis — exists only because
+    /// a balance could leave the wallet the protocol had accounted it to. It cannot now.
+    ///
+    /// Two holes closed by construction, both live on devnet under the token model:
+    /// - hiSOLA moved to an external LP or a second wallet stopped earning fees, stopped
+    ///   backing credit, and stopped voting for its holder — the Invictus failure mode.
+    /// - `vote_gauge` priced power on the balance without ever consulting `staked_amount`, so
+    ///   hiSOLA bought on a secondary market voted at full weight while owing nothing to the
+    ///   floor: buy at a discount, vote, collect the bribes, sell.
+    ///
+    /// ve-locked hiSOLA is NOT counted here — it moves to `VeLockPosition.amount_locked`,
+    /// which was already a ledger figure and stays one.
+    ///
+    /// Appended in spare bytes. Legacy positions read 0 until their owner calls
+    /// `convert_hi_sola`, which burns their tokens and credits the balance here.
+    pub hi_sola: u64,
+
+    /// hiSOLA immobilised by the votes cast in `vote_lock_epoch`, in ledger units.
+    ///
+    /// Replaces the escrow vault: with no transfer to intercept, "you cannot take back the
+    /// stake you voted with before the epoch ends" is a subtraction, not a custody transfer.
+    /// `unstake_hi_sola` and `lock_hi_sola` both require `hi_sola − amount >= vote_locked`
+    /// while the stamped epoch is still current, and ignore it once it has passed.
+    ///
+    /// Only the portion of the vote NOT backed by ve power is recorded: ve-locked hiSOLA is
+    /// already immobilised in its own position, and counting it twice would make voting cost
+    /// more balance than the voter has.
+    pub vote_locked: u64,
+    /// Epoch `vote_locked` was stamped for. A stale stamp means the lock has lapsed —
+    /// the votes it backed belong to a closed epoch and their receipts are already immutable.
+    pub vote_lock_epoch: u64,
 }
 
 impl UserPosition {
-    pub const LEN: usize = 128; // 32+8+16+1+8+8+8+8 = 89 bytes used, 39 spare
+    // 32+8+16+1+8 + 8+8 (legacy escrow) + 8 (staked) + 8+8+8 (ledger + vote lock)
+    // = 113 bytes used, 15 spare.
+    pub const LEN: usize = 128;
+
+    /// hiSOLA this position may not part with right now, because it is backing votes cast in
+    /// the epoch still running. Returns 0 once the stamped epoch has passed — the votes it
+    /// backed are closed and their receipts immutable, so releasing the balance cannot
+    /// retro-alter a tally.
+    ///
+    /// The single reader of the pair `(vote_locked, vote_lock_epoch)`, so the "is the stamp
+    /// still current" test cannot be written one way in `unstake_hi_sola` and another way in
+    /// `lock_hi_sola`.
+    pub fn vote_locked_now(&self, unix_ts: i64) -> u64 {
+        if self.vote_lock_epoch == current_epoch(unix_ts) {
+            self.vote_locked
+        } else {
+            0
+        }
+    }
 }
 
-// Same guard as ProtocolState: `vote_escrowed` / `escrow_epoch` were carved from spare
+// Same guard as ProtocolState: every field past `last_borrow_slot` was carved from spare
 // bytes, so LEN is unchanged and no realloc is needed — but only while the struct still
 // fits. Without this the overflow would surface as a runtime deserialisation failure on
 // every vote, not a build error.
+//
+// ☢️ Measured with `INIT_SPACE` (the Borsh wire size, 113 bytes), NOT `size_of`. Borsh writes
+// fields back to back, while `size_of` pads the struct out to the 16-byte alignment of
+// `fees_debt` — 128 bytes, which is 15 bytes of Rust padding that never reach the account.
+// Keeping the old `size_of` form here would have failed this build and forced LEN to 136,
+// growing `space` from 136 to 144 and putting EVERY live position through a realloc
+// migration on top of the hiSOLA conversion. Two migrations for one change, for padding
+// that does not exist on chain.
 const _: () = assert!(
-    UserPosition::LEN >= 8 + std::mem::size_of::<UserPosition>(),
+    UserPosition::LEN >= UserPosition::INIT_SPACE,
     "UserPosition::LEN is too small — update it to fit the struct"
 );
 

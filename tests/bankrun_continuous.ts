@@ -204,7 +204,12 @@ describe("soladrome — bankrun (continuous emission stream)", () => {
     tknMint = await createMint();
 
     await program.methods
-      .initialize()
+      .initialize(
+        // The founder wallet is no longer baked into the binary — `initialize` records it.
+        // A THROWAWAY key, deliberately not `payer`: the founder guards (no voting, no
+        // unlock, no oSOLA burn) would otherwise fire on this harness's own actor.
+        Keypair.generate().publicKey
+      )
       .accounts({
         authority: payer.publicKey,
         protocolState: statePda,

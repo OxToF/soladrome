@@ -41,6 +41,7 @@ import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   AccountLayout,
+  MintLayout,
   createInitializeMint2Instruction,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
@@ -49,6 +50,9 @@ import {
 } from "@solana/spl-token";
 import { assert } from "chai";
 import * as fs from "fs";
+
+// One epoch, mirroring MIN_LOCK_DURATION in state.rs.
+const MIN_LOCK_DURATION = 604_800;
 
 describe("soladrome — bankrun (borrow collateral recycling)", () => {
   let context: ProgramTestContext;
@@ -81,6 +85,12 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
   const positionOf = (user: PublicKey) =>
     pda([Buffer.from("position"), user.toBuffer()]);
 
+  /// hiSOLA balance of a position — the ledger field that replaced the token account.
+  async function positionHiSola(position: PublicKey): Promise<bigint> {
+    const pos = await program.account.userPosition.fetch(position);
+    return BigInt(pos.hiSola.toString());
+  }
+
   async function tokenBalance(account: PublicKey): Promise<bigint> {
     const raw = await context.banksClient.getAccount(account);
     if (!raw) return BigInt(0);
@@ -109,14 +119,45 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
     return entry.code;
   }
 
+  /// Total supply of a mint — used to assert hiSOLA has none.
+  async function mintSupply(mint: PublicKey): Promise<bigint> {
+    const raw = await context.banksClient.getAccount(mint);
+    if (!raw) return BigInt(0);
+    return MintLayout.decode(Buffer.from(raw.data)).supply;
+  }
+
+  /// Clear A's whole debt so the position can be locked.
+  ///
+  /// The slot warp is required, not cosmetic: `repay_usdc` enforces
+  /// `current_slot > last_borrow_slot` to block a same-transaction flash borrow, and bankrun
+  /// does not advance the slot on its own between transactions.
+  async function repayAll() {
+    const pos: any = await program.account.userPosition.fetch(
+      positionOf(payer.publicKey)
+    );
+    const owed = BigInt(pos.usdcBorrowed.toString());
+    if (owed === BigInt(0)) return;
+    const slot = await context.banksClient.getSlot();
+    context.warpToSlot(slot + BigInt(1));
+    await program.methods
+      .repayUsdc(new BN(owed.toString()))
+      .accounts({
+        user: payer.publicKey,
+        protocolState: statePda,
+        userPosition: positionOf(payer.publicKey),
+        floorVault: floorV,
+        userUsdc: payerUsdc,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .rpc();
+  }
+
   async function borrow(user: Keypair, amount: number) {
     const ix = await program.methods
       .borrowUsdc(new BN(amount))
       .accounts({
         user: user.publicKey,
         protocolState: statePda,
-        hiSolaMint: hiSolaM,
-        userHiSola: getAssociatedTokenAddressSync(hiSolaM, user.publicKey),
         floorVault: floorV,
         marketVault: marketV,
         userUsdc: getAssociatedTokenAddressSync(usdcMint, user.publicKey),
@@ -167,7 +208,12 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
     usdcMint = kp.publicKey;
 
     await program.methods
-      .initialize()
+      .initialize(
+        // The founder wallet is no longer baked into the binary — `initialize` records it.
+        // A THROWAWAY key, deliberately not `payer`: the founder guards (no voting, no
+        // unlock, no oSOLA burn) would otherwise fire on this harness's own actor.
+        Keypair.generate().publicKey
+      )
       .accounts({
         authority: payer.publicKey,
         protocolState: statePda,
@@ -256,11 +302,9 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
         user: payer.publicKey,
         protocolState: statePda,
         solaMint: solaM,
-        hiSolaMint: hiSolaM,
         usdcMint,
         userUsdc: payerUsdc,
         userSola: payerSola,
-        userHiSola: payerHiSola,
         solaVault,
         marketVault: marketV,
         userPosition: positionOf(payer.publicKey),
@@ -272,9 +316,9 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
   });
 
   it("[security] the honest staker can borrow against their own financed stake", async () => {
-    // Establishes the baseline: without this the recycling test below could pass simply
-    // because borrowing is broken for everyone.
-    const staked = await tokenBalance(payerHiSola);
+    // Establishes the baseline: without this the tests below could pass simply because
+    // borrowing is broken for everyone.
+    const staked = await positionHiSola(positionOf(payer.publicKey));
     assert.isTrue(staked > BigInt(0), "A must hold hiSOLA");
 
     const before = await tokenBalance(payerUsdc);
@@ -299,44 +343,37 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
     );
   });
 
-  it("[security] borrow capacity cannot be walked to a fresh wallet", async () => {
-    // A hands the entire collateral to a wallet that has never staked. Nothing here is
-    // blocked at the token layer: hiSOLA has no freeze authority, the transfer succeeds.
-    const amount = await tokenBalance(payerHiSola);
-    await send([
-      createTransferInstruction(
-        payerHiSola,
-        freshHiSola,
-        payer.publicKey,
-        Number(amount)
-      ),
-    ]);
+  it("[security] there is no collateral to walk to a fresh wallet", async () => {
+    // What this file was originally written to catch: A hands the whole collateral to a
+    // wallet that never staked, which then borrows against it, and repeats — each hop a
+    // permanent floor withdrawal, since a borrow carries no interest and no liquidation.
+    // The fix at the time was to cap on `staked_amount.min(balance)`.
+    //
+    // The attack is no longer constructible. It needed a transfer, and there is nothing left
+    // to transfer: `stake_sola` mints no token, so the mint has no supply and A holds no
+    // token account at all. This asserts the ABSENCE, which is the whole claim of the model —
+    // if a mint ever comes back, this test fails and the cap becomes load-bearing again.
     assert.equal(
-      (await tokenBalance(freshHiSola)).toString(),
-      amount.toString(),
-      "the collateral must really be in B's wallet"
+      (await mintSupply(hiSolaM)).toString(),
+      "0",
+      "hiSOLA has no supply, so no balance exists to hand over"
+    );
+    assert.equal(
+      (await tokenBalance(payerHiSola)).toString(),
+      "0",
+      "A holds no hiSOLA token account"
     );
 
-    // B now looks, to any balance-based cap, exactly like a fresh staker holding `amount`.
+    // And the wallet that never staked cannot borrow, having no position to borrow against.
     const floorBefore = await tokenBalance(floorV);
-    const code = errorCode("BorrowLimitExceeded");
     let drained = false;
     try {
       await borrow(fresh, 1_000_000);
       drained = true;
-    } catch (e: any) {
-      assert.include(
-        e.toString(),
-        `0x${code.toString(16)}`,
-        `expected BorrowLimitExceeded, got: ${e.toString()}`
-      );
+    } catch {
+      /* expected — B has no recorded deposit and no balance */
     }
-    assert.isFalse(
-      drained,
-      "a wallet that never staked borrowed against transferred collateral — " +
-        "the per-user cap is a token balance again"
-    );
-
+    assert.isFalse(drained, "a wallet that never staked must not borrow");
     assert.equal(
       (await tokenBalance(floorV)).toString(),
       floorBefore.toString(),
@@ -344,10 +381,29 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
     );
   });
 
-  it("[security] possession alone is not enough, and neither is a stale deposit record", async () => {
-    // The cap is a minimum of two quantities, so check the OTHER half too: A still has a
-    // recorded `staked_amount`, but has given the tokens away. A must not be able to keep
-    // borrowing on a deposit they no longer hold.
+  it("[security] a stale deposit record alone does not sustain a borrow", async () => {
+    // The cap is a minimum of two quantities, so check the half that CAN still come apart.
+    // Locking moves the balance into the ve position while `staked_amount` deliberately
+    // stays put (it records what was financed, which locking does not undo), so a locker has
+    // `staked_amount > 0` and `hi_sola == 0` — the same shape the old transfer produced.
+    // The 100% channel must shut, leaving `borrow_against_locked` at 20% as the only valve.
+    await repayAll();
+
+    const staked = await positionHiSola(positionOf(payer.publicKey));
+    assert.isTrue(staked > BigInt(0), "A must still hold a balance to lock");
+    await program.methods
+      .lockHiSola(new BN(staked.toString()), new BN(MIN_LOCK_DURATION))
+      .accounts({
+        user: payer.publicKey,
+        protocolState: statePda,
+        lockPosition: pda([Buffer.from("velock"), payer.publicKey.toBuffer()]),
+        marketVault: marketV,
+        userPosition: positionOf(payer.publicKey),
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
     const pos: any = await program.account.userPosition.fetch(
       positionOf(payer.publicKey)
     );
@@ -356,9 +412,9 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
       "A's recorded deposit is still on the books"
     );
     assert.equal(
-      (await tokenBalance(payerHiSola)).toString(),
+      pos.hiSola.toString(),
       "0",
-      "A no longer holds the collateral"
+      "but the balance itself has moved into the lock"
     );
 
     const code = errorCode("BorrowLimitExceeded");
@@ -375,7 +431,7 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
     }
     assert.isFalse(
       drained,
-      "A borrowed again after handing the collateral away — `staked_amount` is being " +
+      "A borrowed at 100% against a locked position — `staked_amount` is being " +
         "trusted on its own"
     );
   });
@@ -456,7 +512,6 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
         contributor: contributor.publicKey,
         protocolState: statePda,
         solaMint: solaM,
-        hiSolaMint: hiSolaM,
         solaVault,
         marketVault: marketV,
         lockPosition,
@@ -479,10 +534,20 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
       BigInt(locked.amountLocked.toString()) > BigInt(0),
       "the contributor must actually hold a funded ve lock"
     );
+    // The lock entry IS the hiSOLA — the claim path mints no token, so there is no ve vault
+    // holding a mirror balance any more. Asserting the absence keeps the guarantee honest:
+    // if a mint ever reappears in a claim path, this allocation becomes transferable again.
     assert.equal(
-      (await tokenBalance(veVault)).toString(),
-      locked.amountLocked.toString(),
-      "the locked hiSOLA must sit in the ve vault"
+      (await mintSupply(hiSolaM)).toString(),
+      "0",
+      "an allocation claim must not mint any hiSOLA token"
+    );
+    assert.equal(
+      (
+        await program.account.userPosition.fetch(positionOf(contributor.publicKey))
+      ).hiSola.toString(),
+      "0",
+      "and it must not land in a spendable balance either — it goes straight into the lock"
     );
 
     // ── the property itself, asserted before its explanations ───────────────

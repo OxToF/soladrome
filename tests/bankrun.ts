@@ -34,6 +34,7 @@ import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   AccountLayout,
+  MintLayout,
   createInitializeMint2Instruction,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
@@ -137,23 +138,38 @@ describe("soladrome — bankrun (warped clock)", () => {
     }
   }
 
-  /// Send a `withdraw_vote_escrow` attempt.
+  /// Total supply of a mint — used to assert that hiSOLA has none.
+  async function mintSupply(mint: PublicKey): Promise<bigint> {
+    const raw = await context.banksClient.getAccount(mint);
+    if (!raw) return BigInt(0);
+    return MintLayout.decode(Buffer.from(raw.data)).supply;
+  }
+
+  /// Send an `unstake_hi_sola` attempt.
   ///
   /// The `nonce` is not decoration: bankrun caches by transaction signature and the blockhash
-  /// does not move on its own here, so the refusal attempt and the successful one would be
-  /// byte-identical and the second comes back as "already processed". A self-transfer of
+  /// does not move on its own here, so a refused attempt and a later successful one could be
+  /// byte-identical and the second would come back as "already processed". A self-transfer of
   /// `nonce` lamports makes each attempt distinct without touching protocol state.
-  async function attemptWithdraw(nonce: number) {
+  async function attemptUnstake(amount: bigint, nonce: number) {
     const ix = await program.methods
-      .withdrawVoteEscrow()
+      .unstakeHiSola(new BN(amount.toString()))
       .accounts({
         user: payer.publicKey,
         protocolState: statePda,
-        hiSolaMint: hiSolaM,
-        userHiSola,
-        voteEscrowVault,
+        solaMint: solaM,
+        userSola,
+        solaVault,
+        marketVault: marketV,
+        usdcMint,
+        userUsdc,
         userPosition,
+        // No founder vesting in this harness: the guard is `#[cfg(not(feature = "devnet"))]`
+        // and the account is unchecked, so the program id is an accepted placeholder.
+        founderHiVesting: program.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
       } as any)
       .instruction();
     const bump = SystemProgram.transfer({
@@ -162,6 +178,39 @@ describe("soladrome — bankrun (warped clock)", () => {
       lamports: nonce,
     });
     return send([bump, ix]);
+  }
+
+  /// Cast a gauge vote for `poolId`.
+  async function vote(poolId: PublicKey, epoch: number, weight: bigint) {
+    const epochLE = Buffer.alloc(8);
+    epochLE.writeBigUInt64LE(BigInt(epoch));
+    return program.methods
+      .voteGauge(new BN(epoch), new BN(weight.toString()))
+      .accounts({
+        user: payer.publicKey,
+        poolId,
+        protocolState: statePda,
+        marketVault: marketV,
+        userPosition,
+        lockPosition: SystemProgram.programId,
+        gaugeState: pda([Buffer.from("gauge"), poolId.toBuffer(), epochLE]),
+        userVoteReceipt: pda([
+          Buffer.from("vote"),
+          payer.publicKey.toBuffer(),
+          poolId.toBuffer(),
+          epochLE,
+        ]),
+        userEpochVotes: pda([
+          Buffer.from("uev"),
+          payer.publicKey.toBuffer(),
+          epochLE,
+        ]),
+        globalEpochVotes: pda([Buffer.from("epoch_votes"), epochLE]),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
   }
 
   before(async () => {
@@ -203,7 +252,12 @@ describe("soladrome — bankrun (warped clock)", () => {
 
     // ── protocol ────────────────────────────────────────────────────────────
     await program.methods
-      .initialize()
+      .initialize(
+        // The founder wallet is no longer baked into the binary — `initialize` records it.
+        // A THROWAWAY key, deliberately not `payer`: the founder guards (no voting, no
+        // unlock, no oSOLA burn) would otherwise fire on this harness's own actor.
+        Keypair.generate().publicKey
+      )
       .accounts({
         authority: payer.publicKey,
         protocolState: statePda,
@@ -270,11 +324,9 @@ describe("soladrome — bankrun (warped clock)", () => {
         user: payer.publicKey,
         protocolState: statePda,
         solaMint: solaM,
-        hiSolaMint: hiSolaM,
         usdcMint,
         userUsdc,
         userSola,
-        userHiSola,
         solaVault,
         marketVault: marketV,
         userPosition,
@@ -284,7 +336,11 @@ describe("soladrome — bankrun (warped clock)", () => {
       } as any)
       .rpc();
 
-    stakedAmount = await tokenBalance(userHiSola);
+    stakedAmount = BigInt(
+      (
+        await program.account.userPosition.fetch(userPosition)
+      ).hiSola.toString()
+    );
     assert.isAbove(Number(stakedAmount), 0, "the voter must hold real hiSOLA");
 
     // Park the clock one hour into a FRESH epoch. Without this the harness inherits whatever
@@ -296,68 +352,67 @@ describe("soladrome — bankrun (warped clock)", () => {
     await forwardSeconds(target - (await nowSeconds()));
   });
 
-  it("[bankrun] a vote takes custody of the stake and locks it for the epoch", async () => {
-    votedEpoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
-    // VOTE_WEIGHT_CAP_BPS caps any address at 30% of total_hi_sola. This wallet is the only
-    // staker, so the global cap binds against its own stake: voting the full balance is
-    // refused with VoteOverflow. Vote exactly the cap — the escrow then covers that share,
-    // and the rest stays liquid in the wallet.
-    votedWeight = (stakedAmount * BigInt(3000)) / BigInt(10000);
-    assert.isAbove(Number(votedWeight), 0, "the capped weight must be non-zero");
-    const epochLE = Buffer.alloc(8);
-    epochLE.writeBigUInt64LE(BigInt(votedEpoch));
-    const poolId = Keypair.generate().publicKey;
-
-    await program.methods
-      .voteGauge(new BN(votedEpoch), new BN(votedWeight.toString()))
-      .accounts({
-        user: payer.publicKey,
-        poolId,
-        protocolState: statePda,
-        hiSolaMint: hiSolaM,
-        marketVault: marketV,
-        userHiSola,
-        voteEscrowVault,
-        userPosition,
-        lockPosition: SystemProgram.programId,
-        gaugeState: pda([Buffer.from("gauge"), poolId.toBuffer(), epochLE]),
-        userVoteReceipt: pda([
-          Buffer.from("vote"),
-          payer.publicKey.toBuffer(),
-          poolId.toBuffer(),
-          epochLE,
-        ]),
-        userEpochVotes: pda([
-          Buffer.from("uev"),
-          payer.publicKey.toBuffer(),
-          epochLE,
-        ]),
-        globalEpochVotes: pda([Buffer.from("epoch_votes"), epochLE]),
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        rent: SYSVAR_RENT_PUBKEY,
-      } as any)
-      .rpc();
-
+  it("[bankrun] staking credits the position and mints no token at all", async () => {
+    // The premise of the whole model: there is nothing to transfer, so there is nothing to
+    // intercept. If a mint ever reappears here, every guarantee below reverts to being a
+    // `require!` that a raw SPL transfer walks straight past.
+    const supply = await mintSupply(hiSolaM);
+    assert.equal(supply, BigInt(0), "no hiSOLA token was ever minted");
     assert.equal(
       await tokenBalance(userHiSola),
-      stakedAmount - votedWeight,
-      "exactly the voted weight leaves the wallet; the rest stays liquid"
+      BigInt(0),
+      "the staker holds no hiSOLA token account balance"
     );
+
     const pos = await program.account.userPosition.fetch(userPosition);
     assert.equal(
-      pos.voteEscrowed.toString(),
-      votedWeight.toString(),
-      "the voted weight is under program custody"
+      pos.hiSola.toString(),
+      stakedAmount.toString(),
+      "the balance is the position"
     );
     assert.equal(
-      pos.escrowEpoch.toString(),
-      votedEpoch.toString(),
-      "the escrow is stamped with the epoch it backs"
+      pos.stakedAmount.toString(),
+      stakedAmount.toString(),
+      "and it is recorded as financed, since it was bought through the curve"
     );
   });
 
-  it("[bankrun] release is refused while the voted epoch is still running", async () => {
+  it("[bankrun] a vote locks the backing balance without moving it", async () => {
+    votedEpoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    // VOTE_WEIGHT_CAP_BPS caps any address at 30% of total_hi_sola. This wallet is the only
+    // staker, so the global cap binds against its own stake: voting the full balance is
+    // refused with VoteOverflow. Vote exactly the cap — that share becomes locked, the rest
+    // stays free to withdraw.
+    votedWeight = (stakedAmount * BigInt(3000)) / BigInt(10000);
+    assert.isAbove(Number(votedWeight), 0, "the capped weight must be non-zero");
+    const poolId = Keypair.generate().publicKey;
+    await vote(poolId, votedEpoch, votedWeight);
+
+    const pos = await program.account.userPosition.fetch(userPosition);
+    assert.equal(
+      pos.hiSola.toString(),
+      stakedAmount.toString(),
+      "voting moves nothing — the whole balance is still on the position"
+    );
+    assert.equal(
+      pos.voteLocked.toString(),
+      votedWeight.toString(),
+      "exactly the voted weight is immobilised"
+    );
+    assert.equal(
+      pos.voteLockEpoch.toString(),
+      votedEpoch.toString(),
+      "the lock is stamped with the epoch it backs"
+    );
+    // The property the escrow vault existed to buy, now held without custody.
+    assert.equal(
+      await mintSupply(hiSolaM),
+      BigInt(0),
+      "and still no token exists to be forwarded to a second wallet"
+    );
+  });
+
+  it("[bankrun] the locked backing cannot be unstaked while the epoch runs", async () => {
     // Move time forward, but stay inside the epoch: proves the guard keys on the epoch
     // boundary and not merely on "some time has passed".
     await forwardSeconds(60 * 60 * 24); // one day
@@ -367,16 +422,39 @@ describe("soladrome — bankrun (warped clock)", () => {
       "a day later we must still be inside the voted epoch for this test to mean anything"
     );
 
-    await expectFailure(() => attemptWithdraw(1), "VoteEscrowLocked");
+    // One base unit past the free portion is the whole test: the guard has to bind on the
+    // voted weight itself, not on "has voted this epoch at all".
+    const free = stakedAmount - votedWeight;
+    await expectFailure(() => attemptUnstake(free + BigInt(1), 1), "VoteEscrowLocked");
 
+    const pos = await program.account.userPosition.fetch(userPosition);
     assert.equal(
-      await tokenBalance(userHiSola),
-      stakedAmount - votedWeight,
-      "the refused withdrawal returned nothing"
+      pos.hiSola.toString(),
+      stakedAmount.toString(),
+      "the refused unstake took nothing"
     );
   });
 
-  it("[bankrun] release succeeds once the epoch has ended — the path a validator cannot reach", async () => {
+  it("[bankrun] the unvoted remainder stays free to withdraw", async () => {
+    // Escrow could only ever be all-or-nothing per top-up; the ledger is exact. A voter is
+    // immobilised for what they voted and not one unit more.
+    const free = stakedAmount - votedWeight;
+    await attemptUnstake(free, 2);
+
+    const pos = await program.account.userPosition.fetch(userPosition);
+    assert.equal(
+      pos.hiSola.toString(),
+      votedWeight.toString(),
+      "only the voted weight is left standing"
+    );
+    assert.equal(
+      await tokenBalance(userSola),
+      free,
+      "and the SOLA came back to the wallet — SOLA is still a real token"
+    );
+  });
+
+  it("[bankrun] the lock lapses once the epoch has ended", async () => {
     // Cross the boundary. This is the assertion the main suite has never been able to make.
     await forwardSeconds(EPOCH_DURATION);
     const nowEpoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
@@ -386,42 +464,28 @@ describe("soladrome — bankrun (warped clock)", () => {
       "the clock must have crossed into a later epoch"
     );
 
-    const vaultBefore = await tokenBalance(voteEscrowVault);
-    assert.equal(
-      vaultBefore,
-      votedWeight,
-      "the escrow vault still holds the voted weight"
-    );
-
-    await attemptWithdraw(2);
-
-    assert.equal(
-      await tokenBalance(userHiSola),
-      stakedAmount,
-      "the whole stake is back in the wallet"
-    );
-    assert.equal(
-      await tokenBalance(voteEscrowVault),
-      BigInt(0),
-      "the escrow vault is drained of this user's stake"
-    );
+    await attemptUnstake(votedWeight, 3);
 
     const pos = await program.account.userPosition.fetch(userPosition);
+    assert.equal(pos.hiSola.toString(), "0", "the whole stake is out");
+    // Deliberately NOT cleared on exit: a stale stamp is inert because `vote_locked_now`
+    // compares it against the running epoch. Asserting it stays put pins that reading — if a
+    // later change ever starts trusting `vote_locked` without the epoch test, this breaks.
     assert.equal(
-      pos.voteEscrowed.toString(),
-      "0",
-      "the escrow counter is cleared, so a second withdrawal has nothing to take"
+      pos.voteLocked.toString(),
+      votedWeight.toString(),
+      "the counter is left behind, and is inert because its epoch has passed"
+    );
+    assert.equal(
+      await tokenBalance(userSola),
+      stakedAmount,
+      "every SOLA staked is back in the wallet"
     );
   });
 
-  it("[bankrun] a released escrow cannot be withdrawn twice", async () => {
-    await expectFailure(() => attemptWithdraw(3), "NothingEscrowed");
-  });
-
-  it("[bankrun] releasing the collateral does not erase the votes it backed", async () => {
-    // The instruction's own comment claims the tally is immutable once the epoch closes.
-    // Worth asserting: if releasing collateral rolled back gauge weight, a voter could vote,
-    // wait a week, withdraw, and quietly undo the emissions their vote directed.
+  it("[bankrun] releasing the backing does not erase the votes it backed", async () => {
+    // If unstaking rolled back gauge weight, a voter could vote, wait a week, unstake, and
+    // quietly undo the emissions their vote directed.
     const epochLE = Buffer.alloc(8);
     epochLE.writeBigUInt64LE(BigInt(votedEpoch));
     const gev = await program.account.globalEpochVotes.fetch(
