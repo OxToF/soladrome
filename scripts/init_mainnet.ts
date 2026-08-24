@@ -6,7 +6,11 @@
  *   2. mint_founder_allocation → starts the 7M hiSOLA vesting clock
  *   3. mint_ecosystem_allocation → 1.75M SOLA to authority + 250k SOLA to founder wallet
  *
- * Run AFTER: anchor build --no-default-features && anchor deploy
+ * Run AFTER: anchor build && anchor deploy
+ *
+ * ⚠️ There is no `--no-default-features` any more, and no cluster feature at all: since
+ * 2026-08-23 devnet and mainnet run the SAME binary. The founder wallet is passed to
+ * `initialize` below and is IMMUTABLE afterwards — check it on-chain before step 2.
  *
  * Usage:
  *   ANCHOR_PROVIDER_URL=https://api.mainnet-beta.solana.com \
@@ -76,7 +80,7 @@ async function main() {
   if (!state) {
     console.log("Step 1/3 — initialize...");
     const tx = await program.methods
-      .initialize()
+      .initialize(FOUNDER_WALLET)
       .accounts({
         authority:     kp.publicKey,
         usdcMint:      USDC_MINT,
