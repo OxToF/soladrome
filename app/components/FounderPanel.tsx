@@ -494,11 +494,15 @@ export function FounderPanel() {
     );
   }
 
-  if (!isFounder) {
+  // Two roles reach this panel, and they are different wallets by design: the founder owns
+  // the vesting and borrow sections, the authority owns Register Partner. Gating the whole
+  // panel on the founder meant the authority saw nothing at all — not even the one section
+  // it is the only wallet allowed to use.
+  if (!isFounder && !isAuthority) {
     return (
       <div className="card text-center py-12">
         <div className="text-4xl mb-4">🔒</div>
-        <p className="text-gray-400 text-sm">Founder access only.</p>
+        <p className="text-gray-400 text-sm">Founder or authority access only.</p>
       </div>
     );
   }
@@ -512,15 +516,21 @@ export function FounderPanel() {
       {/* ── Header ─────────────────────────────────────────── */}
       <div className="card">
         <div className="flex items-center gap-3 mb-1">
-          <span className="text-2xl">👑</span>
-          <h2 className="text-xl font-black text-white">Founder Panel</h2>
+          <span className="text-2xl">{isFounder ? "👑" : "🛠"}</span>
+          <h2 className="text-xl font-black text-white">
+            {isFounder ? "Founder Panel" : "Authority Panel"}
+          </h2>
         </div>
         <p className="text-xs text-gray-500">
-          Private — only visible to wallet <span className="font-mono text-gray-400">{founderWallet ? `${founderWallet.slice(0, 8)}…` : "—"}</span>
+          {isFounder ? (
+            <>Private — only visible to wallet <span className="font-mono text-gray-400">{founderWallet ? `${founderWallet.slice(0, 8)}…` : "—"}</span></>
+          ) : (
+            <>Connected as the protocol <strong>authority</strong> <span className="font-mono text-gray-400">{authorityWallet ? `${authorityWallet.slice(0, 8)}…` : "—"}</span>. The founder vesting sections belong to a different wallet and are hidden.</>
+          )}
         </p>
       </div>
 
-      {!vestingStarted ? (
+      {!isFounder ? null : !vestingStarted ? (
         <div className="card text-center py-8 text-gray-500 text-sm">
           Vesting not yet started — call <code className="text-brand-green">mint_founder_allocation</code> first.
         </div>
