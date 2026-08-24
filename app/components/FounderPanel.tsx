@@ -907,9 +907,11 @@ export function FounderPanel() {
                   ⚠️ Not 1:1. The rate multiplies <em>base units</em>, and this mint has{" "}
                   {bribeDecimals} decimals against hiSOLA&apos;s 6 — so num/den carries the
                   gap. For exactly 1 token → 1 hiSOLA use{" "}
+                  {/* No thousands separator here, deliberately: this is meant to be retyped
+                      into the rate fields, which only accept digits. */}
                   <span className="font-mono text-white">
-                    {oneToOneDen >= 1 ? `1 / ${oneToOneDen.toLocaleString("en-US")}`
-                                      : `${Math.round(1 / oneToOneDen).toLocaleString("en-US")} / 1`}
+                    {oneToOneDen >= 1 ? `1 / ${oneToOneDen}`
+                                      : `${Math.round(1 / oneToOneDen)} / 1`}
                   </span>.
                 </p>
               )}
