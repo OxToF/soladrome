@@ -220,6 +220,48 @@ export async function ensureAtaIx(
  * Send and confirm a transaction via the wallet adapter's sendTransaction,
  * which routes through Phantom's transaction preview system.
  */
+/// Turn a raw on-chain failure into something a human can act on.
+///
+/// `getSignatureStatus` returns the runtime's own structure, e.g.
+///   {"InstructionError":[2,{"Custom":6037}]}
+/// which we used to print verbatim. 6037 means FeatureDisabled, and the IDL already carries
+/// that message — there is no reason to make anyone look it up.
+///
+/// Falls back to the raw JSON when the code is not one of ours: a runtime error (insufficient
+/// lamports, account in use) is not in the IDL and its own shape is more informative than any
+/// wording we could invent for it.
+export function explainTxError(err: unknown): string {
+  const raw = JSON.stringify(err);
+  const code = extractCustomCode(err);
+  if (code === null) return `Transaction failed on-chain: ${raw}`;
+
+  const entry = (idl as any).errors?.find((e: any) => e.code === code);
+  if (!entry) return `Transaction failed on-chain: ${raw}`;
+
+  // The IDL message is written for a developer; prepend the name so a report is greppable,
+  // and keep the code so it can be matched against the program source.
+  return `${entry.name} (${code}): ${entry.msg ?? "no message in the IDL"}`;
+}
+
+/// Dig the `Custom` code out of the runtime's error shape, whatever depth it sits at.
+function extractCustomCode(err: unknown): number | null {
+  if (err === null || typeof err !== "object") return null;
+  const o = err as Record<string, unknown>;
+  if (typeof o.Custom === "number") return o.Custom;
+  for (const v of Object.values(o)) {
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        const found = extractCustomCode(item);
+        if (found !== null) return found;
+      }
+    } else if (v && typeof v === "object") {
+      const found = extractCustomCode(v);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
 export async function sendTx(
   connection: Connection,
   wallet: { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction> },
@@ -271,7 +313,7 @@ export async function sendTx(
   while (true) {
     const status = (await txConn.getSignatureStatus(sig)).value;
     if (status?.err) {
-      throw new Error(`Transaction failed on-chain (${sig}): ${JSON.stringify(status.err)}`);
+      throw new Error(`${explainTxError(status.err)} (tx ${sig.slice(0, 12)}…)`);
     }
     if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
       return sig;

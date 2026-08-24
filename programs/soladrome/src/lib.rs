@@ -3671,6 +3671,13 @@ pub mod soladrome {
                 .ok_or(SoladromeError::Overflow)?;
         }
 
+        // ☢️ Floor guard — the pool may not be LEFT below 1.00, however profitable the
+        // trade was on average. The check below constrains the average price only; see
+        // `amm::require_floor_respected` for why that is not the same thing. This call site
+        // is the reason the guard is a shared function: `flash_arbitrage` never touches
+        // `amm::swap`, so a guard written inside `swap` would not have covered it.
+        amm::require_floor_respected(&ctx.accounts.pool, &ctx.accounts.protocol_state)?;
+
         // ── 4. Profitability check ────────────────────────────────────────────
         // Floor needs `amount_osola` USDC to back the freshly minted SOLA.
         require!(usdc_out > amount_osola, SoladromeError::NotProfitable);
