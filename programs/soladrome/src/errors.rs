@@ -125,4 +125,6 @@ pub enum SoladromeError {
     NothingToConvert,
     #[msg("This burn would buy no votes — the oSOLA bonus is bounded by hiSOLA + ve power, and that ceiling is already reached")]
     BurnBuysNoVotes,
+    #[msg("This swap would push the SOLA/USDC pool below the 1 USDC floor — sell through sell_sola instead, it pays 1.00 exactly")]
+    AmmBelowFloor,
 }

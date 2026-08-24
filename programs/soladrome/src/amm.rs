@@ -99,6 +99,68 @@ fn pending_osola(acc: u128, debt: u128, user_lp: u64) -> u64 {
     (delta.saturating_mul(user_lp as u128) / LP_REWARD_PRECISION) as u64
 }
 
+// ── Floor guard ───────────────────────────────────────────────────────────────
+
+/// ☢️ The SOLA/USDC pool may never be left printing below the 1 USDC floor.
+///
+/// THE single implementation, called by every path that moves this pool's reserves in a
+/// direction that can lower the price: `swap` and `flash_arbitrage`. Those two do NOT share
+/// a swap body — `flash_arbitrage` inlines its own `amm_math::swap_out` and its own reserve
+/// update — so a guard living inside `swap` alone would have been exactly the kind of
+/// path-dependent protection that `advance_pool_rewards` above was written to end.
+///
+/// WHY: `sell_sola` pays exactly 1 USDC per SOLA out of `floor_vault`, unconditionally and
+/// without ever reading this pool. That guarantee was never at risk — but the pool PRICE can
+/// still fall under it, and on 2026-08-24 a single 500 SOLA sell on devnet took it to 0.951.
+/// Solvency held throughout; what broke was the headline promise, because a holder reads a
+/// price, not an invariant.
+///
+/// Refusing the trade is strictly better for the seller, which is the part worth noticing:
+/// anyone who would have sold at 0.951 is now sent to `sell_sola` and paid 1.000 instead. The
+/// guard does not trap them, it routes them to the better of the two exits.
+///
+/// CONSEQUENCE, stated because it is a real narrowing: once this pool sits at the floor it
+/// becomes buy-only. SOLA can be bought above 1.00 and sold back down to 1.00, never through.
+/// That is the intended shape — the floor IS the sell side, and the AMM exists to let SOLA
+/// trade ABOVE it.
+///
+/// On the `flash_arbitrage` path this closes a hole its own profitability check could not
+/// see. `require!(usdc_out > amount_osola)` constrains the AVERAGE price paid across the
+/// trade, never the price the pool is LEFT at. From a pool at 4.00, burning 1500 oSOLA
+/// returns 2397 USDC — comfortably profitable — while leaving the pool at 0.64.
+///
+/// Worth stating precisely, because the tempting overstatement is that this was the
+/// arbitrageur's best move: it is not. Profit peaks at ~1000 oSOLA, which lands the pool at
+/// 1.0030 — the profit-maximising size is almost exactly the floor-restoring one, the same
+/// coincidence that holds for the below-floor direction. So a rational arbitrageur already
+/// stops here on their own. The guard is what turns "irrational" into "impossible", which
+/// still matters: an oversized call remains profitable in absolute terms, so nothing but
+/// this `require!` stops someone who wants the depressed print for its own sake.
+///
+/// Only the SOLA/USDC pair is affected. Every other pool, including oSOLA/USDC, is untouched:
+/// "SOLA priced in USDC" is the only quote the 1 USDC floor can be compared to.
+///
+/// Both call sites invoke this AFTER their reserve update, on purpose — it is the post-trade
+/// state that matters, and a failing `require!` reverts the whole instruction on Solana, CPI
+/// transfers included. Nothing before the call survives a refusal.
+pub fn require_floor_respected(pool: &AmmPool, state: &ProtocolState) -> Result<()> {
+    let (a, b) = (pool.token_a_mint, pool.token_b_mint);
+    let sola_is_a = a == state.sola_mint && b == state.usdc_mint;
+    let sola_is_b = b == state.sola_mint && a == state.usdc_mint;
+    if !sola_is_a && !sola_is_b {
+        return Ok(());
+    }
+    let (reserve_sola, reserve_usdc) = if sola_is_a {
+        (pool.reserve_a, pool.reserve_b)
+    } else {
+        (pool.reserve_b, pool.reserve_a)
+    };
+    // price >= 1 <=> usdc >= sola. Compared as integers: both mints are 6 decimals, so there
+    // is no division and no rounding direction to get wrong.
+    require!(reserve_usdc >= reserve_sola, SoladromeError::AmmBelowFloor);
+    Ok(())
+}
+
 // ── Instructions ──────────────────────────────────────────────────────────────
 
 /// Create a new volatile (xy=k) AMM pool for any two distinct token mints.
@@ -598,6 +660,11 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
             .checked_sub(amount_out)
             .ok_or(SoladromeError::Overflow)?;
     }
+
+    // ☢️ The SOLA/USDC pool may never print below the floor. See
+    // `require_floor_respected` — the reasoning lives there, with the other call site.
+    require_floor_respected(pool, &ctx.accounts.protocol_state)?;
+
     Ok(())
 }
 

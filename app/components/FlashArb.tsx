@@ -156,6 +156,20 @@ export function FlashArb() {
                      : false;
   const enoughUsdc   = direction !== "below" || !arb || amt <= arb.usdcBalance;
 
+  // ── The floor guard, mirrored ─────────────────────────────────────────────
+  // `require_floor_respected` refuses any trade that LEAVES the SOLA/USDC pool under 1.00,
+  // and `flash_arbitrage` sells SOLA into that pool, so an oversized burn is refused on
+  // chain. Profitability does not imply it fits: `usdc_out > amount_osola` constrains the
+  // average price paid, the guard constrains the final price. Without this the page would
+  // show a green profit for a size that reverts — the same gap the guard closes on chain.
+  //
+  // The largest burn that fits is the one landing both reserves on sqrt(k), which is also
+  // very nearly the profit-maximising size, so the ceiling costs the caller almost nothing.
+  const maxBurn = arb && arb.reserveUsdc > arb.reserveSola
+    ? (Math.sqrt(arb.reserveUsdc * arb.reserveSola) - arb.reserveSola) / (1 - FEE_RATE / 10_000)
+    : 0;
+  const overshootsFloor = direction === "above" && amt > maxBurn;
+
   // ── Execute: ABOVE ────────────────────────────────────────────────────────
   async function executeFlashArb() {
     if (!wallet || !arb || !usdcMint || amt <= 0) return;
@@ -445,11 +459,12 @@ export function FlashArb() {
           <button
             className="btn-primary w-full py-3 text-base font-bold"
             onClick={direction === "below" ? executeBuyAndRedeem : executeFlashArb}
-            disabled={loading || !wallet || !isProfitable || !enoughUsdc}>
+            disabled={loading || !wallet || !isProfitable || !enoughUsdc || overshootsFloor}>
             {loading ? "Executing…"
               : !wallet ? "Connect your wallet"
               : amt <= 0 ? "Enter an amount"
               : !enoughUsdc ? "Not enough USDC"
+              : overshootsFloor ? `Too large — max ${maxBurn.toFixed(4)} oSOLA before the floor`
               : !isProfitable ? "Not profitable at this size"
               : direction === "below" ? `Buy & redeem — earn ${buyProfit.toFixed(4)} USDC`
               : `Execute — earn ${callerShare.toFixed(4)} USDC`}
