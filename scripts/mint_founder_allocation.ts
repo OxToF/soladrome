@@ -13,8 +13,13 @@ import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import idl from "../target/idl/soladrome.json";
 
-const PROGRAM_ID     = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
-const FOUNDER_WALLET = new PublicKey("46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4");
+const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
+
+// ☢️ The founder address is NOT hardcoded any more. It lives in
+// `ProtocolState.founder_wallet`, written once at `initialize`, and the `founder` account on
+// this instruction is constrained to it — passing anything else fails with Unauthorized.
+// Reading it from chain is also the safest possible pre-flight: what the script prints is
+// exactly what the 12.25M will be committed to.
 
 describe("mint_founder_allocation (one-shot)", () => {
   const provider = anchor.AnchorProvider.env();
@@ -30,9 +35,24 @@ describe("mint_founder_allocation (one-shot)", () => {
     // Guard: skip if already done
     const state = await (program.account as any).protocolState.fetch(statePda);
     if (state.founderAllocated) {
-      console.log("⚠️  Already allocated — skipping.");
+      console.log("⚠️  Already allocated — skipping. This instruction is one-shot.");
       return;
     }
+
+    const FOUNDER_WALLET = state.founderWallet as PublicKey;
+    if (FOUNDER_WALLET.equals(PublicKey.default)) {
+      throw new Error(
+        "founder_wallet is unset — run scripts/migrate_protocol_state.ts first. " +
+          "Every founder guard fails closed until it is set."
+      );
+    }
+
+    // ☢️ Last chance to notice a wrong address. `mint_founder_allocation` needs NO founder
+    // signature (the account is an address-checked SystemAccount, the authority alone signs),
+    // so nothing physical stands between a wrong value here and a permanent misallocation.
+    console.log("authority      :", provider.wallet.publicKey.toBase58());
+    console.log("founder_wallet :", FOUNDER_WALLET.toBase58());
+    console.log("⚠️  ONE-SHOT and irreversible. founder_allocated is set for good.");
 
     const tx = await program.methods
       .mintFounderAllocation()
@@ -47,9 +67,11 @@ describe("mint_founder_allocation (one-shot)", () => {
       } as any)
       .rpc();
 
+    const cliff = new Date(Date.now() + 180 * 86400 * 1000).toISOString().slice(0, 10);
     console.log("✅ mint_founder_allocation — tx:", tx);
-    console.log("   Cliff:    6 h devnet  → claimable after cliff");
-    console.log("   Duration: 24 h devnet → fully vested after 24 h");
-    console.log("   → Connect Ledger on soladrome.finance, 👑 Founder panel is now live");
+    console.log("   Cliff:    180 days, every cluster → first claim on", cliff);
+    console.log("   Duration: 720 days linear after the cliff");
+    console.log("   The 5 s / 24 h devnet variants are gone with the `devnet` feature:");
+    console.log("   one binary, one schedule. The cliff is now REAL on devnet too.");
   });
 });

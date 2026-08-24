@@ -23,6 +23,7 @@
 // Usage:
 //   npx ts-node scripts/create_farming_pool.ts <mintA> <mintB>
 //   npx ts-node scripts/create_farming_pool.ts wsol usdc     # aliases for the launch pair
+//   npx ts-node scripts/create_farming_pool.ts osola usdc --no-rewards   # exit price, no farm
 //
 // Idempotent: an existing pool is detected and only the rewards approval is (re)applied.
 
@@ -75,10 +76,11 @@ async function main() {
     if (a === "wsol" || a === "sol") return new PublicKey(WSOL_MINT);
     if (a === "usdc") return state.usdcMint as PublicKey;
     if (a === "sola") return state.solaMint as PublicKey;
+    if (a === "osola") return state.oSolaMint as PublicKey;
     return new PublicKey(arg);
   };
 
-  const args = process.argv.slice(2);
+  const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   if (args.length !== 2) throw new Error("usage: create_farming_pool.ts <mintA> <mintB>");
   const m1 = resolve(args[0]);
   const m2 = resolve(args[1]);
@@ -126,11 +128,26 @@ async function main() {
     console.log(`create_pool tx: ${sig}  (fee ${FEE_RATE_BPS} bps, protocol share ${PROTOCOL_FEE_BPS} bps)`);
   }
 
+  // ── Emission approval is OPT-OUT, because it is not free ──────────────────
+  //
+  // The continuous stream is `rate x elapsed` PER POOL (advance_pool_rewards, amm.rs), so it
+  // MULTIPLIES with the number of approved pools rather than dividing between them. Approving
+  // one more without halving the rate silently raises total emissions.
+  //
+  // And for a pool whose own token is oSOLA, farming oSOLA is circular: it pays LPs in the
+  // asset they are providing liquidity for. Such a pool is a trading venue, not a farm.
+  //
+  //   --no-rewards   create the pool but leave it out of the emission stream
+  const wantRewards = !process.argv.includes("--no-rewards");
   const sig2 = await (program.methods as any)
-    .setPoolRewards(true)
+    .setPoolRewards(wantRewards)
     .accounts({ authority: wallet.publicKey, protocolState: statePda, pool })
     .rpc();
-  console.log("set_pool_rewards(true) tx:", sig2);
+  console.log(`set_pool_rewards(${wantRewards}) tx:`, sig2);
+  if (wantRewards) {
+    console.log("⚠️  The continuous rate is PER POOL. Divide it by the new pool count or");
+    console.log("    total emissions rise: scripts/configure_continuous_emissions.ts");
+  }
 
   const after: any = await (program.account as any).ammPool.fetch(pool);
   console.log("post-state :", {
