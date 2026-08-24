@@ -125,8 +125,8 @@ pub const DEFAULT_EXERCISE_FEE_BPS: u16 = 1_000; // 10 % of the gain
 /// it is a guard against an authority setting a value that makes oSOLA worthless as an
 /// LP incentive, which would be an economic self-inflicted wound, not an exploit.
 pub const MAX_EXERCISE_FEE_BPS: u16 = 5_000; // 50 % of the gain
-                                     // (FOUNDER_BORROW_CAP_BPS removed 2026-07-18 with founder_borrow_usdc — the 7M are ve-escrowed,
-                                     //  so the founder's only borrow path is borrow_against_locked at PARTNER_BORROW_CAP_BPS, 20%.)
+                                             // (FOUNDER_BORROW_CAP_BPS removed 2026-07-18 with founder_borrow_usdc — the 7M are ve-escrowed,
+                                             //  so the founder's only borrow path is borrow_against_locked at PARTNER_BORROW_CAP_BPS, 20%.)
 
 pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
@@ -786,11 +786,11 @@ pub mod soladrome {
         // wallet and unstaking there. A ledger balance cannot leave, so the rule is now the
         // subtraction it always meant to be. A stamp from an earlier epoch is spent: the votes
         // it backed are closed and their receipts immutable.
-        let vote_locked = ctx.accounts.user_position.vote_locked_now(Clock::get()?.unix_timestamp);
-        require!(
-            remaining >= vote_locked,
-            SoladromeError::VoteEscrowLocked
-        );
+        let vote_locked = ctx
+            .accounts
+            .user_position
+            .vote_locked_now(Clock::get()?.unix_timestamp);
+        require!(remaining >= vote_locked, SoladromeError::VoteEscrowLocked);
 
         // ── Founder vesting lock — defence in depth, and no longer cfg-gated ─────────────
         //
@@ -861,7 +861,9 @@ pub mod soladrome {
                 .user_position
                 .staked_amount
                 .saturating_sub(hi_sola_amount);
-            let unfinanced_after = balance.saturating_sub(hi_sola_amount).saturating_sub(staked_after);
+            let unfinanced_after = balance
+                .saturating_sub(hi_sola_amount)
+                .saturating_sub(staked_after);
             require!(
                 unfinanced_after >= still_locked,
                 SoladromeError::FounderVestingLocked
@@ -1145,10 +1147,7 @@ pub mod soladrome {
                     .checked_mul(vu - vs)
                     .ok_or(SoladromeError::Overflow)?
                     / vs;
-                let f = gain
-                    .checked_mul(fee_bps)
-                    .ok_or(SoladromeError::Overflow)?
-                    / 10_000;
+                let f = gain.checked_mul(fee_bps).ok_or(SoladromeError::Overflow)? / 10_000;
                 u64::try_from(f).map_err(|_| error!(SoladromeError::Overflow))?
             }
         };
