@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { AnchorProvider, utils } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { getProgram, positionPda, statePda, hiSolaM, PROGRAM_ID } from "@/lib/program";
+import { getProgram, positionPda, statePda, PROGRAM_ID } from "@/lib/program";
 import { TRUSTED_MINTS } from "@/lib/tokens";
 import { resolveRpcUrl } from "@/lib/rpc";
 
@@ -169,10 +169,10 @@ async function checkOnce(quest: string, user: PublicKey, meta?: Record<string, u
       // base unit of hiSOLA could borrow 1 → repay 1 and pass. Require a real
       // staker (≥ MIN_UNITS hiSOLA) — repaying never burns collateral, so a
       // genuine borrow→repay wallet still holds it.
-      try {
-        const bal = await connection.getTokenAccountBalance(getAssociatedTokenAddressSync(hiSolaM, user));
-        return BigInt(bal.value.amount) >= MIN_UNITS;
-      } catch { return false; }
+      // hiSOLA is a position, not a token: the balance is on `UserPosition` itself, which
+      // this branch has already fetched. Reading an ATA here would see 0 for everyone and
+      // silently fail the quest for every honest staker.
+      return BigInt(pos.hiSola.toString()) >= MIN_UNITS;
     }
     case "liquidity": {
       // Proof of deposit = LpUserInfo PDA ([b"lp_user", pool, user]): it is only

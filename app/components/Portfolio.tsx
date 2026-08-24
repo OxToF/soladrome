@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import {
-  getProgram, solaM, hiSolaM, oSolaM,
+  getProgram, solaM, oSolaM,
   positionPda, userAta, toUi, PROGRAM_ID,
   marketVault,
 } from "@/lib/program";
@@ -44,7 +44,6 @@ export function Portfolio() {
     // userPosition fetch: 2 RPC calls per tick instead of 5. All SOLA-family
     // mints use 6 decimals (protocol invariant), so amount/1e6 is exact.
     const solaAta   = userAta(solaM,   wallet.publicKey);
-    const hiSolaAta  = userAta(hiSolaM, wallet.publicKey);
     const oSolaAta   = userAta(oSolaM,  wallet.publicKey);
     const ep = currentEpoch();
     const eb = Buffer.alloc(8);
@@ -54,23 +53,28 @@ export function Portfolio() {
     );
 
     const [multiRes, posRes] = await Promise.allSettled([
-      connection.getMultipleAccountsInfo([solaAta, hiSolaAta, oSolaAta, uevPda]),
+      connection.getMultipleAccountsInfo([solaAta, oSolaAta, uevPda]),
       (program.account as any).userPosition.fetch(positionPda(wallet.publicKey)),
     ]);
 
-    const multi = multiRes.status === "fulfilled" ? multiRes.value : [null, null, null, null];
+    const multi = multiRes.status === "fulfilled" ? multiRes.value : [null, null, null];
     const balOf = (info: any, ata: PublicKey) =>
       info ? Number(unpackAccount(ata, info).amount) / 1e6 : 0;
     const solaBalance   = balOf(multi[0], solaAta);
-    const hiSolaBalance = balOf(multi[1], hiSolaAta);
-    const oSolaBalance  = balOf(multi[2], oSolaAta);
+    const oSolaBalance  = balOf(multi[1], oSolaAta);
+    // hiSOLA has no wallet balance to read — it is a position, so it comes from the
+    // UserPosition fetch below. This is the cost the model was accepted with: hiSOLA no
+    // longer shows up in Phantom, so the Portfolio is the only place it is visible.
+    let hiSolaBalance = 0;
 
-    // UserPosition only has: owner, usdcBorrowed, feesDebt, bump
     let debt = 0;
     let feesDebt: BN | null = null;
+    let stakedAmount = 0;
     if (posRes.status === "fulfilled" && posRes.value) {
       if (posRes.value.usdcBorrowed) debt = toUi(posRes.value.usdcBorrowed as BN);
       feesDebt = posRes.value.feesDebt as BN;
+      hiSolaBalance = toUi(posRes.value.hiSola as BN);
+      stakedAmount  = toUi(posRes.value.stakedAmount as BN);
     }
 
     // Fee accumulator uses protocolState + the marketVault account info already
@@ -85,7 +89,11 @@ export function Portfolio() {
         BigInt(protocolState.lastMarketVaultBalance.toString()),
         BigInt(protocolState.totalHiSola.toString()),
       );
-      const raw = jsPendingFees(acc, BigInt(feesDebt.toString()), BigInt(Math.round(hiSolaBalance * 1e6)));
+      // The on-chain basis is `min(staked_amount, hi_sola)` (math::fee_basis), not the raw
+      // balance: hiSOLA released by an expired ve lock was never financed and earns nothing.
+      // Showing the balance here would quote a claimable figure the program will not pay.
+      const basis = Math.min(stakedAmount, hiSolaBalance);
+      const raw = jsPendingFees(acc, BigInt(feesDebt.toString()), BigInt(Math.round(basis * 1e6)));
       claimableFees = Number(raw) / 1e6;
     }
 
@@ -93,7 +101,7 @@ export function Portfolio() {
     // discriminator(8) + epoch(8) + allocated(8) + total_power_snapshot(8) + o_sola_bonus(8)
     let oSolaBonus = 0;
     let allocated  = 0;
-    const uevInfo = multi[3];
+    const uevInfo = multi[2];
     if (uevInfo && uevInfo.data.length >= 40) {
       allocated  = Number(uevInfo.data.readBigUInt64LE(16)) / 1e6;
       oSolaBonus = Number(uevInfo.data.readBigUInt64LE(32)) / 1e6;

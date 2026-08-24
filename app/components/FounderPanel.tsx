@@ -6,15 +6,13 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
-  getProgram, statePda, solaM, hiSolaM, oSolaM,
+  getProgram, statePda, solaM, oSolaM, readPosition,
   solaVaultAddr, marketVault, floorVault,
   positionPda, userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { PROGRAM_ID } from "@/lib/program";
 
-// ── Hardcoded founder wallet (must match FOUNDER_WALLET in lib.rs) ────────────
-const FOUNDER_WALLET = "46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4";
 
 // ── Partner registration ──────────────────────────────────────────────────────
 const PARTNER_SEED        = Buffer.from("partner");
@@ -27,10 +25,13 @@ function partnerAllocPda(partnerWallet: PublicKey): PublicKey {
   )[0];
 }
 
-// ── Vesting constants (devnet — must match state.rs) ─────────────────────────
-// Mainnet: cliff = 180 days, duration = 720 days — flip these before launch
-const VESTING_CLIFF_SECS    = 6 * 3_600;   // 6 h devnet
-const VESTING_DURATION_SECS = 24 * 3_600;  // 24 h devnet
+// ── Vesting constants — must match state.rs ──────────────────────────────────
+// One set of values, for every cluster. These read 6 h / 24 h until 2026-08-23, mirroring
+// the `devnet` feature the program no longer has; the "flip these before launch" note they
+// carried is exactly the kind of manual step that gets forgotten. The program's constants are
+// now unconditional, so these are too.
+const VESTING_CLIFF_SECS    = 180 * 24 * 3_600; // 6 months
+const VESTING_DURATION_SECS = 720 * 24 * 3_600; // 24 months, linear after the cliff
 
 // ── PDAs ─────────────────────────────────────────────────────────────────────
 const founderHiVestingPda = PublicKey.findProgramAddressSync(
@@ -43,18 +44,12 @@ const founderVestingPda = PublicKey.findProgramAddressSync(
   PROGRAM_ID
 )[0];
 
-// Lifetime ve escrow — claim_founder_hi_sola mints here, never to the wallet.
-// Same seeds as the partner ve lock ([b"velock"] / [b"ve_vault"], keyed by owner).
+// Lifetime ve escrow — claim_founder_hi_sola credits this position, never the wallet.
+// Same seed as the partner ve lock ([b"velock"], keyed by owner). There is no longer a
+// paired [b"ve_vault"] token account: both sides of the move are ledger figures.
 function veLockPositionPda(owner: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("velock"), owner.toBuffer()],
-    PROGRAM_ID
-  )[0];
-}
-
-function veLockVaultPda(owner: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("ve_vault"), owner.toBuffer()],
     PROGRAM_ID
   )[0];
 }
@@ -162,15 +157,22 @@ function VestingCard({
 export function FounderPanel() {
   const { connection } = useConnection();
   const wallet         = useAnchorWallet();
-  const { usdcMint }   = useSoladrome();
+  const { usdcMint, protocolState } = useSoladrome();
 
-  const isFounder = wallet?.publicKey.toBase58() === FOUNDER_WALLET;
+  // On-chain, not hardcoded — see the note in app/app/page.tsx. The address differs per
+  // cluster now that one binary serves all of them.
+  const founderWallet = protocolState?.founderWallet?.toBase58() ?? null;
+  const isFounder = !!wallet && !!founderWallet &&
+    wallet.publicKey.toBase58() === founderWallet;
 
   // ── On-chain state ──────────────────────────────────────────────────────────
   const [hiVesting,       setHiVesting]       = useState<{ totalAmount: number; claimed: number; startTs: number } | null>(null);
   const [oVesting,        setOVesting]        = useState<{ totalAmount: number; claimed: number; startTs: number } | null>(null);
   const [founderPos,      setFounderPos]      = useState<{ usdcBorrowed: number } | null>(null);
   const [hiSolaBal,       setHiSolaBal]       = useState<number>(0);
+  // The 7M reserve lives in the ve lock, never in the position — and `borrow_against_locked`
+  // caps on `lock_position.amount_locked`, so that is the figure the cap must be read from.
+  const [lockedRaw,       setLockedRaw]       = useState<number>(0);
   const [floorVaultBal,   setFloorVaultBal]   = useState<number>(0); // raw USDC
   const [nowSecs,         setNowSecs]         = useState<number>(Math.floor(Date.now() / 1000));
 
@@ -196,11 +198,14 @@ export function FounderPanel() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
 
-      const [hiV, oV, pos, hiBal, floorBal, slot] = await Promise.allSettled([
+      const [hiV, oV, pos, hiBal, lock, floorBal, slot] = await Promise.allSettled([
         (program.account as any).founderHiSolaVesting.fetch(founderHiVestingPda),
         (program.account as any).founderVesting.fetch(founderVestingPda),
         (program.account as any).userPosition.fetchNullable(positionPda(wallet.publicKey)),
-        connection.getTokenAccountBalance(userAta(hiSolaM, wallet.publicKey)),
+        // hiSOLA is a position, not a token — reading an ATA here would display 0 for
+        // everyone, including the founder tranche this panel exists to show.
+        readPosition(connection, wallet.publicKey),
+        (program.account as any).veLockPosition.fetchNullable(veLockPositionPda(wallet.publicKey)),
         connection.getTokenAccountBalance(floorVault),
         connection.getSlot(),
       ]);
@@ -227,7 +232,12 @@ export function FounderPanel() {
         setFounderPos({ usdcBorrowed: 0 });
       }
       if (hiBal.status === "fulfilled") {
-        setHiSolaBal(Number(hiBal.value.value.uiAmount ?? 0));
+        setHiSolaBal(Number(hiBal.value.hiSola) / 1e6);
+      }
+      if (lock.status === "fulfilled" && lock.value) {
+        setLockedRaw(Number((lock.value as any).amountLocked.toString()));
+      } else {
+        setLockedRaw(0);
       }
       if (floorBal.status === "fulfilled") {
         setFloorVaultBal(Number(floorBal.value.value.amount)); // raw
@@ -275,12 +285,10 @@ export function FounderPanel() {
           founder,
           protocolState:       statePda,
           solaMint:            solaM,
-          hiSolaMint:          hiSolaM,
           solaVault:           solaVaultAddr,
           marketVault:         marketVault,
           // Escrow accounts — the wallet never receives the hiSOLA (no ATA involved).
           lockPosition:        veLockPositionPda(founder),
-          veLockVault:         veLockVaultPda(founder),
           founderPosition:     positionPda(founder),
           founderHiVesting:    founderHiVestingPda,
           tokenProgram:        commonAccounts.tokenProgram,
@@ -333,7 +341,12 @@ export function FounderPanel() {
   }
 
   // ── Founder borrow / repay ────────────────────────────────────────────────
-  const borrowCap      = hiVesting ? Math.floor(hiVesting.claimed * 0.10) : 0;
+  // `founder_borrow_usdc` and its 10% `FOUNDER_BORROW_CAP_BPS` were deleted in July 2026:
+  // the 7M is ve-escrowed, so the wallet balance is 0 and the instruction's
+  // `new_borrowed <= hi_sola_balance` check could never pass. The single remaining valve is
+  // `borrow_against_locked` at 20% of `amount_locked` — the same one the contributor and
+  // partner panels use, open to any ve-locker.
+  const borrowCap      = Math.floor(lockedRaw * 0.20);
   const currentDebt    = founderPos?.usdcBorrowed ?? 0;
   const capHeadroom    = Math.max(0, borrowCap - currentDebt);          // raw
   // Actual borrowable = min(cap headroom, floor vault liquidity)
@@ -352,18 +365,16 @@ export function FounderPanel() {
 
       if (borrowTab === "borrow") {
         const ix = await program.methods
-          .founderBorrowUsdc(fromUi(+borrowAmt))
+          .borrowAgainstLocked(fromUi(+borrowAmt))
           .accounts({
-            founder,
+            partner:                founder,
             protocolState:          statePda,
-            hiSolaMint:             hiSolaM,
-            founderHiSola:          userAta(hiSolaM, founder),
+            lockPosition:           veLockPositionPda(founder),
             floorVault:             floorVault,
             marketVault:            marketVault,
             usdcMint:               usdcMint,
-            founderUsdc:            userAta(usdcMint, founder),
-            founderPosition:        positionPda(founder),
-            founderHiVesting:       founderHiVestingPda,
+            partnerUsdc:            userAta(usdcMint, founder),
+            partnerPosition:        positionPda(founder),
             tokenProgram:           commonAccounts.tokenProgram,
             associatedTokenProgram: commonAccounts.associatedTokenProgram,
             systemProgram:          commonAccounts.systemProgram,
@@ -473,7 +484,7 @@ export function FounderPanel() {
           <h2 className="text-xl font-black text-white">Founder Panel</h2>
         </div>
         <p className="text-xs text-gray-500">
-          Private — only visible to wallet <span className="font-mono text-gray-400">{FOUNDER_WALLET.slice(0, 8)}…</span>
+          Private — only visible to wallet <span className="font-mono text-gray-400">{founderWallet ? `${founderWallet.slice(0, 8)}…` : "—"}</span>
         </p>
       </div>
 
@@ -540,7 +551,7 @@ export function FounderPanel() {
           <div className="card">
             <h3 className="text-base font-bold text-white mb-1">
               Founder Borrow
-              <span className="ml-2 text-xs font-normal text-gray-500">(capped at 10% of claimed hiSOLA)</span>
+              <span className="ml-2 text-xs font-normal text-gray-500">(capped at 20% of locked hiSOLA)</span>
             </h3>
 
             {/* Cap info banner */}
@@ -548,7 +559,7 @@ export function FounderPanel() {
               <span className="text-brand-green text-base leading-none shrink-0">ℹ</span>
               <span>
                 Cap: <span className="text-white font-mono font-semibold">{fmtSola(borrowCap)} USDC</span>
-                {" "}(10% × {fmtSola(hiVesting?.claimed ?? 0)} hiSOLA) ·{" "}
+                {" "}(20% × {fmtSola(lockedRaw)} hiSOLA locked) ·{" "}
                 Debt: <span className="text-yellow-400 font-mono">{fmtSola(currentDebt)} USDC</span> ·{" "}
                 Available: <span className="text-brand-green font-mono font-semibold">{borrowAvail.toFixed(4)} USDC</span>
               </span>

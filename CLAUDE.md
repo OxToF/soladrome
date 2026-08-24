@@ -30,6 +30,20 @@ solana program deploy target/deploy/soladrome.so \
 # Failed deploys leave a buffer (~12 SOL) — reclaim: solana program close --buffers --url https://api.devnet.solana.com
 ```
 
+### ✅ Running the whole suite locally, without touching devnet
+`Anchor.toml` points at devnet, but the suite does **not** need it. `solana-test-validator` is not
+on `PATH` by default; it ships with the Agave install:
+```bash
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+solana-test-validator --reset --quiet --ledger /tmp/test-ledger \
+  --bpf-program DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe target/deploy/soladrome.so &
+solana --url http://127.0.0.1:8899 airdrop 500 2BhwbPGjRcoYv98jLJpkk6khjZX1oW97kSixUge2xTfB
+ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/id.json \
+  npx ts-mocha -p ./tsconfig.json -t 1000000 "tests/**/*.ts"
+```
+⚠️ **Always `--reset`.** Without a fresh ledger, state left by a previous run makes tests pass that
+fail from cold — seen on `[founder] burn_o_sola_for_votes`, green only on the second run.
+
 ### ⚠️ `anchor test` DEPLOYS TO DEVNET — it is not a localnet run
 `Anchor.toml` has `cluster = "devnet"`, so `anchor test` **builds, deploys to the live devnet
 program (`4d2SY…`), then runs the suite against accumulated devnet state** — rate-limited by Helius
@@ -39,6 +53,15 @@ reserves are frozen in `ProtocolState` at init):
 ```bash
 anchor test --provider.cluster localnet
 ```
+
+### ⚠️ `ProtocolState`: 416 → 448 bytes (migration required, 2026-08-23)
+`founder_wallet: Pubkey` needed 32 bytes and the singleton had **9** spare, so unlike every field
+before it this one grew `LEN`. Live deployments must run `migrate_protocol_state(founder_wallet)`
+— it reallocs (zero-filled), tops up rent, then backfills the address **write-once**: only a still
+-default field may be set, and only while `founder_allocated` is false, so the migration can never
+redirect a live tranche. Until it runs, `founder_wallet` reads `Pubkey::default()`, which matches
+no signer — every founder guard fails **closed**, not open. Growing a live singleton is what caused
+the 3003 devnet brick in July; this is why the growth goes through that instruction and nothing else.
 
 ### Legacy `UserPosition`: 128 → 136 bytes (migration required)
 The flash-borrow guard added `last_borrow_slot: u64`, growing `UserPosition` from 128 to 136 bytes.
@@ -128,9 +151,9 @@ the launch figure, so it silently goes wrong every time the launch figure moves.
 - Single global `ProtocolState` PDA `[b"state"]`
 - `buy_sola`: USDC in → split between `floor_vault` (1:1 backing) and `market_vault` (excess = fees)
 - `sell_sola`: burn SOLA → redeem 1:1 from `floor_vault` only (never touches curve)
-- `stake_sola` / `unstake_hi_sola`: SOLA ↔ hiSOLA 1:1, SOLA locked in `sola_vault`
+- `stake_sola` / `unstake_hi_sola`: SOLA ↔ hiSOLA 1:1, SOLA locked in `sola_vault`. **hiSOLA is a non-transferable position (`UserPosition.hi_sola`), not an SPL token** — see the section below
 - `claim_fees`: pro-rata share of `market_vault` via reward-per-token accumulator (`PRECISION = 1e12`)
-- `borrow_usdc` / `repay_usdc`: hiSOLA collateral → USDC from `floor_vault`, max = `staked_amount.min(hi_sola balance + vote_escrowed)`, no interest, no liquidation
+- `borrow_usdc` / `repay_usdc`: hiSOLA collateral → USDC from `floor_vault`, max = `staked_amount.min(hi_sola)`, no interest, no liquidation
 - `exercise_o_sola`: burn oSOLA + pay floor USDC → mint SOLA (strengthens floor)
 
 **System 2 — Permissionless AMM multi-pool**
@@ -149,7 +172,49 @@ the launch figure, so it silently goes wrong every time the launch figure moves.
   dominating their own pool's LP recaptures none of their own bribe.
 - Bribes deposited during epoch N; claims only open after epoch N ends
 - Double-claim guard: `UserBribeClaim` PDA created with `init` (fails on replay)
-- Vote allocation: cumulative across pools ≤ hiSOLA balance; `UserVoteReceipt` uses `init` (blocks second vote for same pool)
+- Vote allocation: cumulative across pools ≤ `UserPosition.hi_sola` + ve power; `UserVoteReceipt` uses `init` (blocks second vote for same pool). Voting stamps `vote_locked` / `vote_lock_epoch`, which `unstake_hi_sola` and `lock_hi_sola` refuse to go below until the epoch ends
+
+### hiSOLA is a position, not a token (decided 2026-08-21)
+
+`UserPosition.hi_sola` **is** the balance. There is no hiSOLA ATA, no transfer, no mint CPI:
+`stake_sola` credits a number and `unstake_hi_sola` debits it. `VeLockPosition.amount_locked`
+was already a ledger figure and stays one, so `lock_hi_sola` / `unlock_hi_sola` and the four
+allocation claim paths (founder, team, contributor, partner) move numbers between two ledgers
+instead of minting into a vault.
+
+**Why.** hiSOLA was a plain SPL token with no freeze authority, so the program was never
+invoked on a transfer and could not block one. Two consequences were live on devnet:
+
+- ☢️ **The vote was rentable.** `vote_gauge` priced power on the token balance and never
+  consulted `staked_amount`, so hiSOLA bought on a secondary market voted at full weight while
+  owing nothing to the floor: buy at a discount, vote, collect the bribes, sell. Dormant only
+  for want of a hiSOLA pool — never closed.
+- **An external LP silently lost everything.** Moving hiSOLA out of the wallet zeroed the fee
+  basis, the borrow capacity and the vote. This is Invictus's failure mode by the outside door.
+
+Everything built to *contain* a transfer is therefore gone, replaced by the thing that
+*prevents* it. The vote escrow (a global custody vault, its top-up transfer, and
+`withdraw_vote_escrow`) becomes two fields, `vote_locked` / `vote_lock_epoch`, read only
+through `UserPosition::vote_locked_now`. **This is the only change that shrinks the audit
+surface: 54 instructions unchanged, but −32 account parameters across 13 instructions.**
+
+**Migration — `convert_hi_sola`, holder-called, devnet only.** The program has no freeze
+authority and no permanent delegate on the old mint, so it cannot reach into anyone's ATA: the
+holder must call it. It burns their old tokens *and* their share of the global escrow vault
+(the vault's only remaining exit) and credits `hi_sola` by the same amount. It deliberately
+touches nothing else — not `staked_amount`, not `total_hi_sola`, not the accumulator — because
+the same stake is being re-expressed in a different unit, not created. A wallet that never
+converts simply keeps a token no instruction reads. Covered by `tests/bankrun_convert.ts`,
+which fabricates the legacy state with `setAccount`.
+
+⚠️ `UserPosition::LEN` stays **128** and the account size stays 136: the new fields were carved
+from spare bytes, so **no realloc migration**. The size guard is asserted against
+`INIT_SPACE` (the Borsh wire size, 113 bytes), not `size_of` — the latter pads to the 16-byte
+alignment of `fees_debt` and would have forced a second migration for padding that never
+reaches the account.
+
+⚠️ **Cost accepted:** hiSOLA no longer appears in Phantom. The Portfolio is now the only place
+a holder sees their balance.
 
 ### Critical invariants
 
@@ -177,24 +242,44 @@ floor-drain section below.
 dormant anti-capture reserve: `founder_voting_enabled = false` by default, flipped via
 `set_founder_voting` only as a break-glass against governance capture. `ECOSYSTEM_TOTAL` = 1.75M.
 
-**☢️ `FOUNDER_WALLET` is feature-gated (added 2026-07-17)** — `devnet` is a **default** feature, so
-a plain `anchor build` resolves the founder to a throwaway devnet key (`J8Ww4yej…` since
-2026-08-10). Its keypair lives at `tests/keys/founder-devnet.json`, which is **gitignored, not
-committed** — the previous one leaked to the public repo and forced the 2026-07-21 purge, which
-destroyed it and left the three `[founder]` tests failing on a missing file until the key was
-rotated. Regenerate it locally (`solana-keygen new -o tests/keys/founder-devnet.json
---no-bip39-passphrase --force`) and update the constant to match. Shipping a devnet build to
-mainnet still hands 12.25M to whoever holds that throwaway key. `VESTING_CLIFF_SECS` rides the same flag (5 s vs 180 days), so
-a wrong build gives away the wallet *and* the timelock together.
+### ☢️ ONE BINARY — the `devnet` feature is gone (2026-08-23)
 
-```
-anchor build --no-default-features   ← mainnet: real Ledger 46Aqf…, 180-day cliff
-anchor build                         ← devnet/localnet: throwaway key, 5 s cliff
-```
+**There is no cluster feature any more, and there must never be one again.** `anchor build` is
+the only build; devnet and mainnet run the identical artefact. `--no-default-features` no longer
+exists — delete it from any script or note that still carries it.
 
-This gate is what made the founder path testable at all (the mainnet wallet is a Ledger no test can
-sign for) — before it, the entire 12.25M allocation had **zero** coverage. Consider inverting the
-default so the safe build is the unflagged one.
+**What it used to be.** `devnet` was a **default** feature, so a plain `anchor build` produced:
+throwaway founder key (`J8Ww4yej…`, secret on a laptop, predecessor leaked publicly and forced the
+2026-07-21 purge), `VESTING_CLIFF_SECS` 5 s instead of 180 days, `VESTING_DURATION_SECS` 24 h
+instead of 720 days, `BASE_BAG_VEST_SECS` 6 h instead of 180 days, `MIN_LOCK_DURATION` 5 s instead
+of 7 days — and **one security check compiled out entirely** (the founder vesting lock in
+`unstake_hi_sola`). The *safe* build was the one you had to remember a flag for, and nothing in the
+build output told the two apart.
+
+The deeper problem was not the direction of the default. It was that **devnet and mainnet ran
+different code**, so the artefact under test was never the artefact to be audited or shipped.
+
+**How it was removed.** Every constant now carries its mainnet value unconditionally. The founder
+wallet moved out of the binary into `ProtocolState.founder_wallet`, written once by `initialize`
+and never writable again (no setter). That move is what made the rest possible: a hardcoded Ledger
+address is unsignable by **any** harness, bankrun included, so pinning the real address in the
+binary would have returned the 12.25M path to zero coverage — which is exactly why the feature flag
+was introduced in the first place.
+
+Trust is unchanged and visibility is better: whoever runs `initialize` is whoever used to run
+`anchor build`, but the result is now a public on-chain value anyone can read, instead of a string
+you would have to disassemble a binary to verify.
+
+⚠️ **Mainnet deploy** — pass the Ledger `46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4` to
+`initialize`, then **read `founder_wallet` back on-chain before calling
+`mint_founder_allocation`**. After that call the 12.25M is committed to whatever address is stored.
+`Pubkey::default()` is rejected at init, so a zeroed field can only mean an un-migrated legacy
+account — and every founder guard fails **closed** in that state, never open.
+
+**Tests that need a 180-day clock live in bankrun.** `tests/bankrun_allocations.ts` covers the
+founder cliff, the ve-lock refusal and the partner welcome-bag stream against a warped clock. The
+rule going forward: when a path is untestable against a real validator clock, **move the test, not
+the constant.**
 
 **Borrow is extraction, not credit.** No interest, no liquidation — a borrow is never repaid in
 practice, so every borrowed USDC leaves the floor vault permanently. The cap is therefore not a
@@ -204,7 +289,7 @@ risk limit, it is **the drain limit**.
 
 | Instruction | Cap | Why |
 |---|---|---|
-| `borrow_usdc` | **100%** of `staked_amount.min(user_hi_sola.amount + vote_escrowed)` | An ordinary user bought their SOLA — their USDC *is* in the floor vault. They borrow their own deposit back and drain nobody. Same as Beradrome. ⚠️ Since 2026-08-12 the cap needs **both** a recorded deposit and possession: capping on the balance alone let the same collateral be walked wallet to wallet, each hop drawing the floor again (proven both ways in `tests/bankrun_borrow_recycle.ts`). |
+| `borrow_usdc` | **100%** of `staked_amount.min(hi_sola)` | An ordinary user bought their SOLA — their USDC *is* in the floor vault. They borrow their own deposit back and drain nobody. Same as Beradrome. The minimum now separates **financed** stake (bought through the curve) from **unfinanced** hiSOLA released by an expired ve lock, which must stay on the 20% channel. Its original job — stopping the same balance being walked wallet to wallet — was made moot by non-transferability, but the split is a distinct rule and the minimum stays (proven in `tests/bankrun_borrow_recycle.ts`). |
 | ~~`founder_borrow_usdc`~~ | — | **Removed 2026-07-18** with `FOUNDER_BORROW_CAP_BPS`: the 7M are ve-escrowed → wallet balance 0 → its `new_borrowed <= hi_sola_balance` check could never pass. Use `borrow_against_locked`. |
 | ~~`contributor_borrow_usdc`~~ | — | **Removed 2026-07-18** with `CONTRIBUTOR_BORROW_CAP_BPS`, same reason. Use `borrow_against_locked`. |
 | `borrow_against_locked` | `PARTNER_BORROW_CAP_BPS` (**20%**) | Unfinanced. Open to **any** ve-locker, so it also serves the founder's 7M and the team's 250K. |

@@ -107,15 +107,22 @@ pub enum SoladromeError {
     EcosystemBudgetExceeded,
     // ── Vote escrow ───────────────────────────────────────────────────────────
     // ⚠️ Still append at the END — see the note above.
-    #[msg("Escrowed hiSOLA is locked until the voted epoch ends — reset is only possible from the next epoch")]
+    #[msg("The hiSOLA backing this epoch's votes cannot be released until the epoch ends")]
     VoteEscrowLocked,
+    /// ⚠️ DEAD since hiSOLA became a position — kept so the ordinal codes of every variant
+    /// below it stay put. Anchor numbers these by declaration order, so removing one silently
+    /// renumbers the rest and every client that maps a code to a message starts lying.
     #[msg("Nothing held in vote escrow for this account")]
     NothingEscrowed,
-    #[msg("Insufficient liquid hiSOLA to back this vote — the voted weight must be escrowed")]
+    #[msg("Insufficient hiSOLA to back this vote")]
     InsufficientVoteBacking,
     // ── Still append at the END — see the note above. ─────────────────────────
     #[msg("This pool epoch is already finalized — its reward pot has been sized and cannot take more weight")]
     EpochAlreadyFinalized,
     #[msg("POL skim exceeds pol_split_bps of the uncredited fee growth")]
     PolSplitExceeded,
+    #[msg("No legacy hiSOLA to convert — this wallet holds no tokens and no vote escrow")]
+    NothingToConvert,
+    #[msg("This burn would buy no votes — the oSOLA bonus is bounded by hiSOLA + ve power, and that ceiling is already reached")]
+    BurnBuysNoVotes,
 }

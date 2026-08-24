@@ -40,6 +40,73 @@ export function getProgram(provider: AnchorProvider) {
   return new Program(idl as any, provider);
 }
 
+// ── hiSOLA is a position, not a token ─────────────────────────────────────────
+// There is no hiSOLA mint balance to read: the balance lives in `UserPosition.hi_sola`.
+// Decoded by byte offset rather than through Anchor so any caller with a `Connection` can
+// use it — no provider, no wallet. Offsets are exact because Borsh writes fields back to
+// back; they are listed here rather than scattered across the components that need them.
+//
+//   8 owner(32) · 40 usdc_borrowed(8) · 48 fees_debt(16) · 64 bump(1)
+//  65 last_borrow_slot(8) · 73 vote_escrowed(8, legacy) · 81 escrow_epoch(8, legacy)
+//  89 staked_amount(8) · 97 hi_sola(8) · 105 vote_locked(8) · 113 vote_lock_epoch(8)
+export const POS_OFF = {
+  usdcBorrowed: 40,
+  voteEscrowed: 73,
+  stakedAmount: 89,
+  hiSola: 97,
+  voteLocked: 105,
+  voteLockEpoch: 113,
+} as const;
+
+export type HiSolaPosition = {
+  /// Spendable hiSOLA balance, in base units.
+  hiSola: bigint;
+  /// The financed subset — the ceiling on `borrow_usdc`.
+  stakedAmount: bigint;
+  /// Immobilised by this epoch's votes; 0 once the stamped epoch has passed.
+  voteLocked: bigint;
+  /// The epoch `voteLocked` was stamped for.
+  voteLockEpoch: number;
+  /// Legacy SPL balance still sitting in the old escrow vault, awaiting `convert_hi_sola`.
+  voteEscrowed: bigint;
+  usdcBorrowed: bigint;
+};
+
+/// Read a wallet's hiSOLA position. Returns all-zero when the position does not exist yet,
+/// which is the correct reading: no position, no balance.
+export async function readPosition(
+  connection: { getAccountInfo: (k: PublicKey) => Promise<{ data: Buffer } | null> },
+  owner: PublicKey,
+  atEpoch?: number
+): Promise<HiSolaPosition> {
+  const zero = {
+    hiSola: BigInt(0),
+    stakedAmount: BigInt(0),
+    voteLocked: BigInt(0),
+    voteLockEpoch: 0,
+    voteEscrowed: BigInt(0),
+    usdcBorrowed: BigInt(0),
+  };
+  const info = await connection.getAccountInfo(positionPda(owner));
+  if (!info || info.data.length < POS_OFF.voteLockEpoch + 8) return zero;
+  const d = Buffer.from(info.data);
+  const stampedEpoch = d.readBigUInt64LE(POS_OFF.voteLockEpoch);
+  const locked = d.readBigUInt64LE(POS_OFF.voteLocked);
+  return {
+    hiSola: d.readBigUInt64LE(POS_OFF.hiSola),
+    stakedAmount: d.readBigUInt64LE(POS_OFF.stakedAmount),
+    // A stamp from an earlier epoch is spent — the program reads it the same way
+    // (`UserPosition::vote_locked_now`), so showing it as still locked would be a lie.
+    voteLocked:
+      atEpoch !== undefined && stampedEpoch !== BigInt(atEpoch)
+        ? BigInt(0)
+        : locked,
+    voteLockEpoch: Number(stampedEpoch),
+    voteEscrowed: d.readBigUInt64LE(POS_OFF.voteEscrowed),
+    usdcBorrowed: d.readBigUInt64LE(POS_OFF.usdcBorrowed),
+  };
+}
+
 export function userAta(mint: PublicKey, owner: PublicKey) {
   return getAssociatedTokenAddressSync(mint, owner);
 }

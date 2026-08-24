@@ -9,10 +9,25 @@ crate-type = ["cdylib", "lib"]
 name = "soladrome"
 
 [features]
-# "devnet" is ON by default → `anchor build` uses short test durations.
-# For mainnet, build with: anchor build --no-default-features
-default = ["devnet"]
-devnet = []
+# ☢️ THERE IS NO CLUSTER PROFILE ANY MORE, AND THERE MUST NEVER BE ONE AGAIN.
+#
+# Until 2026-08-23 this read `default = ["devnet"]`. A plain `anchor build` silently produced
+# a DEVNET binary — throwaway founder key (secret on disk, its predecessor leaked publicly),
+# 5-second vesting cliff, 24-hour vest, and one security check compiled out entirely — while
+# the mainnet binary was the one you had to remember `--no-default-features` for. Nothing in
+# the build output told the two apart.
+#
+# The deeper problem was not the direction of the default. It was that **devnet and mainnet
+# ran different code**, so the artefact under test was never the artefact to be audited or
+# shipped. Devnet 2 exists precisely to run the mainnet build.
+#
+# One binary now. The founder wallet moved OUT of the binary into
+# `ProtocolState.founder_wallet` (set once at `initialize`), which is what made this possible:
+# a compile-time Ledger address is unsignable by any harness, bankrun included, so the
+# 12.25M allocation would otherwise have had zero coverage. Every timing constant carries its
+# mainnet value; the paths that need to cross a 180-day cliff are tested under bankrun's
+# warped clock, not shortened for the test's convenience.
+default = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []

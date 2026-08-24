@@ -120,6 +120,12 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
     return b;
   };
 
+  /// hiSOLA balance of a position — the ledger field that replaced the token account.
+  async function positionHiSola(position: PublicKey): Promise<bigint> {
+    const pos = await program.account.userPosition.fetch(position);
+    return BigInt(pos.hiSola.toString());
+  }
+
   async function tokenBalance(account: PublicKey): Promise<bigint> {
     const raw = await context.banksClient.getAccount(account);
     if (!raw) return BigInt(0);
@@ -401,10 +407,7 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
         user: payer.publicKey,
         poolId: pool.key,
         protocolState: statePda,
-        hiSolaMint: hiSolaM,
         marketVault: marketV,
-        userHiSola: payerHiSola,
-        voteEscrowVault,
         userPosition,
         lockPosition: SystemProgram.programId,
         gaugeState: pda([
@@ -467,7 +470,12 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
     tknY = await createMint();
 
     await program.methods
-      .initialize()
+      .initialize(
+        // The founder wallet is no longer baked into the binary — `initialize` records it.
+        // A THROWAWAY key, deliberately not `payer`: the founder guards (no voting, no
+        // unlock, no oSOLA burn) would otherwise fire on this harness's own actor.
+        Keypair.generate().publicKey
+      )
       .accounts({
         authority: payer.publicKey,
         protocolState: statePda,
@@ -607,11 +615,9 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
         user: payer.publicKey,
         protocolState: statePda,
         solaMint: solaM,
-        hiSolaMint: hiSolaM,
         usdcMint,
         userUsdc: payerUsdc,
         userSola: payerSola,
-        userHiSola: payerHiSola,
         solaVault,
         marketVault: marketV,
         userPosition,
@@ -630,7 +636,7 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
 
     // Sole staker ⇒ the 30% global cap is the whole vote budget. Split it 2:1 so the two
     // gauges must divide one schedule rather than each seeing a full pot.
-    const staked = await tokenBalance(payerHiSola);
+    const staked = await positionHiSola(userPosition);
     const budget = (staked * BigInt(VOTE_WEIGHT_CAP_BPS)) / BigInt(10_000);
     votesX = (budget * BigInt(2)) / BigInt(3);
     votesY = budget - votesX;

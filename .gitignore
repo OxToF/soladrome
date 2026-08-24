@@ -59,3 +59,8 @@ app/.env.*.local
 .vercel
 tests/keys/
 .env*
+
+# Audit prep — vendor quotes and internal scoping. NEVER on the public repo.
+# Lives in the private audit repo instead.
+AUDIT_SCOPE.md
+AUDIT_PACKAGES.md

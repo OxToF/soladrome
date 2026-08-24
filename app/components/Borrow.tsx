@@ -6,7 +6,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
 import {
-  getProgram, statePda, hiSolaM, floorVault, marketVault,
+  getProgram, statePda, floorVault, marketVault, readPosition,
   positionPda, userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
@@ -40,13 +40,24 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
       const provider = new (await import("@coral-xyz/anchor")).AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
       const [ataInfo, posResult, usdcInfo] = await Promise.allSettled([
-        connection.getTokenAccountBalance(userAta(hiSolaM, wallet.publicKey)),
+        // The borrow cap is `staked_amount.min(hi_sola)`, so show the same minimum rather
+        // than the raw balance — an unfinanced balance (released by an expired ve lock)
+        // would otherwise display as collateral the 100% channel will refuse.
+        readPosition(connection, wallet.publicKey),
         (program.account as any).userPosition.fetch(positionPda(wallet.publicKey)),
         usdcMint
           ? connection.getTokenAccountBalance(userAta(usdcMint, wallet.publicKey))
           : Promise.reject(new Error("no usdc mint")),
       ]);
-      setHiSolaBal(ataInfo.status === "fulfilled" ? (ataInfo.value.value.uiAmount ?? 0) : 0);
+      setHiSolaBal(
+        ataInfo.status === "fulfilled"
+          ? Number(
+              ataInfo.value.hiSola < ataInfo.value.stakedAmount
+                ? ataInfo.value.hiSola
+                : ataInfo.value.stakedAmount
+            ) / 1e6
+          : 0
+      );
       setBorrowed(posResult.status === "fulfilled" ? toUi(posResult.value.usdcBorrowed as BN) : 0);
       setUsdcBal(usdcInfo.status === "fulfilled" ? (usdcInfo.value.value.uiAmount ?? 0) : 0);
     } catch { setHiSolaBal(0); setUsdcBal(0); setBorrowed(0); }
@@ -71,7 +82,6 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
     try {
       const provider = new AnchorProvider(connection, wallet, {});
       const program = getProgram(provider);
-      const userHiSola = userAta(hiSolaM, wallet.publicKey);
       const userUsdc   = userAta(usdcMint, wallet.publicKey);
       const position   = positionPda(wallet.publicKey);
 
@@ -91,8 +101,6 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
           .accounts({
             user: wallet.publicKey,
             protocolState: statePda,
-            hiSolaMint: hiSolaM,
-            userHiSola,
             floorVault,
             marketVault,
             userUsdc,

@@ -68,15 +68,13 @@ pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
     //
     // The base is the uncredited growth, not the whole vault: everything at or below
     // `last_market_vault_balance` is already promised to stakers and is not POL's to split.
-    let growth = market_balance.saturating_sub(ctx.accounts.protocol_state.last_market_vault_balance);
+    let growth =
+        market_balance.saturating_sub(ctx.accounts.protocol_state.last_market_vault_balance);
     let max_skim = (growth as u128)
         .checked_mul(ctx.accounts.pol_state.pol_split_bps as u128)
         .ok_or(SoladromeError::Overflow)?
         / 10_000;
-    require!(
-        amount as u128 <= max_skim,
-        SoladromeError::PolSplitExceeded
-    );
+    require!(amount as u128 <= max_skim, SoladromeError::PolSplitExceeded);
 
     // Credit stakers only on what the skim leaves behind. saturating_sub also covers the
     // case where `amount` digs into fees already credited in a previous advance: the

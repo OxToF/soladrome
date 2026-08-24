@@ -2,10 +2,7 @@
 // Copyright (C) 2025 Soladrome Labs
 
 use anchor_lang::prelude::*;
-use anchor_spl::{
-    associated_token::AssociatedToken,
-    token::{self, Mint, Token, TokenAccount, Transfer},
-};
+use anchor_spl::token::TokenAccount;
 
 use crate::errors::SoladromeError;
 use crate::math;
@@ -21,10 +18,14 @@ pub const VE_VAULT_SEED: &[u8] = b"ve_vault";
 
 /// Lock hiSOLA for governance voting power.
 ///
-/// Transferring hiSOLA into the ve_lock_vault removes it from the fee
-/// accumulator denominator — locked holders trade fee yield for ve power.
-/// Subsequent calls on an existing lock may add tokens or extend the end date
-/// (never shorten). Locking into an expired position resets it.
+/// Moving hiSOLA from the position balance into `amount_locked` removes it from the fee
+/// accumulator denominator — locked holders trade fee yield for ve power. Subsequent calls on
+/// an existing lock may add more or extend the end date (never shorten). Locking into an
+/// expired position resets it.
+///
+/// Both sides are ledger figures now: `VeLockPosition.amount_locked` always was one, and
+/// `UserPosition.hi_sola` became one when hiSOLA stopped being a token. The vault this used
+/// to fill is gone.
 pub fn lock_hi_sola(ctx: Context<LockHiSola>, amount: u64, lock_duration_secs: u64) -> Result<()> {
     // Pause check lives here (not only in the lib.rs wrapper) so any future
     // internal call-site cannot accidentally bypass the emergency freeze.
@@ -70,6 +71,27 @@ pub fn lock_hi_sola(ctx: Context<LockHiSola>, amount: u64, lock_duration_secs: u
         ctx.accounts.protocol_state.total_hi_sola,
     );
 
+    // ── Debit the position ───────────────────────────────────────────────────
+    // Same two guards as `unstake_hi_sola`, and for the same reason: locking moves the
+    // balance out of `hi_sola`, so without them it would be the way around both. Debt is
+    // gated because ve-locked hiSOLA is not collateral `borrow_usdc` can see, and the vote
+    // lock because a vote cast this epoch must not be undone by relocating its backing.
+    {
+        let pos = &ctx.accounts.user_position;
+        let remaining = pos
+            .hi_sola
+            .checked_sub(amount)
+            .ok_or(SoladromeError::InvalidAmount)?;
+        require!(
+            pos.usdc_borrowed <= remaining,
+            SoladromeError::OutstandingDebt
+        );
+        require!(
+            remaining >= pos.vote_locked_now(clock.unix_timestamp),
+            SoladromeError::VoteEscrowLocked
+        );
+    }
+
     // ── Checkpoint user fees_debt before locking ─────────────────────────────
     // Prevents extracting fees accumulated by other stakers during the lock
     // period: after unlock, fees_debt is updated again so only post-unlock
@@ -82,20 +104,15 @@ pub fn lock_hi_sola(ctx: Context<LockHiSola>, amount: u64, lock_duration_secs: u
             pos.bump = ctx.bumps.user_position;
         }
         pos.fees_debt = acc;
+        pos.hi_sola = pos.hi_sola.saturating_sub(amount);
+        // `staked_amount` is deliberately NOT decremented. It records what this wallet
+        // financed, which locking does not undo. The `min(staked_amount, hi_sola)` in
+        // `borrow_usdc` and `fee_basis` already collapses to 0 while the balance is locked —
+        // exactly what the emptied ATA used to do — and restores the original cap on unlock,
+        // without a second counter that could drift from the first. Allocations that were
+        // never financed still read `staked_amount = 0` after unlocking, so the 100% channel
+        // stays shut for them and `borrow_against_locked` (20%) remains their only valve.
     }
-
-    // Transfer hiSOLA: user ATA → ve_lock_vault.
-    token::transfer(
-        CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.user_hi_sola.to_account_info(),
-                to: ctx.accounts.ve_lock_vault.to_account_info(),
-                authority: ctx.accounts.user.to_account_info(),
-            },
-        ),
-        amount,
-    )?;
 
     // Update lock position.
     {
@@ -125,20 +142,18 @@ pub fn lock_hi_sola(ctx: Context<LockHiSola>, amount: u64, lock_duration_secs: u
 
 /// Unlock hiSOLA after the lock has expired.
 ///
-/// Restores hiSOLA to the fee accumulator denominator so the returned tokens
-/// resume earning staking fees on the next claim.
+/// Returns the balance to `user_position.hi_sola` and to the fee accumulator denominator, so
+/// it resumes earning staking fees on the next claim.
 pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
     let clock = Clock::get()?;
 
-    // Only the non-permanent portion may ever leave the vault. `permanent_amount` is the
-    // partner welcome bag (see VeLockPosition): unfinanced hiSOLA that must never reach a
-    // wallet, where it could be unstaked and redeemed 1:1 against backing it never funded.
+    // Only the non-permanent portion may ever be released. `permanent_amount` is the partner
+    // welcome bag (see VeLockPosition): unfinanced hiSOLA that must never become a spendable
+    // balance, where it could be unstaked and redeemed 1:1 against backing it never funded.
     // Legacy positions read permanent_amount = 0 and behave exactly as before.
     let locked = ctx.accounts.lock_position.amount_locked;
     let permanent = ctx.accounts.lock_position.permanent_amount;
     let amount = locked.saturating_sub(permanent);
-    let lock_bump = ctx.accounts.lock_position.bump;
-    let user_key = ctx.accounts.user.key();
 
     require!(amount > 0, SoladromeError::NothingToClaim);
     require!(
@@ -155,21 +170,6 @@ pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
         ctx.accounts.protocol_state.total_hi_sola,
     );
 
-    // Transfer hiSOLA: ve_lock_vault → user ATA (lock_position PDA signs).
-    let lock_seeds: &[&[u8]] = &[VELOCK_SEED, user_key.as_ref(), &[lock_bump]];
-    token::transfer(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.ve_lock_vault.to_account_info(),
-                to: ctx.accounts.user_hi_sola.to_account_info(),
-                authority: ctx.accounts.lock_position.to_account_info(),
-            },
-            &[lock_seeds],
-        ),
-        amount,
-    )?;
-
     // NOT zero: the permanent portion stays locked and stays counted, so the position keeps
     // its voting power forever and a later unlock can never drain it.
     ctx.accounts.lock_position.amount_locked = permanent;
@@ -184,6 +184,15 @@ pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
             pos.bump = ctx.bumps.user_position;
         }
         pos.fees_debt = acc;
+        // Credit the balance — this replaces the vault → ATA transfer. `staked_amount` is
+        // NOT credited: hiSOLA released by an expired lock was never financed through the
+        // curve (partner bribe-earned tranches), so it must not open the 100% borrow channel.
+        // For a wallet that locked its own financed stake, `staked_amount` was left standing
+        // at lock time and simply becomes effective again here.
+        pos.hi_sola = pos
+            .hi_sola
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
     }
 
     // Return locked hiSOLA to the fee distribution pool.
@@ -235,14 +244,9 @@ pub struct LockHiSola<'info> {
     )]
     pub protocol_state: Box<Account<'info, ProtocolState>>,
 
-    #[account(address = protocol_state.hi_sola_mint)]
-    pub hi_sola_mint: Box<Account<'info, Mint>>,
-
-    /// Caller's hiSOLA ATA — source of tokens to lock.
-    #[account(mut, token::mint = hi_sola_mint, token::authority = user)]
-    pub user_hi_sola: Box<Account<'info, TokenAccount>>,
-
     /// Lock metadata PDA. Created on first lock, updated on subsequent ones.
+    /// The source of the locked hiSOLA is `user_position.hi_sola`, so there is no token
+    /// account on either side any more — and no `ve_lock_vault`.
     #[account(
         init_if_needed,
         payer = user,
@@ -251,17 +255,6 @@ pub struct LockHiSola<'info> {
         bump,
     )]
     pub lock_position: Box<Account<'info, VeLockPosition>>,
-
-    /// Token account holding locked hiSOLA. Owned by the lock_position PDA.
-    #[account(
-        init_if_needed,
-        payer = user,
-        token::mint      = hi_sola_mint,
-        token::authority = lock_position,
-        seeds = [VE_VAULT_SEED, user.key().as_ref()],
-        bump,
-    )]
-    pub ve_lock_vault: Box<Account<'info, TokenAccount>>,
 
     /// Read-only market vault snapshot for accumulator advance.
     #[account(address = protocol_state.market_vault)]
@@ -279,7 +272,6 @@ pub struct LockHiSola<'info> {
     )]
     pub user_position: Box<Account<'info, UserPosition>>,
 
-    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
@@ -296,34 +288,12 @@ pub struct UnlockHiSola<'info> {
     )]
     pub protocol_state: Box<Account<'info, ProtocolState>>,
 
-    #[account(address = protocol_state.hi_sola_mint)]
-    pub hi_sola_mint: Box<Account<'info, Mint>>,
-
-    /// Destination for unlocked hiSOLA. Created if user burned their ATA previously.
-    #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint      = hi_sola_mint,
-        associated_token::authority = user,
-    )]
-    pub user_hi_sola: Box<Account<'info, TokenAccount>>,
-
     #[account(
         mut,
         seeds = [VELOCK_SEED, user.key().as_ref()],
         bump  = lock_position.bump,
     )]
     pub lock_position: Box<Account<'info, VeLockPosition>>,
-
-    /// Source vault — tokens transferred back to user on unlock.
-    #[account(
-        mut,
-        seeds = [VE_VAULT_SEED, user.key().as_ref()],
-        bump,
-        token::mint      = hi_sola_mint,
-        token::authority = lock_position,
-    )]
-    pub ve_lock_vault: Box<Account<'info, TokenAccount>>,
 
     /// Read-only market vault snapshot for accumulator advance.
     #[account(address = protocol_state.market_vault)]
@@ -340,7 +310,5 @@ pub struct UnlockHiSola<'info> {
     )]
     pub user_position: Box<Account<'info, UserPosition>>,
 
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }

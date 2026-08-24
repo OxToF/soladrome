@@ -6,7 +6,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
 import {
-  getProgram, statePda, hiSolaM, marketVault,
+  getProgram, statePda, marketVault,
   positionPda, userAta, sendTx,
 } from "@/lib/program";
 import { TOKEN_PROGRAM_ID as SPL_TOKEN } from "@solana/spl-token";
@@ -37,7 +37,6 @@ export function ClaimFees() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program = getProgram(provider);
       const usdcMintPk = usdcMint;
-      const userHiSola = userAta(hiSolaM, wallet.publicKey);
       const userUsdc   = userAta(usdcMintPk, wallet.publicKey);
       const position   = positionPda(wallet.publicKey);
 
@@ -56,8 +55,6 @@ export function ClaimFees() {
         .accounts({
           user: wallet.publicKey,
           protocolState: statePda,
-          hiSolaMint: hiSolaM,
-          userHiSola,
           marketVault,
           userUsdc,
           userPosition: position,

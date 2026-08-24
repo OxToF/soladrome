@@ -102,6 +102,12 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
     return b;
   };
 
+  /// hiSOLA balance of a position — the ledger field that replaced the token account.
+  async function positionHiSola(position: PublicKey): Promise<bigint> {
+    const pos = await program.account.userPosition.fetch(position);
+    return BigInt(pos.hiSola.toString());
+  }
+
   async function tokenBalance(account: PublicKey): Promise<bigint> {
     const raw = await context.banksClient.getAccount(account);
     if (!raw) return BigInt(0);
@@ -278,10 +284,7 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
         user: payer.publicKey,
         poolId: poolPda, // the gauge is keyed on the real pool, not a label
         protocolState: statePda,
-        hiSolaMint: hiSolaM,
         marketVault: marketV,
-        userHiSola,
-        voteEscrowVault,
         userPosition,
         lockPosition: SystemProgram.programId,
         gaugeState: pda([Buffer.from("gauge"), poolPda.toBuffer(), epochLE(epoch)]),
@@ -321,7 +324,12 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
     tknMint = await createMint();
 
     await program.methods
-      .initialize()
+      .initialize(
+        // The founder wallet is no longer baked into the binary — `initialize` records it.
+        // A THROWAWAY key, deliberately not `payer`: the founder guards (no voting, no
+        // unlock, no oSOLA burn) would otherwise fire on this harness's own actor.
+        Keypair.generate().publicKey
+      )
       .accounts({
         authority: payer.publicKey,
         protocolState: statePda,
@@ -448,11 +456,9 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
         user: payer.publicKey,
         protocolState: statePda,
         solaMint: solaM,
-        hiSolaMint: hiSolaM,
         usdcMint,
         userUsdc,
         userSola,
-        userHiSola,
         solaVault,
         marketVault: marketV,
         userPosition,
@@ -468,7 +474,7 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
     emissionEpoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
 
     // Sole staker ⇒ the 30% global cap binds against this wallet's own stake.
-    const staked = await tokenBalance(userHiSola);
+    const staked = await positionHiSola(userPosition);
     votedWeight = (staked * BigInt(3000)) / BigInt(10000);
     await voteForPool(emissionEpoch, votedWeight);
   });
@@ -566,8 +572,8 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
     assert.isAbove(nextEpoch, emissionEpoch, "we must be in a later epoch");
 
     // Re-arm: vote in the new epoch, checkpoint, then close it.
-    const escrowed: any = await program.account.userPosition.fetch(userPosition);
-    await voteForPool(nextEpoch, BigInt(escrowed.voteEscrowed.toString()));
+    const standing: any = await program.account.userPosition.fetch(userPosition);
+    await voteForPool(nextEpoch, BigInt(standing.voteLocked.toString()));
     await checkpoint(nextEpoch, 9);
     await forwardSeconds(EPOCH_DURATION);
     await emit(nextEpoch, 10);
@@ -601,8 +607,8 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
       .rpc();
 
     const thirdEpoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
-    const escrowed: any = await program.account.userPosition.fetch(userPosition);
-    await voteForPool(thirdEpoch, BigInt(escrowed.voteEscrowed.toString()));
+    const standing: any = await program.account.userPosition.fetch(userPosition);
+    await voteForPool(thirdEpoch, BigInt(standing.voteLocked.toString()));
     await forwardSeconds(EPOCH_DURATION);
 
     await expectFailure(() => emit(thirdEpoch, 11), "FeatureDisabled");
