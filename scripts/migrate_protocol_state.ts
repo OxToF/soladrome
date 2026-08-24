@@ -63,7 +63,7 @@ async function main() {
   if (before.data.length >= 448) {
     // Already reallocated — the call is still worth making if the field is unset, and is a
     // no-op otherwise. Read it rather than guessing.
-    const st: any = await program.account.protocolState.fetch(statePda);
+    const st: any = await (program.account as any).protocolState.fetch(statePda);
     const current = st.founderWallet?.toBase58();
     if (current && current !== PublicKey.default.toBase58()) {
       console.log(`\nAlready migrated, founder_wallet = ${current}. Nothing to do.`);
@@ -81,7 +81,7 @@ async function main() {
     .rpc();
 
   const after = await conn.getAccountInfo(statePda);
-  const st: any = await program.account.protocolState.fetch(statePda);
+  const st: any = await (program.account as any).protocolState.fetch(statePda);
 
   console.log("\n✅ migrated — tx:", tx);
   console.log("   size          :", before.data.length, "→", after!.data.length);
