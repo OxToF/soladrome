@@ -735,9 +735,59 @@ pub struct PartnerAllocation {
     pub start_ts: i64,        // unix timestamp when register_partner was executed
     pub bump: u8,
     pub base_hi_sola: u64, // one-time welcome bag (streams over BASE_BAG_VEST_SECS); appended last for backward-compatible upgrades
+    /// Unix timestamp at which the partner funded their bribe stream, or 0 if they never did.
+    ///
+    /// **This is the gate on the welcome bag.** The bag used to accrue from `start_ts` for
+    /// everyone, which made it an unconditional gift: a partner could register, never bribe a
+    /// unit, and still claim permanent voting power the floor had funded nothing for. It now
+    /// vests from THIS timestamp, so it is earned by committing an escrowed bribe schedule
+    /// (`fund_partner_bribe_stream`) and by nothing else. 0 means no stream, which means no
+    /// bag — legacy accounts read 0 and therefore fail closed, never open.
+    pub stream_start_ts: i64,
 }
 impl PartnerAllocation {
-    // 32 + 32 + 8*7 + 8 + 1 = 129 bytes used; 31 spare
+    // 32 + 32 + 8*7 + 8 + 8 + 1 = 137 bytes used; 23 spare.
+    // Carved from the spare bytes on purpose: LEN does not move, so no account grows and no
+    // realloc migration is needed. Growing a live singleton is what bricked devnet in July.
+    pub const LEN: usize = 160;
+}
+
+// ── Partner bribe stream ──────────────────────────────────────────────────────
+
+/// An escrowed, self-paced bribe schedule: the partner funds it once and it pays out one
+/// tranche per epoch, forever after, without them signing again.
+///
+/// It exists because `partner_deposit_bribe` requires `epoch == current_epoch`, so a partner
+/// could only ever bribe the week they were transacting in. Delivering "300 SOL a week for a
+/// year" meant 52 signatures, and missing one meant that gauge got nothing. Worse, the
+/// incentive ran the other way: every `claim_partner_allocation` resets `lock_end_ts` to
+/// `now + lock_duration`, so bribing everything at once and claiming once released the
+/// bribe-earned tranche 52 epochs sooner than paying weekly. The instrument rewarded exactly
+/// the behaviour the gauges least wanted — one enormous mercenary week, then silence.
+///
+/// Release is **permissionless**, like `replay_vote`: the epoch's voters are the ones owed the
+/// bribe, so anyone may crank it, and no single keeper can withhold it.
+///
+/// The schedule **slips** rather than catching up. If nobody cranks an epoch, the next call
+/// pays the next tranche — at most one per epoch, never several at once. Nothing is lost and
+/// nothing is written retroactively; the stream simply runs longer. Batching missed tranches
+/// would re-concentrate the bribes, which is the failure this account exists to prevent.
+///
+/// PDA: [b"bribe_stream", partner]
+#[account]
+pub struct PartnerBribeStream {
+    pub partner: Pubkey,    // beneficiary wallet, matching PartnerAllocation.partner
+    pub bribe_mint: Pubkey, // must equal PartnerAllocation.bribe_mint — the committed token
+    pub pool_id: Pubkey,    // the gauge this stream feeds, fixed for the life of the stream
+    pub amount_per_epoch: u64, // released each epoch, in the bribe mint's base units
+    pub epochs_total: u64,  // tranches funded at escrow time
+    pub epochs_released: u64, // tranches paid out so far; stream is spent at epochs_total
+    pub last_release_epoch: u64, // guards one release per epoch — this is what makes it slip
+    pub start_ts: i64,      // when the escrow was funded; the welcome bag vests from here
+    pub bump: u8,
+}
+impl PartnerBribeStream {
+    // 32*3 + 8*4 + 8 + 1 = 137 bytes used; 23 spare for later fields.
     pub const LEN: usize = 160;
 }
 

@@ -129,4 +129,12 @@ pub enum SoladromeError {
     AmmBelowFloor,
     #[msg("Partner allocation is live — it can only be closed once fully claimed (bag vested and bribe cap reached), or while never activated (nothing claimed, nothing bribed)")]
     PartnerAllocationNotSettled,
+    #[msg("This bribe stream has paid out every tranche it was funded for")]
+    BribeStreamExhausted,
+    #[msg(
+        "This epoch's tranche has already been released — the stream pays at most once per epoch"
+    )]
+    BribeStreamAlreadyReleased,
+    #[msg("This bribe stream is still running — it can only be replaced once every funded tranche has been released")]
+    BribeStreamStillRunning,
 }

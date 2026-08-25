@@ -91,15 +91,25 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
   }
 
   /// The whole reason this file exists: 180 days in one call.
+  ///
+  /// The slot bump is not cosmetic. Bankrun does not advance the slot between transactions, so
+  /// the blockhash never moves and two byte-identical calls — `claimPartnerAllocation()` twice,
+  /// which takes no arguments — collide in the status cache and the second is rejected as
+  /// already processed rather than reaching the program. Warping first, then re-applying the
+  /// clock so the override wins, keeps time and slot moving together.
   async function forwardSeconds(seconds: number) {
-    const clock = await context.banksClient.getClock();
+    const before = await context.banksClient.getClock();
+    const target = before.unixTimestamp + BigInt(seconds);
+    const slot = await context.banksClient.getSlot();
+    context.warpToSlot(slot + BigInt(1));
+    const after = await context.banksClient.getClock();
     context.setClock(
       new Clock(
-        clock.slot,
-        clock.epochStartTimestamp,
-        clock.epoch,
-        clock.leaderScheduleEpoch,
-        clock.unixTimestamp + BigInt(seconds)
+        after.slot,
+        after.epochStartTimestamp,
+        after.epoch,
+        after.leaderScheduleEpoch,
+        target
       )
     );
   }
@@ -276,6 +286,121 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
 
   /// A label, not a real pool — `pool_id` is an UncheckedAccount on the bribe path.
   const bribePool = Keypair.generate();
+
+  const streamPda = (o: PublicKey) =>
+    pda([Buffer.from("bribe_stream"), o.toBuffer()]);
+  const streamVaultPda = (o: PublicKey) =>
+    pda([Buffer.from("stream_tokens"), o.toBuffer()]);
+
+  /// `bribes_enabled` is off at initialize. Read before writing: calling set_phase_flags
+  /// twice with identical arguments would be a byte-identical transaction, and bankrun does
+  /// not advance the blockhash between calls, so the second is rejected as already processed.
+  async function ensureBribesEnabled() {
+    const st: any = await program.account.protocolState.fetch(statePda);
+    if (st.bribesEnabled) return;
+    await program.methods
+      .setPhaseFlags(null, true, null, null, null, null)
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+  }
+
+  async function fundUsdc(owner: PublicKey, amount: BN) {
+    const ata = getAssociatedTokenAddressSync(usdcMint, owner);
+    if (!(await accountExists(ata))) {
+      await send([
+        createAssociatedTokenAccountInstruction(
+          payer.publicKey,
+          ata,
+          owner,
+          usdcMint
+        ),
+      ]);
+    }
+    await send([
+      createMintToInstruction(
+        usdcMint,
+        ata,
+        payer.publicKey,
+        BigInt(amount.toString())
+      ),
+    ]);
+    return ata;
+  }
+
+  /// Escrow a whole schedule in one signature. This is also what opens the welcome bag —
+  /// `stream_start_ts` is stamped here and `base_hi_sola` vests from it, so most of the
+  /// partner tests above now have to call this before a claim mints anything at all.
+  async function fundStream(
+    partner: Keypair,
+    epochs: number,
+    perEpoch: BN
+  ): Promise<void> {
+    await ensureBribesEnabled();
+    const ata = await fundUsdc(partner.publicKey, perEpoch.muln(epochs));
+    await program.methods
+      .fundPartnerBribeStream(new BN(epochs), perEpoch)
+      .accounts({
+        partner: partner.publicKey,
+        protocolState: statePda,
+        partnerAllocation: partnerPda(partner.publicKey),
+        poolId: bribePool.publicKey,
+        bribeMint: usdcMint,
+        partnerToken: ata,
+        bribeStream: streamPda(partner.publicKey),
+        streamVault: streamVaultPda(partner.publicKey),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .signers([partner])
+      .rpc();
+  }
+
+  /// Crank one tranche. `caller` defaults to the payer — passing a different one both proves
+  /// the instruction is permissionless and keeps an otherwise byte-identical retry distinct.
+  async function releaseTranche(partner: PublicKey, caller?: Keypair) {
+    const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    const poolId = bribePool.publicKey;
+    return program.methods
+      .releasePartnerBribe(new BN(epoch))
+      .accounts({
+        caller: caller ? caller.publicKey : payer.publicKey,
+        protocolState: statePda,
+        partner,
+        bribeStream: streamPda(partner),
+        partnerAllocation: partnerPda(partner),
+        streamVault: streamVaultPda(partner),
+        poolId,
+        rewardMint: usdcMint,
+        bribeVault: pda([
+          Buffer.from("bribe_vault"),
+          poolId.toBuffer(),
+          usdcMint.toBuffer(),
+          le8(epoch),
+        ]),
+        bribeTokenVault: pda([
+          Buffer.from("bribe_tokens"),
+          poolId.toBuffer(),
+          usdcMint.toBuffer(),
+          le8(epoch),
+        ]),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .signers(caller ? [caller] : [])
+      .rpc();
+  }
+
+  const bribeTokenVaultAt = (epoch: number) =>
+    pda([
+      Buffer.from("bribe_tokens"),
+      bribePool.publicKey.toBuffer(),
+      usdcMint.toBuffer(),
+      le8(epoch),
+    ]);
+
+
 
   before(async () => {
     context = await startAnchor(".", [], []);
@@ -509,6 +634,11 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       } as any)
       .rpc();
 
+    // ☢️ The bag no longer vests from registration — it vests from the moment the partner
+    // escrows a bribe schedule. Without this call `base_vested` stays 0 and the claim below
+    // fails with NothingToClaim. The gift is now the consideration for the commitment.
+    await fundStream(partner, 4, new BN(1_000));
+
     // Let a real slice of the 6-month bag stream. Under the devnet build this window was
     // 6 hours, so "a slice vested" was a 6-second sleep and the stream was never exercised.
     await forwardSeconds(BASE_BAG_VEST_SECS / 2);
@@ -597,6 +727,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     const partner = await fundedWallet();
     const alloc = partnerPda(partner.publicKey);
     await registerPartnerFor(partner.publicKey, ONE, ONE);
+    await fundStream(partner, 2, new BN(1_000));
 
     // Take a slice of the bag, then stop. `hi_sola_claimed > 0` disqualifies the
     // never-activated path, and the bribe cap was never reached so the settled path is
@@ -633,6 +764,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     const partner = await fundedWallet();
     const alloc = partnerPda(partner.publicKey);
     await registerPartnerFor(partner.publicKey, ONE, ONE);
+    await fundStream(partner, 2, new BN(1_000));
 
     await forwardSeconds(BASE_BAG_VEST_SECS + DAY);
     await claimPartner(partner).rpc();
@@ -722,6 +854,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       }),
     ]);
     await registerPartnerFor(settling.publicKey, ONE, ONE);
+    await fundStream(settling, 2, new BN(1_000));
 
     // A quarter of the committed bribe. The partner has now performed — real tokens left
     // their wallet into the bribe vault and are already payable to voters — so the "never
@@ -818,5 +951,248 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       velockPda(settling.publicKey)
     );
     assert.equal(lock.amountLocked.toString(), ONE.add(ONE).toString());
+  });
+
+  // ── Partner bribe stream ──────────────────────────────────────────────────
+  //
+  // The instrument the partnership actually needed. partner_deposit_bribe can only credit the
+  // epoch it is called in, so "300 a week for a year" was 52 signatures with a hole every time
+  // one was missed — and the lock reset on every claim made honouring the schedule strictly
+  // worse than dumping everything in week one. These cases pin the three properties that fix
+  // that: the bag is earned rather than given, the payout is one tranche per epoch and cannot
+  // be batched, and the lock term no longer moves.
+
+  it("[stream] the welcome bag vests nothing until a schedule is escrowed", async () => {
+    const partner = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+
+    // Six months pass on the registration clock. Under the old rule this alone vested the
+    // entire bag — permanent voting power for a partner who had committed nothing.
+    await forwardSeconds(BASE_BAG_VEST_SECS + DAY);
+    await expectFailure(
+      () => claimPartner(partner).rpc(),
+      "NothingToClaim"
+    );
+    const before: any = await program.account.partnerAllocation.fetch(
+      partnerPda(partner.publicKey)
+    );
+    assert.equal(
+      before.streamStartTs.toString(),
+      "0",
+      "no stream, no stamp — and the stamp is the gate"
+    );
+
+    // Escrowing the schedule opens it, and the 6 months just elapsed do NOT count: vesting
+    // starts here, not at registration. Half the window later, half the bag.
+    await fundStream(partner, 4, new BN(1_000));
+    await forwardSeconds(BASE_BAG_VEST_SECS / 2);
+    await claimPartner(partner).rpc();
+
+    const lock: any = await program.account.veLockPosition.fetch(
+      velockPda(partner.publicKey)
+    );
+    const locked = BigInt(lock.amountLocked.toString());
+    const half = BigInt(ONE.toString()) / BigInt(2);
+    assert.isTrue(
+      locked > (half * BigInt(95)) / BigInt(100) && locked <= half,
+      `half the window must vest about half the bag, got ${locked}`
+    );
+    assert.equal(
+      lock.permanentAmount.toString(),
+      lock.amountLocked.toString(),
+      "and all of it is the permanent bag — nothing was bribed yet"
+    );
+  });
+
+  it("[stream] pays one tranche per epoch, cranked by anyone, into that epoch's bribe vault", async () => {
+    const partner = await fundedWallet();
+    const stranger = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+    await fundStream(partner, 4, new BN(25_000));
+
+    const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    await releaseTranche(partner.publicKey);
+
+    assert.equal(
+      (await tokenBalance(bribeTokenVaultAt(epoch))).toString(),
+      "25000",
+      "the tranche must actually reach the vault this epoch's voters claim from"
+    );
+    const pa: any = await program.account.partnerAllocation.fetch(
+      partnerPda(partner.publicKey)
+    );
+    assert.equal(
+      pa.totalBribedCredited.toString(),
+      "25000",
+      "and credit the allocation exactly as a manual bribe would"
+    );
+
+    // Same epoch, different caller. The different signer is what makes this a distinct
+    // transaction rather than a replay, so the refusal comes from the program.
+    await expectFailure(
+      () => releaseTranche(partner.publicKey, stranger),
+      "BribeStreamAlreadyReleased"
+    );
+
+    // Next epoch, and a caller with no stake in the stream at all — that is the point of a
+    // permissionless crank: the voters owed the money are never behind the partner's goodwill.
+    await forwardSeconds(EPOCH_DURATION);
+    await releaseTranche(partner.publicKey, stranger);
+    const s2: any = await program.account.partnerBribeStream.fetch(
+      streamPda(partner.publicKey)
+    );
+    assert.equal(s2.epochsReleased.toString(), "2");
+  });
+
+  it("[stream] a skipped epoch makes the schedule slip, never batch", async () => {
+    const partner = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+    await fundStream(partner, 4, new BN(25_000));
+
+    // Nobody cranks for three epochs. The whole point of the guard is that this backlog is
+    // NOT paid out at once — batching it would re-concentrate the bribes into one epoch,
+    // which is the failure the stream exists to prevent.
+    await forwardSeconds(3 * EPOCH_DURATION);
+    const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    await releaseTranche(partner.publicKey);
+
+    assert.equal(
+      (await tokenBalance(bribeTokenVaultAt(epoch))).toString(),
+      "25000",
+      "exactly one tranche moved, not the three that were owed"
+    );
+    const st: any = await program.account.partnerBribeStream.fetch(
+      streamPda(partner.publicKey)
+    );
+    assert.equal(st.epochsReleased.toString(), "1");
+    assert.equal(
+      st.epochsTotal.toString(),
+      "4",
+      "nothing is lost either — the stream simply runs three epochs longer"
+    );
+  });
+
+  it("[stream] the escrow cannot be redirected to another gauge", async () => {
+    const partner = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+    await fundStream(partner, 2, new BN(25_000));
+
+    // A permissionless crank means an attacker can call it. The pool is pinned at funding
+    // time precisely so they cannot aim someone else's escrowed bribes at their own pool.
+    const otherPool = Keypair.generate().publicKey;
+    const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    await expectFailure(
+      () =>
+        program.methods
+          .releasePartnerBribe(new BN(epoch))
+          .accounts({
+            caller: payer.publicKey,
+            protocolState: statePda,
+            partner: partner.publicKey,
+            bribeStream: streamPda(partner.publicKey),
+            partnerAllocation: partnerPda(partner.publicKey),
+            streamVault: streamVaultPda(partner.publicKey),
+            poolId: otherPool,
+            rewardMint: usdcMint,
+            bribeVault: pda([
+              Buffer.from("bribe_vault"),
+              otherPool.toBuffer(),
+              usdcMint.toBuffer(),
+              le8(epoch),
+            ]),
+            bribeTokenVault: pda([
+              Buffer.from("bribe_tokens"),
+              otherPool.toBuffer(),
+              usdcMint.toBuffer(),
+              le8(epoch),
+            ]),
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            rent: SYSVAR_RENT_PUBKEY,
+          } as any)
+          .rpc(),
+      "Unauthorized"
+    );
+  });
+
+  it("[stream] runs dry after its funded tranches, and only then may be replaced", async () => {
+    const partner = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+    await fundStream(partner, 2, new BN(25_000));
+
+    // A running stream cannot be topped up: re-stamping stream_start_ts would restart the
+    // welcome bag's 6-month clock and, now that the ve lock is anchored on that stamp, let the
+    // partner move their own unlock date.
+    // Different figures on purpose: an identical re-funding call would be a byte-identical
+    // transaction and bankrun would reject the replay before the program ever ran, so the
+    // refusal has to come from a genuinely distinct top-up attempt.
+    await expectFailure(
+      () => fundStream(partner, 3, new BN(11_111)),
+      "BribeStreamStillRunning"
+    );
+
+    await releaseTranche(partner.publicKey);
+    await forwardSeconds(EPOCH_DURATION);
+    await releaseTranche(partner.publicKey);
+
+    await forwardSeconds(EPOCH_DURATION);
+    await expectFailure(
+      () => releaseTranche(partner.publicKey),
+      "BribeStreamExhausted"
+    );
+    assert.equal(
+      (await tokenBalance(streamVaultPda(partner.publicKey))).toString(),
+      "0",
+      "a spent stream holds nothing — every funded tranche was paid out"
+    );
+
+    // Spent, so a new term may now be escrowed. This is the path a renewed partnership takes.
+    await fundStream(partner, 3, new BN(10_000));
+    const st: any = await program.account.partnerBribeStream.fetch(
+      streamPda(partner.publicKey)
+    );
+    assert.equal(st.epochsTotal.toString(), "3");
+    assert.equal(st.epochsReleased.toString(), "0", "the new term starts at zero");
+  });
+
+  it("[stream] the lock term is fixed at commitment — claiming again never pushes it", async () => {
+    // The behaviour that made the schedule worse than dumping. lock_end_ts was `now +
+    // lock_duration`, reassigned on every claim, so a partner claiming weekly pushed their own
+    // unlock out weekly while one who dumped everything in week one walked away 52 epochs
+    // earlier. It is now anchored on the moment the schedule was escrowed.
+    const partner = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+    await fundStream(partner, 4, new BN(25_000));
+    const streamedAt = (
+      await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey))
+    ).streamStartTs.toNumber();
+
+    await forwardSeconds(EPOCH_DURATION);
+    await claimPartner(partner).rpc();
+    const first: any = await program.account.veLockPosition.fetch(
+      velockPda(partner.publicKey)
+    );
+    assert.equal(
+      first.lockEndTs.toNumber(),
+      streamedAt + MIN_LOCK_DURATION,
+      "the term runs from the commitment, not from the claim"
+    );
+
+    // Claim again, later. Under the old rule this alone moved the unlock a full epoch out.
+    await forwardSeconds(EPOCH_DURATION);
+    await claimPartner(partner).rpc();
+    const second: any = await program.account.veLockPosition.fetch(
+      velockPda(partner.publicKey)
+    );
+    assert.equal(
+      second.lockEndTs.toNumber(),
+      first.lockEndTs.toNumber(),
+      "a second claim must not push the unlock date — that was the perverse incentive"
+    );
+    assert.isTrue(
+      BigInt(second.amountLocked.toString()) >
+        BigInt(first.amountLocked.toString()),
+      "while still locking the newly vested slice"
+    );
   });
 });

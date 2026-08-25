@@ -5090,6 +5090,195 @@
       ]
     },
     {
+      "name": "fund_partner_bribe_stream",
+      "docs": [
+        "Partner escrows a bribe schedule: one payment now, one tranche per epoch forever after.",
+        "",
+        "This is the instruction that makes a partnership run on its own. `partner_deposit_bribe`",
+        "can only ever credit the epoch it is called in, so a year of weekly bribes was 52",
+        "signatures with a gap every time one was missed. Here the partner transfers",
+        "`epochs_total × amount_per_epoch` into an escrow the program controls, and",
+        "`release_partner_bribe` pays it out one epoch at a time, called by anyone.",
+        "",
+        "☢️ **Funding this is what unlocks the welcome bag.** `stream_start_ts` is stamped on the",
+        "allocation here, and `claim_partner_allocation` vests `base_hi_sola` from that stamp —",
+        "zero while it is zero. Before this existed the bag accrued from registration for",
+        "everyone, so a partner who never bribed a unit still collected permanent voting power",
+        "against a floor that funded it. The bag is now the consideration for the schedule, and",
+        "it starts when the schedule does.",
+        "",
+        "One *live* stream per partner. Re-funding is allowed only once the previous schedule has",
+        "paid out every tranche it was funded for — that is the renewal path, and it pairs with",
+        "`close_partner_allocation`: a settled deal closes, re-registers on new terms, and funds",
+        "a fresh schedule. Without it, a re-registered partner would find the stream PDA already",
+        "taken and their new welcome bag locked shut for good.",
+        "",
+        "Topping a *running* stream is deliberately refused: it would re-stamp `stream_start_ts`",
+        "and restart the bag's 6-month clock, letting a partner reset their own vesting at will.",
+        "A partner who wants to bribe beyond their commitment uses `partner_deposit_bribe`, which",
+        "still works and still credits the allocation — there is no ceiling on strengthening",
+        "your own position, only on restarting the gift."
+      ],
+      "discriminator": [
+        32,
+        112,
+        53,
+        36,
+        34,
+        247,
+        130,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "partner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_allocation",
+          "docs": [
+            "Stamped with `stream_start_ts` here — this is what opens the welcome bag."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_id",
+          "docs": [
+            "on `deposit_bribe` — bribe vaults are keyed by it and nothing dereferences it."
+          ]
+        },
+        {
+          "name": "bribe_mint"
+        },
+        {
+          "name": "partner_token",
+          "writable": true
+        },
+        {
+          "name": "bribe_stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stream_vault",
+          "docs": [
+            "The escrow itself, owned by the stream PDA so only `release_partner_bribe` can move it."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "epochs_total",
+          "type": "u64"
+        },
+        {
+          "name": "amount_per_epoch",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "initialize",
       "docs": [
         "`founder_wallet` is write-once and has no setter — see the note at the head of this",
@@ -6374,6 +6563,249 @@
         },
         {
           "name": "lock_duration_secs",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "release_partner_bribe",
+      "docs": [
+        "Permissionless: pay out one tranche of a partner's escrowed bribe schedule.",
+        "",
+        "Callable by anyone — the caller pays the rent for that epoch's bribe vault, exactly as",
+        "`replay_vote` has any caller pay to replay someone else's vote. The people owed this",
+        "money are the epoch's voters, so leaving the trigger to the partner would put them",
+        "behind the very party whose incentive is to delay.",
+        "",
+        "**The schedule slips, it never batches.** `last_release_epoch < epoch` allows at most one",
+        "tranche per epoch. A missed epoch is not paid twice later: the next call pays the next",
+        "tranche and the stream simply ends one epoch later. Catching up would dump several",
+        "tranches into a single epoch, which is precisely the concentration this replaces.",
+        "",
+        "The tranche lands in the same `BribeVault` a manual `deposit_bribe` would reach, so",
+        "voters claim it identically, and it credits `total_bribed_credited` identically. Nothing",
+        "downstream needs to know a stream exists."
+      ],
+      "discriminator": [
+        22,
+        4,
+        148,
+        244,
+        25,
+        146,
+        194,
+        207
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Keeper, voter, partner, anyone — pays the rent for a first-time bribe vault."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner",
+          "docs": [
+            "of both PDAs below and re-asserted against the stored `partner` fields."
+          ]
+        },
+        {
+          "name": "bribe_stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_allocation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stream_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_id"
+        },
+        {
+          "name": "reward_mint"
+        },
+        {
+          "name": "bribe_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bribe_token_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "epoch",
           "type": "u64"
         }
       ]
@@ -8750,6 +9182,19 @@
       ]
     },
     {
+      "name": "PartnerBribeStream",
+      "discriminator": [
+        143,
+        157,
+        97,
+        211,
+        207,
+        102,
+        108,
+        233
+      ]
+    },
+    {
       "name": "PolState",
       "discriminator": [
         213,
@@ -9094,6 +9539,21 @@
       "code": 6047,
       "name": "PartnerAllocationNotSettled",
       "msg": "Partner allocation is live — it can only be closed once fully claimed (bag vested and bribe cap reached), or while never activated (nothing claimed, nothing bribed)"
+    },
+    {
+      "code": 6048,
+      "name": "BribeStreamExhausted",
+      "msg": "This bribe stream has paid out every tranche it was funded for"
+    },
+    {
+      "code": 6049,
+      "name": "BribeStreamAlreadyReleased",
+      "msg": "This epoch's tranche has already been released — the stream pays at most once per epoch"
+    },
+    {
+      "code": 6050,
+      "name": "BribeStreamStillRunning",
+      "msg": "This bribe stream is still running — it can only be replaced once every funded tranche has been released"
     }
   ],
   "types": [
@@ -9623,6 +10083,86 @@
           {
             "name": "base_hi_sola",
             "type": "u64"
+          },
+          {
+            "name": "stream_start_ts",
+            "docs": [
+              "Unix timestamp at which the partner funded their bribe stream, or 0 if they never did.",
+              "",
+              "**This is the gate on the welcome bag.** The bag used to accrue from `start_ts` for",
+              "everyone, which made it an unconditional gift: a partner could register, never bribe a",
+              "unit, and still claim permanent voting power the floor had funded nothing for. It now",
+              "vests from THIS timestamp, so it is earned by committing an escrowed bribe schedule",
+              "(`fund_partner_bribe_stream`) and by nothing else. 0 means no stream, which means no",
+              "bag — legacy accounts read 0 and therefore fail closed, never open."
+            ],
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PartnerBribeStream",
+      "docs": [
+        "An escrowed, self-paced bribe schedule: the partner funds it once and it pays out one",
+        "tranche per epoch, forever after, without them signing again.",
+        "",
+        "It exists because `partner_deposit_bribe` requires `epoch == current_epoch`, so a partner",
+        "could only ever bribe the week they were transacting in. Delivering \"300 SOL a week for a",
+        "year\" meant 52 signatures, and missing one meant that gauge got nothing. Worse, the",
+        "incentive ran the other way: every `claim_partner_allocation` resets `lock_end_ts` to",
+        "`now + lock_duration`, so bribing everything at once and claiming once released the",
+        "bribe-earned tranche 52 epochs sooner than paying weekly. The instrument rewarded exactly",
+        "the behaviour the gauges least wanted — one enormous mercenary week, then silence.",
+        "",
+        "Release is **permissionless**, like `replay_vote`: the epoch's voters are the ones owed the",
+        "bribe, so anyone may crank it, and no single keeper can withhold it.",
+        "",
+        "The schedule **slips** rather than catching up. If nobody cranks an epoch, the next call",
+        "pays the next tranche — at most one per epoch, never several at once. Nothing is lost and",
+        "nothing is written retroactively; the stream simply runs longer. Batching missed tranches",
+        "would re-concentrate the bribes, which is the failure this account exists to prevent.",
+        "",
+        "PDA: [b\"bribe_stream\", partner]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "partner",
+            "type": "pubkey"
+          },
+          {
+            "name": "bribe_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_id",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_per_epoch",
+            "type": "u64"
+          },
+          {
+            "name": "epochs_total",
+            "type": "u64"
+          },
+          {
+            "name": "epochs_released",
+            "type": "u64"
+          },
+          {
+            "name": "last_release_epoch",
+            "type": "u64"
+          },
+          {
+            "name": "start_ts",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }

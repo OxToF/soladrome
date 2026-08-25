@@ -25,9 +25,10 @@ pub use pol::*;
 use state::{
     current_epoch, BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting,
     GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo,
-    PartnerAllocation, ProtocolState, UserBribeClaim, UserEpochVotes, UserPosition, UserVoteConfig,
-    UserVoteReceipt, VeLockPosition, BASE_BAG_VEST_SECS, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS,
-    MAX_LOCK_DURATION, MIN_LOCK_DURATION, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
+    PartnerAllocation, PartnerBribeStream, ProtocolState, UserBribeClaim, UserEpochVotes,
+    UserPosition, UserVoteConfig, UserVoteReceipt, VeLockPosition, BASE_BAG_VEST_SECS,
+    EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION, MIN_LOCK_DURATION,
+    VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
 };
 #[allow(ambiguous_glob_reexports)]
 pub use ve::*;
@@ -179,6 +180,8 @@ pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
 
 // ── Protocol Partner allocation ───────────────────────────────────────────────
 pub const PARTNER_SEED: &[u8] = b"partner";
+pub const BRIBE_STREAM_SEED: &[u8] = b"bribe_stream";
+pub const STREAM_TOKENS_SEED: &[u8] = b"stream_tokens";
 /// Partner borrow cap: max 20 % of their vote-locked hiSOLA position.
 /// Partner positions are locked (wallet balance = 0), so they borrow against the
 /// ve_lock_vault via `borrow_against_locked`. The 75 % floor buffer still applies.
@@ -1870,14 +1873,27 @@ pub mod soladrome {
         // rate_den is guaranteed > 0 at register_partner, so the division is safe.
         let pa = &ctx.accounts.partner_allocation;
         let now_ts = Clock::get()?.unix_timestamp;
-        let elapsed = now_ts.saturating_sub(pa.start_ts).max(0) as u64;
-        let base_vested = if elapsed >= BASE_BAG_VEST_SECS {
-            pa.base_hi_sola
+        // ☢️ The welcome bag vests from `stream_start_ts`, not from registration.
+        //
+        // A zero stamp means the partner never escrowed a bribe schedule, and vests nothing:
+        // the bag is the consideration for that schedule, so it cannot precede it. Vesting
+        // from `start_ts` instead would hand a partner who funded late a windfall of months
+        // they never committed to, and hand a partner who never funded at all the whole bag —
+        // permanent voting power against a floor that financed none of it.
+        //
+        // Legacy allocations read 0 here, so they fail closed. Funding the stream opens it.
+        let base_vested = if pa.stream_start_ts == 0 {
+            0
         } else {
-            ((pa.base_hi_sola as u128)
-                .checked_mul(elapsed as u128)
-                .ok_or(SoladromeError::Overflow)?
-                / BASE_BAG_VEST_SECS as u128) as u64
+            let elapsed = now_ts.saturating_sub(pa.stream_start_ts).max(0) as u64;
+            if elapsed >= BASE_BAG_VEST_SECS {
+                pa.base_hi_sola
+            } else {
+                ((pa.base_hi_sola as u128)
+                    .checked_mul(elapsed as u128)
+                    .ok_or(SoladromeError::Overflow)?
+                    / BASE_BAG_VEST_SECS as u128) as u64
+            }
         };
         let bribe_earned = (pa.total_bribed_credited as u128)
             .checked_mul(pa.rate_num as u128)
@@ -1900,7 +1916,24 @@ pub mod soladrome {
             ctx.accounts.protocol_state.total_hi_sola,
         );
 
-        let lock_end_ts = (now_ts as u64)
+        // ── The lock term is fixed by the deal, not by when you claim ────────────
+        //
+        // This was `now + lock_duration`, reassigned on every claim, and it made the schedule
+        // the partner was sold strictly worse than dumping. Claiming weekly pushed the unlock
+        // out weekly, so bribing everything at once and claiming once released the bribe-earned
+        // tranche a full `lock_duration` sooner than honouring the agreement. The instrument
+        // rewarded the one behaviour the gauges least wanted.
+        //
+        // The term now runs from the commitment, so every claim computes the same instant and
+        // repeated claims move nothing. Anchored on `stream_start_ts` — the moment the partner
+        // escrowed their schedule — falling back to registration for an allocation with no
+        // stream, which would otherwise anchor on 0 and hand out a lock that expired in 1970.
+        let lock_anchor = if pa.stream_start_ts != 0 {
+            pa.stream_start_ts
+        } else {
+            pa.start_ts
+        };
+        let lock_end_ts = (lock_anchor as u64)
             .checked_add(lock_duration)
             .ok_or(SoladromeError::Overflow)? as i64;
 
@@ -1935,7 +1968,15 @@ pub mod soladrome {
                 .amount_locked
                 .checked_add(amount)
                 .ok_or(SoladromeError::Overflow)?;
-            lock.lock_end_ts = lock_end_ts;
+            // ☢️ Never shorten an existing lock. This VeLockPosition is the same account
+            // `lock_hi_sola` writes, so a partner who separately locked their own hiSOLA for
+            // four years must not see that term cut to the partnership's when they claim a
+            // tranche. Assigning outright was safe only while the value was always `now +
+            // duration` and therefore always in the future; a fixed term is not, so the
+            // monotonic guard becomes load-bearing here rather than decorative.
+            if lock_end_ts > lock.lock_end_ts {
+                lock.lock_end_ts = lock_end_ts;
+            }
 
             // ── The welcome bag is permanent; the bribe-earned portion is not ──
             // Every claim sets hi_sola_claimed = entitled = base_vested + bribe_earned, so
@@ -1985,6 +2026,230 @@ pub mod soladrome {
             amount,
             lock_end_ts,
             ctx.accounts.partner_allocation.hi_sola_claimed,
+        );
+        Ok(())
+    }
+
+    /// Partner escrows a bribe schedule: one payment now, one tranche per epoch forever after.
+    ///
+    /// This is the instruction that makes a partnership run on its own. `partner_deposit_bribe`
+    /// can only ever credit the epoch it is called in, so a year of weekly bribes was 52
+    /// signatures with a gap every time one was missed. Here the partner transfers
+    /// `epochs_total × amount_per_epoch` into an escrow the program controls, and
+    /// `release_partner_bribe` pays it out one epoch at a time, called by anyone.
+    ///
+    /// ☢️ **Funding this is what unlocks the welcome bag.** `stream_start_ts` is stamped on the
+    /// allocation here, and `claim_partner_allocation` vests `base_hi_sola` from that stamp —
+    /// zero while it is zero. Before this existed the bag accrued from registration for
+    /// everyone, so a partner who never bribed a unit still collected permanent voting power
+    /// against a floor that funded it. The bag is now the consideration for the schedule, and
+    /// it starts when the schedule does.
+    ///
+    /// One *live* stream per partner. Re-funding is allowed only once the previous schedule has
+    /// paid out every tranche it was funded for — that is the renewal path, and it pairs with
+    /// `close_partner_allocation`: a settled deal closes, re-registers on new terms, and funds
+    /// a fresh schedule. Without it, a re-registered partner would find the stream PDA already
+    /// taken and their new welcome bag locked shut for good.
+    ///
+    /// Topping a *running* stream is deliberately refused: it would re-stamp `stream_start_ts`
+    /// and restart the bag's 6-month clock, letting a partner reset their own vesting at will.
+    /// A partner who wants to bribe beyond their commitment uses `partner_deposit_bribe`, which
+    /// still works and still credits the allocation — there is no ceiling on strengthening
+    /// your own position, only on restarting the gift.
+    pub fn fund_partner_bribe_stream(
+        ctx: Context<FundPartnerBribeStream>,
+        epochs_total: u64,
+        amount_per_epoch: u64,
+    ) -> Result<()> {
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        require!(
+            ctx.accounts.protocol_state.bribes_enabled,
+            SoladromeError::FeatureDisabled
+        );
+        require!(epochs_total > 0, SoladromeError::InvalidAmount);
+        require!(amount_per_epoch > 0, SoladromeError::InvalidAmount);
+
+        // Re-funding is the renewal path, and only from a spent schedule. A default `partner`
+        // means the account was just created by `init_if_needed`; anything else is a stream
+        // that already ran, and it may only be replaced once it has paid out in full.
+        // Refusing a top-up mid-stream is what stops a partner re-stamping `stream_start_ts`
+        // to restart their own welcome-bag vesting — and, now that the ve lock is anchored on
+        // that stamp, to push their own unlock date around at will.
+        {
+            let prev = &ctx.accounts.bribe_stream;
+            if prev.partner != Pubkey::default() {
+                require_keys_eq!(
+                    prev.partner,
+                    ctx.accounts.partner.key(),
+                    SoladromeError::Unauthorized
+                );
+                require!(
+                    prev.epochs_released >= prev.epochs_total,
+                    SoladromeError::BribeStreamStillRunning
+                );
+            }
+        }
+
+        // Only the token the deal was written in credits the allocation, so escrowing anything
+        // else would lock funds that `release_partner_bribe` could never pay out.
+        require_keys_eq!(
+            ctx.accounts.bribe_mint.key(),
+            ctx.accounts.partner_allocation.bribe_mint,
+            SoladromeError::BribeMintMismatch
+        );
+
+        let total = (epochs_total as u128)
+            .checked_mul(amount_per_epoch as u128)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(total <= u64::MAX as u128, SoladromeError::Overflow);
+        let total = total as u64;
+
+        // The whole schedule is escrowed up front. This is what the partner is actually
+        // committing to, and it is why the bag can be released against it.
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.partner_token.to_account_info(),
+                    to: ctx.accounts.stream_vault.to_account_info(),
+                    authority: ctx.accounts.partner.to_account_info(),
+                },
+            ),
+            total,
+        )?;
+
+        let now_ts = Clock::get()?.unix_timestamp;
+        let s = &mut ctx.accounts.bribe_stream;
+        s.partner = ctx.accounts.partner.key();
+        s.bribe_mint = ctx.accounts.bribe_mint.key();
+        s.pool_id = ctx.accounts.pool_id.key();
+        s.amount_per_epoch = amount_per_epoch;
+        s.epochs_total = epochs_total;
+        s.epochs_released = 0;
+        // Zero means "never released". Epoch 0 is 1970 and unreachable, so the first crank in
+        // any real epoch passes the `last_release_epoch < epoch` guard.
+        s.last_release_epoch = 0;
+        s.start_ts = now_ts;
+        s.bump = ctx.bumps.bribe_stream;
+
+        // ☢️ The gate. Until this line runs for a partner, their welcome bag vests nothing.
+        ctx.accounts.partner_allocation.stream_start_ts = now_ts;
+
+        msg!(
+            "Bribe stream funded: {} | {} × {} = {} (mint {}) | pool {} | bag vesting starts now",
+            s.partner,
+            epochs_total,
+            amount_per_epoch,
+            total,
+            s.bribe_mint,
+            s.pool_id,
+        );
+        Ok(())
+    }
+
+    /// Permissionless: pay out one tranche of a partner's escrowed bribe schedule.
+    ///
+    /// Callable by anyone — the caller pays the rent for that epoch's bribe vault, exactly as
+    /// `replay_vote` has any caller pay to replay someone else's vote. The people owed this
+    /// money are the epoch's voters, so leaving the trigger to the partner would put them
+    /// behind the very party whose incentive is to delay.
+    ///
+    /// **The schedule slips, it never batches.** `last_release_epoch < epoch` allows at most one
+    /// tranche per epoch. A missed epoch is not paid twice later: the next call pays the next
+    /// tranche and the stream simply ends one epoch later. Catching up would dump several
+    /// tranches into a single epoch, which is precisely the concentration this replaces.
+    ///
+    /// The tranche lands in the same `BribeVault` a manual `deposit_bribe` would reach, so
+    /// voters claim it identically, and it credits `total_bribed_credited` identically. Nothing
+    /// downstream needs to know a stream exists.
+    pub fn release_partner_bribe(ctx: Context<ReleasePartnerBribe>, epoch: u64) -> Result<()> {
+        require!(
+            !ctx.accounts.protocol_state.paused,
+            SoladromeError::ProtocolPaused
+        );
+        require!(
+            ctx.accounts.protocol_state.bribes_enabled,
+            SoladromeError::FeatureDisabled
+        );
+
+        let clock = Clock::get()?;
+        require!(
+            epoch == current_epoch(clock.unix_timestamp),
+            SoladromeError::WrongEpoch
+        );
+
+        let stream = &ctx.accounts.bribe_stream;
+        require!(
+            stream.epochs_released < stream.epochs_total,
+            SoladromeError::BribeStreamExhausted
+        );
+        // One per epoch. This single comparison is the whole slip behaviour.
+        require!(
+            stream.last_release_epoch < epoch,
+            SoladromeError::BribeStreamAlreadyReleased
+        );
+
+        let amount = stream.amount_per_epoch;
+        let partner_key = stream.partner;
+        let stream_bump = stream.bump;
+
+        // First-time vault init, mirroring deposit_bribe / partner_deposit_bribe.
+        if ctx.accounts.bribe_vault.pool_id == Pubkey::default() {
+            ctx.accounts.bribe_vault.pool_id = ctx.accounts.pool_id.key();
+            ctx.accounts.bribe_vault.reward_mint = ctx.accounts.reward_mint.key();
+            ctx.accounts.bribe_vault.epoch = epoch;
+            ctx.accounts.bribe_vault.bump = ctx.bumps.bribe_vault;
+        }
+
+        // Escrow → this epoch's bribe vault, signed by the stream PDA that owns the escrow.
+        let seeds: &[&[u8]] = &[BRIBE_STREAM_SEED, partner_key.as_ref(), &[stream_bump]];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.stream_vault.to_account_info(),
+                    to: ctx.accounts.bribe_token_vault.to_account_info(),
+                    authority: ctx.accounts.bribe_stream.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )?;
+
+        ctx.accounts.bribe_vault.total_bribed = ctx
+            .accounts
+            .bribe_vault
+            .total_bribed
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
+
+        // Credited exactly as a manual bribe would be — the allocation cannot tell the
+        // difference, so the cap is reached on the schedule instead of in week one.
+        ctx.accounts.partner_allocation.total_bribed_credited = ctx
+            .accounts
+            .partner_allocation
+            .total_bribed_credited
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
+
+        let s = &mut ctx.accounts.bribe_stream;
+        s.epochs_released = s
+            .epochs_released
+            .checked_add(1)
+            .ok_or(SoladromeError::Overflow)?;
+        s.last_release_epoch = epoch;
+
+        msg!(
+            "Bribe stream release: {} | epoch {} | +{} | tranche {}/{} | credited total {}",
+            partner_key,
+            epoch,
+            amount,
+            s.epochs_released,
+            s.epochs_total,
+            ctx.accounts.partner_allocation.total_bribed_credited,
         );
         Ok(())
     }
@@ -4643,6 +4908,129 @@ pub struct PartnerDepositBribe<'info> {
     #[account(
         init_if_needed,
         payer = partner,
+        token::mint = reward_mint,
+        token::authority = bribe_vault,
+        seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub bribe_token_vault: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+/// Partner escrows their whole bribe schedule in one signature.
+#[derive(Accounts)]
+pub struct FundPartnerBribeStream<'info> {
+    #[account(mut)]
+    pub partner: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    /// Stamped with `stream_start_ts` here — this is what opens the welcome bag.
+    #[account(
+        mut,
+        seeds = [PARTNER_SEED, partner.key().as_ref()],
+        bump = partner_allocation.bump,
+        constraint = partner_allocation.partner == partner.key() @ SoladromeError::Unauthorized,
+    )]
+    pub partner_allocation: Box<Account<'info, PartnerAllocation>>,
+
+    /// CHECK: The gauge this stream will feed, fixed for its lifetime. Label only, exactly as
+    /// on `deposit_bribe` — bribe vaults are keyed by it and nothing dereferences it.
+    pub pool_id: UncheckedAccount<'info>,
+
+    pub bribe_mint: Box<Account<'info, Mint>>,
+
+    #[account(mut, token::mint = bribe_mint, token::authority = partner)]
+    pub partner_token: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        init_if_needed,
+        payer = partner,
+        space = 8 + PartnerBribeStream::LEN,
+        seeds = [BRIBE_STREAM_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub bribe_stream: Box<Account<'info, PartnerBribeStream>>,
+
+    /// The escrow itself, owned by the stream PDA so only `release_partner_bribe` can move it.
+    #[account(
+        init_if_needed,
+        payer = partner,
+        token::mint = bribe_mint,
+        token::authority = bribe_stream,
+        seeds = [STREAM_TOKENS_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub stream_vault: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+/// Anyone cranks one tranche into the current epoch's bribe vault.
+#[derive(Accounts)]
+#[instruction(epoch: u64)]
+pub struct ReleasePartnerBribe<'info> {
+    /// Keeper, voter, partner, anyone — pays the rent for a first-time bribe vault.
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    /// CHECK: The stream's beneficiary. Never signs here; identity is enforced by the seeds
+    /// of both PDAs below and re-asserted against the stored `partner` fields.
+    pub partner: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [BRIBE_STREAM_SEED, partner.key().as_ref()],
+        bump = bribe_stream.bump,
+        constraint = bribe_stream.partner == partner.key() @ SoladromeError::Unauthorized,
+        // The gauge and the token are fixed at funding time. Binding them here is what stops a
+        // caller redirecting someone else's escrowed bribes to a pool of their own choosing.
+        constraint = bribe_stream.pool_id == pool_id.key() @ SoladromeError::Unauthorized,
+        constraint = bribe_stream.bribe_mint == reward_mint.key() @ SoladromeError::BribeMintMismatch,
+    )]
+    pub bribe_stream: Box<Account<'info, PartnerBribeStream>>,
+
+    #[account(
+        mut,
+        seeds = [PARTNER_SEED, partner.key().as_ref()],
+        bump = partner_allocation.bump,
+        constraint = partner_allocation.partner == partner.key() @ SoladromeError::Unauthorized,
+    )]
+    pub partner_allocation: Box<Account<'info, PartnerAllocation>>,
+
+    #[account(
+        mut,
+        seeds = [STREAM_TOKENS_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub stream_vault: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: Bribe label, as everywhere else in this system.
+    pub pool_id: UncheckedAccount<'info>,
+
+    pub reward_mint: Box<Account<'info, Mint>>,
+
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + BribeVault::LEN,
+        seeds = [b"bribe_vault", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub bribe_vault: Box<Account<'info, BribeVault>>,
+
+    #[account(
+        init_if_needed,
+        payer = caller,
         token::mint = reward_mint,
         token::authority = bribe_vault,
         seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
