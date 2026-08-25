@@ -10,6 +10,7 @@ import {
   getProgram, statePda, solaM,
   solaVaultAddr, marketVault, positionPda, PROGRAM_ID, sendTx,
 } from "@/lib/program";
+import { PartnerStream } from "@/components/PartnerStream";
 
 const PARTNER_SEED  = Buffer.from("partner");
 const VELOCK_SEED   = Buffer.from("velock");
@@ -59,6 +60,8 @@ function timeLeft(endTs: number, nowSecs: number): string {
 }
 
 interface AllocData {
+  bribeMintKey:     PublicKey;
+  streamStartTs:    number;
   bribeMint:        string;
   rateNum:          bigint;
   rateDen:          bigint;
@@ -108,6 +111,8 @@ export function PartnerPanel() {
         // a streaming bag plus a bribe-earned tranche, so the read threw and the panel sat
         // on "Loading…" forever. Anything added here must exist in the IDL.
         setAlloc({
+          bribeMintKey:     d.bribeMint,
+          streamStartTs:    Number(d.streamStartTs?.toString() ?? "0"),
           bribeMint:        d.bribeMint.toBase58(),
           rateNum:          BigInt(d.rateNum.toString()),
           rateDen:          BigInt(d.rateDen.toString()),
@@ -211,10 +216,16 @@ export function PartnerPanel() {
 
   // ── The same arithmetic claim_partner_allocation runs, so the figure on the button is
   //    the figure the instruction will mint. Integer division throughout, as on-chain.
-  const elapsed = Math.max(0, nowSecs - alloc.startTs);
-  const baseVested = elapsed >= BASE_BAG_VEST_SECS
-    ? alloc.baseHiSola
-    : (alloc.baseHiSola * BigInt(elapsed)) / BigInt(BASE_BAG_VEST_SECS);
+  // Mirrors claim_partner_allocation exactly: a zero stamp means no schedule was ever
+  // escrowed, and the bag vests nothing at all — it is earned, not granted.
+  const elapsed = alloc.streamStartTs === 0
+    ? 0
+    : Math.max(0, nowSecs - alloc.streamStartTs);
+  const baseVested = alloc.streamStartTs === 0
+    ? BigInt(0)
+    : elapsed >= BASE_BAG_VEST_SECS
+      ? alloc.baseHiSola
+      : (alloc.baseHiSola * BigInt(elapsed)) / BigInt(BASE_BAG_VEST_SECS);
   const bribeEarnedRaw = alloc.rateDen > BigInt(0)
     ? (alloc.totalBribed * alloc.rateNum) / alloc.rateDen
     : BigInt(0);
@@ -222,7 +233,7 @@ export function PartnerPanel() {
   const entitled  = baseVested + bribeEarned;
   const claimable = entitled > alloc.claimed ? entitled - alloc.claimed : BigInt(0);
 
-  const bagDoneIn = alloc.startTs + BASE_BAG_VEST_SECS;
+  const bagDoneIn = alloc.streamStartTs + BASE_BAG_VEST_SECS;
   const bagStreaming = nowSecs < bagDoneIn;
 
   const isLocked   = lock && lock.lockEndTs > nowSecs;
@@ -251,6 +262,20 @@ export function PartnerPanel() {
           Vote-locked hiSOLA · a streaming welcome bag plus what your bribes earn
         </p>
       </div>
+
+      {/* ── The schedule that gates everything else ── */}
+      <PartnerStream
+        alloc={{
+          bribeMint:     alloc.bribeMintKey,
+          rateNum:       alloc.rateNum,
+          rateDen:       alloc.rateDen,
+          capHiSola:     alloc.capHiSola,
+          baseHiSola:    alloc.baseHiSola,
+          streamStartTs: alloc.streamStartTs,
+        }}
+        bribeDec={bribeDec}
+        onChanged={fetchData}
+      />
 
       {/* ── Claimable now ── */}
       <div className="card">
@@ -294,7 +319,8 @@ export function PartnerPanel() {
           </span>
         </div>
         <p className="text-[11px] text-gray-500 mb-3">
-          Streams over 6 months from registration, whether you bribe or not.
+          Streams over 6 months from the day you escrow your bribe schedule — it is what the
+          schedule buys.
         </p>
         <div className="w-full bg-brand-border rounded-full h-2 mb-2">
           <div
@@ -303,9 +329,13 @@ export function PartnerPanel() {
           />
         </div>
         <p className="text-[11px] text-gray-500">
-          {bagStreaming
-            ? <>Fully streamed in <span className="font-mono text-gray-400">{timeLeft(bagDoneIn, nowSecs)}</span>.</>
-            : <>Fully streamed.</>}
+          {alloc.streamStartTs === 0
+            ? <><span className="text-amber-400/90">Not started.</span> The bag vests from the day
+                you escrow a bribe schedule, not from the day you were registered — commit one
+                above and the 6 months begin.</>
+            : bagStreaming
+              ? <>Fully streamed in <span className="font-mono text-gray-400">{timeLeft(bagDoneIn, nowSecs)}</span>.</>
+              : <>Fully streamed.</>}
           {" "}This portion is <span className="text-white">permanent</span> — it keeps its voting
           power for life and can never be unlocked or sold.
         </p>
