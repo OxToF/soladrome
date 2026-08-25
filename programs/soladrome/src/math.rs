@@ -60,8 +60,16 @@ pub fn advance_accumulator(
 ///
 /// Voting no longer enters this calculation at all: a vote immobilises the balance
 /// (`vote_locked`) without moving it, so there is nothing to add back.
-pub fn fee_basis(staked_amount: u64, hi_sola: u64) -> u64 {
-    staked_amount.min(hi_sola)
+pub fn fee_basis(staked_amount: u64, hi_sola: u64, fee_shares: u64) -> u64 {
+    // `min` is the financed-stake rule: fees follow USDC that actually reached the floor, so
+    // hiSOLA released by an expired ve lock cannot collect on a deposit it never made.
+    //
+    // `fee_shares` is the deliberate exception, and it is added rather than min-ed because it
+    // is not a balance at all — it is hiSOLA locked for life that the protocol has decided
+    // earns fees anyway. A contributor who funds an audit paid in a currency the floor never
+    // saw; refusing them the yield their bag generates would make the bag worthless as
+    // compensation, which is what it is for. See `claim_contributor_hi_sola`.
+    staked_amount.min(hi_sola).saturating_add(fee_shares)
 }
 
 /// Pending claimable USDC for a user (rounded down).

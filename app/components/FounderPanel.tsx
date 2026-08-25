@@ -982,13 +982,20 @@ export function FounderPanel() {
                   </p>
                   <p className="text-[11px] text-gray-500 leading-relaxed">
                     It can never be unlocked or sold — <span className="font-mono">unlock_hi_sola</span>{" "}
-                    releases nothing of it, at any date. It votes forever (up to 4×) and borrows
-                    up to{" "}
+                    releases nothing of it, at any date. In exchange it works for them
+                    permanently: it votes forever (up to 4×), borrows up to{" "}
                     <span className="font-mono text-gray-300">
                       {fromBaseUnits(conOk.hi / BigInt(5), 6)} USDC
                     </span>{" "}
-                    (20%). It stays out of the fee pool permanently, so it earns{" "}
-                    <strong>no protocol fees, ever</strong> — it buys governance, not income.
+                    (20%), and <strong className="text-white">earns protocol fees for life</strong>{" "}
+                    on the full {fromBaseUnits(conOk.hi, 6)}, claimable from the Portfolio like
+                    any staker&apos;s.
+                  </p>
+                  <p className="text-[11px] text-gray-500 leading-relaxed">
+                    That yield is the real compensation — the bag itself can never be sold, so
+                    without it the tranche would pay nothing at all. The share is not printed:
+                    it joins <span className="font-mono">total_hi_sola</span>, so every other
+                    holder is diluted by exactly what the contributor receives.
                   </p>
                 </div>
               )}

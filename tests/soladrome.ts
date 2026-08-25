@@ -2796,8 +2796,56 @@ describe("soladrome", () => {
       "contributor position holds no spendable hiSOLA (locked, not liquid)");
     assert.equal(cPosAcc.stakedAmount.toString(), "0",
       "and nothing financed — the bag never paid into the floor");
-    assert.equal(after.totalHiSola.toString(), before.totalHiSola.toString(),
-      "total_hi_sola unchanged → locked bag earns no fees");
+    // ☢️ Reversed on 2026-08-25. This used to assert total_hi_sola was UNCHANGED, i.e. that
+    // the bag earned no fees — which made it worthless as compensation. Someone who funds an
+    // audit receives governance and, until this changed, no yield at all.
+    assert.equal(
+      after.totalHiSola.sub(before.totalHiSola).toString(),
+      HI.toString(),
+      "the bag joins the fee denominator — the share is real, not printed"
+    );
+    assert.equal(cPosAcc.feeShares.toString(), HI.toString(),
+      "and is recorded as fee_shares: earns fees without ever being spendable");
+
+    // The point of the whole change: fees actually reach them. Drive real revenue into the
+    // market vault, then let the contributor claim against a basis that is entirely locked.
+    const buyerUsdc = anchor.utils.token.associatedAddress({ mint: usdcMint, owner: wallet.publicKey });
+    const buyerSola = anchor.utils.token.associatedAddress({ mint: solaM, owner: wallet.publicKey });
+    await program.methods.buySola(new BN(400).mul(ONE), new BN(1))
+      .accounts({
+        user:          wallet.publicKey,
+        protocolState: statePda,
+        solaMint:      solaM,
+        userUsdc:      buyerUsdc,
+        userSola:      buyerSola,
+        floorVault:    floorV,
+        marketVault:   marketV,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    // claim_fees pays into an existing ATA, so create the contributor's first.
+    const cUsdcAcc = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, usdcMint, contributor.publicKey
+    );
+    await program.methods.claimFees()
+      .accounts({
+        user:          contributor.publicKey,
+        protocolState: statePda,
+        marketVault:   marketV,
+        userUsdc:      cUsdcAcc.address,
+        userPosition:  cPos,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+      } as any)
+      .signers([contributor])
+      .rpc();
+
+    const earned = await getTokenBalance(connection, cUsdcAcc.address);
+    assert.isTrue(earned > 0n,
+      "a contributor whose entire bag is locked for life must still collect protocol fees");
+    console.log(`✅ [contributor] locked bag earned ${earned} USDC of fees`);
 
     // And claims the oSOLA tranche — to the wallet, floor-neutral until exercised.
     const cOSola = anchor.utils.token.associatedAddress({ mint: oSolaM, owner: contributor.publicKey });

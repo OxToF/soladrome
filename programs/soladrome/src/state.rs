@@ -345,11 +345,31 @@ pub struct UserPosition {
     /// Epoch `vote_locked` was stamped for. A stale stamp means the lock has lapsed —
     /// the votes it backed belong to a closed epoch and their receipts are already immutable.
     pub vote_lock_epoch: u64,
+
+    /// hiSOLA that earns protocol fees without being a spendable balance.
+    ///
+    /// Every other fee-earning hiSOLA sits in `hi_sola` and is capped by `staked_amount` — the
+    /// financed-stake rule: fees follow USDC that actually reached the floor. A contributor's
+    /// bag satisfies neither. It is locked for life in `VeLockPosition`, so `hi_sola` is 0, and
+    /// it was never bought through the curve, so `staked_amount` is 0. Their fee basis was
+    /// therefore 0, and being permanent, it would have stayed 0 forever.
+    ///
+    /// That made the bag worthless as compensation, which is the one job it has. Someone who
+    /// funds an audit pays in a currency the floor never sees; the yield their locked hiSOLA
+    /// generates is the entire return on it. `fee_shares` is that exception — added to the
+    /// basis in `math::fee_basis`, and matched by an increment to `total_hi_sola` so the share
+    /// is real rather than printed: every other holder is diluted by exactly what the
+    /// contributor receives.
+    ///
+    /// Deliberately NOT granted to the founder's 7M, which is a dormant anti-capture reserve
+    /// that takes no vote and no fees by design. Carved from spare bytes, so `LEN` does not
+    /// move and no account reallocs.
+    pub fee_shares: u64,
 }
 
 impl UserPosition {
     // 32+8+16+1+8 + 8+8 (legacy escrow) + 8 (staked) + 8+8+8 (ledger + vote lock)
-    // = 113 bytes used, 15 spare.
+    // + 8 (fee_shares) = 121 bytes used, 7 spare.
     pub const LEN: usize = 128;
 
     /// hiSOLA this position may not part with right now, because it is backing votes cast in

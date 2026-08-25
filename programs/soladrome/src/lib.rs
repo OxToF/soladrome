@@ -27,7 +27,7 @@ use state::{
     GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo,
     PartnerAllocation, PartnerBribeStream, ProtocolState, UserBribeClaim, UserEpochVotes,
     UserPosition, UserVoteConfig, UserVoteReceipt, VeLockPosition, BASE_BAG_VEST_SECS,
-    EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION, MIN_LOCK_DURATION,
+    EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION, MIN_LOCK_DURATION, PRECISION,
     VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
 };
 #[allow(ambiguous_glob_reexports)]
@@ -697,7 +697,8 @@ pub mod soladrome {
             } else {
                 // `staked_amount` is still the pre-stake figure here: this harvest settles
                 // what the OLD position earned, before the new deposit is recorded below.
-                let basis = math::fee_basis(position.staked_amount, old_balance);
+                let basis =
+                    math::fee_basis(position.staked_amount, old_balance, position.fee_shares);
                 math::pending_fees(acc, position.fees_debt, basis)
             };
             // Entry/exit point: debt = current accumulator (no retroactive claim).
@@ -881,7 +882,11 @@ pub mod soladrome {
         // `fees_debt` is reset to `acc` a few lines down, which permanently closes the window
         // on everything not credited now. Capped by the financed stake — see
         // `math::fee_basis`.
-        let fee_basis = math::fee_basis(ctx.accounts.user_position.staked_amount, balance);
+        let fee_basis = math::fee_basis(
+            ctx.accounts.user_position.staked_amount,
+            balance,
+            ctx.accounts.user_position.fee_shares,
+        );
         let pending = math::pending_fees(acc, ctx.accounts.user_position.fees_debt, fee_basis);
         if pending > 0 {
             let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
@@ -1264,6 +1269,7 @@ pub mod soladrome {
         let basis = math::fee_basis(
             ctx.accounts.user_position.staked_amount,
             ctx.accounts.user_position.hi_sola,
+            ctx.accounts.user_position.fee_shares,
         );
         let claimable = math::pending_fees(acc, ctx.accounts.user_position.fees_debt, basis);
         require!(claimable > 0, SoladromeError::NothingToClaim);
@@ -1741,18 +1747,47 @@ pub mod soladrome {
                 .ok_or(SoladromeError::Overflow)?;
         }
 
-        // Init/update contributor position debt snapshot
+        // ── The bag earns fees ───────────────────────────────────────────────
+        // It did not until 2026-08-25, and that made it worthless as compensation. The tranche
+        // is locked for life, so `hi_sola` stays 0; it was never bought through the curve, so
+        // `staked_amount` stays 0. `fee_basis` is the min of the two, so a contributor's basis
+        // was 0 and — the lock being permanent — could never become anything else. Someone who
+        // funds an audit would have received governance and no yield whatsoever.
         let pos = &mut ctx.accounts.contributor_position;
         if pos.owner == Pubkey::default() {
             pos.owner = ctx.accounts.contributor.key();
             pos.bump = ctx.bumps.contributor_position;
         }
-        pos.fees_debt = acc;
 
-        // total_hi_sola: UNCHANGED — locked hiSOLA is out of the fee denominator.
+        // Adding to the basis while `fees_debt` is a single scalar would hand the new shares a
+        // retroactive claim on fees accrued before they existed. Re-stamping to `acc` instead
+        // would forfeit whatever this position had already accrued — harmless for a fresh
+        // contributor, real for one who was already staking. So carry the accrual across
+        // exactly: pick the debt that reproduces the same pending amount against the new,
+        // larger basis. Rounds down, i.e. never in the claimant's favour.
+        let old_basis = math::fee_basis(pos.staked_amount, pos.hi_sola, pos.fee_shares);
+        let pending = math::pending_fees(acc, pos.fees_debt, old_basis);
+        pos.fee_shares = pos
+            .fee_shares
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
+        let new_basis = math::fee_basis(pos.staked_amount, pos.hi_sola, pos.fee_shares);
+        pos.fees_debt = if pending == 0 || new_basis == 0 {
+            acc
+        } else {
+            acc.saturating_sub((pending as u128 * PRECISION) / new_basis as u128)
+        };
+
+        // total_hi_sola GROWS by the tranche — the counterpart of the line above. The share is
+        // real, not printed: existing holders are diluted by exactly what the contributor now
+        // receives, which is the honest way to pay someone out of the fee stream.
         let s = &mut ctx.accounts.protocol_state;
         s.fees_per_hi_sola = acc;
         s.last_market_vault_balance = market_balance;
+        s.total_hi_sola = s
+            .total_hi_sola
+            .checked_add(claimable)
+            .ok_or(SoladromeError::Overflow)?;
         s.total_sola = s
             .total_sola
             .checked_add(claimable)
