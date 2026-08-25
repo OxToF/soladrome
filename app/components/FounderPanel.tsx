@@ -29,6 +29,43 @@ function partnerAllocPda(partnerWallet: PublicKey): PublicKey {
   )[0];
 }
 
+// ── Exact amounts, no floats ─────────────────────────────────────────────────
+// `register_partner` writes numbers that can never be edited afterwards, so every figure
+// on this form is parsed and displayed with BigInt. `parseFloat(x) * 1e6` was the previous
+// route and it is not safe here: it silently rounds past 2^53 and turns a typed amount into
+// a neighbouring one, on an instruction with no second chance.
+const U64_MAX = BigInt("18446744073709551615");
+
+/// Decimal string → base units. Returns null on anything not exactly representable,
+/// including more decimal places than the mint actually has.
+function toBaseUnits(input: string, decimals: number): bigint | null {
+  const s = input.trim();
+  if (!s || s === "." || !/^\d*\.?\d*$/.test(s)) return null;
+  const [whole = "", frac = ""] = s.split(".");
+  if (frac.length > decimals) return null;
+  const padded = (frac + "0".repeat(decimals)).slice(0, decimals);
+  return (
+    BigInt(whole || "0") * BigInt(10) ** BigInt(decimals) + BigInt(padded || "0")
+  );
+}
+
+/// Base units → display string. A whole amount renders whole: 1 000 000 base units of a
+/// 6-decimal mint is "1,000,000", never "1,000,000.000000" and never "1000000.00". Trailing
+/// zeros inside a real fraction are dropped too.
+function fromBaseUnits(v: bigint, decimals: number): string {
+  const d = BigInt(10) ** BigInt(decimals);
+  const whole = (v / d).toLocaleString("en-US");
+  const frac = v % d;
+  if (frac === BigInt(0)) return whole;
+  const f = frac.toString().padStart(decimals, "0").replace(/0+$/, "");
+  return `${whole}.${f}`;
+}
+
+function gcd(a: bigint, b: bigint): bigint {
+  while (b) [a, b] = [b, a % b];
+  return a;
+}
+
 // ── Vesting constants — must match state.rs ──────────────────────────────────
 // One set of values, for every cluster. These read 6 h / 24 h until 2026-08-23, mirroring
 // the `devnet` feature the program no longer has; the "flip these before launch" note they
@@ -195,8 +232,10 @@ export function FounderPanel() {
   // provided", which points at the wrong thing entirely. All six are collected now.
   const [regWallet,    setRegWallet]    = useState("");
   const [regBribeMint, setRegBribeMint] = useState("");
-  const [regRateNum,   setRegRateNum]   = useState("1");
-  const [regRateDen,   setRegRateDen]   = useState("1");
+  // The deal in the terms it is actually negotiated in: the partner commits N bribe tokens,
+  // and those bribes earn them up to M hiSOLA. `rate_num`/`rate_den` are DERIVED from that
+  // pair — see below. They used to be typed by hand, which is what put decimals on screen.
+  const [regCommit,    setRegCommit]    = useState("1000000");
   const [regCap,       setRegCap]       = useState("1000000");
   const [regAmount,    setRegAmount]    = useState("100000");
   const [regEpochs,    setRegEpochs]    = useState("52");
@@ -210,16 +249,17 @@ export function FounderPanel() {
   const isAuthority = !!wallet && !!authorityWallet &&
     wallet.publicKey.toBase58() === authorityWallet;
 
-  // ── The rate is not a ratio of whole tokens ─────────────────────────────────
+  // ── The rate is derived, never typed ────────────────────────────────────────
   // `partner_deposit_bribe` credits `total_bribed_credited += amount` in the BRIBE MINT's
   // base units, and `claim_partner_allocation` turns that into hiSOLA base units (6 dec) with
   // `× rate_num / rate_den`. The decimal gap therefore lands entirely inside the rate:
   //
   //     hiSOLA per 1 whole bribe token = 10^(decimals − 6) × num/den
   //
-  // So the form's default 1/1 is only correct for a 6-decimal mint. Against a 9-decimal one —
-  // wSOL and most SPL tokens — it pays 1000× what it looks like. Nothing on screen said so,
-  // which is why the decimals are read from chain and the result spelled out below.
+  // Asking an operator to type num/den means asking them to hold that exponent in their head
+  // against whatever decimals the mint happens to have — 1/1 looks 1:1 and pays 1000× on a
+  // 9-decimal mint like wSOL. So the form no longer asks. It takes the two figures the deal
+  // is actually written in — tokens committed, hiSOLA earned — and reduces them to num/den.
   const [bribeDecimals, setBribeDecimals] = useState<number | null>(null);
   const [bribeMintErr,  setBribeMintErr]  = useState<string | null>(null);
 
@@ -243,20 +283,51 @@ export function FounderPanel() {
     return () => { cancelled = true; };
   }, [regBribeMint, connection]);
 
-  // hiSOLA credited per whole bribe token, and the num/den that would make it exactly 1:1.
-  const rateNumN = parseInt(regRateNum, 10);
-  const rateDenN = parseInt(regRateDen, 10);
-  const rateUsable = Number.isFinite(rateNumN) && Number.isFinite(rateDenN) &&
-                     rateNumN > 0 && rateDenN > 0;
-  const hiSolaPerToken = bribeDecimals !== null && rateUsable
-    ? Math.pow(10, bribeDecimals - 6) * (rateNumN / rateDenN)
-    : null;
-  const oneToOneDen = bribeDecimals !== null ? Math.pow(10, bribeDecimals - 6) : null;
-  // Whole bribe tokens needed before `cap_hi_sola` binds — the figure that says whether the
-  // rate is sane far better than the ratio itself does.
-  const capN = parseFloat(regCap);
-  const tokensToCap = hiSolaPerToken && hiSolaPerToken > 0 && Number.isFinite(capN)
-    ? capN / hiSolaPerToken
+  // ── Everything the instruction will write, derived exactly from what was typed ──────
+  // One object, so the summary block and the submit handler can never disagree about what
+  // is going on-chain. `err` is the single place a bad input is named.
+  const deal = (() => {
+    const capBase  = toBaseUnits(regCap, 6);
+    const baseBase = toBaseUnits(regAmount, 6);
+    const epochs   = /^\d+$/.test(regEpochs.trim()) ? parseInt(regEpochs, 10) : NaN;
+
+    if (capBase === null)  return { err: "Cap must be a plain amount, at most 6 decimals." };
+    if (baseBase === null) return { err: "Welcome bag must be a plain amount, at most 6 decimals." };
+    if (capBase <= BigInt(0)) return { err: "Cap must be greater than 0." };
+    if (!Number.isFinite(epochs) || epochs < 1 || epochs > MAX_LOCK_EPOCHS)
+      return { err: `Lock must be between 1 and ${MAX_LOCK_EPOCHS} epochs.` };
+    if (bribeDecimals === null) return { pending: true as const };
+
+    const commitBase = toBaseUnits(regCommit, bribeDecimals);
+    if (commitBase === null)
+      return { err: `Commitment must be a plain amount, at most ${bribeDecimals} decimals — that is all this mint has.` };
+    if (commitBase <= BigInt(0)) return { err: "Commitment must be greater than 0." };
+
+    // rate = cap / commitment, reduced. At exactly `commitBase` bribed the program computes
+    // commitBase × num / den = capBase with no remainder, so the cap lands on the committed
+    // amount to the base unit — which is the property the operator is really buying here.
+    const g   = gcd(capBase, commitBase);
+    const num = capBase / g;
+    const den = commitBase / g;
+    if (num > U64_MAX || den > U64_MAX)
+      return { err: "That ratio does not fit in u64. Round the commitment or the cap." };
+    if (capBase > U64_MAX || baseBase > U64_MAX)
+      return { err: "Amount too large for u64." };
+
+    // hiSOLA base units credited by one whole bribe token — exact when it divides evenly.
+    const perTokenBase = (BigInt(10) ** BigInt(bribeDecimals) * num) / den;
+    const perTokenExact =
+      (BigInt(10) ** BigInt(bribeDecimals) * num) % den === BigInt(0);
+
+    return {
+      capBase, baseBase, commitBase, num, den, epochs, perTokenBase, perTokenExact,
+      lockSecs: epochs * EPOCH_DURATION_SECS,
+    };
+  })();
+  const dealErr     = "err" in deal ? (deal.err as string) : null;
+  const dealPending = "pending" in deal;
+  const dealOk      = !dealErr && !dealPending
+    ? (deal as Extract<typeof deal, { num: bigint }>)
     : null;
 
   // ── Fetch all vesting + position data ───────────────────────────────────────
@@ -483,23 +554,20 @@ export function FounderPanel() {
     if (!wallet) return;
     setLoadingReg(true); setStatusReg("");
     try {
+      // Every figure comes from the same derivation the summary block renders, so what is
+      // signed is exactly what was read on screen. No second parse, no second rounding.
+      if (dealErr || !dealOk) {
+        setStatusReg(`❌ ${dealErr ?? "Waiting for the bribe mint."}`);
+        return;
+      }
       const partnerKey = new PublicKey(regWallet.trim());
       const bribeMint  = new PublicKey(regBribeMint.trim());
-      const rateNumBN  = new BN(regRateNum.trim());
-      const rateDenBN  = new BN(regRateDen.trim());
-      const capBN      = new BN(Math.floor(parseFloat(regCap) * 1_000_000));
-      const baseBN     = new BN(Math.floor(parseFloat(regAmount) * 1_000_000));
-      const lockBN     = new BN(parseInt(regEpochs, 10) * EPOCH_DURATION_SECS);
+      const rateNumBN  = new BN(dealOk.num.toString());
+      const rateDenBN  = new BN(dealOk.den.toString());
+      const capBN      = new BN(dealOk.capBase.toString());
+      const baseBN     = new BN(dealOk.baseBase.toString());
+      const lockBN     = new BN(dealOk.lockSecs);
       const allocPda   = partnerAllocPda(partnerKey);
-
-      // Mirror the on-chain requires, so a bad input is named here rather than coming back
-      // as a generic InvalidAmount from the program.
-      if (capBN.lten(0))                    { setStatusReg("❌ Cap must be greater than 0."); return; }
-      if (rateNumBN.lten(0) || rateDenBN.lten(0)) { setStatusReg("❌ Both sides of the rate must be greater than 0."); return; }
-      const epochs = parseInt(regEpochs, 10);
-      if (epochs < 1 || epochs > MAX_LOCK_EPOCHS) {
-        setStatusReg(`❌ Lock must be between 1 and ${MAX_LOCK_EPOCHS} epochs.`); return;
-      }
 
       // Guard: already registered?
       const existing = await connection.getAccountInfo(allocPda);
@@ -773,43 +841,27 @@ export function FounderPanel() {
             />
           </div>
 
-          {/* Rate + cap row */}
-          <div className="grid grid-cols-3 gap-3">
+          {/* ── The deal, in the terms it is negotiated in ──────────────────── */}
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
-                Rate num
+                Partner commits (bribe tokens)
               </label>
               <input
                 className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
                 type="text"
-                inputMode="numeric"
-                placeholder="1"
-                value={regRateNum}
+                inputMode="decimal"
+                placeholder="1000000"
+                value={regCommit}
                 onChange={(e) => {
-                  if (e.target.value === "" || /^\d+$/.test(e.target.value))
-                    setRegRateNum(e.target.value);
+                  if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
+                    setRegCommit(e.target.value);
                 }}
               />
             </div>
             <div>
               <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
-                Rate den
-              </label>
-              <input
-                className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
-                type="text"
-                inputMode="numeric"
-                placeholder="1"
-                value={regRateDen}
-                onChange={(e) => {
-                  if (e.target.value === "" || /^\d+$/.test(e.target.value))
-                    setRegRateDen(e.target.value);
-                }}
-              />
-            </div>
-            <div>
-              <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
-                Cap (hiSOLA)
+                Which earns (hiSOLA)
               </label>
               <input
                 className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
@@ -866,55 +918,148 @@ export function FounderPanel() {
             1 epoch = 7 days · 52 epochs ≈ 12 months · max {MAX_LOCK_EPOCHS} epochs (≈ 4 years)
           </p>
           <p className="text-[10px] text-gray-500">
-            Welcome bag streams into the partner&apos;s vote-locked position over 6 months. Cap
-            bounds the hiSOLA their bribes can additionally earn, at rate num/den.
+            Welcome bag streams into the partner&apos;s vote-locked position over 6 months.
+            The commitment pair above bounds what their bribes can additionally earn — enter
+            whole tokens, the decimals of each mint are handled for you.
           </p>
 
-          {/* ── Effective rate ─────────────────────────────────────────────────
-              The rate is applied to base units, so its meaning depends on the bribe mint's
-              decimals. Spell the result out rather than leave num/den to be interpreted. */}
+          {/* ── What will be written on-chain ──────────────────────────────────
+              register_partner has no editor and no undo, so the deal is restated in plain
+              language and then in the exact integers that go into the account. Anything
+              unreadable here is a figure nobody can fix later. */}
           {bribeMintErr && (
             <p className="text-[11px] text-red-400">❌ {bribeMintErr}</p>
           )}
+          {dealErr && (
+            <p className="text-[11px] text-red-400">❌ {dealErr}</p>
+          )}
+          {dealPending && !bribeMintErr && (
+            <p className="text-[11px] text-gray-500">
+              Enter the bribe mint — its decimals decide the rate.
+            </p>
+          )}
 
-          {bribeDecimals !== null && (
-            <div className="rounded-xl border border-brand-border bg-brand-dark/60 px-3 py-2.5 flex flex-col gap-1">
+          {dealOk && bribeDecimals !== null && (
+            <div className="rounded-xl border border-brand-border bg-brand-dark/60 px-3 py-3 flex flex-col gap-2.5">
               <p className="text-[10px] text-gray-500 uppercase tracking-widest">
-                Effective rate · mint has {bribeDecimals} decimals
+                This deal, once signed · immutable
               </p>
 
-              {hiSolaPerToken === null ? (
-                <p className="text-xs text-gray-500">Enter a rate to see what it pays.</p>
-              ) : (
-                <p className="text-sm text-white font-mono">
-                  1 token bribed → {hiSolaPerToken.toLocaleString("en-US", {
-                    maximumFractionDigits: 6,
-                  })} hiSOLA
-                </p>
-              )}
-
-              {tokensToCap !== null && (
-                <p className="text-[11px] text-gray-500">
-                  Cap reached after ~{tokensToCap.toLocaleString("en-US", {
-                    maximumFractionDigits: 2,
-                  })} tokens bribed.
-                </p>
-              )}
-
-              {oneToOneDen !== null && hiSolaPerToken !== null &&
-               Math.abs(hiSolaPerToken - 1) > 1e-9 && (
-                <p className="text-[11px] text-amber-400/90 leading-relaxed">
-                  ⚠️ Not 1:1. The rate multiplies <em>base units</em>, and this mint has{" "}
-                  {bribeDecimals} decimals against hiSOLA&apos;s 6 — so num/den carries the
-                  gap. For exactly 1 token → 1 hiSOLA use{" "}
-                  {/* No thousands separator here, deliberately: this is meant to be retyped
-                      into the rate fields, which only accept digits. */}
+              <ul className="text-xs text-gray-300 leading-relaxed flex flex-col gap-1">
+                <li>
+                  Partner bribes{" "}
                   <span className="font-mono text-white">
-                    {oneToOneDen >= 1 ? `1 / ${oneToOneDen}`
-                                      : `${Math.round(1 / oneToOneDen)} / 1`}
-                  </span>.
+                    {fromBaseUnits(dealOk.commitBase, bribeDecimals)}
+                  </span>{" "}
+                  tokens <strong className="text-white">in total, ever</strong> — and earns{" "}
+                  <span className="font-mono text-white">
+                    {fromBaseUnits(dealOk.capBase, 6)}
+                  </span>{" "}
+                  hiSOLA for it, reached to the base unit.
+                </li>
+                <li>
+                  Each{" "}
+                  <span className="font-mono text-white">1</span> token bribed credits{" "}
+                  <span className="font-mono text-white">
+                    {fromBaseUnits(dealOk.perTokenBase, 6)}
+                  </span>{" "}
+                  hiSOLA{dealOk.perTokenExact ? "" : " (rounded down per claim)"}.
+                </li>
+                <li>
+                  Plus a welcome bag of{" "}
+                  <span className="font-mono text-white">
+                    {fromBaseUnits(dealOk.baseBase, 6)}
+                  </span>{" "}
+                  hiSOLA, streaming over 6 months whether they bribe or not.
+                </li>
+              </ul>
+
+              {/* ── No schedule exists on-chain ──────────────────────────────────
+                  partner_deposit_bribe does `total_bribed_credited += amount`, a lifetime
+                  counter. Its `epoch` argument only picks which epoch's voters are paid; it
+                  never reaches the credit. So "300/epoch for a year" is not expressible —
+                  the same total dumped in one week caps out in one week. */}
+              <p className="text-[11px] text-amber-400/90 leading-relaxed">
+                ⏱ No schedule. That commitment is a <strong>lifetime cumulative total</strong>,
+                not per epoch and not per year — nothing on-chain paces it. The partner may
+                deposit all{" "}
+                <span className="font-mono">
+                  {fromBaseUnits(dealOk.commitBase, bribeDecimals)}
+                </span>{" "}
+                in a single epoch, reach the cap, and never bribe again.
+              </p>
+
+              {/* ── The rate is frozen ───────────────────────────────────────────
+                  There is no oracle anywhere in the partner path. rate_num/rate_den is a
+                  fixed base-unit ratio, so whatever USD equivalence justified it today is
+                  frozen for the life of the deal. */}
+              <p className="text-[11px] text-amber-400/90 leading-relaxed">
+                🔒 The rate is <strong>final</strong>. There is no oracle: hiSOLA is not priced
+                at floor, nor in USDC, nor re-quoted later. Whatever this ratio is worth today
+                is what it stays worth, for {dealOk.epochs} epochs and beyond.
+              </p>
+
+              {/* ── Which half comes back out ────────────────────────────────────
+                  permanent_amount = the bag only; unlock_hi_sola releases
+                  amount_locked − permanent_amount. Released hiSOLA can be unstaked and sold
+                  1:1 against a floor it never financed, so the releasable figure is the
+                  exposure this form actually writes. */}
+              <div className="border-t border-brand-border pt-2 flex flex-col gap-1">
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-gray-500">Permanent · never unlockable</span>
+                  <span className="text-gray-300 font-mono">
+                    {fromBaseUnits(dealOk.baseBase, 6)} hiSOLA
+                  </span>
+                </div>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-gray-500">
+                    Releasable after {dealOk.epochs} epochs
+                    {" "}({(dealOk.lockSecs / 86_400).toLocaleString("en-US")} days)
+                  </span>
+                  <span className="text-white font-mono">
+                    {fromBaseUnits(dealOk.capBase, 6)} hiSOLA
+                  </span>
+                </div>
+                {dealOk.capBase > dealOk.baseBase && (
+                  <p className="text-[11px] text-amber-400/90 leading-relaxed mt-0.5">
+                    ⚠️ The releasable tranche is{" "}
+                    <span className="font-mono">
+                      {dealOk.baseBase === BigInt(0)
+                        ? "all"
+                        : `${(Number((dealOk.capBase * BigInt(100)) / dealOk.baseBase) / 100)
+                            .toLocaleString("en-US", { maximumFractionDigits: 1 })}×`}
+                    </span>{" "}
+                    {dealOk.baseBase === BigInt(0) ? "of it — there is no permanent bag at all" : "the permanent one"}. Once unlocked it can be unstaked and sold at the 1 USDC
+                    floor, which no bribe ever funded — so this line is the floor exposure this
+                    deal creates. Raising the welcome bag or lowering the cap is what shrinks it.
+                  </p>
+                )}
+              </div>
+
+              {/* The raw u64s. Present because this is the row that will sit in the account
+                  for the life of the partnership, and because a mismatch between this and
+                  the sentences above is the one thing worth catching before signing. */}
+              <div className="border-t border-brand-border pt-2 flex flex-col gap-0.5">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-0.5">
+                  Stored values
                 </p>
-              )}
+                {([
+                  ["rate_num", dealOk.num.toString()],
+                  ["rate_den", dealOk.den.toString()],
+                  ["cap_hi_sola", dealOk.capBase.toString()],
+                  ["base_hi_sola", dealOk.baseBase.toString()],
+                  ["lock_duration_secs", dealOk.lockSecs.toString()],
+                ] as const).map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-3 text-[11px]">
+                    <span className="text-gray-500 font-mono">{k}</span>
+                    <span className="text-gray-300 font-mono break-all text-right">{v}</span>
+                  </div>
+                ))}
+                <p className="text-[10px] text-gray-600 mt-1">
+                  Bribe mint has {bribeDecimals} decimals; hiSOLA has 6. The rate carries that
+                  gap so you never have to.
+                </p>
+              </div>
             </div>
           )}
 
@@ -931,9 +1076,12 @@ export function FounderPanel() {
             className="btn-primary w-full"
             onClick={registerPartner}
             disabled={loadingReg || !isAuthority || !regWallet.trim() || !regBribeMint.trim() ||
-                      !regRateNum || !regRateDen || !regCap || !regAmount || !regEpochs}
+                      !dealOk}
           >
-            {loadingReg ? "Processing…" : !isAuthority ? "Authority wallet required" : "Register Partner"}
+            {loadingReg ? "Processing…"
+              : !isAuthority ? "Authority wallet required"
+              : !dealOk ? "Complete the deal above"
+              : "Register Partner"}
           </button>
 
           {statusReg && (
