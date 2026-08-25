@@ -286,7 +286,12 @@ export function FounderPanel() {
   // ── Everything the instruction will write, derived exactly from what was typed ──────
   // One object, so the summary block and the submit handler can never disagree about what
   // is going on-chain. `err` is the single place a bad input is named.
-  const deal = (() => {
+  // Split in two on purpose. The hiSOLA side of the deal — cap, welcome bag, lock term, and
+  // therefore the permanent-vs-releasable split that is the whole floor exposure — is fixed in
+  // 6-decimal hiSOLA and owes the bribe mint nothing. Gating all of it behind the mint left the
+  // panel looking unchanged until an address was pasted, which is exactly the moment an
+  // operator is still deciding the terms.
+  const terms = (() => {
     const capBase  = toBaseUnits(regCap, 6);
     const baseBase = toBaseUnits(regAmount, 6);
     const epochs   = /^\d+$/.test(regEpochs.trim()) ? parseInt(regEpochs, 10) : NaN;
@@ -294,8 +299,18 @@ export function FounderPanel() {
     if (capBase === null)  return { err: "Cap must be a plain amount, at most 6 decimals." };
     if (baseBase === null) return { err: "Welcome bag must be a plain amount, at most 6 decimals." };
     if (capBase <= BigInt(0)) return { err: "Cap must be greater than 0." };
+    if (capBase > U64_MAX || baseBase > U64_MAX)
+      return { err: "Amount too large for u64." };
     if (!Number.isFinite(epochs) || epochs < 1 || epochs > MAX_LOCK_EPOCHS)
       return { err: `Lock must be between 1 and ${MAX_LOCK_EPOCHS} epochs.` };
+    return { capBase, baseBase, epochs, lockSecs: epochs * EPOCH_DURATION_SECS };
+  })();
+  const termsErr = "err" in terms ? (terms.err as string) : null;
+  const termsOk  = termsErr ? null : (terms as Extract<typeof terms, { capBase: bigint }>);
+
+  const deal = (() => {
+    if (!termsOk) return { err: termsErr as string };
+    const { capBase, baseBase, epochs } = termsOk;
     if (bribeDecimals === null) return { pending: true as const };
 
     const commitBase = toBaseUnits(regCommit, bribeDecimals);
@@ -311,8 +326,6 @@ export function FounderPanel() {
     const den = commitBase / g;
     if (num > U64_MAX || den > U64_MAX)
       return { err: "That ratio does not fit in u64. Round the commitment or the cap." };
-    if (capBase > U64_MAX || baseBase > U64_MAX)
-      return { err: "Amount too large for u64." };
 
     // hiSOLA base units credited by one whole bribe token — exact when it divides evenly.
     const perTokenBase = (BigInt(10) ** BigInt(bribeDecimals) * num) / den;
@@ -933,19 +946,21 @@ export function FounderPanel() {
           {dealErr && (
             <p className="text-[11px] text-red-400">❌ {dealErr}</p>
           )}
-          {dealPending && !bribeMintErr && (
-            <p className="text-[11px] text-gray-500">
-              Enter the bribe mint — its decimals decide the rate.
-            </p>
-          )}
 
-          {dealOk && bribeDecimals !== null && (
+          {termsOk && (
             <div className="rounded-xl border border-brand-border bg-brand-dark/60 px-3 py-3 flex flex-col gap-2.5">
               <p className="text-[10px] text-gray-500 uppercase tracking-widest">
                 This deal, once signed · immutable
               </p>
 
               <ul className="text-xs text-gray-300 leading-relaxed flex flex-col gap-1">
+                {!dealOk || bribeDecimals === null ? (
+                  <li className="text-gray-500">
+                    Enter the bribe mint to price the commitment — its decimals decide the
+                    rate. Everything below is already fixed by the figures above.
+                  </li>
+                ) : (
+                <>
                 <li>
                   Partner bribes{" "}
                   <span className="font-mono text-white">
@@ -972,6 +987,8 @@ export function FounderPanel() {
                   </span>{" "}
                   hiSOLA, streaming over 6 months whether they bribe or not.
                 </li>
+                </>
+                )}
               </ul>
 
               {/* ── No schedule exists on-chain ──────────────────────────────────
@@ -983,9 +1000,7 @@ export function FounderPanel() {
                 ⏱ No schedule. That commitment is a <strong>lifetime cumulative total</strong>,
                 not per epoch and not per year — nothing on-chain paces it. The partner may
                 deposit all{" "}
-                <span className="font-mono">
-                  {fromBaseUnits(dealOk.commitBase, bribeDecimals)}
-                </span>{" "}
+                <span className="font-mono">{regCommit || "of it"}</span>{" "}
                 in a single epoch, reach the cap, and never bribe again.
               </p>
 
@@ -996,7 +1011,7 @@ export function FounderPanel() {
               <p className="text-[11px] text-amber-400/90 leading-relaxed">
                 🔒 The rate is <strong>final</strong>. There is no oracle: hiSOLA is not priced
                 at floor, nor in USDC, nor re-quoted later. Whatever this ratio is worth today
-                is what it stays worth, for {dealOk.epochs} epochs and beyond.
+                is what it stays worth, for {termsOk.epochs} epochs and beyond.
               </p>
 
               {/* ── Which half comes back out ────────────────────────────────────
@@ -1008,28 +1023,28 @@ export function FounderPanel() {
                 <div className="flex justify-between text-[11px]">
                   <span className="text-gray-500">Permanent · never unlockable</span>
                   <span className="text-gray-300 font-mono">
-                    {fromBaseUnits(dealOk.baseBase, 6)} hiSOLA
+                    {fromBaseUnits(termsOk.baseBase, 6)} hiSOLA
                   </span>
                 </div>
                 <div className="flex justify-between text-[11px]">
                   <span className="text-gray-500">
-                    Releasable after {dealOk.epochs} epochs
-                    {" "}({(dealOk.lockSecs / 86_400).toLocaleString("en-US")} days)
+                    Releasable after {termsOk.epochs} epochs
+                    {" "}({(termsOk.lockSecs / 86_400).toLocaleString("en-US")} days)
                   </span>
                   <span className="text-white font-mono">
-                    {fromBaseUnits(dealOk.capBase, 6)} hiSOLA
+                    {fromBaseUnits(termsOk.capBase, 6)} hiSOLA
                   </span>
                 </div>
-                {dealOk.capBase > dealOk.baseBase && (
+                {termsOk.capBase > termsOk.baseBase && (
                   <p className="text-[11px] text-amber-400/90 leading-relaxed mt-0.5">
                     ⚠️ The releasable tranche is{" "}
                     <span className="font-mono">
-                      {dealOk.baseBase === BigInt(0)
+                      {termsOk.baseBase === BigInt(0)
                         ? "all"
-                        : `${(Number((dealOk.capBase * BigInt(100)) / dealOk.baseBase) / 100)
+                        : `${(Number((termsOk.capBase * BigInt(100)) / termsOk.baseBase) / 100)
                             .toLocaleString("en-US", { maximumFractionDigits: 1 })}×`}
                     </span>{" "}
-                    {dealOk.baseBase === BigInt(0) ? "of it — there is no permanent bag at all" : "the permanent one"}. Once unlocked it can be unstaked and sold at the 1 USDC
+                    {termsOk.baseBase === BigInt(0) ? "of it — there is no permanent bag at all" : "the permanent one"}. Once unlocked it can be unstaked and sold at the 1 USDC
                     floor, which no bribe ever funded — so this line is the floor exposure this
                     deal creates. Raising the welcome bag or lowering the cap is what shrinks it.
                   </p>
@@ -1043,6 +1058,12 @@ export function FounderPanel() {
                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-0.5">
                   Stored values
                 </p>
+                {!dealOk ? (
+                  <p className="text-[11px] text-gray-500">
+                    rate_num and rate_den are derived from the bribe mint&apos;s decimals —
+                    enter it to see the exact integers.
+                  </p>
+                ) : (<>
                 {([
                   ["rate_num", dealOk.num.toString()],
                   ["rate_den", dealOk.den.toString()],
@@ -1059,6 +1080,7 @@ export function FounderPanel() {
                   Bribe mint has {bribeDecimals} decimals; hiSOLA has 6. The rate carries that
                   gap so you never have to.
                 </p>
+                </>)}
               </div>
             </div>
           )}
