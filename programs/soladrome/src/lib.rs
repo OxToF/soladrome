@@ -1989,6 +1989,76 @@ pub mod soladrome {
         Ok(())
     }
 
+    /// Authority-only: close a `PartnerAllocation` PDA and return its rent to the authority
+    /// that paid for it at `register_partner`.
+    ///
+    /// This is bookkeeping, not a revoke. It only accepts an allocation that has reached a
+    /// **terminal state** — one of exactly two, and nothing in between:
+    ///
+    /// 1. **Fully settled** — `hi_sola_claimed >= base_hi_sola + cap_hi_sola`. The welcome bag
+    ///    ran to term and the bribe-earned side is capped out, so `claim_partner_allocation`
+    ///    would mint 0 from here on and further `partner_deposit_bribe` credits buy nothing
+    ///    (`bribe_earned` is `min`-ed against `cap_hi_sola`). The deal is finished on the
+    ///    numbers; the account is dead weight.
+    ///
+    /// 2. **Never activated** — `hi_sola_claimed == 0 && total_bribed_credited == 0`. The
+    ///    partner never claimed a lamport of hiSOLA and never bribed a single unit: the deal
+    ///    was signed on-chain and then never started. Cancelling it forfeits only the *accrued
+    ///    but untouched* slice of the welcome bag, which is unfinanced (no USDC ever entered
+    ///    the floor for it) and was a gift conditioned on a partnership that did not happen.
+    ///
+    /// Anything between the two is refused with `PartnerAllocationNotSettled`. That is the line
+    /// that matters: **once a partner has performed — bribed anything, or claimed anything —
+    /// the authority can no longer close the account out from under them.** Their earned,
+    /// still-claimable entitlement survives any admin action.
+    ///
+    /// ⚠️ Closing frees the `[b"partner", partner_wallet]` seeds, so `register_partner` can open
+    /// the same PDA again with `hi_sola_claimed`, `total_bribed_credited` and `start_ts` reset
+    /// to zero — a **fresh deal**, including a fresh `base_hi_sola` bag streaming from scratch.
+    /// That is intended for case 1 (renewing a partnership for another term) and for case 2
+    /// (re-registering on corrected terms), but it means close-then-re-register is the one way
+    /// to hand the same wallet a second welcome bag. It takes the authority signature twice and
+    /// is visible on-chain in both instructions.
+    ///
+    /// The partner's `VeLockPosition` and `UserPosition` are separate PDAs and are untouched:
+    /// everything already minted stays locked, votes stay counted, `borrow_against_locked`
+    /// keeps working. Nothing is burned here.
+    ///
+    /// Not pause-gated, matching `register_partner`: this is admin cleanup that moves no tokens.
+    pub fn close_partner_allocation(ctx: Context<ClosePartnerAllocation>) -> Result<()> {
+        let pa = &ctx.accounts.partner_allocation;
+
+        // `cap_hi_sola > 0` is enforced at register, so this total is always > 0 and a
+        // never-claimed allocation can never accidentally read as settled.
+        let settled_total = pa
+            .base_hi_sola
+            .checked_add(pa.cap_hi_sola)
+            .ok_or(SoladromeError::Overflow)?;
+        // `>=` rather than `==`: claims can only ever reach this total, never pass it
+        // (`entitled` is bounded by base + cap), but the guard should not depend on that.
+        let fully_settled = pa.hi_sola_claimed >= settled_total;
+        let never_activated = pa.hi_sola_claimed == 0 && pa.total_bribed_credited == 0;
+
+        require!(
+            fully_settled || never_activated,
+            SoladromeError::PartnerAllocationNotSettled
+        );
+
+        msg!(
+            "Partner allocation closed: {} | claimed {} of {} | bribed {} | reason={}",
+            pa.partner,
+            pa.hi_sola_claimed,
+            settled_total,
+            pa.total_bribed_credited,
+            if fully_settled {
+                "settled"
+            } else {
+                "never activated"
+            },
+        );
+        Ok(())
+    }
+
     /// Borrow USDC against a vote-locked hiSOLA position (the partner liquidity valve).
     ///
     /// Partner hiSOLA lives in the ve_lock_vault (wallet balance = 0), so the normal
@@ -5356,6 +5426,35 @@ pub struct ClaimPartnerAllocation<'info> {
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+/// Authority reclaims the rent of a terminal `PartnerAllocation`.
+/// Moves no tokens and touches no other PDA — see `close_partner_allocation` for the two
+/// states this is allowed in, and for why re-registering the same wallet is a fresh deal.
+#[derive(Accounts)]
+pub struct ClosePartnerAllocation<'info> {
+    /// Receives the reclaimed rent — the same account that paid it at `register_partner`.
+    #[account(
+        mut,
+        address = protocol_state.authority @ SoladromeError::Unauthorized,
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    /// CHECK: The partner's beneficiary wallet — identity enforced by the PDA seeds below
+    /// and re-asserted against the stored `partner` field. Never signs, never receives.
+    pub partner_wallet: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        close = authority,
+        seeds = [PARTNER_SEED, partner_wallet.key().as_ref()],
+        bump = partner_allocation.bump,
+        constraint = partner_allocation.partner == partner_wallet.key() @ SoladromeError::Unauthorized,
+    )]
+    pub partner_allocation: Account<'info, PartnerAllocation>,
 }
 
 // ── Vote carry-over ───────────────────────────────────────────────────────────

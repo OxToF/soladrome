@@ -127,4 +127,6 @@ pub enum SoladromeError {
     BurnBuysNoVotes,
     #[msg("This swap would push the SOLA/USDC pool below the 1 USDC floor — sell through sell_sola instead, it pays 1.00 exactly")]
     AmmBelowFloor,
+    #[msg("Partner allocation is live — it can only be closed once fully claimed (bag vested and bribe cap reached), or while never activated (nothing claimed, nothing bribed)")]
+    PartnerAllocationNotSettled,
 }

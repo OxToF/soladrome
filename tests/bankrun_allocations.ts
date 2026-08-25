@@ -131,6 +131,151 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
   const velockPda = (o: PublicKey) => pda([Buffer.from("velock"), o.toBuffer()]);
   const positionPda = (o: PublicKey) =>
     pda([Buffer.from("position"), o.toBuffer()]);
+  const partnerPda = (o: PublicKey) =>
+    pda([Buffer.from("partner"), o.toBuffer()]);
+
+  const le8 = (n: number) => {
+    const b = Buffer.alloc(8);
+    b.writeBigUInt64LE(BigInt(n));
+    return b;
+  };
+
+  async function lamportsOf(key: PublicKey): Promise<bigint> {
+    const raw = await context.banksClient.getAccount(key);
+    return raw ? BigInt(raw.lamports) : BigInt(0);
+  }
+
+  async function accountExists(key: PublicKey): Promise<boolean> {
+    const raw = await context.banksClient.getAccount(key);
+    // A closed Anchor account is defunded and reassigned to the System Program; bankrun
+    // reports it as absent. Either shape means "gone" — never trust `data.length` alone.
+    return raw !== null && raw.lamports > 0;
+  }
+
+  /// A funded wallet with nothing but lamports — every partner test starts from one.
+  async function fundedWallet(): Promise<Keypair> {
+    const kp = Keypair.generate();
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: kp.publicKey,
+        lamports: 5_000_000_000,
+      }),
+    ]);
+    return kp;
+  }
+
+  async function registerPartnerFor(
+    wallet: PublicKey,
+    base: BN,
+    cap: BN
+  ): Promise<void> {
+    await program.methods
+      .registerPartner(
+        usdcMint, // committed bribe mint
+        new BN(1), // rate 1:1 — one bribe unit buys one hiSOLA, up to the cap
+        new BN(1),
+        cap,
+        base,
+        new BN(MIN_LOCK_DURATION)
+      )
+      .accounts({
+        authority: payer.publicKey,
+        protocolState: statePda,
+        partnerWallet: wallet,
+        partnerAllocation: partnerPda(wallet),
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+  }
+
+  function closePartner(wallet: PublicKey, authority: PublicKey) {
+    return program.methods
+      .closePartnerAllocation()
+      .accounts({
+        authority,
+        protocolState: statePda,
+        partnerWallet: wallet,
+        partnerAllocation: partnerPda(wallet),
+      } as any);
+  }
+
+  /// Give the partner USDC and route it through `partner_deposit_bribe`, which is the ONLY
+  /// way `total_bribed_credited` ever moves — credit is atomic with a real transfer.
+  async function partnerBribes(partner: Keypair, amount: BN): Promise<void> {
+    const ata = getAssociatedTokenAddressSync(usdcMint, partner.publicKey);
+    if (!(await accountExists(ata))) {
+      await send([
+        createAssociatedTokenAccountInstruction(
+          payer.publicKey,
+          ata,
+          partner.publicKey,
+          usdcMint
+        ),
+      ]);
+    }
+    await send([
+      createMintToInstruction(
+        usdcMint,
+        ata,
+        payer.publicKey,
+        BigInt(amount.toString())
+      ),
+    ]);
+
+    const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    const poolId = bribePool.publicKey;
+    await program.methods
+      .partnerDepositBribe(new BN(epoch), amount)
+      .accounts({
+        partner: partner.publicKey,
+        protocolState: statePda,
+        partnerAllocation: partnerPda(partner.publicKey),
+        poolId,
+        rewardMint: usdcMint,
+        partnerToken: ata,
+        bribeVault: pda([
+          Buffer.from("bribe_vault"),
+          poolId.toBuffer(),
+          usdcMint.toBuffer(),
+          le8(epoch),
+        ]),
+        bribeTokenVault: pda([
+          Buffer.from("bribe_tokens"),
+          poolId.toBuffer(),
+          usdcMint.toBuffer(),
+          le8(epoch),
+        ]),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .signers([partner])
+      .rpc();
+  }
+
+  function claimPartner(partner: Keypair) {
+    return program.methods
+      .claimPartnerAllocation()
+      .accounts({
+        partner: partner.publicKey,
+        protocolState: statePda,
+        solaMint: solaM,
+        solaVault,
+        marketVault: marketV,
+        partnerAllocation: partnerPda(partner.publicKey),
+        lockPosition: velockPda(partner.publicKey),
+        partnerPosition: positionPda(partner.publicKey),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .signers([partner]);
+  }
+
+  /// A label, not a real pool — `pool_id` is an UncheckedAccount on the bribe path.
+  const bribePool = Keypair.generate();
 
   before(async () => {
     context = await startAnchor(".", [], []);
@@ -434,5 +579,244 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       lock.amountLocked.toString(),
       "the expired lock released nothing — permanent_amount overrides the timer forever"
     );
+  });
+
+  // ── close_partner_allocation ──────────────────────────────────────────────
+  //
+  // The instruction reclaims 168 bytes of rent, so the temptation is to read it as
+  // housekeeping and test only the happy path. The part worth proving is the refusal:
+  // `close = authority` deletes an account that carries a partner's still-claimable
+  // entitlement, and the two terminal states are the entire thing standing between
+  // "reclaim rent on a finished deal" and "the authority can revoke what a partner
+  // earned". The four refusal tests below are the load-bearing ones.
+
+  const ONE = new BN(1_000_000);
+  const settling = Keypair.generate();
+
+  it("[partner] a half-claimed allocation refuses to close — earned entitlement outlives the authority", async () => {
+    const partner = await fundedWallet();
+    const alloc = partnerPda(partner.publicKey);
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+
+    // Take a slice of the bag, then stop. `hi_sola_claimed > 0` disqualifies the
+    // never-activated path, and the bribe cap was never reached so the settled path is
+    // out too — the partner is mid-deal and stays that way.
+    await forwardSeconds(BASE_BAG_VEST_SECS / 2);
+    await claimPartner(partner).rpc();
+
+    const pa: any = await program.account.partnerAllocation.fetch(alloc);
+    assert.isTrue(
+      pa.hiSolaClaimed.toNumber() > 0,
+      "the partner must actually have taken something for this test to mean anything"
+    );
+    assert.isTrue(
+      pa.hiSolaClaimed.lt(ONE.add(ONE)),
+      "and must be short of base + cap, or it would be legitimately settled"
+    );
+
+    await expectFailure(
+      () => closePartner(partner.publicKey, payer.publicKey).rpc(),
+      "PartnerAllocationNotSettled"
+    );
+    assert.isTrue(
+      await accountExists(alloc),
+      "the refused close took nothing — the allocation is still there to be claimed against"
+    );
+  });
+
+  it("[partner] an unmet bribe commitment keeps the account open even with the bag fully claimed", async () => {
+    // The other half of the settled test, and the case that decides the design: a partner
+    // who took the whole welcome bag but never delivered the bribes they committed to.
+    // `bribe_earned` never reaches `cap_hi_sola`, so hiSOLA is still owed and the authority
+    // cannot tidy the account away. A dead partnership leaves 168 bytes on-chain — that is
+    // the price of the guarantee, and it is the right way round.
+    const partner = await fundedWallet();
+    const alloc = partnerPda(partner.publicKey);
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+
+    await forwardSeconds(BASE_BAG_VEST_SECS + DAY);
+    await claimPartner(partner).rpc();
+
+    const pa: any = await program.account.partnerAllocation.fetch(alloc);
+    assert.equal(
+      pa.hiSolaClaimed.toString(),
+      ONE.toString(),
+      "the whole bag is claimed, and nothing more — the partner never bribed"
+    );
+    await expectFailure(
+      () => closePartner(partner.publicKey, payer.publicKey).rpc(),
+      "PartnerAllocationNotSettled"
+    );
+    assert.isTrue(await accountExists(alloc));
+  });
+
+  it("[partner] a registration nobody ever activated is cancellable, rent back to the authority", async () => {
+    const partner = await fundedWallet();
+    const alloc = partnerPda(partner.publicKey);
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+
+    // Time passes and the bag accrues — but accrual is not activation. Nothing has been
+    // claimed and nothing has been bribed, so there is no earned position to protect.
+    await forwardSeconds(90 * DAY);
+    const pa: any = await program.account.partnerAllocation.fetch(alloc);
+    assert.equal(pa.hiSolaClaimed.toString(), "0");
+    assert.equal(pa.totalBribedCredited.toString(), "0");
+
+    const rentHeld = await lamportsOf(alloc);
+    assert.isTrue(rentHeld > BigInt(0), "the PDA holds rent worth reclaiming");
+    const authorityBefore = await lamportsOf(payer.publicKey);
+
+    await closePartner(partner.publicKey, payer.publicKey).rpc();
+
+    assert.isFalse(await accountExists(alloc), "the allocation is gone");
+    const gained =
+      (await lamportsOf(payer.publicKey)) - authorityBefore;
+    // Exactly the rent, less this transaction's fee — the authority paid it at
+    // register_partner and is the only account that gets it back.
+    assert.isTrue(
+      gained > rentHeld - BigInt(100_000) && gained <= rentHeld,
+      `authority should recover ~${rentHeld} lamports, got ${gained}`
+    );
+
+    // And the partner keeps nothing they never had: no lock was ever opened for them.
+    assert.isFalse(
+      await accountExists(velockPda(partner.publicKey)),
+      "a partner who never claimed has no ve position to lose"
+    );
+  });
+
+  it("[partner] the authority signature is the whole gate — the partner cannot close their own", async () => {
+    const partner = await fundedWallet();
+    const alloc = partnerPda(partner.publicKey);
+    await registerPartnerFor(partner.publicKey, ONE, ONE);
+
+    // This allocation IS in a closable state (never activated). The only thing wrong with
+    // the call below is who signs it, which is what makes the refusal meaningful.
+    await expectFailure(
+      () =>
+        closePartner(partner.publicKey, partner.publicKey)
+          .signers([partner])
+          .rpc(),
+      "Unauthorized"
+    );
+    assert.isTrue(await accountExists(alloc));
+
+    await closePartner(partner.publicKey, payer.publicKey).rpc();
+    assert.isFalse(
+      await accountExists(alloc),
+      "same account, same state, authority signature — now it closes"
+    );
+  });
+
+  it("[partner] one bribe is enough to take the cancellation away", async () => {
+    await program.methods
+      .setPhaseFlags(null, true, null, null, null, null)
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: settling.publicKey,
+        lamports: 5_000_000_000,
+      }),
+    ]);
+    await registerPartnerFor(settling.publicKey, ONE, ONE);
+
+    // A quarter of the committed bribe. The partner has now performed — real tokens left
+    // their wallet into the bribe vault and are already payable to voters — so the "never
+    // activated" escape closes here, permanently, on `total_bribed_credited` alone.
+    await partnerBribes(settling, ONE.divn(4));
+
+    const pa: any = await program.account.partnerAllocation.fetch(
+      partnerPda(settling.publicKey)
+    );
+    assert.equal(
+      pa.hiSolaClaimed.toString(),
+      "0",
+      "nothing claimed — the refusal must come from the bribe half of the guard"
+    );
+    assert.equal(pa.totalBribedCredited.toString(), ONE.divn(4).toString());
+
+    await expectFailure(
+      () => closePartner(settling.publicKey, payer.publicKey).rpc(),
+      "PartnerAllocationNotSettled"
+    );
+  });
+
+  it("[partner] a fully settled deal closes — bag vested, bribe cap reached, everything claimed", async () => {
+    const alloc = partnerPda(settling.publicKey);
+
+    // Complete the commitment: at rate 1:1 the remaining three quarters put bribe_earned
+    // at the cap, where further deposits would buy nothing (`min(cap, …)`).
+    await partnerBribes(settling, ONE.divn(4).muln(3));
+    await forwardSeconds(BASE_BAG_VEST_SECS + DAY);
+    await claimPartner(settling).rpc();
+
+    const pa: any = await program.account.partnerAllocation.fetch(alloc);
+    assert.equal(
+      pa.hiSolaClaimed.toString(),
+      ONE.add(ONE).toString(),
+      "base + cap, both delivered — the deal owes nothing more"
+    );
+
+    const rentHeld = await lamportsOf(alloc);
+    const authorityBefore = await lamportsOf(payer.publicKey);
+    await closePartner(settling.publicKey, payer.publicKey).rpc();
+    assert.isFalse(await accountExists(alloc));
+    assert.isTrue(
+      (await lamportsOf(payer.publicKey)) - authorityBefore >
+        rentHeld - BigInt(100_000)
+    );
+
+    // Closing is bookkeeping: the hiSOLA already minted stays exactly where it was.
+    const lock: any = await program.account.veLockPosition.fetch(
+      velockPda(settling.publicKey)
+    );
+    assert.equal(
+      lock.amountLocked.toString(),
+      ONE.add(ONE).toString(),
+      "the ve lock is a separate PDA — closing the allocation burns nothing"
+    );
+    assert.equal(
+      lock.permanentAmount.toString(),
+      ONE.toString(),
+      "and the welcome bag is still permanent, still unsellable"
+    );
+  });
+
+  it("[partner] re-registering a closed wallet is a FRESH deal, bag and all", async () => {
+    // The documented consequence of freeing the seeds, asserted rather than assumed: this
+    // is the one path that hands the same wallet a second welcome bag. It costs a second
+    // authority signature and both instructions are on-chain — but nothing in the program
+    // remembers the first deal, so nobody should expect it to.
+    const alloc = partnerPda(settling.publicKey);
+    assert.isFalse(await accountExists(alloc), "closed by the previous test");
+
+    // Renewed on new terms — a doubled bribe cap for the second term.
+    await registerPartnerFor(settling.publicKey, ONE, ONE.muln(2));
+    const pa: any = await program.account.partnerAllocation.fetch(alloc);
+    assert.equal(
+      pa.hiSolaClaimed.toString(),
+      "0",
+      "counters are zeroed — the 2 000 000 already locked is invisible to the new deal"
+    );
+    assert.equal(
+      pa.totalBribedCredited.toString(),
+      "0",
+      "and last term's delivered bribes do not carry over toward the new cap"
+    );
+    assert.equal(pa.capHiSola.toString(), ONE.muln(2).toString());
+    assert.equal(
+      pa.startTs.toNumber(),
+      await nowSeconds(),
+      "the 6-month bag stream restarts from now — this is the second welcome bag"
+    );
+
+    // The already-locked hiSOLA from the first term is untouched by any of it.
+    const lock: any = await program.account.veLockPosition.fetch(
+      velockPda(settling.publicKey)
+    );
+    assert.equal(lock.amountLocked.toString(), ONE.add(ONE).toString());
   });
 });

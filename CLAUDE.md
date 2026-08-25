@@ -367,6 +367,18 @@ floor) — releasing it at expiry is an accepted, capped exposure (`cap_hi_sola`
 protocol sells a partner is: permanent voting power on the bag + a 20% borrow valve
 (`borrow_against_locked`) + a releasable bribe-earned tranche. Covered by the `[partner]` test.
 
+**`close_partner_allocation` (2026-08-25) is not a revoke.** It reclaims the PDA's rent to
+the authority in exactly two terminal states — **fully settled** (`hi_sola_claimed >=
+base_hi_sola + cap_hi_sola`: bag vested, bribe cap reached, nothing further can accrue) or
+**never activated** (`hi_sola_claimed == 0 && total_bribed_credited == 0`: the deal was
+signed and never started). Anything in between is refused. The invariant that matters:
+**once a partner has performed — bribed anything or claimed anything — the authority can no
+longer delete their still-claimable entitlement.** A partner who took the bag but never met
+their bribe commitment therefore leaves the account open forever; that 168 bytes is the price
+of the guarantee. ⚠️ Closing frees `[b"partner", wallet]`, so `register_partner` reopens it
+with zeroed counters and a **fresh welcome bag** — the intended renewal path, and the only
+way one wallet gets a second bag. Seven `[partner]` cases in `tests/bankrun_allocations.ts`.
+
 ### Open items flagged pre-audit (still not fixed)
 
 1. ~~**Stale comments on the founder borrow cap**~~ — **moot since 2026-07-18**: `founder_borrow_usdc`

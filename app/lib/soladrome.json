@@ -3116,6 +3116,115 @@
       "args": []
     },
     {
+      "name": "close_partner_allocation",
+      "docs": [
+        "Authority-only: close a `PartnerAllocation` PDA and return its rent to the authority",
+        "that paid for it at `register_partner`.",
+        "",
+        "This is bookkeeping, not a revoke. It only accepts an allocation that has reached a",
+        "**terminal state** — one of exactly two, and nothing in between:",
+        "",
+        "1. **Fully settled** — `hi_sola_claimed >= base_hi_sola + cap_hi_sola`. The welcome bag",
+        "ran to term and the bribe-earned side is capped out, so `claim_partner_allocation`",
+        "would mint 0 from here on and further `partner_deposit_bribe` credits buy nothing",
+        "(`bribe_earned` is `min`-ed against `cap_hi_sola`). The deal is finished on the",
+        "numbers; the account is dead weight.",
+        "",
+        "2. **Never activated** — `hi_sola_claimed == 0 && total_bribed_credited == 0`. The",
+        "partner never claimed a lamport of hiSOLA and never bribed a single unit: the deal",
+        "was signed on-chain and then never started. Cancelling it forfeits only the *accrued",
+        "but untouched* slice of the welcome bag, which is unfinanced (no USDC ever entered",
+        "the floor for it) and was a gift conditioned on a partnership that did not happen.",
+        "",
+        "Anything between the two is refused with `PartnerAllocationNotSettled`. That is the line",
+        "that matters: **once a partner has performed — bribed anything, or claimed anything —",
+        "the authority can no longer close the account out from under them.** Their earned,",
+        "still-claimable entitlement survives any admin action.",
+        "",
+        "⚠️ Closing frees the `[b\"partner\", partner_wallet]` seeds, so `register_partner` can open",
+        "the same PDA again with `hi_sola_claimed`, `total_bribed_credited` and `start_ts` reset",
+        "to zero — a **fresh deal**, including a fresh `base_hi_sola` bag streaming from scratch.",
+        "That is intended for case 1 (renewing a partnership for another term) and for case 2",
+        "(re-registering on corrected terms), but it means close-then-re-register is the one way",
+        "to hand the same wallet a second welcome bag. It takes the authority signature twice and",
+        "is visible on-chain in both instructions.",
+        "",
+        "The partner's `VeLockPosition` and `UserPosition` are separate PDAs and are untouched:",
+        "everything already minted stays locked, votes stay counted, `borrow_against_locked`",
+        "keeps working. Nothing is burned here.",
+        "",
+        "Not pause-gated, matching `register_partner`: this is admin cleanup that moves no tokens."
+      ],
+      "discriminator": [
+        151,
+        113,
+        76,
+        242,
+        124,
+        163,
+        120,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Receives the reclaimed rent — the same account that paid it at `register_partner`."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_wallet",
+          "docs": [
+            "and re-asserted against the stored `partner` field. Never signs, never receives."
+          ]
+        },
+        {
+          "name": "partner_allocation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner_wallet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "collect_to_pol",
       "docs": [
         "Redirect a portion of market_vault fees to pol_usdc_vault. Authority-only."
@@ -8980,6 +9089,11 @@
       "code": 6046,
       "name": "AmmBelowFloor",
       "msg": "This swap would push the SOLA/USDC pool below the 1 USDC floor — sell through sell_sola instead, it pays 1.00 exactly"
+    },
+    {
+      "code": 6047,
+      "name": "PartnerAllocationNotSettled",
+      "msg": "Partner allocation is live — it can only be closed once fully claimed (bag vested and bribe cap reached), or while never activated (nothing claimed, nothing bribed)"
     }
   ],
   "types": [
