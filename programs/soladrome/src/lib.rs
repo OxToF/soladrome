@@ -1617,8 +1617,23 @@ pub mod soladrome {
     // ── Contributor / marketing vesting ──────────────────────────────────────
 
     /// Authority-only: register a contributor wallet with a dual hiSOLA + oSOLA allocation.
-    /// Mirrors the founder structure — hiSOLA (governance + borrow) + oSOLA (liquid options).
-    /// Vesting starts immediately (start_ts = now) — call at launch time.
+    ///
+    /// ⚠️ There is no vesting, despite the account being named `ContributorVesting`. The cliff
+    /// and linear schedule were removed on 2026-07-18 and both tranches are now claimable in
+    /// full immediately; `start_ts` is kept as a record of when the deal was struck and is read
+    /// by nothing. This comment claimed otherwise until 2026-08-25, as did the two claim
+    /// instructions below — the account name is the last trace of a mechanism that is gone.
+    ///
+    /// The two sides are not the same kind of thing:
+    /// - **hiSOLA** goes into a LIFETIME ve lock (`permanent_amount` covers the whole tranche),
+    ///   so it can never be unlocked or sold. It votes forever and borrows at 20 %, and because
+    ///   it never re-enters `total_hi_sola` it earns no protocol fees, ever.
+    /// - **oSOLA** is an option, not a payment: exercising burns it and pays 1 USDC per unit
+    ///   into the floor, so the contributor funds every SOLA they take. It is worth nothing at
+    ///   or below the floor.
+    ///
+    /// Note this oSOLA is NOT drawn against `ecosystem_o_sola_minted` — `ECOSYSTEM_TOTAL` caps
+    /// `distribute_o_sola` only. The bound on contributor oSOLA is whatever the authority types.
     pub fn register_contributor(
         ctx: Context<RegisterContributor>,
         hi_sola_amount: u64,
@@ -1646,9 +1661,16 @@ pub mod soladrome {
         Ok(())
     }
 
-    /// Contributor-only: claim vested hiSOLA (25 % TGE + 75 % linear over 6 months).
-    /// Mints SOLA to sola_vault (locked backing) + hiSOLA to contributor wallet 1:1.
-    /// Also snapshots the fee accumulator so the contributor earns fees from day one.
+    /// Contributor-only: claim the whole hiSOLA tranche at once into a LIFETIME ve lock.
+    ///
+    /// ⚠️ Not "25 % TGE + 75 % linear over 6 months", which is what this said until 2026-08-25
+    /// and has not been true since the schedule was removed on 2026-07-18. There is no cliff
+    /// and no vesting: `claimable` is the entire unclaimed remainder.
+    ///
+    /// Mints SOLA to sola_vault as 1:1 backing and records the hiSOLA as `permanent_amount`,
+    /// so `unlock_hi_sola` can never release any of it. `total_hi_sola` is NOT incremented and
+    /// never will be, which means this tranche earns no protocol fees at any point — it buys
+    /// permanent voting power and a 20 % borrow valve, nothing else.
     pub fn claim_contributor_hi_sola(ctx: Context<ClaimContributorHiSola>) -> Result<()> {
         let clock = Clock::get()?;
         let vesting = &ctx.accounts.contributor_vesting;
@@ -1786,10 +1808,12 @@ pub mod soladrome {
 
     /// Authority-only: register a protocol partner with a one-time locked hiSOLA allocation.
     ///
-    /// Unlike contributors (cliff + linear vesting), the partner claims the full amount
-    /// once via `claim_partner_allocation` — hiSOLA is minted directly to their
-    /// ve_lock_vault (never touches the wallet), giving immediate voting power while
-    /// borrow remains blocked for the entire lock duration.
+    /// Unlike a contributor, whose tranches are claimable in full the moment they are
+    /// registered, a partner earns theirs over time: `claim_partner_allocation` mints only what
+    /// has accrued so far — the streamed welcome bag plus whatever their bribes have earned —
+    /// and it is called as often as there is something new to take. hiSOLA lands directly in
+    /// the ve lock and never touches the wallet, giving immediate voting power while the normal
+    /// wallet-balance borrow path stays closed for the whole lock.
     ///
     /// `base_hi_sola` is the one-time welcome bag (Founding Partner tier): it streams
     /// linearly into the partner's vote-locked position over the first 6 months

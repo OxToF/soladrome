@@ -16,11 +16,19 @@ import { PROGRAM_ID } from "@/lib/program";
 
 // ── Partner registration ──────────────────────────────────────────────────────
 const PARTNER_SEED        = Buffer.from("partner");
+const CONTRIBUTOR_SEED    = Buffer.from("contributor");
 // One binary since 2026-08-23, so this is 604 800 on every cluster — there is no longer a
 // devnet variant of EPOCH_DURATION to qualify this with.
 const EPOCH_DURATION_SECS = 604_800; // state.rs: EPOCH_DURATION
 // state.rs: MAX_LOCK_DURATION = 208 * EPOCH_DURATION. The form used to say 104.
 const MAX_LOCK_EPOCHS = 208;
+
+function contributorVestingPda(contributorWallet: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [CONTRIBUTOR_SEED, contributorWallet.toBuffer()],
+    PROGRAM_ID
+  )[0];
+}
 
 function partnerAllocPda(partnerWallet: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
@@ -244,6 +252,30 @@ export function FounderPanel() {
   const [regSchedule,  setRegSchedule]  = useState("52");
   const [loadingReg,   setLoadingReg]   = useState(false);
   const [statusReg,    setStatusReg]    = useState("");
+
+  // ── Register contributor form ───────────────────────────────────────────────
+  // Until 2026-08-25 this had no UI at all: register_contributor was reachable only through
+  // scripts/register_contributor.ts, which read the amounts with parseFloat out of environment
+  // variables. Two immutable figures, typed into a shell, with nothing shown back.
+  const [conWallet,  setConWallet]  = useState("");
+  const [conHiSola,  setConHiSola]  = useState("");
+  const [conOSola,   setConOSola]   = useState("");
+  const [loadingCon, setLoadingCon] = useState(false);
+  const [statusCon,  setStatusCon]  = useState("");
+
+  const contributor = (() => {
+    const hi = toBaseUnits(conHiSola || "0", 6);
+    const o  = toBaseUnits(conOSola  || "0", 6);
+    if (hi === null) return { err: "hiSOLA must be a plain amount, at most 6 decimals." };
+    if (o === null)  return { err: "oSOLA must be a plain amount, at most 6 decimals." };
+    if (hi > U64_MAX || o > U64_MAX) return { err: "Amount too large for u64." };
+    // The program's own require!: at least one side must be non-zero.
+    if (hi === BigInt(0) && o === BigInt(0))
+      return { err: "Give the contributor hiSOLA, oSOLA, or both — both cannot be zero." };
+    return { hi, o };
+  })();
+  const conErr = "err" in contributor ? (contributor.err as string) : null;
+  const conOk  = conErr ? null : (contributor as Extract<typeof contributor, { hi: bigint }>);
 
   // This section is authority-only (`address = protocol_state.authority`), and the panel it
   // sits in is founder-only. Those are two different wallets on purpose, so the form was
@@ -567,6 +599,52 @@ export function FounderPanel() {
     }
   }
 
+  // ── Register contributor (authority-only) ────────────────────────────────
+
+  async function registerContributor() {
+    if (!wallet) return;
+    setLoadingCon(true); setStatusCon("");
+    try {
+      if (conErr || !conOk) { setStatusCon(`❌ ${conErr}`); return; }
+      let contributorKey: PublicKey;
+      try { contributorKey = new PublicKey(conWallet.trim()); }
+      catch { setStatusCon("❌ That is not a valid Solana address."); return; }
+
+      const vestingPda = contributorVestingPda(contributorKey);
+      // `init`, so a second registration for the same wallet fails on-chain. Say so here
+      // rather than let it come back as a raw account-already-in-use error.
+      const existing = await connection.getAccountInfo(vestingPda);
+      if (existing) {
+        setStatusCon(`⚠️ ${conWallet.slice(0, 8)}… is already registered. There is no editor: close nothing, this is final.`);
+        return;
+      }
+
+      const provider = new AnchorProvider(connection, wallet, {});
+      const program  = getProgram(provider);
+      const ix = await program.methods
+        .registerContributor(
+          new BN(conOk.hi.toString()),
+          new BN(conOk.o.toString())
+        )
+        .accounts({
+          authority:           wallet.publicKey,
+          protocolState:       statePda,
+          contributorWallet:   contributorKey,
+          contributorVesting:  vestingPda,
+          systemProgram:       SystemProgram.programId,
+          rent:                SYSVAR_RENT_PUBKEY,
+        } as any)
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
+      setStatusCon(`✅ Contributor registered — tx: ${tx.slice(0, 16)}…`);
+      setConWallet("");
+    } catch (e: any) {
+      setStatusCon(`❌ ${e?.message ?? e}`);
+    } finally {
+      setLoadingCon(false);
+    }
+  }
+
   // ── Register partner (authority-only) ────────────────────────────────────
 
   async function registerPartner() {
@@ -821,6 +899,169 @@ export function FounderPanel() {
           </div>
         </>
       )}
+
+      {/* ── Register Contributor ─────────────────────────────── */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-2xl">🧑‍💻</span>
+          <div>
+            <h3 className="text-base font-bold text-white">Register Contributor</h3>
+            <p className="text-xs text-gray-500">
+              Authority-only · both tranches claimable in full, immediately
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+              Contributor wallet
+            </label>
+            <input
+              className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+              type="text"
+              placeholder="Solana wallet address"
+              value={conWallet}
+              onChange={(e) => setConWallet(e.target.value)}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+                hiSOLA (locked for life)
+              </label>
+              <input
+                className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+                type="text"
+                inputMode="decimal"
+                placeholder="0"
+                value={conHiSola}
+                onChange={(e) => {
+                  if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
+                    setConHiSola(e.target.value);
+                }}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+                oSOLA (an option)
+              </label>
+              <input
+                className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+                type="text"
+                inputMode="decimal"
+                placeholder="0"
+                value={conOSola}
+                onChange={(e) => {
+                  if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
+                    setConOSola(e.target.value);
+                }}
+              />
+            </div>
+          </div>
+
+          {conErr && conWallet.trim() !== "" && (
+            <p className="text-[11px] text-red-400">❌ {conErr}</p>
+          )}
+
+          {conOk && (
+            <div className="rounded-xl border border-brand-border bg-brand-dark/60 px-3 py-3 flex flex-col gap-2.5">
+              <p className="text-[10px] text-gray-500 uppercase tracking-widest">
+                This allocation, once signed · immutable
+              </p>
+
+              {/* The two tranches are different instruments, and conflating them is the
+                  mistake this block exists to prevent. */}
+              {conOk.hi > BigInt(0) && (
+                <div className="flex flex-col gap-1">
+                  <p className="text-xs text-gray-300 leading-relaxed">
+                    <span className="font-mono text-white">{fromBaseUnits(conOk.hi, 6)}</span>{" "}
+                    hiSOLA, claimable in full straight away and landing in a{" "}
+                    <strong className="text-white">lifetime</strong> ve lock.
+                  </p>
+                  <p className="text-[11px] text-gray-500 leading-relaxed">
+                    It can never be unlocked or sold — <span className="font-mono">unlock_hi_sola</span>{" "}
+                    releases nothing of it, at any date. It votes forever (up to 4×) and borrows
+                    up to{" "}
+                    <span className="font-mono text-gray-300">
+                      {fromBaseUnits(conOk.hi / BigInt(5), 6)} USDC
+                    </span>{" "}
+                    (20%). It stays out of the fee pool permanently, so it earns{" "}
+                    <strong>no protocol fees, ever</strong> — it buys governance, not income.
+                  </p>
+                </div>
+              )}
+
+              {conOk.o > BigInt(0) && (
+                <div className="flex flex-col gap-1 border-t border-brand-border pt-2">
+                  <p className="text-xs text-gray-300 leading-relaxed">
+                    <span className="font-mono text-white">{fromBaseUnits(conOk.o, 6)}</span>{" "}
+                    oSOLA — an <strong className="text-white">option</strong>, not a payment.
+                  </p>
+                  <p className="text-[11px] text-amber-400/90 leading-relaxed">
+                    ⚠️ It is the right to buy {fromBaseUnits(conOk.o, 6)} SOLA at 1 USDC each.
+                    Taking all of it costs the contributor{" "}
+                    <span className="font-mono text-white">
+                      {fromBaseUnits(conOk.o, 6)} USDC
+                    </span>{" "}
+                    of their own money, paid into the floor. At or below the 1 USDC floor it is
+                    worth <strong>nothing</strong>; above it the gain is (price − 1) per unit,
+                    less the exercise fee charged on that gain.
+                  </p>
+                  <p className="text-[11px] text-gray-500 leading-relaxed">
+                    That is also why it is safe to grant: every unit exercised puts 1 USDC in the
+                    floor, so unlike the hiSOLA tranche this side finances the SOLA it creates.
+                    Note it is <strong>not</strong> drawn from the 1.75M ecosystem budget —
+                    <span className="font-mono"> ECOSYSTEM_TOTAL</span> caps{" "}
+                    <span className="font-mono">distribute_o_sola</span> only, so the figure
+                    above is bounded by nothing but this form.
+                  </p>
+                </div>
+              )}
+
+              <div className="border-t border-brand-border pt-2 flex flex-col gap-0.5">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-0.5">
+                  Stored values
+                </p>
+                {([
+                  ["hi_sola_amount", conOk.hi.toString()],
+                  ["o_sola_amount", conOk.o.toString()],
+                ] as const).map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-3 text-[11px]">
+                    <span className="text-gray-500 font-mono">{k}</span>
+                    <span className="text-gray-300 font-mono break-all text-right">{v}</span>
+                  </div>
+                ))}
+                <p className="text-[10px] text-gray-600 mt-1">
+                  There is no vesting and no editor. Both tranches are claimable the moment this
+                  is signed, and the amounts can never be changed.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {!isAuthority && (
+            <p className="text-[11px] text-amber-400/90 leading-relaxed">
+              ⚠️ Signed by the protocol <strong>authority</strong>, a different wallet from the
+              founder. Connect the authority wallet to register a contributor.
+            </p>
+          )}
+
+          <button
+            className="btn-primary w-full"
+            onClick={registerContributor}
+            disabled={loadingCon || !isAuthority || !conWallet.trim() || !conOk}
+          >
+            {loadingCon ? "Processing…"
+              : !isAuthority ? "Authority wallet required"
+              : !conOk ? "Enter an allocation above"
+              : "Register Contributor"}
+          </button>
+
+          {statusCon && <p className="text-xs text-gray-400 break-all">{statusCon}</p>}
+        </div>
+      </div>
 
       {/* ── Register Partner ────────────────────────────────── */}
       <div className="card">
