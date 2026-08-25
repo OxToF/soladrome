@@ -175,10 +175,14 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     return kp;
   }
 
+  /// `scheduleEpochs` is the rhythm, fixed at registration: fund_partner_bribe_stream refuses
+  /// any other length, and refuses a schedule too small to deliver `cap`. The tests below use
+  /// 4 epochs and size their streams to reach the cap exactly.
   async function registerPartnerFor(
     wallet: PublicKey,
     base: BN,
-    cap: BN
+    cap: BN,
+    scheduleEpochs = 4
   ): Promise<void> {
     await program.methods
       .registerPartner(
@@ -187,7 +191,8 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
         new BN(1),
         cap,
         base,
-        new BN(MIN_LOCK_DURATION)
+        new BN(MIN_LOCK_DURATION),
+        new BN(scheduleEpochs)
       )
       .accounts({
         authority: payer.publicKey,
@@ -622,7 +627,8 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
         new BN(1),
         ONE,
         ONE,
-        new BN(MIN_LOCK_DURATION)
+        new BN(MIN_LOCK_DURATION),
+        new BN(4) // the bribe rhythm, now a term of the deal rather than the partner's pick
       )
       .accounts({
         authority: payer.publicKey,
@@ -637,7 +643,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     // ☢️ The bag no longer vests from registration — it vests from the moment the partner
     // escrows a bribe schedule. Without this call `base_vested` stays 0 and the claim below
     // fails with NothingToClaim. The gift is now the consideration for the commitment.
-    await fundStream(partner, 4, new BN(1_000));
+    await fundStream(partner, 4, ONE.divn(4));
 
     // Let a real slice of the 6-month bag stream. Under the devnet build this window was
     // 6 hours, so "a slice vested" was a 6-second sleep and the stream was never exercised.
@@ -727,7 +733,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     const partner = await fundedWallet();
     const alloc = partnerPda(partner.publicKey);
     await registerPartnerFor(partner.publicKey, ONE, ONE);
-    await fundStream(partner, 2, new BN(1_000));
+    await fundStream(partner, 4, ONE.divn(4));
 
     // Take a slice of the bag, then stop. `hi_sola_claimed > 0` disqualifies the
     // never-activated path, and the bribe cap was never reached so the settled path is
@@ -764,7 +770,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     const partner = await fundedWallet();
     const alloc = partnerPda(partner.publicKey);
     await registerPartnerFor(partner.publicKey, ONE, ONE);
-    await fundStream(partner, 2, new BN(1_000));
+    await fundStream(partner, 4, ONE.divn(4));
 
     await forwardSeconds(BASE_BAG_VEST_SECS + DAY);
     await claimPartner(partner).rpc();
@@ -854,7 +860,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       }),
     ]);
     await registerPartnerFor(settling.publicKey, ONE, ONE);
-    await fundStream(settling, 2, new BN(1_000));
+    await fundStream(settling, 4, ONE.divn(4));
 
     // A quarter of the committed bribe. The partner has now performed — real tokens left
     // their wallet into the bribe vault and are already payable to voters — so the "never
@@ -984,7 +990,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
 
     // Escrowing the schedule opens it, and the 6 months just elapsed do NOT count: vesting
     // starts here, not at registration. Half the window later, half the bag.
-    await fundStream(partner, 4, new BN(1_000));
+    await fundStream(partner, 4, ONE.divn(4));
     await forwardSeconds(BASE_BAG_VEST_SECS / 2);
     await claimPartner(partner).rpc();
 
@@ -1008,14 +1014,14 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     const partner = await fundedWallet();
     const stranger = await fundedWallet();
     await registerPartnerFor(partner.publicKey, ONE, ONE);
-    await fundStream(partner, 4, new BN(25_000));
+    await fundStream(partner, 4, ONE.divn(4));
 
     const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
     await releaseTranche(partner.publicKey);
 
     assert.equal(
       (await tokenBalance(bribeTokenVaultAt(epoch))).toString(),
-      "25000",
+      "250000",
       "the tranche must actually reach the vault this epoch's voters claim from"
     );
     const pa: any = await program.account.partnerAllocation.fetch(
@@ -1023,7 +1029,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     );
     assert.equal(
       pa.totalBribedCredited.toString(),
-      "25000",
+      "250000",
       "and credit the allocation exactly as a manual bribe would"
     );
 
@@ -1047,7 +1053,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
   it("[stream] a skipped epoch makes the schedule slip, never batch", async () => {
     const partner = await fundedWallet();
     await registerPartnerFor(partner.publicKey, ONE, ONE);
-    await fundStream(partner, 4, new BN(25_000));
+    await fundStream(partner, 4, ONE.divn(4));
 
     // Nobody cranks for three epochs. The whole point of the guard is that this backlog is
     // NOT paid out at once — batching it would re-concentrate the bribes into one epoch,
@@ -1058,7 +1064,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
 
     assert.equal(
       (await tokenBalance(bribeTokenVaultAt(epoch))).toString(),
-      "25000",
+      "250000",
       "exactly one tranche moved, not the three that were owed"
     );
     const st: any = await program.account.partnerBribeStream.fetch(
@@ -1075,7 +1081,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
   it("[stream] the escrow cannot be redirected to another gauge", async () => {
     const partner = await fundedWallet();
     await registerPartnerFor(partner.publicKey, ONE, ONE);
-    await fundStream(partner, 2, new BN(25_000));
+    await fundStream(partner, 4, ONE.divn(4));
 
     // A permissionless crank means an attacker can call it. The pool is pinned at funding
     // time precisely so they cannot aim someone else's escrowed bribes at their own pool.
@@ -1118,7 +1124,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
   it("[stream] runs dry after its funded tranches, and only then may be replaced", async () => {
     const partner = await fundedWallet();
     await registerPartnerFor(partner.publicKey, ONE, ONE);
-    await fundStream(partner, 2, new BN(25_000));
+    await fundStream(partner, 4, ONE.divn(4));
 
     // A running stream cannot be topped up: re-stamping stream_start_ts would restart the
     // welcome bag's 6-month clock and, now that the ve lock is anchored on that stamp, let the
@@ -1127,15 +1133,16 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     // transaction and bankrun would reject the replay before the program ever ran, so the
     // refusal has to come from a genuinely distinct top-up attempt.
     await expectFailure(
-      () => fundStream(partner, 3, new BN(11_111)),
+      () => fundStream(partner, 4, ONE.divn(4).addn(1)),
       "BribeStreamStillRunning"
     );
 
-    await releaseTranche(partner.publicKey);
-    await forwardSeconds(EPOCH_DURATION);
-    await releaseTranche(partner.publicKey);
+    // Drain all four tranches the schedule was funded for, one epoch apart.
+    for (let i = 0; i < 4; i++) {
+      await releaseTranche(partner.publicKey);
+      await forwardSeconds(EPOCH_DURATION);
+    }
 
-    await forwardSeconds(EPOCH_DURATION);
     await expectFailure(
       () => releaseTranche(partner.publicKey),
       "BribeStreamExhausted"
@@ -1147,11 +1154,11 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     );
 
     // Spent, so a new term may now be escrowed. This is the path a renewed partnership takes.
-    await fundStream(partner, 3, new BN(10_000));
+    await fundStream(partner, 4, ONE.divn(4));
     const st: any = await program.account.partnerBribeStream.fetch(
       streamPda(partner.publicKey)
     );
-    assert.equal(st.epochsTotal.toString(), "3");
+    assert.equal(st.epochsTotal.toString(), "4");
     assert.equal(st.epochsReleased.toString(), "0", "the new term starts at zero");
   });
 
@@ -1162,7 +1169,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     // earlier. It is now anchored on the moment the schedule was escrowed.
     const partner = await fundedWallet();
     await registerPartnerFor(partner.publicKey, ONE, ONE);
-    await fundStream(partner, 4, new BN(25_000));
+    await fundStream(partner, 4, ONE.divn(4));
     const streamedAt = (
       await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey))
     ).streamStartTs.toNumber();

@@ -62,6 +62,7 @@ function timeLeft(endTs: number, nowSecs: number): string {
 interface AllocData {
   bribeMintKey:     PublicKey;
   streamStartTs:    number;
+  scheduleEpochs:   number;
   bribeMint:        string;
   rateNum:          bigint;
   rateDen:          bigint;
@@ -113,6 +114,7 @@ export function PartnerPanel() {
         setAlloc({
           bribeMintKey:     d.bribeMint,
           streamStartTs:    Number(d.streamStartTs?.toString() ?? "0"),
+          scheduleEpochs:   Number(d.scheduleEpochs?.toString() ?? "0"),
           bribeMint:        d.bribeMint.toBase58(),
           rateNum:          BigInt(d.rateNum.toString()),
           rateDen:          BigInt(d.rateDen.toString()),
@@ -271,7 +273,8 @@ export function PartnerPanel() {
           rateDen:       alloc.rateDen,
           capHiSola:     alloc.capHiSola,
           baseHiSola:    alloc.baseHiSola,
-          streamStartTs: alloc.streamStartTs,
+          streamStartTs:  alloc.streamStartTs,
+          scheduleEpochs: alloc.scheduleEpochs,
         }}
         bribeDec={bribeDec}
         onChanged={fetchData}

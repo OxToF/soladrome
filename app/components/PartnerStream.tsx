@@ -52,6 +52,7 @@ function fmt(v: bigint, decimals = 6): string {
 
 export interface StreamAlloc {
   bribeMint: PublicKey;
+  scheduleEpochs: number;
   rateNum: bigint;
   rateDen: bigint;
   capHiSola: bigint;
@@ -89,7 +90,8 @@ export function PartnerStream({
   const [escrowLeft, setEscrowLeft] = useState<bigint>(BigInt(0));
   const [walletBal, setWalletBal] = useState<bigint>(BigInt(0));
   const [nowSecs, setNowSecs] = useState(Math.floor(Date.now() / 1000));
-  const [epochs, setEpochs] = useState("52");
+  // Not state the partner controls: the rhythm is a term of the deal.
+  const epochs = String(alloc.scheduleEpochs || 52);
   const [perEpoch, setPerEpoch] = useState("300");
   const [poolInput, setPoolInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -164,6 +166,18 @@ export function PartnerStream({
     const earnedRaw = alloc.rateDen > BigInt(0)
       ? (total * alloc.rateNum) / alloc.rateDen
       : BigInt(0);
+    // Underfunding is refused on-chain (ScheduleUnderfunded), not merely suboptimal: the
+    // escrow IS the commitment, and it opens the welcome bag. Name the amount that works
+    // rather than letting a transaction go out that cannot succeed.
+    if (earnedRaw < alloc.capHiSola && alloc.rateNum > BigInt(0)) {
+      const needTotal =
+        (alloc.capHiSola * alloc.rateDen + alloc.rateNum - BigInt(1)) / alloc.rateNum;
+      const needPer =
+        (needTotal + BigInt(nEpochs) - BigInt(1)) / BigInt(nEpochs);
+      return {
+        err: `This does not deliver the committed cap — the program refuses it. Use at least ${fmt(needPer, bribeDec!)} per epoch.`,
+      };
+    }
     const earned = earnedRaw < alloc.capHiSola ? earnedRaw : alloc.capHiSola;
     return { total, earned, earnedRaw, nEpochs };
   })();
@@ -369,22 +383,20 @@ export function PartnerStream({
             <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
               Over how many epochs
             </label>
-            <input
-              className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
-              type="text"
-              inputMode="numeric"
-              placeholder="52"
-              value={epochs}
-              onChange={(e) => {
-                if (e.target.value === "" || /^\d+$/.test(e.target.value))
-                  setEpochs(e.target.value);
-              }}
-            />
+            {/* Fixed at registration — fund_partner_bribe_stream refuses any other length, so
+                offering an editable field here would only produce a rejected transaction. */}
+            <div className="w-full bg-brand-dark/60 border border-brand-border rounded-xl px-3 py-2 text-sm text-gray-400 font-mono flex items-center justify-between">
+              <span>{epochs}</span>
+              <span className="text-[10px] uppercase tracking-widest text-gray-600">
+                agreed
+              </span>
+            </div>
           </div>
         </div>
 
         <p className="text-[10px] text-gray-500">
-          1 epoch = 7 days · 52 epochs ≈ 12 months · you hold{" "}
+          1 epoch = 7 days · the {alloc.scheduleEpochs}-epoch rhythm was agreed at registration
+          and cannot be changed here · you hold{" "}
           <span className="font-mono text-gray-400">{fmt(walletBal, bribeDec)}</span>
         </p>
 
@@ -429,14 +441,6 @@ export function PartnerStream({
                 ⚠️ This overshoots your cap. Bribes past{" "}
                 <span className="font-mono">{fmt(alloc.capHiSola)}</span> hiSOLA still pay
                 voters in full, but earn you nothing further.
-              </p>
-            )}
-            {planOk.earnedRaw < alloc.capHiSola && (
-              <p className="text-[11px] text-amber-400/90 leading-relaxed">
-                ⚠️ This schedule stops short of your cap — it earns{" "}
-                <span className="font-mono">{fmt(planOk.earned)}</span> of{" "}
-                <span className="font-mono">{fmt(alloc.capHiSola)}</span>. You can top up
-                manually later, but this escrow cannot be extended once it is running.
               </p>
             )}
             <p className="text-[11px] text-gray-500 leading-relaxed">

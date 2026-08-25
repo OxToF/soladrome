@@ -239,6 +239,9 @@ export function FounderPanel() {
   const [regCap,       setRegCap]       = useState("1000000");
   const [regAmount,    setRegAmount]    = useState("100000");
   const [regEpochs,    setRegEpochs]    = useState("52");
+  // The bribe rhythm, agreed with the partner and written at registration. The partner can no
+  // longer pick it at funding time — fund_partner_bribe_stream refuses any other length.
+  const [regSchedule,  setRegSchedule]  = useState("52");
   const [loadingReg,   setLoadingReg]   = useState(false);
   const [statusReg,    setStatusReg]    = useState("");
 
@@ -303,7 +306,10 @@ export function FounderPanel() {
       return { err: "Amount too large for u64." };
     if (!Number.isFinite(epochs) || epochs < 1 || epochs > MAX_LOCK_EPOCHS)
       return { err: `Lock must be between 1 and ${MAX_LOCK_EPOCHS} epochs.` };
-    return { capBase, baseBase, epochs, lockSecs: epochs * EPOCH_DURATION_SECS };
+    const schedule = /^\d+$/.test(regSchedule.trim()) ? parseInt(regSchedule, 10) : NaN;
+    if (!Number.isFinite(schedule) || schedule < 1 || schedule > MAX_LOCK_EPOCHS)
+      return { err: `Bribe schedule must be between 1 and ${MAX_LOCK_EPOCHS} epochs.` };
+    return { capBase, baseBase, epochs, schedule, lockSecs: epochs * EPOCH_DURATION_SECS };
   })();
   const termsErr = "err" in terms ? (terms.err as string) : null;
   const termsOk  = termsErr ? null : (terms as Extract<typeof terms, { capBase: bigint }>);
@@ -580,6 +586,7 @@ export function FounderPanel() {
       const capBN      = new BN(dealOk.capBase.toString());
       const baseBN     = new BN(dealOk.baseBase.toString());
       const lockBN     = new BN(dealOk.lockSecs);
+      const schedBN    = new BN(termsOk!.schedule);
       const allocPda   = partnerAllocPda(partnerKey);
 
       // Guard: already registered?
@@ -593,7 +600,7 @@ export function FounderPanel() {
       const program  = getProgram(provider);
 
       const ix = await program.methods
-        .registerPartner(bribeMint, rateNumBN, rateDenBN, capBN, baseBN, lockBN)
+        .registerPartner(bribeMint, rateNumBN, rateDenBN, capBN, baseBN, lockBN, schedBN)
         .accounts({
           authority:         wallet.publicKey,
           protocolState:     statePda,
@@ -926,6 +933,47 @@ export function FounderPanel() {
             </div>
           </div>
 
+          {/* ── The bribe rhythm ────────────────────────────────────────────────
+              Nothing on-chain paces a bribe by itself: partner_deposit_bribe credits a
+              lifetime cumulative counter. This is the field that turns the commitment into a
+              schedule, and it is written here rather than chosen by the partner at funding
+              time, because it is a term of the agreement. */}
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+              Bribes spread over
+            </label>
+            <div className="flex gap-2 mb-2">
+              {([["6 months", 26], ["1 year", 52], ["2 years", 104]] as const).map(
+                ([label, n]) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setRegSchedule(String(n))}
+                    className={`flex-1 rounded-xl border px-3 py-2 text-xs transition-colors ${
+                      regSchedule === String(n)
+                        ? "border-brand-green text-white bg-brand-green/10"
+                        : "border-brand-border text-gray-400 hover:border-gray-600"
+                    }`}
+                  >
+                    {label}
+                    <span className="block text-[10px] text-gray-500">{n} epochs</span>
+                  </button>
+                )
+              )}
+            </div>
+            <input
+              className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+              type="text"
+              inputMode="numeric"
+              placeholder="52"
+              value={regSchedule}
+              onChange={(e) => {
+                if (e.target.value === "" || /^\d+$/.test(e.target.value))
+                  setRegSchedule(e.target.value);
+              }}
+            />
+          </div>
+
           {/* Info line */}
           <p className="text-[10px] text-gray-500">
             1 epoch = 7 days · 52 epochs ≈ 12 months · max {MAX_LOCK_EPOCHS} epochs (≈ 4 years)
@@ -991,17 +1039,36 @@ export function FounderPanel() {
                 )}
               </ul>
 
-              {/* ── No schedule exists on-chain ──────────────────────────────────
-                  partner_deposit_bribe does `total_bribed_credited += amount`, a lifetime
-                  counter. Its `epoch` argument only picks which epoch's voters are paid; it
-                  never reaches the credit. So "300/epoch for a year" is not expressible —
-                  the same total dumped in one week caps out in one week. */}
-              <p className="text-[11px] text-amber-400/90 leading-relaxed">
-                ⏱ No schedule. That commitment is a <strong>lifetime cumulative total</strong>,
-                not per epoch and not per year — nothing on-chain paces it. The partner may
-                deposit all{" "}
-                <span className="font-mono">{regCommit || "of it"}</span>{" "}
-                in a single epoch, reach the cap, and never bribe again.
+              {termsOk && (
+                <p className="text-xs text-gray-300 leading-relaxed">
+                  Bribes are escrowed once and paid out over{" "}
+                  <span className="font-mono text-white">{termsOk.schedule}</span> epochs
+                  {" "}(≈ {Math.round((termsOk.schedule * 7) / 30.4)} months)
+                  {dealOk && bribeDecimals !== null && (
+                    <>
+                      {" "}—{" "}
+                      <span className="font-mono text-white">
+                        {fromBaseUnits(
+                          dealOk.commitBase / BigInt(termsOk.schedule),
+                          bribeDecimals
+                        )}
+                      </span>{" "}
+                      per epoch, released to that gauge&apos;s voters one epoch at a time
+                    </>
+                  )}
+                  . The partner escrows the whole schedule in one signature and has nothing
+                  further to sign.
+                </p>
+              )}
+
+              {/* ── What the schedule does and does not bind ─────────────────────
+                  The escrow paces the committed amount. It does not stop the partner bribing
+                  MORE on top through partner_deposit_bribe, and it does not make the cap
+                  time-bounded: total_bribed_credited stays a lifetime counter. */}
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                The escrow paces the committed amount and cannot be withdrawn or retimed once
+                running. It does not stop the partner bribing more on top — extra bribes still
+                credit the allocation, up to the cap.
               </p>
 
               {/* ── The rate is frozen ───────────────────────────────────────────

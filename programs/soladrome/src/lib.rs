@@ -1806,8 +1806,17 @@ pub mod soladrome {
         cap_hi_sola: u64,
         base_hi_sola: u64,
         lock_duration_secs: u64,
+        schedule_epochs: u64,
     ) -> Result<()> {
         require!(cap_hi_sola > 0, SoladromeError::InvalidAmount);
+        // The rhythm is a term of the deal. 26 / 52 / 104 epochs are 6 months, a year, two
+        // years; the ceiling matches the ve lock's so a schedule can never outrun the lock it
+        // is paid under. Zero is rejected here — only legacy accounts read 0, and they read it
+        // because the field did not exist when they were written.
+        require!(
+            schedule_epochs > 0 && schedule_epochs <= MAX_LOCK_DURATION / EPOCH_DURATION,
+            SoladromeError::InvalidAmount
+        );
         require!(
             bribe_mint != Pubkey::default(),
             SoladromeError::InvalidAmount
@@ -1833,6 +1842,8 @@ pub mod soladrome {
         pa.hi_sola_claimed = 0;
         pa.lock_duration_secs = lock_duration_secs;
         pa.start_ts = Clock::get()?.unix_timestamp;
+        pa.schedule_epochs = schedule_epochs;
+        pa.stream_start_ts = 0;
         pa.bump = ctx.bumps.partner_allocation;
 
         msg!(
@@ -1845,6 +1856,7 @@ pub mod soladrome {
             pa.base_hi_sola,
             pa.lock_duration_secs,
         );
+        msg!("Bribe schedule: {} epochs", pa.schedule_epochs);
         Ok(())
     }
 
@@ -2101,11 +2113,38 @@ pub mod soladrome {
             SoladromeError::BribeMintMismatch
         );
 
+        // ── The schedule must be the one that was negotiated ────────────────────
+        // Length is fixed at registration, so the partner confirms a rhythm rather than
+        // choosing one. Legacy allocations carry 0 and are left free, since the field did not
+        // exist when they were written and an upgrade must not strand them.
+        let pa = &ctx.accounts.partner_allocation;
+        if pa.schedule_epochs != 0 {
+            require!(
+                epochs_total == pa.schedule_epochs,
+                SoladromeError::ScheduleLengthMismatch
+            );
+        }
+
         let total = (epochs_total as u128)
             .checked_mul(amount_per_epoch as u128)
             .ok_or(SoladromeError::Overflow)?;
         require!(total <= u64::MAX as u128, SoladromeError::Overflow);
         let total = total as u64;
+
+        // ── And it must actually deliver what was committed ─────────────────────
+        // The escrow IS the commitment, so a schedule that cannot reach `cap_hi_sola` is not
+        // the deal — it would open the welcome bag against a promise the partner never has to
+        // keep. Overshooting is fine and harmless: bribes past the cap still pay voters in
+        // full, they simply earn no further hiSOLA.
+        let earns = (total as u128)
+            .checked_mul(pa.rate_num as u128)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(pa.rate_den as u128)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(
+            earns >= pa.cap_hi_sola as u128,
+            SoladromeError::ScheduleUnderfunded
+        );
 
         // The whole schedule is escrowed up front. This is what the partner is actually
         // committing to, and it is why the bag can be released against it.

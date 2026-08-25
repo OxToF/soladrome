@@ -6564,6 +6564,10 @@
         {
           "name": "lock_duration_secs",
           "type": "u64"
+        },
+        {
+          "name": "schedule_epochs",
+          "type": "u64"
         }
       ]
     },
@@ -9554,6 +9558,16 @@
       "code": 6050,
       "name": "BribeStreamStillRunning",
       "msg": "This bribe stream is still running — it can only be replaced once every funded tranche has been released"
+    },
+    {
+      "code": 6051,
+      "name": "ScheduleLengthMismatch",
+      "msg": "This schedule is not the length the deal was registered for — the rhythm is fixed at registration, not chosen at funding"
+    },
+    {
+      "code": 6052,
+      "name": "ScheduleUnderfunded",
+      "msg": "This schedule does not deliver the committed cap — escrow enough that the bribes earn the full cap_hi_sola"
     }
   ],
   "types": [
@@ -10097,6 +10111,18 @@
               "bag — legacy accounts read 0 and therefore fail closed, never open."
             ],
             "type": "i64"
+          },
+          {
+            "name": "schedule_epochs",
+            "docs": [
+              "How many epochs the partner's bribes must be spread over, agreed at registration.",
+              "",
+              "The rhythm is a term of the deal, not the partner's to pick: `fund_partner_bribe_stream`",
+              "refuses any schedule of a different length. Typical values are 26 (6 months), 52 (a",
+              "year) or 104 (two years). 0 means unset — legacy allocations only, which accept any",
+              "length so an upgrade cannot strand a partner mid-negotiation."
+            ],
+            "type": "u64"
           }
         ]
       }

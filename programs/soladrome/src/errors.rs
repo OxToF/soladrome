@@ -137,4 +137,8 @@ pub enum SoladromeError {
     BribeStreamAlreadyReleased,
     #[msg("This bribe stream is still running — it can only be replaced once every funded tranche has been released")]
     BribeStreamStillRunning,
+    #[msg("This schedule is not the length the deal was registered for — the rhythm is fixed at registration, not chosen at funding")]
+    ScheduleLengthMismatch,
+    #[msg("This schedule does not deliver the committed cap — escrow enough that the bribes earn the full cap_hi_sola")]
+    ScheduleUnderfunded,
 }

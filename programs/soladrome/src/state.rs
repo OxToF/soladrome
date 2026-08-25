@@ -744,9 +744,16 @@ pub struct PartnerAllocation {
     /// (`fund_partner_bribe_stream`) and by nothing else. 0 means no stream, which means no
     /// bag — legacy accounts read 0 and therefore fail closed, never open.
     pub stream_start_ts: i64,
+    /// How many epochs the partner's bribes must be spread over, agreed at registration.
+    ///
+    /// The rhythm is a term of the deal, not the partner's to pick: `fund_partner_bribe_stream`
+    /// refuses any schedule of a different length. Typical values are 26 (6 months), 52 (a
+    /// year) or 104 (two years). 0 means unset — legacy allocations only, which accept any
+    /// length so an upgrade cannot strand a partner mid-negotiation.
+    pub schedule_epochs: u64,
 }
 impl PartnerAllocation {
-    // 32 + 32 + 8*7 + 8 + 8 + 1 = 137 bytes used; 23 spare.
+    // 32 + 32 + 8*7 + 8 + 8 + 8 + 1 = 145 bytes used; 15 spare.
     // Carved from the spare bytes on purpose: LEN does not move, so no account grows and no
     // realloc migration is needed. Growing a live singleton is what bricked devnet in July.
     pub const LEN: usize = 160;
