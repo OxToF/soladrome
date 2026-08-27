@@ -37,6 +37,23 @@ function partnerAllocPda(partnerWallet: PublicKey): PublicKey {
   )[0];
 }
 
+/// Everything `close_partner_allocation` weighs, resolved before the transaction is built so
+/// the panel says the same thing the program will.
+interface CloseInfo {
+  lpMint: PublicKey;
+  lpThreshold: bigint;
+  lpBalance: bigint;
+  baseHiSola: bigint;
+  bagClaimed: boolean;
+  hiSolaClaimed: bigint;
+  epochsQualified: number;
+  streamStartTs: number;
+  epochsReleased: number;
+  epochsTotal: number;
+  closable: boolean;
+  reason: string;
+}
+
 /// The singleton the contributor caps are counted against — 100 000 hiSOLA and 100 000 oSOLA,
 /// summed over every contributor ever registered. There was no bound at all until 2026-08-27.
 const contributorRegistryPda = PublicKey.findProgramAddressSync(
@@ -260,6 +277,13 @@ export function FounderPanel() {
   const [loadingReg,   setLoadingReg]   = useState(false);
   const [statusReg,    setStatusReg]    = useState("");
 
+  // ── Close partner allocation ────────────────────────────────────────────────
+  const [closeWallet,  setCloseWallet]  = useState("");
+  const [closeInfo,    setCloseInfo]    = useState<CloseInfo | null>(null);
+  const [closeErr,     setCloseErr]     = useState<string | null>(null);
+  const [loadingClose, setLoadingClose] = useState(false);
+  const [statusClose,  setStatusClose]  = useState("");
+
   // ── Register contributor form ───────────────────────────────────────────────
   // Until 2026-08-25 this had no UI at all: register_contributor was reachable only through
   // scripts/register_contributor.ts, which read the amounts with parseFloat out of environment
@@ -380,6 +404,110 @@ export function FounderPanel() {
     })();
     return () => { cancelled = true; };
   }, [regLpMint, connection]);
+
+  // ── What close_partner_allocation will decide, decided here first ───────────
+  // Every branch below mirrors a line of the instruction. It has to: an operator who is told
+  // "closable" and then gets PartnerAllocationNotSettled learns nothing about which of the four
+  // conditions failed, and the account has no editor to try again with.
+  useEffect(() => {
+    const addr = closeWallet.trim();
+    setCloseInfo(null); setCloseErr(null);
+    if (!addr) return;
+    let cancelled = false;
+    let wallet: PublicKey;
+    try { wallet = new PublicKey(addr); }
+    catch { setCloseErr("Not a valid address."); return; }
+
+    (async () => {
+      try {
+        const provider = new AnchorProvider(connection, wallet as any, {});
+        const program  = getProgram(provider);
+        const pa: any = await (program.account as any).partnerAllocation
+          .fetchNullable(partnerAllocPda(wallet));
+        if (cancelled) return;
+        if (!pa) { setCloseErr("No partner allocation registered for this wallet."); return; }
+
+        const [streamPda] = PublicKey.findProgramAddressSync(
+          [Buffer.from("bribe_stream"), wallet.toBuffer()], PROGRAM_ID
+        );
+        const stream: any = await (program.account as any).partnerBribeStream
+          .fetchNullable(streamPda);
+        const lpMint = pa.lpMint as PublicKey;
+        const lpBalance = await connection
+          .getTokenAccountBalance(userAta(lpMint, wallet))
+          .then((b) => BigInt(b.value.amount))
+          // No LP account at all reads as zero, exactly as the program reads it.
+          .catch(() => BigInt(0));
+        if (cancelled) return;
+
+        const streamStartTs = Number(pa.streamStartTs.toString());
+        const epochsReleased = stream ? Number(stream.epochsReleased.toString()) : 0;
+        const epochsTotal    = stream ? Number(stream.epochsTotal.toString()) : 0;
+        const lpThreshold    = BigInt(pa.lpThreshold.toString());
+        const epoch = Math.floor(Date.now() / 1000 / EPOCH_DURATION_SECS);
+
+        const neverActivated = streamStartTs === 0;
+        const bagSettled = Boolean(pa.bagClaimed) || BigInt(pa.baseHiSola.toString()) === BigInt(0);
+        const epochDecided =
+          Number(pa.lastCreditedEpoch.toString()) === epoch || lpBalance < lpThreshold;
+        const escrowSpent = !stream || epochsReleased >= epochsTotal;
+        const closable = neverActivated || (bagSettled && epochDecided && escrowSpent);
+
+        const reason = neverActivated
+          ? "no schedule was ever escrowed, so nothing has accrued and nothing is owed"
+          : !bagSettled
+            ? "the signature bag is still unclaimed, and a schedule stands against it"
+            : !escrowSpent
+              ? `${epochsTotal - epochsReleased} bribe tranche${epochsTotal - epochsReleased === 1 ? "" : "s"} are still escrowed, and the gauge's voters are owed them`
+              : !epochDecided
+                ? "the liquidity is still in place and this epoch has not been cranked, so it can still be earned"
+                : "the bag is settled, the escrow is spent, and this epoch can no longer be earned";
+
+        setCloseInfo({
+          lpMint, lpThreshold, lpBalance,
+          baseHiSola: BigInt(pa.baseHiSola.toString()),
+          bagClaimed: Boolean(pa.bagClaimed),
+          hiSolaClaimed: BigInt(pa.hiSolaClaimed.toString()),
+          epochsQualified: Number(pa.epochsQualified.toString()),
+          streamStartTs, epochsReleased, epochsTotal, closable, reason,
+        });
+      } catch (e: any) {
+        if (!cancelled) setCloseErr(e?.message ?? String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [closeWallet, connection]);
+
+  async function closePartnerAllocation() {
+    if (!wallet || !closeInfo) return;
+    setLoadingClose(true); setStatusClose("");
+    try {
+      const partnerKey = new PublicKey(closeWallet.trim());
+      const provider = new AnchorProvider(connection, wallet, {});
+      const program  = getProgram(provider);
+      const ix = await program.methods
+        .closePartnerAllocation()
+        .accounts({
+          authority:         wallet.publicKey,
+          protocolState:     statePda,
+          partnerWallet:     partnerKey,
+          partnerAllocation: partnerAllocPda(partnerKey),
+          lpMint:            closeInfo.lpMint,
+          partnerLpToken:    userAta(closeInfo.lpMint, partnerKey),
+          bribeStream: PublicKey.findProgramAddressSync(
+            [Buffer.from("bribe_stream"), partnerKey.toBuffer()], PROGRAM_ID
+          )[0],
+        } as any)
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
+      setStatusClose(`✅ Allocation closed — tx: ${tx.slice(0, 16)}… The seeds are free: register this wallet again for a fresh deal.`);
+      setCloseWallet("");
+    } catch (e: any) {
+      setStatusClose(`❌ ${e?.message ?? e}`);
+    } finally {
+      setLoadingClose(false);
+    }
+  }
 
   // ── Everything the instruction will write, derived exactly from what was typed ──────
   // One object, so the summary block and the submit handler can never disagree about what
@@ -1509,6 +1637,117 @@ export function FounderPanel() {
 
           {statusReg && (
             <p className="text-xs text-gray-400 break-all">{statusReg}</p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Close Partner Allocation ─────────────────────────── */}
+      {/* `register_partner` has no editor and no undo, so the only way to correct a mistyped
+          deal is to close it and register again. That has to live next to the form that made
+          the mistake — otherwise the correction is a script, and a typo becomes permanent for
+          whoever does not have one. */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-2xl">🧹</span>
+          <div>
+            <h3 className="text-base font-bold text-white">Close a Partner Allocation</h3>
+            <p className="text-xs text-gray-500">
+              Authority-only · correct a mistyped deal, or tidy one that has ended
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+              Partner wallet
+            </label>
+            <input
+              className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+              type="text"
+              placeholder="Wallet whose allocation to close"
+              value={closeWallet}
+              onChange={(e) => setCloseWallet(e.target.value)}
+            />
+          </div>
+
+          {closeErr && <p className="text-[11px] text-red-400">❌ {closeErr}</p>}
+
+          {closeInfo && (
+            <div className="rounded-xl border border-brand-border bg-brand-dark/60 px-3 py-3 flex flex-col gap-2">
+              <p className="text-[10px] text-gray-500 uppercase tracking-widest">
+                What this account holds
+              </p>
+              <div className="flex flex-col gap-0.5 text-[11px]">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Signature bag</span>
+                  <span className="text-gray-300 font-mono">
+                    {fromBaseUnits(closeInfo.baseHiSola, 6)} hiSOLA ·{" "}
+                    {closeInfo.bagClaimed ? "claimed" : "unclaimed"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Retainer credited</span>
+                  <span className="text-gray-300 font-mono">
+                    {fromBaseUnits(closeInfo.hiSolaClaimed, 6)} hiSOLA over{" "}
+                    {closeInfo.epochsQualified} epoch
+                    {closeInfo.epochsQualified === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Bribe schedule</span>
+                  <span className="text-gray-300 font-mono">
+                    {closeInfo.streamStartTs === 0
+                      ? "never escrowed"
+                      : `${closeInfo.epochsReleased} / ${closeInfo.epochsTotal} released`}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">LP held vs required</span>
+                  <span className="text-gray-300 font-mono break-all text-right">
+                    {closeInfo.lpBalance.toString()} / {closeInfo.lpThreshold.toString()}
+                  </span>
+                </div>
+              </div>
+
+              {closeInfo.closable ? (
+                <p className="text-[11px] text-brand-green leading-relaxed">
+                  ✅ Closable — {closeInfo.reason}. Everything already credited stays exactly
+                  where it is: the ve lock and the fee share are separate accounts and nothing
+                  is burned here. Re-registering this wallet afterwards is a{" "}
+                  <strong>fresh deal, with a fresh bag</strong>.
+                </p>
+              ) : (
+                <p className="text-[11px] text-amber-400/90 leading-relaxed">
+                  ⛔ Not closable — {closeInfo.reason}. This is the guarantee the partner is
+                  sold: the authority cannot delete what they have already earned, or what they
+                  can still earn this epoch.
+                </p>
+              )}
+            </div>
+          )}
+
+          {!isAuthority && (
+            <p className="text-[11px] text-amber-400/90 leading-relaxed">
+              ⚠️ Signed by the protocol <strong>authority</strong>, a different wallet from the
+              founder. Connect the authority wallet to close an allocation.
+            </p>
+          )}
+
+          <button
+            className="btn-primary w-full"
+            onClick={closePartnerAllocation}
+            disabled={loadingClose || !isAuthority || !closeInfo || !closeInfo.closable}
+          >
+            {loadingClose ? "Processing…"
+              : !isAuthority ? "Authority wallet required"
+              : !closeInfo ? "Enter a registered partner wallet"
+              : !closeInfo.closable ? "This allocation is live"
+              : "Close allocation & reclaim rent"}
+          </button>
+
+          {statusClose && (
+            <p className="text-xs text-gray-400 break-all">{statusClose}</p>
           )}
         </div>
       </div>
