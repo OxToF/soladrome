@@ -155,4 +155,6 @@ pub enum SoladromeError {
     ContributorCapExceeded,
     #[msg("Contributor tranches must be split 50/50 — hiSOLA and oSOLA in equal amounts")]
     ContributorSplitMismatch,
+    #[msg("This allocation is readable at the current layout — close it with close_partner_allocation, which checks what the partner is still owed")]
+    PartnerAllocationNotLegacy,
 }

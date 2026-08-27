@@ -392,8 +392,19 @@ renewal path, the migration path for the old 160-byte layout, and the only way o
 second bag.
 
 **`partner_deposit_bribe` was deleted** — without the match it was `deposit_bribe` renamed.
-**57 → 56 instructions.** Sixteen `[partner]`/`[crank]`/`[close]`/`[stream]` cases in
-`tests/bankrun_allocations.ts`.
+**57 instructions** (−1 for that deletion, +1 for `close_legacy_partner_allocation`). Seventeen
+`[partner]`/`[crank]`/`[close]`/`[stream]` cases in `tests/bankrun_allocations.ts`.
+
+⚠️ **`PartnerAllocation` grew 160 → 192, and that needed an escape hatch.** `register_partner`
+uses `init`, and a 160-byte account cannot be deserialized as the 192-byte struct — so
+`close_partner_allocation`, which takes a typed account, fails at the account level before its
+body runs, and the seeds can never be reopened. Without `close_legacy_partner_allocation` the
+resize would have **bricked every allocation written before it**, and the "close and
+re-register" renewal path the design leans on would not have existed. Its safety is the size
+check, not the signature: `require!(data_len() < 8 + LEN)` is structurally unsatisfiable while
+the layout stands, so it is inert on every live account rather than merely guarded. `<` and not
+`!=`, so that a future *shrink* of LEN could never make readable accounts deletable. Proven by
+the `☢️ [close] the legacy escape refuses an account it could have read` case.
 
 **☢️ `fee_shares` — the tranche that earns without being spendable.** Four credit sites
 (contributor bag, team 250K, partner bag, partner retainer) plus `lock_hi_sola`. Two rules that

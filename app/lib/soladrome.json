@@ -3128,6 +3128,110 @@
       "args": []
     },
     {
+      "name": "close_legacy_partner_allocation",
+      "docs": [
+        "Authority-only: close a `PartnerAllocation` written under a layout too small to read.",
+        "",
+        "☢️ **This exists because `close_partner_allocation` cannot help such an account.** That",
+        "instruction takes a typed `Account<PartnerAllocation>`, so Anchor deserializes before a",
+        "single line of it runs — and an account written at 160 bytes has no `lp_mint`, no",
+        "`retainer_per_epoch`, no `min_bribe_per_epoch` to read. It fails at the account level,",
+        "permanently. `register_partner` uses `init`, so the seeds cannot be reopened either:",
+        "without this, growing the struct on 2026-08-27 would have **bricked every allocation",
+        "that predated it**, and the \"close and re-register\" renewal path the design leans on",
+        "would have been a path that did not exist.",
+        "",
+        "**The size check is the entire safety property, and it is `<`, not `!=`.**",
+        "`register_partner` only ever creates accounts at exactly `8 + PartnerAllocation::LEN`, so",
+        "while the layout stands this instruction cannot fire on anything — it is structurally",
+        "inert, not merely guarded by an authority signature. `<` rather than `!=` so that a",
+        "future *shrink* of `LEN` could not suddenly make live, readable accounts deletable:",
+        "strictly smaller means \"written under a layout too small to be read now\", which is the",
+        "only condition that justifies deleting an account without looking at what is inside it.",
+        "",
+        "That is worth stating plainly, because the shape is the dangerous one: an authority",
+        "instruction that removes a partner's account without reading their entitlement. Every",
+        "other partner path refuses to do that, deliberately (see `close_partner_allocation`). The",
+        "justification here is that there is no entitlement left to read — the account cannot be",
+        "interpreted at all, by anyone, ever again.",
+        "",
+        "The discriminator is still checked, so this cannot be pointed at an account of some other",
+        "type that happens to sit at the right seeds. Closing frees `[b\"partner\", wallet]` and",
+        "`register_partner` reopens it at the current layout — a fresh deal, with a fresh bag,",
+        "exactly as after an ordinary close."
+      ],
+      "discriminator": [
+        21,
+        12,
+        75,
+        207,
+        159,
+        248,
+        74,
+        103
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_wallet",
+          "docs": [
+            "It cannot be re-asserted against the stored `partner` field here, because reading that",
+            "field is exactly what this instruction exists to work around."
+          ]
+        },
+        {
+          "name": "partner_allocation",
+          "docs": [
+            "cannot deserialize it. Validated in the body: owned by this program, carrying the",
+            "`PartnerAllocation` discriminator, and strictly smaller than the current layout."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner_wallet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_partner_allocation",
       "docs": [
         "Authority-only: close a `PartnerAllocation` PDA and return its rent to the authority",
@@ -9628,6 +9732,11 @@
       "code": 6057,
       "name": "ContributorSplitMismatch",
       "msg": "Contributor tranches must be split 50/50 — hiSOLA and oSOLA in equal amounts"
+    },
+    {
+      "code": 6058,
+      "name": "PartnerAllocationNotLegacy",
+      "msg": "This allocation is readable at the current layout — close it with close_partner_allocation, which checks what the partner is still owed"
     }
   ],
   "types": [
