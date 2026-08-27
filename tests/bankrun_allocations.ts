@@ -221,6 +221,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
         partnerAllocation: partnerPda(wallet),
         lpMint,
         partnerLpToken: getAssociatedTokenAddressSync(lpMint, wallet),
+        bribeStream: streamPda(wallet),
       } as any);
   }
 
@@ -963,6 +964,83 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
   // but an epoch the partner could still be credited for right now. These cases pin that line
   // from both sides.
 
+  it("☢️ [close] a registration nobody ever activated is correctable", async () => {
+    // Found on devnet, 2026-08-28, by registering a deal whose LP threshold was larger than the
+    // pool's entire supply. Without this clause such an allocation can never be claimed (the bag
+    // needs an escrowed schedule) and never be closed (an unclaimed bag reads as a debt), so the
+    // authority cannot fix its own typo — ever. A bag is only owed once a schedule stands
+    // against it, and here `stream_start_ts` is 0.
+    const partner = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, RETAINER, {
+      lpThreshold: LP_THRESHOLD.muln(1_000_000), // more LP than could ever exist
+    });
+
+    const pa: any = await program.account.partnerAllocation.fetch(
+      partnerPda(partner.publicKey)
+    );
+    assert.equal(pa.streamStartTs.toString(), "0");
+    assert.isFalse(pa.bagClaimed, "and the bag is sitting there unclaimed");
+
+    // No LP account, no stream account: both are absent, and both must read as "nothing owed"
+    // rather than failing the instruction at the account level.
+    assert.isFalse(
+      await accountExists(getAssociatedTokenAddressSync(lpMint, partner.publicKey))
+    );
+    await closePartner(partner.publicKey, payer.publicKey).rpc();
+    assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
+
+    // And the seeds are free, so the corrected terms can be registered straight away.
+    await registerPartnerFor(partner.publicKey, ONE, RETAINER);
+    const fixed: any = await program.account.partnerAllocation.fetch(
+      partnerPda(partner.publicKey)
+    );
+    assert.equal(fixed.lpThreshold.toString(), LP_THRESHOLD.toString());
+  });
+
+  it("☢️ [close] a live escrow blocks the close — the voters' money must not be stranded", async () => {
+    // `crank_partner_epoch` needs the allocation, so closing while tranches remain would lock
+    // them in the escrow forever: the gauge never receives money the partner already paid in,
+    // and the partner cannot recover it either. Withdrawing LP stops the retainer; it does not
+    // cancel a bribe commitment that is already funded.
+    const partner = await livePartner();
+    await claimPartner(partner).rpc();
+    await crankEpoch(partner.publicKey);
+    await burnLp(partner, LP_THRESHOLD); // they have left, and still owe three tranches
+
+    await expectFailure(
+      () => closePartner(partner.publicKey, payer.publicKey).rpc(),
+      "PartnerAllocationNotSettled"
+    );
+
+    // Drain the schedule they committed to, and the account closes.
+    for (let i = 0; i < 3; i++) {
+      await forwardSeconds(EPOCH_DURATION);
+      await crankEpoch(partner.publicKey);
+    }
+    assert.equal(
+      (await tokenBalance(streamVaultPda(partner.publicKey))).toString(),
+      "0",
+      "every funded tranche reached the voters"
+    );
+    await closePartner(partner.publicKey, payer.publicKey).rpc();
+    assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
+  });
+
+  /// Run out whatever the partner escrowed, so the close is not blocked by tranches the gauge
+  /// is still owed. A test that wants to close has to do this now — that is the point of the
+  /// case above, and everything below assumes it.
+  async function drainEscrow(partner: Keypair) {
+    for (let i = 0; i < 8; i++) {
+      const s: any = await program.account.partnerBribeStream.fetchNullable(
+        streamPda(partner.publicKey)
+      );
+      if (!s || s.epochsReleased.gte(s.epochsTotal)) return;
+      await forwardSeconds(EPOCH_DURATION);
+      await crankEpoch(partner.publicKey);
+    }
+    assert.fail("the escrow should have drained within its funded tranches");
+  }
+
   it("[close] a partner still providing liquidity cannot be closed out mid-epoch", async () => {
     const partner = await livePartner();
     await claimPartner(partner).rpc();
@@ -980,6 +1058,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
   it("[close] an unclaimed bag blocks the close outright", async () => {
     const partner = await livePartner();
     await burnLp(partner, LP_THRESHOLD); // no epoch can be earned any more
+    await drainEscrow(partner); // and nothing is owed to the gauge either
     await expectFailure(
       () => closePartner(partner.publicKey, payer.publicKey).rpc(),
       "PartnerAllocationNotSettled"
@@ -997,8 +1076,8 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     const partner = await livePartner();
     await claimPartner(partner).rpc();
     await crankEpoch(partner.publicKey);
-    await forwardSeconds(EPOCH_DURATION);
     await burnLp(partner, LP_THRESHOLD);
+    await drainEscrow(partner);
 
     const alloc = partnerPda(partner.publicKey);
     const rentHeld = await lamportsOf(alloc);
@@ -1029,11 +1108,11 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
   });
 
   it("[close] an epoch already credited is closable without waiting for the next", async () => {
-    const partner = await livePartner();
+    const partner = await livePartner({ epochs: 1 });
     await claimPartner(partner).rpc();
     await crankEpoch(partner.publicKey);
-    // Same epoch, LP still in place: nothing further can be credited before the epoch turns,
-    // so there is nothing left to protect.
+    // Same epoch, LP still in place. The retainer cannot pay again before the epoch turns and
+    // the one-epoch schedule is spent, so there is nothing left to protect.
     await closePartner(partner.publicKey, payer.publicKey).rpc();
     assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
   });
@@ -1042,6 +1121,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     const partner = await livePartner();
     await burnLp(partner, LP_THRESHOLD);
     await claimPartner(partner).rpc();
+    await drainEscrow(partner);
 
     // This allocation IS closable. The only thing wrong with the call below is who signs it.
     await expectFailure(
@@ -1092,6 +1172,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
 
     // And the ordinary path still works on it, because it can read what is owed.
     await burnLp(partner, LP_THRESHOLD);
+    await drainEscrow(partner);
     await closePartner(partner.publicKey, payer.publicKey).rpc();
     assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
   });
@@ -1101,7 +1182,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     // the one path that hands the same wallet a second bag, and it is also the migration path
     // for allocations written at the old 160-byte layout. It costs a second authority signature
     // and both instructions are on-chain.
-    const partner = await livePartner();
+    const partner = await livePartner({ epochs: 1 });
     await claimPartner(partner).rpc();
     await crankEpoch(partner.publicKey);
     await closePartner(partner.publicKey, payer.publicKey).rpc();

@@ -2602,26 +2602,46 @@ pub mod soladrome {
         let pa = &ctx.accounts.partner_allocation;
         let epoch = current_epoch(Clock::get()?.unix_timestamp);
 
-        // An unclaimed bag is a debt, whatever else is true.
+        // ☢️ **Never activated.** No schedule was ever escrowed, so nothing has accrued and
+        // nothing is owed: the bag is the consideration for a commitment that does not exist,
+        // `claim_partner_allocation` refuses it, and `crank_partner_epoch` refuses too. This
+        // clause is the whole reason a mistyped registration is correctable at all. Without it —
+        // and it was missing until 2026-08-28 — an allocation registered with, say, an LP
+        // threshold larger than the pool's entire supply could never be claimed (no stream), and
+        // never be closed (unclaimed bag), and the authority could not fix its own typo for the
+        // life of the protocol. It was found by registering exactly that on devnet.
+        let never_activated = pa.stream_start_ts == 0;
+
+        // An unclaimed bag IS a debt once a schedule has been escrowed against it.
         let bag_settled = pa.bag_claimed || pa.base_hi_sola == 0;
         // Nothing further can be credited for the epoch in progress: either it already was, or
-        // the liquidity that would have qualified it is gone.
+        // the liquidity that would have qualified it is gone. A partner with no LP account at
+        // all reads 0 here, which is exactly right — see `ClosePartnerAllocation`.
         let epoch_decided = pa.last_credited_epoch == epoch
-            || ctx.accounts.partner_lp_token.amount < pa.lp_threshold;
+            || lp_balance_of(&ctx.accounts.partner_lp_token)? < pa.lp_threshold;
+        // ☢️ And the escrow must be spent. `crank_partner_epoch` needs this allocation to run,
+        // so closing while tranches remain would strand them: the gauge's voters never receive
+        // money the partner has already paid in, and the partner cannot recover it either.
+        // Withdrawing their LP stops the retainer; it does not cancel a bribe commitment they
+        // have already funded.
+        let escrow_spent = stream_is_spent(&ctx.accounts.bribe_stream)?;
 
         require!(
-            bag_settled && epoch_decided,
+            never_activated || (bag_settled && epoch_decided && escrow_spent),
             SoladromeError::PartnerAllocationNotSettled
         );
 
         msg!(
-            "Partner allocation closed: {} | {} hiSOLA over {} epochs | bag {} | last epoch {} of {}",
+            "Partner allocation closed: {} | {} hiSOLA over {} epochs | bag {} | reason={}",
             pa.partner,
             pa.hi_sola_claimed,
             pa.epochs_qualified,
             if pa.bag_claimed { "claimed" } else { "none" },
-            pa.last_credited_epoch,
-            epoch,
+            if never_activated {
+                "never activated"
+            } else {
+                "settled"
+            },
         );
         Ok(())
     }
@@ -6123,6 +6143,53 @@ pub struct ClaimPartnerAllocation<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
+/// An SPL token account's balance, or 0 when the account does not exist yet.
+///
+/// A partner who never provided liquidity has no LP token account at all, and a typed
+/// `Account<TokenAccount>` cannot express "may be absent" — it fails at the account level, which
+/// would make exactly the partners with no liquidity the ones who could not be closed. Absent
+/// means a balance of zero, which is the honest reading and the one that lets the close proceed.
+///
+/// Safe to be lenient here **only because the caller cannot choose which account this is**: the
+/// context pins it to the partner's associated token account for the deal's LP mint. Without
+/// that pin, an authority could present any uninitialised account to force a balance of 0 and
+/// close a partner who was still qualifying.
+fn lp_balance_of(info: &AccountInfo) -> Result<u64> {
+    // Not a live SPL token account: uninitialised accounts are owned by the System Program.
+    if info.owner != &anchor_spl::token::ID {
+        return Ok(0);
+    }
+    let data = info.try_borrow_data()?;
+    // 165 — the fixed SPL token account size. Written out rather than pulled through the `Pack`
+    // trait, which would need importing solely for this constant.
+    if data.len() != 165 {
+        return Ok(0);
+    }
+    // SPL token layout: mint(32) · owner(32) · amount(8) at offset 64.
+    Ok(u64::from_le_bytes(
+        data[64..72]
+            .try_into()
+            .map_err(|_| error!(SoladromeError::Overflow))?,
+    ))
+}
+
+/// Whether a partner's escrowed bribe schedule has paid out every tranche it was funded for —
+/// `true` when the stream account does not exist, since an unfunded schedule owes nothing.
+fn stream_is_spent(info: &AccountInfo) -> Result<bool> {
+    if info.owner != &crate::ID {
+        return Ok(true);
+    }
+    let data = info.try_borrow_data()?;
+    if data.len() < 8 + PartnerBribeStream::LEN {
+        return Ok(true);
+    }
+    if &data[..8] != PartnerBribeStream::DISCRIMINATOR {
+        return Ok(true);
+    }
+    let stream = PartnerBribeStream::try_deserialize(&mut &data[..])?;
+    Ok(stream.epochs_released >= stream.epochs_total)
+}
+
 /// Authority reclaims the rent of a terminal `PartnerAllocation`.
 /// Moves no tokens and touches no other PDA — see `close_partner_allocation` for the two
 /// states this is allowed in, and for why re-registering the same wallet is a fresh deal.
@@ -6151,14 +6218,33 @@ pub struct ClosePartnerAllocation<'info> {
     )]
     pub partner_allocation: Account<'info, PartnerAllocation>,
 
-    /// The LP token named in the deal, and the partner's account of it — read to establish that
-    /// this epoch's retainer can no longer be earned. Pinned to the allocation so the authority
-    /// cannot present an empty account of some other mint to force the close through.
+    /// CHECK: The LP token named in the deal. Only its address is used — to derive the account
+    /// below — so it is never deserialized, which also means a close is not blocked by anything
+    /// about the mint itself.
     #[account(address = partner_allocation.lp_mint @ SoladromeError::LpMintMismatch)]
-    pub lp_mint: Account<'info, Mint>,
+    pub lp_mint: UncheckedAccount<'info>,
 
-    #[account(token::mint = lp_mint, token::authority = partner_wallet)]
-    pub partner_lp_token: Account<'info, TokenAccount>,
+    /// CHECK: The partner's associated token account for that mint, read to establish that this
+    /// epoch's retainer can no longer be earned. **Untyped on purpose, and pinned by address.**
+    /// Untyped because a partner who never provided liquidity has no such account, and a typed
+    /// account would fail at the account level — making the partners with no liquidity precisely
+    /// the ones who could not be closed. Pinned because the authority chooses what to pass here:
+    /// without the address constraint they could present any empty account, read a balance of 0
+    /// and close a partner who was still qualifying. `lp_balance_of` returns 0 for an absent
+    /// account, which is the honest reading of "they hold none".
+    #[account(
+        address = anchor_spl::associated_token::get_associated_token_address(
+            &partner_wallet.key(), &lp_mint.key()
+        ),
+    )]
+    pub partner_lp_token: UncheckedAccount<'info>,
+
+    /// CHECK: The partner's escrowed bribe schedule, if they ever funded one. Read to refuse a
+    /// close while tranches remain: `crank_partner_epoch` needs the allocation, so closing early
+    /// would strand money the partner has already paid in and the gauge's voters are owed.
+    /// Untyped for the same reason as above — most allocations have no stream account.
+    #[account(seeds = [BRIBE_STREAM_SEED, partner_wallet.key().as_ref()], bump)]
+    pub bribe_stream: UncheckedAccount<'info>,
 }
 
 /// Authority reclaims the rent of a `PartnerAllocation` too small to deserialize.
