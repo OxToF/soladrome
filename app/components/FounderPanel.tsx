@@ -37,6 +37,13 @@ function partnerAllocPda(partnerWallet: PublicKey): PublicKey {
   )[0];
 }
 
+/// The singleton the contributor caps are counted against — 100 000 hiSOLA and 100 000 oSOLA,
+/// summed over every contributor ever registered. There was no bound at all until 2026-08-27.
+const contributorRegistryPda = PublicKey.findProgramAddressSync(
+  [Buffer.from("contributor_registry")],
+  PROGRAM_ID
+)[0];
+
 // ── Exact amounts, no floats ─────────────────────────────────────────────────
 // `register_partner` writes numbers that can never be edited afterwards, so every figure
 // on this form is parsed and displayed with BigInt. `parseFloat(x) * 1e6` was the previous
@@ -69,10 +76,9 @@ function fromBaseUnits(v: bigint, decimals: number): string {
   return `${whole}.${f}`;
 }
 
-function gcd(a: bigint, b: bigint): bigint {
-  while (b) [a, b] = [b, a % b];
-  return a;
-}
+// (`gcd` removed 2026-08-27 with the 1:1 bribe match. It reduced a negotiated pair —
+//  tokens committed, hiSOLA earned — into the `rate_num`/`rate_den` the program stored for
+//  life. There is no conversion rate anywhere in the partner path any more.)
 
 // ── Vesting constants — must match state.rs ──────────────────────────────────
 // One set of values, for every cluster. These read 6 h / 24 h until 2026-08-23, mirroring
@@ -234,18 +240,19 @@ export function FounderPanel() {
   const [status,     setStatus]     = useState("");
 
   // ── Register partner form ───────────────────────────────────────────────────
-  // `register_partner` takes SIX arguments, not two. The form used to collect the welcome
-  // bag and the lock only, and passed those two to a six-argument method — Anchor then read
-  // the accounts object as a positional argument and reported "Account `authority` not
-  // provided", which points at the wrong thing entirely. All six are collected now.
+  // The deal in the terms it is negotiated in. Since 2026-08-27 that is a bag and a rate, not
+  // a bag and a cap: the partner is paid per epoch, against liquidity that is still there, for
+  // as long as they keep it there. Nothing here derives a conversion rate any more — there is
+  // none, which is the point.
   const [regWallet,    setRegWallet]    = useState("");
   const [regBribeMint, setRegBribeMint] = useState("");
-  // The deal in the terms it is actually negotiated in: the partner commits N bribe tokens,
-  // and those bribes earn them up to M hiSOLA. `rate_num`/`rate_den` are DERIVED from that
-  // pair — see below. They used to be typed by hand, which is what put decimals on screen.
-  const [regCommit,    setRegCommit]    = useState("1000000");
-  const [regCap,       setRegCap]       = useState("1000000");
-  const [regAmount,    setRegAmount]    = useState("100000");
+  const [regLpMint,    setRegLpMint]    = useState("");
+  // The three tiers of 2026-08-26, in hiSOLA: 1M LP → 20 000 bag + 3 450/epoch · 500K →
+  // 7 500 + 1 300 · 200K → 2 000 + 350. Defaults are Tier 1.
+  const [regAmount,    setRegAmount]    = useState("20000");
+  const [regRetainer,  setRegRetainer]  = useState("3450");
+  const [regLpFloor,   setRegLpFloor]   = useState("");
+  const [regMinBribe,  setRegMinBribe]  = useState("300");
   const [regEpochs,    setRegEpochs]    = useState("52");
   // The bribe rhythm, agreed with the partner and written at registration. The partner can no
   // longer pick it at funding time — fund_partner_bribe_stream refuses any other length.
@@ -272,6 +279,12 @@ export function FounderPanel() {
     // The program's own require!: at least one side must be non-zero.
     if (hi === BigInt(0) && o === BigInt(0))
       return { err: "Give the contributor hiSOLA, oSOLA, or both — both cannot be zero." };
+    // And its second one, added 2026-08-27: the two sides are not interchangeable. hiSOLA is
+    // permanent governance plus a real share of revenue; oSOLA is an option the holder pays
+    // 1 USDC a unit to exercise, financing the floor as they do. One without the other is
+    // either pure dilution or a pure lottery ticket.
+    if (hi !== o)
+      return { err: "The two tranches must be equal — the split is 50/50, enforced on-chain." };
     return { hi, o };
   })();
   const conErr = "err" in contributor ? (contributor.err as string) : null;
@@ -284,39 +297,44 @@ export function FounderPanel() {
   const isAuthority = !!wallet && !!authorityWallet &&
     wallet.publicKey.toBase58() === authorityWallet;
 
-  // ── The rate is derived, never typed ────────────────────────────────────────
-  // `partner_deposit_bribe` credits `total_bribed_credited += amount` in the BRIBE MINT's
-  // base units, and `claim_partner_allocation` turns that into hiSOLA base units (6 dec) with
-  // `× rate_num / rate_den`. The decimal gap therefore lands entirely inside the rate:
-  //
-  //     hiSOLA per 1 whole bribe token = 10^(decimals − 6) × num/den
-  //
-  // Asking an operator to type num/den means asking them to hold that exponent in their head
-  // against whatever decimals the mint happens to have — 1/1 looks 1:1 and pays 1000× on a
-  // 9-decimal mint like wSOL. So the form no longer asks. It takes the two figures the deal
-  // is actually written in — tokens committed, hiSOLA earned — and reduces them to num/den.
+  // ── Decimals are read from the chain, never assumed ─────────────────────────
+  // Two amounts on this form live in someone else's units: the minimum bribe per epoch is in
+  // the bribe mint's, and the LP threshold is in the LP mint's. Both are frozen into an
+  // immutable agreement, so neither may be guessed at 6 — a 9-decimal mint like wSOL would
+  // put the figure out by 1000×, silently, in the direction that makes the deal meaningless.
   const [bribeDecimals, setBribeDecimals] = useState<number | null>(null);
   const [bribeMintErr,  setBribeMintErr]  = useState<string | null>(null);
+  const [lpDecimals,    setLpDecimals]    = useState<number | null>(null);
+  const [lpMintErr,     setLpMintErr]     = useState<string | null>(null);
 
-  useEffect(() => {
-    const raw = regBribeMint.trim();
-    if (!raw) { setBribeDecimals(null); setBribeMintErr(null); return; }
-    let cancelled = false;
-    let key: PublicKey;
-    try { key = new PublicKey(raw); }
-    catch { setBribeDecimals(null); setBribeMintErr("Not a valid address."); return; }
-    setBribeMintErr(null);
-    connection.getParsedAccountInfo(key)
-      .then((res) => {
-        if (cancelled) return;
-        const parsed: any = res.value?.data;
-        const dec = parsed?.parsed?.info?.decimals;
-        if (typeof dec === "number") { setBribeDecimals(dec); setBribeMintErr(null); }
-        else { setBribeDecimals(null); setBribeMintErr("That address is not an SPL mint."); }
-      })
-      .catch(() => { if (!cancelled) { setBribeDecimals(null); setBribeMintErr("Could not read the mint."); } });
-    return () => { cancelled = true; };
-  }, [regBribeMint, connection]);
+  function useMintDecimals(
+    raw: string,
+    setDec: (d: number | null) => void,
+    setErr: (e: string | null) => void
+  ) {
+    useEffect(() => {
+      const addr = raw.trim();
+      if (!addr) { setDec(null); setErr(null); return; }
+      let cancelled = false;
+      let key: PublicKey;
+      try { key = new PublicKey(addr); }
+      catch { setDec(null); setErr("Not a valid address."); return; }
+      setErr(null);
+      connection.getParsedAccountInfo(key)
+        .then((res) => {
+          if (cancelled) return;
+          const parsed: any = res.value?.data;
+          const dec = parsed?.parsed?.info?.decimals;
+          if (typeof dec === "number") { setDec(dec); setErr(null); }
+          else { setDec(null); setErr("That address is not an SPL mint."); }
+        })
+        .catch(() => { if (!cancelled) { setDec(null); setErr("Could not read the mint."); } });
+      return () => { cancelled = true; };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [raw, connection]);
+  }
+  useMintDecimals(regBribeMint, setBribeDecimals, setBribeMintErr);
+  useMintDecimals(regLpMint, setLpDecimals, setLpMintErr);
 
   // ── Everything the instruction will write, derived exactly from what was typed ──────
   // One object, so the summary block and the submit handler can never disagree about what
@@ -327,58 +345,54 @@ export function FounderPanel() {
   // panel looking unchanged until an address was pasted, which is exactly the moment an
   // operator is still deciding the terms.
   const terms = (() => {
-    const capBase  = toBaseUnits(regCap, 6);
-    const baseBase = toBaseUnits(regAmount, 6);
-    const epochs   = /^\d+$/.test(regEpochs.trim()) ? parseInt(regEpochs, 10) : NaN;
+    const baseBase     = toBaseUnits(regAmount, 6);
+    const retainerBase = toBaseUnits(regRetainer, 6);
+    const epochs       = /^\d+$/.test(regEpochs.trim()) ? parseInt(regEpochs, 10) : NaN;
 
-    if (capBase === null)  return { err: "Cap must be a plain amount, at most 6 decimals." };
-    if (baseBase === null) return { err: "Welcome bag must be a plain amount, at most 6 decimals." };
-    if (capBase <= BigInt(0)) return { err: "Cap must be greater than 0." };
-    if (capBase > U64_MAX || baseBase > U64_MAX)
+    if (baseBase === null) return { err: "Signature bag must be a plain amount, at most 6 decimals." };
+    if (retainerBase === null)
+      return { err: "Retainer must be a plain amount, at most 6 decimals." };
+    if (retainerBase <= BigInt(0))
+      return { err: "The retainer per epoch must be greater than 0 — it is the whole deal." };
+    if (baseBase > U64_MAX || retainerBase > U64_MAX)
       return { err: "Amount too large for u64." };
     if (!Number.isFinite(epochs) || epochs < 1 || epochs > MAX_LOCK_EPOCHS)
       return { err: `Lock must be between 1 and ${MAX_LOCK_EPOCHS} epochs.` };
     const schedule = /^\d+$/.test(regSchedule.trim()) ? parseInt(regSchedule, 10) : NaN;
     if (!Number.isFinite(schedule) || schedule < 1 || schedule > MAX_LOCK_EPOCHS)
       return { err: `Bribe schedule must be between 1 and ${MAX_LOCK_EPOCHS} epochs.` };
-    return { capBase, baseBase, epochs, schedule, lockSecs: epochs * EPOCH_DURATION_SECS };
+    return {
+      baseBase, retainerBase, epochs, schedule, lockSecs: epochs * EPOCH_DURATION_SECS,
+    };
   })();
   const termsErr = "err" in terms ? (terms.err as string) : null;
-  const termsOk  = termsErr ? null : (terms as Extract<typeof terms, { capBase: bigint }>);
+  const termsOk  = termsErr ? null : (terms as Extract<typeof terms, { retainerBase: bigint }>);
 
+  // The two figures that live in someone else's decimals, and therefore wait for both mints.
   const deal = (() => {
     if (!termsOk) return { err: termsErr as string };
-    const { capBase, baseBase, epochs } = termsOk;
-    if (bribeDecimals === null) return { pending: true as const };
+    if (bribeDecimals === null || lpDecimals === null) return { pending: true as const };
 
-    const commitBase = toBaseUnits(regCommit, bribeDecimals);
-    if (commitBase === null)
-      return { err: `Commitment must be a plain amount, at most ${bribeDecimals} decimals — that is all this mint has.` };
-    if (commitBase <= BigInt(0)) return { err: "Commitment must be greater than 0." };
+    const minBribeBase = toBaseUnits(regMinBribe, bribeDecimals);
+    if (minBribeBase === null)
+      return { err: `Minimum bribe must be a plain amount, at most ${bribeDecimals} decimals — that is all this mint has.` };
+    if (minBribeBase <= BigInt(0))
+      return { err: "The minimum bribe per epoch must be above 0 — it is what the bag is released against." };
 
-    // rate = cap / commitment, reduced. At exactly `commitBase` bribed the program computes
-    // commitBase × num / den = capBase with no remainder, so the cap lands on the committed
-    // amount to the base unit — which is the property the operator is really buying here.
-    const g   = gcd(capBase, commitBase);
-    const num = capBase / g;
-    const den = commitBase / g;
-    if (num > U64_MAX || den > U64_MAX)
-      return { err: "That ratio does not fit in u64. Round the commitment or the cap." };
+    const lpBase = toBaseUnits(regLpFloor, lpDecimals);
+    if (lpBase === null)
+      return { err: `LP threshold must be a plain amount, at most ${lpDecimals} decimals.` };
+    if (lpBase <= BigInt(0))
+      return { err: "The LP threshold must be above 0 — a retainer conditioned on nothing is a vesting." };
+    if (minBribeBase > U64_MAX || lpBase > U64_MAX)
+      return { err: "Amount too large for u64." };
 
-    // hiSOLA base units credited by one whole bribe token — exact when it divides evenly.
-    const perTokenBase = (BigInt(10) ** BigInt(bribeDecimals) * num) / den;
-    const perTokenExact =
-      (BigInt(10) ** BigInt(bribeDecimals) * num) % den === BigInt(0);
-
-    return {
-      capBase, baseBase, commitBase, num, den, epochs, perTokenBase, perTokenExact,
-      lockSecs: epochs * EPOCH_DURATION_SECS,
-    };
+    return { ...termsOk, minBribeBase, lpBase };
   })();
   const dealErr     = "err" in deal ? (deal.err as string) : null;
   const dealPending = "pending" in deal;
   const dealOk      = !dealErr && !dealPending
-    ? (deal as Extract<typeof deal, { num: bigint }>)
+    ? (deal as Extract<typeof deal, { lpBase: bigint }>)
     : null;
 
   // ── Fetch all vesting + position data ───────────────────────────────────────
@@ -631,6 +645,7 @@ export function FounderPanel() {
           protocolState:       statePda,
           contributorWallet:   contributorKey,
           contributorVesting:  vestingPda,
+          contributorRegistry: contributorRegistryPda,
           systemProgram:       SystemProgram.programId,
           rent:                SYSVAR_RENT_PUBKEY,
         } as any)
@@ -654,18 +669,19 @@ export function FounderPanel() {
       // Every figure comes from the same derivation the summary block renders, so what is
       // signed is exactly what was read on screen. No second parse, no second rounding.
       if (dealErr || !dealOk) {
-        setStatusReg(`❌ ${dealErr ?? "Waiting for the bribe mint."}`);
+        setStatusReg(`❌ ${dealErr ?? "Waiting for the bribe and LP mints."}`);
         return;
       }
-      const partnerKey = new PublicKey(regWallet.trim());
-      const bribeMint  = new PublicKey(regBribeMint.trim());
-      const rateNumBN  = new BN(dealOk.num.toString());
-      const rateDenBN  = new BN(dealOk.den.toString());
-      const capBN      = new BN(dealOk.capBase.toString());
-      const baseBN     = new BN(dealOk.baseBase.toString());
-      const lockBN     = new BN(dealOk.lockSecs);
-      const schedBN    = new BN(termsOk!.schedule);
-      const allocPda   = partnerAllocPda(partnerKey);
+      const partnerKey  = new PublicKey(regWallet.trim());
+      const bribeMint   = new PublicKey(regBribeMint.trim());
+      const lpMint      = new PublicKey(regLpMint.trim());
+      const lpFloorBN   = new BN(dealOk.lpBase.toString());
+      const retainerBN  = new BN(dealOk.retainerBase.toString());
+      const baseBN      = new BN(dealOk.baseBase.toString());
+      const lockBN      = new BN(dealOk.lockSecs);
+      const schedBN     = new BN(dealOk.schedule);
+      const minBribeBN  = new BN(dealOk.minBribeBase.toString());
+      const allocPda    = partnerAllocPda(partnerKey);
 
       // Guard: already registered?
       const existing = await connection.getAccountInfo(allocPda);
@@ -678,7 +694,9 @@ export function FounderPanel() {
       const program  = getProgram(provider);
 
       const ix = await program.methods
-        .registerPartner(bribeMint, rateNumBN, rateDenBN, capBN, baseBN, lockBN, schedBN)
+        .registerPartner(
+          bribeMint, lpMint, lpFloorBN, retainerBN, baseBN, lockBN, schedBN, minBribeBN
+        )
         .accounts({
           authority:         wallet.publicKey,
           protocolState:     statePda,
@@ -1076,7 +1094,7 @@ export function FounderPanel() {
           <span className="text-2xl">🤝</span>
           <div>
             <h3 className="text-base font-bold text-white">Register Protocol Partner</h3>
-            <p className="text-xs text-gray-500">Authority-only · hiSOLA locked directly in governance vault</p>
+            <p className="text-xs text-gray-500">Authority-only · a signature bag, then a retainer on their liquidity</p>
           </div>
         </div>
 
@@ -1109,53 +1127,72 @@ export function FounderPanel() {
             />
           </div>
 
+          {/* LP mint — the token the retainer is conditioned on */}
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+              LP mint
+            </label>
+            <input
+              className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+              type="text"
+              placeholder="LP token of the pool they commit to seed"
+              value={regLpMint}
+              onChange={(e) => setRegLpMint(e.target.value)}
+            />
+            <p className="text-[10px] text-gray-500 mt-1">
+              Named explicitly, so a partner can bribe in their governance token and provide
+              liquidity in their LST. The protocol never takes custody of it — it reads the
+              balance each epoch and stops paying when it drops.
+            </p>
+          </div>
+
           {/* ── The deal, in the terms it is negotiated in ──────────────────── */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
-                Partner commits (bribe tokens)
+                LP threshold
               </label>
               <input
                 className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
                 type="text"
                 inputMode="decimal"
-                placeholder="1000000"
-                value={regCommit}
+                placeholder="LP tokens they must keep"
+                value={regLpFloor}
                 onChange={(e) => {
                   if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
-                    setRegCommit(e.target.value);
+                    setRegLpFloor(e.target.value);
                 }}
               />
             </div>
             <div>
               <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
-                Which earns (hiSOLA)
+                Retainer / epoch (hiSOLA)
               </label>
               <input
                 className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
                 type="text"
                 inputMode="decimal"
-                placeholder="1000000"
-                value={regCap}
+                placeholder="3450"
+                value={regRetainer}
                 onChange={(e) => {
                   if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
-                    setRegCap(e.target.value);
+                    setRegRetainer(e.target.value);
                 }}
               />
             </div>
           </div>
 
-          {/* Welcome bag + Epochs row */}
+          {/* Signature bag + Epochs row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
-                Welcome bag (hiSOLA)
+                Signature bag (hiSOLA)
               </label>
               <input
                 className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
                 type="text"
                 inputMode="decimal"
-                placeholder="100000"
+                placeholder="20000"
                 value={regAmount}
                 onChange={(e) => {
                   if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
@@ -1181,11 +1218,27 @@ export function FounderPanel() {
             </div>
           </div>
 
-          {/* ── The bribe rhythm ────────────────────────────────────────────────
-              Nothing on-chain paces a bribe by itself: partner_deposit_bribe credits a
-              lifetime cumulative counter. This is the field that turns the commitment into a
-              schedule, and it is written here rather than chosen by the partner at funding
-              time, because it is a term of the agreement. */}
+          {/* ── The bribe commitment ────────────────────────────────────────────
+              Two terms, both written here rather than chosen by the partner at funding time:
+              how long the schedule runs, and how large each tranche must be. The size floor
+              is what stops a partner escrowing 52 epochs of dust to collect the bag. */}
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
+              Minimum bribe / epoch (bribe tokens)
+            </label>
+            <input
+              className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
+              type="text"
+              inputMode="decimal"
+              placeholder="300"
+              value={regMinBribe}
+              onChange={(e) => {
+                if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
+                  setRegMinBribe(e.target.value);
+              }}
+            />
+          </div>
+
           <div>
             <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
               Bribes spread over
@@ -1227,9 +1280,9 @@ export function FounderPanel() {
             1 epoch = 7 days · 52 epochs ≈ 12 months · max {MAX_LOCK_EPOCHS} epochs (≈ 4 years)
           </p>
           <p className="text-[10px] text-gray-500">
-            Welcome bag streams into the partner&apos;s vote-locked position over 6 months.
-            The commitment pair above bounds what their bribes can additionally earn — enter
-            whole tokens, the decimals of each mint are handled for you.
+            The tiers agreed on 2026-08-26, in hiSOLA: 1M LP → 20 000 bag + 3 450/epoch ·
+            500K → 7 500 + 1 300 · 200K → 2 000 + 350. Enter whole tokens; the decimals of
+            each mint are read from the chain and handled for you.
           </p>
 
           {/* ── What will be written on-chain ──────────────────────────────────
@@ -1237,7 +1290,10 @@ export function FounderPanel() {
               language and then in the exact integers that go into the account. Anything
               unreadable here is a figure nobody can fix later. */}
           {bribeMintErr && (
-            <p className="text-[11px] text-red-400">❌ {bribeMintErr}</p>
+            <p className="text-[11px] text-red-400">❌ Bribe mint: {bribeMintErr}</p>
+          )}
+          {lpMintErr && (
+            <p className="text-[11px] text-red-400">❌ LP mint: {lpMintErr}</p>
           )}
           {dealErr && (
             <p className="text-[11px] text-red-400">❌ {dealErr}</p>
@@ -1250,120 +1306,92 @@ export function FounderPanel() {
               </p>
 
               <ul className="text-xs text-gray-300 leading-relaxed flex flex-col gap-1">
-                {!dealOk || bribeDecimals === null ? (
+                <li>
+                  A signature bag of{" "}
+                  <span className="font-mono text-white">
+                    {fromBaseUnits(termsOk.baseBase, 6)}
+                  </span>{" "}
+                  hiSOLA, delivered whole the moment they escrow their schedule. It is the only
+                  unconditional part, which is why it is the smaller one.
+                </li>
+                <li>
+                  Then{" "}
+                  <span className="font-mono text-white">
+                    {fromBaseUnits(termsOk.retainerBase, 6)}
+                  </span>{" "}
+                  hiSOLA <strong className="text-white">per epoch</strong>, every epoch their
+                  liquidity is still there — no total, no cap, no end date.
+                </li>
+                {!dealOk || lpDecimals === null ? (
                   <li className="text-gray-500">
-                    Enter the bribe mint to price the commitment — its decimals decide the
-                    rate. Everything below is already fixed by the figures above.
+                    Enter both mints to price the liquidity condition and the bribe floor —
+                    their decimals decide the integers stored.
                   </li>
                 ) : (
-                <>
-                <li>
-                  Partner bribes{" "}
-                  <span className="font-mono text-white">
-                    {fromBaseUnits(dealOk.commitBase, bribeDecimals)}
-                  </span>{" "}
-                  tokens <strong className="text-white">in total, ever</strong> — and earns{" "}
-                  <span className="font-mono text-white">
-                    {fromBaseUnits(dealOk.capBase, 6)}
-                  </span>{" "}
-                  hiSOLA for it, reached to the base unit.
-                </li>
-                <li>
-                  Each{" "}
-                  <span className="font-mono text-white">1</span> token bribed credits{" "}
-                  <span className="font-mono text-white">
-                    {fromBaseUnits(dealOk.perTokenBase, 6)}
-                  </span>{" "}
-                  hiSOLA{dealOk.perTokenExact ? "" : " (rounded down per claim)"}.
-                </li>
-                <li>
-                  Plus a welcome bag of{" "}
-                  <span className="font-mono text-white">
-                    {fromBaseUnits(dealOk.baseBase, 6)}
-                  </span>{" "}
-                  hiSOLA, streaming over 6 months whether they bribe or not.
-                </li>
-                </>
+                  <li>
+                    Conditioned on holding{" "}
+                    <span className="font-mono text-white">
+                      {fromBaseUnits(dealOk.lpBase, lpDecimals)}
+                    </span>{" "}
+                    LP, checked at the moment each epoch is cranked. The protocol never holds
+                    it — it stops paying, and resumes if the balance comes back.
+                  </li>
                 )}
               </ul>
 
-              {termsOk && (
-                <p className="text-xs text-gray-300 leading-relaxed">
-                  Bribes are escrowed once and paid out over{" "}
-                  <span className="font-mono text-white">{termsOk.schedule}</span> epochs
-                  {" "}(≈ {Math.round((termsOk.schedule * 7) / 30.4)} months)
-                  {dealOk && bribeDecimals !== null && (
-                    <>
-                      {" "}—{" "}
-                      <span className="font-mono text-white">
-                        {fromBaseUnits(
-                          dealOk.commitBase / BigInt(termsOk.schedule),
-                          bribeDecimals
-                        )}
-                      </span>{" "}
-                      per epoch, released to that gauge&apos;s voters one epoch at a time
-                    </>
-                  )}
-                  . The partner escrows the whole schedule in one signature and has nothing
-                  further to sign.
-                </p>
-              )}
+              <p className="text-xs text-gray-300 leading-relaxed">
+                Bribes are escrowed once and paid out over{" "}
+                <span className="font-mono text-white">{termsOk.schedule}</span> epochs
+                {" "}(≈ {Math.round((termsOk.schedule * 7) / 30.4)} months)
+                {dealOk && bribeDecimals !== null && (
+                  <>
+                    {", at least "}
+                    <span className="font-mono text-white">
+                      {fromBaseUnits(dealOk.minBribeBase, bribeDecimals)}
+                    </span>{" "}
+                    per epoch
+                  </>
+                )}
+                . One signature funds the whole schedule, and they have nothing further to sign.
+              </p>
 
-              {/* ── What the schedule does and does not bind ─────────────────────
-                  The escrow paces the committed amount. It does not stop the partner bribing
-                  MORE on top through partner_deposit_bribe, and it does not make the cap
-                  time-bounded: total_bribed_credited stays a lifetime counter. */}
+              {/* ☠️ The property that replaced the cap, and the cost that came with it. */}
               <p className="text-[11px] text-gray-500 leading-relaxed">
-                The escrow paces the committed amount and cannot be withdrawn or retimed once
-                running. It does not stop the partner bribing more on top — extra bribes still
-                credit the allocation, up to the cap.
+                Every epoch is bought separately, so a partner who leaves has forfeited nothing
+                — there was never a remainder. The other side of that: an epoch nobody cranks
+                is <strong className="text-gray-300">lost, not deferred</strong>. The chain keeps
+                no history of an LP balance, so it cannot be established afterwards.
               </p>
 
-              {/* ── The rate is frozen ───────────────────────────────────────────
-                  There is no oracle anywhere in the partner path. rate_num/rate_den is a
-                  fixed base-unit ratio, so whatever USD equivalence justified it today is
-                  frozen for the life of the deal. */}
               <p className="text-[11px] text-amber-400/90 leading-relaxed">
-                🔒 The rate is <strong>final</strong>. There is no oracle: hiSOLA is not priced
-                at floor, nor in USDC, nor re-quoted later. Whatever this ratio is worth today
-                is what it stays worth, for {termsOk.epochs} epochs and beyond.
+                ⚠️ The attestation proves the balance existed at the instant of the crank, and
+                nothing more. A partner running their own epoch can hold the LP for exactly that
+                transaction. Closing that would mean taking custody of their LP, which is the one
+                thing this deal promises not to do — the remedy is declining to renew.
               </p>
 
-              {/* ── Which half comes back out ────────────────────────────────────
-                  permanent_amount = the bag only; unlock_hi_sola releases
-                  amount_locked − permanent_amount. Released hiSOLA can be unstaked and sold
-                  1:1 against a floor it never financed, so the releasable figure is the
-                  exposure this form actually writes. */}
+              {/* Everything credited here is permanent, which is what keeps unfinanced supply
+                  off the 100% channel: no unlock, no unstake, no sell_sola. */}
               <div className="border-t border-brand-border pt-2 flex flex-col gap-1">
                 <div className="flex justify-between text-[11px]">
                   <span className="text-gray-500">Permanent · never unlockable</span>
-                  <span className="text-gray-300 font-mono">
-                    {fromBaseUnits(termsOk.baseBase, 6)} hiSOLA
-                  </span>
+                  <span className="text-gray-300 font-mono">everything</span>
                 </div>
                 <div className="flex justify-between text-[11px]">
-                  <span className="text-gray-500">
-                    Releasable after {termsOk.epochs} epochs
-                    {" "}({(termsOk.lockSecs / 86_400).toLocaleString("en-US")} days)
-                  </span>
+                  <span className="text-gray-500">A year of maintained liquidity costs</span>
                   <span className="text-white font-mono">
-                    {fromBaseUnits(termsOk.capBase, 6)} hiSOLA
+                    {fromBaseUnits(
+                      termsOk.baseBase + termsOk.retainerBase * BigInt(52), 6
+                    )}{" "}
+                    hiSOLA
                   </span>
                 </div>
-                {termsOk.capBase > termsOk.baseBase && (
-                  <p className="text-[11px] text-amber-400/90 leading-relaxed mt-0.5">
-                    ⚠️ The releasable tranche is{" "}
-                    <span className="font-mono">
-                      {termsOk.baseBase === BigInt(0)
-                        ? "all"
-                        : `${(Number((termsOk.capBase * BigInt(100)) / termsOk.baseBase) / 100)
-                            .toLocaleString("en-US", { maximumFractionDigits: 1 })}×`}
-                    </span>{" "}
-                    {termsOk.baseBase === BigInt(0) ? "of it — there is no permanent bag at all" : "the permanent one"}. Once unlocked it can be unstaked and sold at the 1 USDC
-                    floor, which no bribe ever funded — so this line is the floor exposure this
-                    deal creates. Raising the welcome bag or lowering the cap is what shrinks it.
-                  </p>
-                )}
+                <p className="text-[11px] text-gray-500 leading-relaxed mt-0.5">
+                  Bag and retainer alike are locked for life, so none of it can be unstaked and
+                  sold at the 1 USDC floor it never financed. The exposure is a share of the fee
+                  stream and a 20% borrow valve — not the floor itself. The figure above is an
+                  illustration at 52 epochs, not a total: the deal has none.
+                </p>
               </div>
 
               {/* The raw u64s. Present because this is the row that will sit in the account
@@ -1375,15 +1403,16 @@ export function FounderPanel() {
                 </p>
                 {!dealOk ? (
                   <p className="text-[11px] text-gray-500">
-                    rate_num and rate_den are derived from the bribe mint&apos;s decimals —
-                    enter it to see the exact integers.
+                    The LP threshold and the bribe floor are written in their own mints\u2019
+                    decimals — enter both mints to see the exact integers.
                   </p>
                 ) : (<>
                 {([
-                  ["rate_num", dealOk.num.toString()],
-                  ["rate_den", dealOk.den.toString()],
-                  ["cap_hi_sola", dealOk.capBase.toString()],
+                  ["lp_threshold", dealOk.lpBase.toString()],
+                  ["retainer_per_epoch", dealOk.retainerBase.toString()],
                   ["base_hi_sola", dealOk.baseBase.toString()],
+                  ["min_bribe_per_epoch", dealOk.minBribeBase.toString()],
+                  ["schedule_epochs", dealOk.schedule.toString()],
                   ["lock_duration_secs", dealOk.lockSecs.toString()],
                 ] as const).map(([k, v]) => (
                   <div key={k} className="flex justify-between gap-3 text-[11px]">
@@ -1392,8 +1421,8 @@ export function FounderPanel() {
                   </div>
                 ))}
                 <p className="text-[10px] text-gray-600 mt-1">
-                  Bribe mint has {bribeDecimals} decimals; hiSOLA has 6. The rate carries that
-                  gap so you never have to.
+                  LP mint has {lpDecimals} decimals, bribe mint has {bribeDecimals}, hiSOLA has 6.
+                  Each figure is written in the units of its own mint.
                 </p>
                 </>)}
               </div>
@@ -1412,8 +1441,8 @@ export function FounderPanel() {
           <button
             className="btn-primary w-full"
             onClick={registerPartner}
-            disabled={loadingReg || !isAuthority || !regWallet.trim() || !regBribeMint.trim() ||
-                      !dealOk}
+            disabled={loadingReg || !isAuthority || !regWallet.trim() ||
+                      !regBribeMint.trim() || !regLpMint.trim() || !dealOk}
           >
             {loadingReg ? "Processing…"
               : !isAuthority ? "Authority wallet required"

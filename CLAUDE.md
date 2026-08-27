@@ -356,28 +356,58 @@ unfinanced burn decremented a counter it never incremented. Exposure was ~2M (25
 Ve-locking the ecosystem was considered and rejected: it would make the airdrop impossible while
 only deferring the drain. **Only financing removes it.**
 
-**Partner allocations (settled 2026-07-17): the welcome bag is permanent voting power.**
-`VeLockPosition.permanent_amount` (new field, carved from spare bytes — legacy positions read 0)
-marks the portion `unlock_hi_sola` can never release: releasable = `amount_locked −
-permanent_amount`. `claim_partner_allocation` sets `permanent_amount = base_vested`, so the
-welcome bag never reaches a wallet (it is unfinanced — no USDC ever entered the floor for it),
-while the **bribe-earned** portion stays under the normal 4-year lock, releasable and re-lockable
-at expiry. Note the bribe-earned tranche is *also* unfinanced (partner bribes pay voters, not the
-floor) — releasing it at expiry is an accepted, capped exposure (`cap_hi_sola` per deal). What the
-protocol sells a partner is: permanent voting power on the bag + a 20% borrow valve
-(`borrow_against_locked`) + a releasable bribe-earned tranche. Covered by the `[partner]` test.
+**Partner allocations (reshaped 2026-08-27): a signature bag, then a retainer.**
+The 1:1 bribe match is gone — it priced hiSOLA at a base-unit ratio frozen for life with no
+oracle, `total_bribed_credited` was a lifetime counter with no clock, and a bad rate was
+irrevocable once any claim had happened. What a partner gets now:
 
-**`close_partner_allocation` (2026-08-25) is not a revoke.** It reclaims the PDA's rent to
-the authority in exactly two terminal states — **fully settled** (`hi_sola_claimed >=
-base_hi_sola + cap_hi_sola`: bag vested, bribe cap reached, nothing further can accrue) or
-**never activated** (`hi_sola_claimed == 0 && total_bribed_credited == 0`: the deal was
-signed and never started). Anything in between is refused. The invariant that matters:
-**once a partner has performed — bribed anything or claimed anything — the authority can no
-longer delete their still-claimable entitlement.** A partner who took the bag but never met
-their bribe commitment therefore leaves the account open forever; that 168 bytes is the price
-of the guarantee. ⚠️ Closing frees `[b"partner", wallet]`, so `register_partner` reopens it
-with zeroed counters and a **fresh welcome bag** — the intended renewal path, and the only
-way one wallet gets a second bag. Seven `[partner]` cases in `tests/bankrun_allocations.ts`.
+- **`base_hi_sola`** — a small signature bag, delivered whole by `claim_partner_allocation` the
+  moment they escrow a bribe schedule (`stream_start_ts != 0` is the gate on the whole deal).
+- **`retainer_per_epoch`** — hiSOLA credited by `crank_partner_epoch` for every epoch they still
+  hold `lp_threshold` of `lp_mint`. No total, no cap, no end date. Tiers: 1M LP → 20K + 3 450/epoch
+  · 500K → 7 500 + 1 300 · 200K → 2 000 + 350.
+
+**Both are `permanent_amount`**, so `unlock_hi_sola` releases nothing at any date and the
+`sell_sola` drain from partner allocations is **zero**. The releasable bribe-earned tranche that
+used to expire into a wallet after 4 years no longer exists. Both also earn protocol fees
+(`fee_shares` + a matching `total_hi_sola` increment) — the exposure moved from the floor to the
+fee stream, deliberately.
+
+☢️ **`crank_partner_epoch` is one instruction doing two independently-gated things.** The escrowed
+bribe tranche is released whether or not the LP condition holds (it is already the voters' money,
+and it *slips* if an epoch is missed); the retainer is bought fresh each epoch and **a missed epoch
+is lost, not deferred** — the chain keeps no history of an SPL balance, so the crank IS the
+attestation. Which also means it only proves the balance existed at that instant: a partner can
+add liquidity, crank, and remove it in one transaction. Closing that would need custody of the LP,
+which the deal promises not to take — disclosed as reputational, not cryptographic.
+
+**`close_partner_allocation` (2026-08-25, gates rewritten 2026-08-27) is not a revoke.** A retainer
+has no promised total to compare against, so the test changed shape: it closes when the bag is
+settled (claimed, or `base_hi_sola == 0`) **and** the current epoch is already decided (credited
+this epoch, or the LP is now below `lp_threshold`). The guarantee that matters is intact — the
+authority cannot take away an epoch the partner is still earning — and the account of a partner who
+simply stopped no longer has to stay open forever, because nothing is owed. ⚠️ Closing frees
+`[b"partner", wallet]`, so `register_partner` reopens it with zeroed counters and a fresh bag: the
+renewal path, the migration path for the old 160-byte layout, and the only way one wallet gets a
+second bag.
+
+**`partner_deposit_bribe` was deleted** — without the match it was `deposit_bribe` renamed.
+**57 → 56 instructions.** Sixteen `[partner]`/`[crank]`/`[close]`/`[stream]` cases in
+`tests/bankrun_allocations.ts`.
+
+**☢️ `fee_shares` — the tranche that earns without being spendable.** Four credit sites
+(contributor bag, team 250K, partner bag, partner retainer) plus `lock_hi_sola`. Two rules that
+must hold at every one of them:
+- **Carry the debt, never re-stamp it.** `fees_debt` is one scalar for the whole basis, so
+  `fees_debt = acc` forfeits accrual and leaving it alone hands the new shares a retroactive
+  claim. `UserPosition::credit_fee_shares` does `acc − pending × PRECISION / new_basis`.
+- **`lock_hi_sola` credits the DROP IN BASIS, not the amount.** Crediting the amount outright
+  would let unfinanced hiSOLA (basis 0, because `staked_amount` is 0) manufacture a fee claim by
+  locking. `total_hi_sola` then falls by `amount − credited`, which is 0 for financed stake — so
+  locking no longer costs a holder their fees, which is the point — and the full amount for
+  unfinanced supply, exactly as before. The founder's 7M stays excluded **automatically**: it
+  never routes through `lock_hi_sola` and never credits `fee_shares`. That automaticity is the
+  reason the fix went through `fee_shares` instead of inverting the `total_hi_sola` default.
 
 ### Open items flagged pre-audit (still not fixed)
 

@@ -15,8 +15,7 @@ import { PartnerStream } from "@/components/PartnerStream";
 const PARTNER_SEED  = Buffer.from("partner");
 const VELOCK_SEED   = Buffer.from("velock");
 
-// state.rs — the welcome bag streams over 6 months from registration.
-const BASE_BAG_VEST_SECS = 180 * 24 * 3_600;
+const EPOCH_DURATION = 604_800; // state.rs
 // lib.rs — borrow_against_locked, PARTNER_BORROW_CAP_BPS. This panel used to publish 10%
 // "after the lock expires", which was wrong twice over: the cap is 20%, and the valve is
 // open DURING the lock — it exists precisely because locked hiSOLA cannot reach a wallet.
@@ -44,11 +43,6 @@ function fmt(v: bigint, decimals = 6): string {
   return `${whole}.${frac.toString().padStart(decimals, "0").replace(/0+$/, "")}`;
 }
 
-function pct(part: bigint, whole: bigint): number {
-  if (whole === BigInt(0)) return 0;
-  return Number((part * BigInt(10_000)) / whole) / 100;
-}
-
 function timeLeft(endTs: number, nowSecs: number): string {
   const s = Math.max(0, endTs - nowSecs);
   const d = Math.floor(s / 86400);
@@ -60,18 +54,21 @@ function timeLeft(endTs: number, nowSecs: number): string {
 }
 
 interface AllocData {
-  bribeMintKey:     PublicKey;
-  streamStartTs:    number;
-  scheduleEpochs:   number;
-  bribeMint:        string;
-  rateNum:          bigint;
-  rateDen:          bigint;
-  capHiSola:        bigint;
-  baseHiSola:       bigint;
-  totalBribed:      bigint;
-  claimed:          bigint;
-  lockDurationSecs: number;
-  startTs:          number;
+  bribeMintKey:      PublicKey;
+  lpMint:            PublicKey;
+  lpThreshold:       bigint;
+  retainerPerEpoch:  bigint;
+  minBribePerEpoch:  bigint;
+  lastCreditedEpoch: number;
+  epochsQualified:   number;
+  streamStartTs:     number;
+  scheduleEpochs:    number;
+  bribeMint:         string;
+  baseHiSola:        bigint;
+  bagClaimed:        boolean;
+  claimed:           bigint;
+  lockDurationSecs:  number;
+  startTs:           number;
 }
 
 interface LockData {
@@ -107,23 +104,26 @@ export function PartnerPanel() {
 
       if (a.status === "fulfilled" && a.value) {
         const d = a.value as any;
-        // Field names track PartnerAllocation in state.rs. This panel read `hiSolaAmount`
-        // and `claimed` until 2026-08-25 — neither has existed since the allocation became
-        // a streaming bag plus a bribe-earned tranche, so the read threw and the panel sat
-        // on "Loading…" forever. Anything added here must exist in the IDL.
+        // Field names track PartnerAllocation in state.rs, and a mismatch is not cosmetic —
+        // a missing field throws in this callback and leaves the panel on "Loading…" forever.
+        // It happened on 2026-08-25 (`hiSolaAmount`) and again here: `rateNum`, `rateDen`,
+        // `capHiSola` and `totalBribedCredited` no longer exist at all.
         setAlloc({
-          bribeMintKey:     d.bribeMint,
-          streamStartTs:    Number(d.streamStartTs?.toString() ?? "0"),
-          scheduleEpochs:   Number(d.scheduleEpochs?.toString() ?? "0"),
-          bribeMint:        d.bribeMint.toBase58(),
-          rateNum:          BigInt(d.rateNum.toString()),
-          rateDen:          BigInt(d.rateDen.toString()),
-          capHiSola:        BigInt(d.capHiSola.toString()),
-          baseHiSola:       BigInt(d.baseHiSola.toString()),
-          totalBribed:      BigInt(d.totalBribedCredited.toString()),
-          claimed:          BigInt(d.hiSolaClaimed.toString()),
-          lockDurationSecs: Number(d.lockDurationSecs.toString()),
-          startTs:          Number(d.startTs.toString()),
+          bribeMintKey:      d.bribeMint,
+          lpMint:            d.lpMint,
+          lpThreshold:       BigInt(d.lpThreshold.toString()),
+          retainerPerEpoch:  BigInt(d.retainerPerEpoch.toString()),
+          minBribePerEpoch:  BigInt(d.minBribePerEpoch.toString()),
+          lastCreditedEpoch: Number(d.lastCreditedEpoch.toString()),
+          epochsQualified:   Number(d.epochsQualified.toString()),
+          streamStartTs:     Number(d.streamStartTs?.toString() ?? "0"),
+          scheduleEpochs:    Number(d.scheduleEpochs?.toString() ?? "0"),
+          bribeMint:         d.bribeMint.toBase58(),
+          baseHiSola:        BigInt(d.baseHiSola.toString()),
+          bagClaimed:        Boolean(d.bagClaimed),
+          claimed:           BigInt(d.hiSolaClaimed.toString()),
+          lockDurationSecs:  Number(d.lockDurationSecs.toString()),
+          startTs:           Number(d.startTs.toString()),
         });
         setNotFound(false);
 
@@ -216,27 +216,13 @@ export function PartnerPanel() {
     <div className="card text-center py-12 text-gray-500 text-sm">Loading…</div>
   );
 
-  // ── The same arithmetic claim_partner_allocation runs, so the figure on the button is
-  //    the figure the instruction will mint. Integer division throughout, as on-chain.
-  // Mirrors claim_partner_allocation exactly: a zero stamp means no schedule was ever
-  // escrowed, and the bag vests nothing at all — it is earned, not granted.
-  const elapsed = alloc.streamStartTs === 0
-    ? 0
-    : Math.max(0, nowSecs - alloc.streamStartTs);
-  const baseVested = alloc.streamStartTs === 0
-    ? BigInt(0)
-    : elapsed >= BASE_BAG_VEST_SECS
-      ? alloc.baseHiSola
-      : (alloc.baseHiSola * BigInt(elapsed)) / BigInt(BASE_BAG_VEST_SECS);
-  const bribeEarnedRaw = alloc.rateDen > BigInt(0)
-    ? (alloc.totalBribed * alloc.rateNum) / alloc.rateDen
+  // ── The same test claim_partner_allocation runs ─────────────────────────────
+  // A zero stamp means no schedule was ever escrowed, and nothing accrues at all — the bag is
+  // the consideration for the schedule, so it cannot precede it.
+  const claimable = alloc.streamStartTs !== 0 && !alloc.bagClaimed
+    ? alloc.baseHiSola
     : BigInt(0);
-  const bribeEarned = bribeEarnedRaw < alloc.capHiSola ? bribeEarnedRaw : alloc.capHiSola;
-  const entitled  = baseVested + bribeEarned;
-  const claimable = entitled > alloc.claimed ? entitled - alloc.claimed : BigInt(0);
-
-  const bagDoneIn = alloc.streamStartTs + BASE_BAG_VEST_SECS;
-  const bagStreaming = nowSecs < bagDoneIn;
+  const currentEpoch = Math.floor(nowSecs / EPOCH_DURATION);
 
   const isLocked   = lock && lock.lockEndTs > nowSecs;
   const lockEndsIn = lock ? timeLeft(lock.lockEndTs, nowSecs) : null;
@@ -261,125 +247,107 @@ export function PartnerPanel() {
           <h2 className="text-xl font-black text-white">Partner Allocation</h2>
         </div>
         <p className="text-xs text-gray-500">
-          Vote-locked hiSOLA · a streaming welcome bag plus what your bribes earn
+          Vote-locked hiSOLA · a signature bag, then a retainer on your liquidity
         </p>
       </div>
 
-      {/* ── The schedule that gates everything else ── */}
+      {/* ── The schedule that gates everything else, and this epoch's crank ── */}
       <PartnerStream
         alloc={{
-          bribeMint:     alloc.bribeMintKey,
-          rateNum:       alloc.rateNum,
-          rateDen:       alloc.rateDen,
-          capHiSola:     alloc.capHiSola,
-          baseHiSola:    alloc.baseHiSola,
-          streamStartTs:  alloc.streamStartTs,
-          scheduleEpochs: alloc.scheduleEpochs,
+          bribeMint:         alloc.bribeMintKey,
+          lpMint:            alloc.lpMint,
+          lpThreshold:       alloc.lpThreshold,
+          retainerPerEpoch:  alloc.retainerPerEpoch,
+          minBribePerEpoch:  alloc.minBribePerEpoch,
+          baseHiSola:        alloc.baseHiSola,
+          streamStartTs:     alloc.streamStartTs,
+          scheduleEpochs:    alloc.scheduleEpochs,
+          lastCreditedEpoch: alloc.lastCreditedEpoch,
+          epochsQualified:   alloc.epochsQualified,
         }}
         bribeDec={bribeDec}
         onChanged={fetchData}
       />
 
-      {/* ── Claimable now ── */}
-      <div className="card">
-        <h3 className="text-base font-bold text-white mb-4">Available to claim</h3>
-
-        <div className="bg-brand-dark border border-brand-border rounded-xl p-4 mb-4">
-          <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Claimable now</p>
-          <p className="text-2xl font-black text-white font-mono">{fmt(claimable)}</p>
-          <p className="text-[10px] text-gray-500">hiSOLA</p>
-        </div>
-
-        <div className="flex items-start gap-2 text-xs text-gray-500 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 mb-4">
-          <span className="text-brand-green text-base leading-none shrink-0">ℹ</span>
-          <span>
-            Claiming mints straight into your vote-locked position — your wallet balance stays 0,
-            and voting power is live immediately. While locked you can draw up to{" "}
-            <span className="text-white font-mono">
-              {fmt(borrowable)} USDC
-            </span>{" "}
-            against it (20%), without interest or liquidation.
-          </span>
-        </div>
-
-        <button
-          className="btn-primary w-full"
-          onClick={claimAllocation}
-          disabled={loading || claimable === BigInt(0)}
-        >
-          {loading ? "Processing…"
-            : claimable === BigInt(0) ? "Nothing to claim yet"
-            : `Claim & lock ${fmt(claimable)} hiSOLA`}
-        </button>
-      </div>
-
-      {/* ── Welcome bag ── */}
+      {/* ── The signature bag ── */}
       <div className="card">
         <div className="flex justify-between items-baseline mb-1">
-          <h3 className="text-base font-bold text-white">Welcome bag</h3>
+          <h3 className="text-base font-bold text-white">Signature bag</h3>
+          <span className="text-xs text-gray-400 font-mono">{fmt(alloc.baseHiSola)} hiSOLA</span>
+        </div>
+        <p className="text-[11px] text-gray-500 mb-4">
+          Delivered whole, once, the moment your schedule is escrowed. It is the only
+          unconditional part of the deal, which is why it is the smaller part.
+        </p>
+
+        {alloc.bagClaimed ? (
+          <p className="text-xs text-brand-green">
+            ✅ Claimed — permanent, voting for life, never unlockable or sellable.
+          </p>
+        ) : (
+          <>
+            <div className="flex items-start gap-2 text-xs text-gray-500 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 mb-4">
+              <span className="text-brand-green text-base leading-none shrink-0">ℹ</span>
+              <span>
+                Claiming mints straight into your vote-locked position — your wallet balance
+                stays 0, and voting power is live immediately. It earns protocol fees for life,
+                and you can draw{" "}
+                <span className="text-white font-mono">20%</span> of it as USDC through
+                borrow_against_locked, without interest or liquidation.
+              </span>
+            </div>
+            <button
+              className="btn-primary w-full"
+              onClick={claimAllocation}
+              disabled={loading || claimable === BigInt(0)}
+            >
+              {loading ? "Processing…"
+                : claimable === BigInt(0)
+                  ? "Escrow your bribe schedule first"
+                  : `Claim & lock ${fmt(claimable)} hiSOLA`}
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* ── The retainer ── */}
+      <div className="card">
+        <div className="flex justify-between items-baseline mb-1">
+          <h3 className="text-base font-bold text-white">Retainer</h3>
           <span className="text-xs text-gray-400 font-mono">
-            {fmt(baseVested)} / {fmt(alloc.baseHiSola)}
+            {fmt(alloc.retainerPerEpoch)} hiSOLA / epoch
           </span>
         </div>
         <p className="text-[11px] text-gray-500 mb-3">
-          Streams over 6 months from the day you escrow your bribe schedule — it is what the
-          schedule buys.
+          Bought one epoch at a time against liquidity that is still there. No total, no cap and
+          no end date: stay three years and it pays for three years.
         </p>
-        <div className="w-full bg-brand-border rounded-full h-2 mb-2">
-          <div
-            className="bg-brand-green h-2 rounded-full transition-all"
-            style={{ width: `${Math.min(100, pct(baseVested, alloc.baseHiSola))}%` }}
-          />
-        </div>
-        <p className="text-[11px] text-gray-500">
-          {alloc.streamStartTs === 0
-            ? <><span className="text-amber-400/90">Not started.</span> The bag vests from the day
-                you escrow a bribe schedule, not from the day you were registered — commit one
-                above and the 6 months begin.</>
-            : bagStreaming
-              ? <>Fully streamed in <span className="font-mono text-gray-400">{timeLeft(bagDoneIn, nowSecs)}</span>.</>
-              : <>Fully streamed.</>}
-          {" "}This portion is <span className="text-white">permanent</span> — it keeps its voting
-          power for life and can never be unlocked or sold.
-        </p>
-      </div>
-
-      {/* ── Bribe-earned tranche ── */}
-      <div className="card">
-        <div className="flex justify-between items-baseline mb-1">
-          <h3 className="text-base font-bold text-white">Earned by bribing</h3>
-          <span className="text-xs text-gray-400 font-mono">
-            {fmt(bribeEarned)} / {fmt(alloc.capHiSola)}
-          </span>
-        </div>
-        <p className="text-[11px] text-gray-500 mb-3">
-          Credited as you deposit bribes in the committed mint. Unlike the bag, this tranche is
-          releasable once the lock expires.
-        </p>
-        <div className="w-full bg-brand-border rounded-full h-2 mb-3">
-          <div
-            className="bg-brand-green h-2 rounded-full transition-all"
-            style={{ width: `${Math.min(100, pct(bribeEarned, alloc.capHiSola))}%` }}
-          />
-        </div>
         <div className="flex flex-col gap-1 text-[11px]">
           <div className="flex justify-between">
-            <span className="text-gray-500">Bribes deposited so far</span>
+            <span className="text-gray-500">Epochs earned</span>
+            <span className="text-gray-300 font-mono">{alloc.epochsQualified}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Credited in total</span>
+            <span className="text-gray-300 font-mono">{fmt(alloc.claimed)} hiSOLA</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Last epoch credited</span>
             <span className="text-gray-300 font-mono">
-              {bribeDec !== null ? fmt(alloc.totalBribed, bribeDec) : alloc.totalBribed.toString()}
-              {bribeDec === null ? " base units" : ""}
+              {alloc.lastCreditedEpoch === 0 ? "—" : alloc.lastCreditedEpoch}
+              {alloc.lastCreditedEpoch === currentEpoch && " (this one)"}
             </span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-500">Committed bribe mint</span>
             <span className="text-gray-300 font-mono">{alloc.bribeMint.slice(0, 8)}…</span>
           </div>
-          {bribeEarned >= alloc.capHiSola && (
-            <p className="text-brand-green mt-1">
-              ✅ Cap reached — further bribes still pay voters, but earn no more hiSOLA.
-            </p>
-          )}
         </div>
+        <p className="text-[11px] text-gray-500 mt-3 leading-relaxed">
+          Every epoch credited is <span className="text-white">permanent</span> hiSOLA: it votes
+          for life, earns protocol fees for life, and borrows at 20% — and it can never be
+          unlocked or sold, because nobody bought it through the curve.
+        </p>
       </div>
 
       {/* ── Locked position ── */}

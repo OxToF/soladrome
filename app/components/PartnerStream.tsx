@@ -7,12 +7,11 @@ import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
-  getProgram, statePda, PROGRAM_ID, sendTx, userAta, explainTxError,
+  getProgram, statePda, solaM, solaVaultAddr, marketVault, positionPda,
+  PROGRAM_ID, sendTx, userAta, explainTxError,
 } from "@/lib/program";
 
 const EPOCH_DURATION = 604_800; // state.rs
-const BASE_BAG_VEST_SECS = 180 * 24 * 3_600; // state.rs
-const MAX_LOCK_EPOCHS = 208;
 
 const pda = (seeds: (Buffer | Uint8Array)[]) =>
   PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
@@ -20,6 +19,7 @@ const pda = (seeds: (Buffer | Uint8Array)[]) =>
 const partnerPda = (o: PublicKey) => pda([Buffer.from("partner"), o.toBuffer()]);
 const streamPda = (o: PublicKey) => pda([Buffer.from("bribe_stream"), o.toBuffer()]);
 const streamVaultPda = (o: PublicKey) => pda([Buffer.from("stream_tokens"), o.toBuffer()]);
+const velockPda = (o: PublicKey) => pda([Buffer.from("velock"), o.toBuffer()]);
 
 const le8 = (n: number) => {
   const b = Buffer.alloc(8);
@@ -52,12 +52,15 @@ function fmt(v: bigint, decimals = 6): string {
 
 export interface StreamAlloc {
   bribeMint: PublicKey;
+  lpMint: PublicKey;
+  lpThreshold: bigint;
+  retainerPerEpoch: bigint;
+  minBribePerEpoch: bigint;
   scheduleEpochs: number;
-  rateNum: bigint;
-  rateDen: bigint;
-  capHiSola: bigint;
   baseHiSola: bigint;
   streamStartTs: number;
+  lastCreditedEpoch: number;
+  epochsQualified: number;
 }
 
 interface StreamData {
@@ -69,11 +72,15 @@ interface StreamData {
   startTs: number;
 }
 
-/// The card that decides whether the partnership runs itself.
+/// The card that runs the partnership week by week.
 ///
-/// `fund_partner_bribe_stream` is the one action that opens the welcome bag, so this is the
-/// first thing a partner should see — and the copy has to say plainly that the bag is the
-/// consideration for the schedule, not a signing bonus.
+/// Two things live here because they are one transaction: `fund_partner_bribe_stream`, the one
+/// action that opens the deal at all, and `crank_partner_epoch`, which every epoch releases the
+/// bribe tranche and buys that epoch of the retainer against the partner's liquidity.
+///
+/// ☢️ The copy has to be blunt about the asymmetry between the two halves, because the money
+/// difference is real: a missed epoch costs the partner the retainer permanently, while the
+/// bribe side merely slips.
 export function PartnerStream({
   alloc,
   bribeDec,
@@ -89,6 +96,8 @@ export function PartnerStream({
   const [stream, setStream] = useState<StreamData | null>(null);
   const [escrowLeft, setEscrowLeft] = useState<bigint>(BigInt(0));
   const [walletBal, setWalletBal] = useState<bigint>(BigInt(0));
+  const [lpBal, setLpBal] = useState<bigint>(BigInt(0));
+  const [lpDec, setLpDec] = useState<number>(6);
   const [nowSecs, setNowSecs] = useState(Math.floor(Date.now() / 1000));
   // Not state the partner controls: the rhythm is a term of the deal.
   const epochs = String(alloc.scheduleEpochs || 52);
@@ -125,13 +134,21 @@ export function PartnerStream({
       ).catch(() => null);
       setWalletBal(BigInt(b?.value.amount ?? "0"));
 
+      // The liquidity condition, read exactly as the program reads it: one balance, one
+      // comparison, no custody anywhere.
+      const lp = await connection.getTokenAccountBalance(
+        userAta(alloc.lpMint, wallet.publicKey)
+      ).catch(() => null);
+      setLpBal(BigInt(lp?.value.amount ?? "0"));
+      if (typeof lp?.value.decimals === "number") setLpDec(lp.value.decimals);
+
       const slot = await connection.getSlot();
       const bt = await connection.getBlockTime(slot);
       if (bt) setNowSecs(bt);
     } catch (e) {
       console.error("PartnerStream fetch:", e);
     }
-  }, [connection, wallet, alloc.bribeMint]);
+  }, [connection, wallet, alloc.bribeMint, alloc.lpMint]);
 
   useEffect(() => { fetchStream(); }, [fetchStream]);
 
@@ -145,10 +162,13 @@ export function PartnerStream({
 
   const currentEpoch = Math.floor(nowSecs / EPOCH_DURATION);
   const spent = stream !== null && stream.epochsReleased >= stream.epochsTotal;
-  const running = stream !== null && !spent;
-  const canRelease = running && stream.lastReleaseEpoch < currentEpoch;
+  const tranceDue = stream !== null && !spent && stream.lastReleaseEpoch < currentEpoch;
+  const lpOk = lpBal >= alloc.lpThreshold;
+  const epochOpen = alloc.lastCreditedEpoch < currentEpoch;
+  const retainerDue = lpOk && epochOpen && alloc.retainerPerEpoch > BigInt(0);
+  const canCrank = stream !== null && (tranceDue || retainerDue);
 
-  // ── What the schedule being typed would actually buy ────────────────────────
+  // ── What the schedule being typed would actually escrow ─────────────────────
   const nEpochs = /^\d+$/.test(epochs.trim()) ? parseInt(epochs, 10) : NaN;
   const perBase = toBaseUnits(perEpoch, bribeDec);
   const plan = (() => {
@@ -157,29 +177,19 @@ export function PartnerStream({
     if (perBase === null)
       return { err: `At most ${bribeDec} decimals — that is all this mint has.` };
     if (perBase <= BigInt(0)) return { err: "Amount per epoch must be above 0." };
+    // Refused on-chain as ScheduleUnderfunded, not merely suboptimal: the escrow IS the
+    // commitment the bag is released against, so a derisory tranche is not the deal. Name the
+    // number that works rather than letting a doomed transaction go out.
+    if (perBase < alloc.minBribePerEpoch)
+      return {
+        err: `Your deal commits to at least ${fmt(alloc.minBribePerEpoch, bribeDec)} per epoch — the program refuses less.`,
+      };
     const total = perBase * BigInt(nEpochs);
     if (total > walletBal)
       return {
         err: `You hold ${fmt(walletBal, bribeDec)} — this schedule escrows ${fmt(total, bribeDec)} up front.`,
       };
-    // Same arithmetic the program runs: credited × num / den, capped.
-    const earnedRaw = alloc.rateDen > BigInt(0)
-      ? (total * alloc.rateNum) / alloc.rateDen
-      : BigInt(0);
-    // Underfunding is refused on-chain (ScheduleUnderfunded), not merely suboptimal: the
-    // escrow IS the commitment, and it opens the welcome bag. Name the amount that works
-    // rather than letting a transaction go out that cannot succeed.
-    if (earnedRaw < alloc.capHiSola && alloc.rateNum > BigInt(0)) {
-      const needTotal =
-        (alloc.capHiSola * alloc.rateDen + alloc.rateNum - BigInt(1)) / alloc.rateNum;
-      const needPer =
-        (needTotal + BigInt(nEpochs) - BigInt(1)) / BigInt(nEpochs);
-      return {
-        err: `This does not deliver the committed cap — the program refuses it. Use at least ${fmt(needPer, bribeDec!)} per epoch.`,
-      };
-    }
-    const earned = earnedRaw < alloc.capHiSola ? earnedRaw : alloc.capHiSola;
-    return { total, earned, earnedRaw, nEpochs };
+    return { total, nEpochs };
   })();
   const planErr = "err" in plan ? (plan.err as string) : null;
   const planOk = planErr ? null : (plan as Extract<typeof plan, { total: bigint }>);
@@ -217,14 +227,14 @@ export function PartnerStream({
     finally { setBusy(false); }
   }
 
-  async function release() {
+  async function crank() {
     if (!wallet || !stream) return;
     setBusy(true); setStatus("");
     try {
       const provider = new AnchorProvider(connection, wallet, {});
       const program = getProgram(provider);
       const ix = await program.methods
-        .releasePartnerBribe(new BN(currentEpoch))
+        .crankPartnerEpoch(new BN(currentEpoch))
         .accounts({
           caller: wallet.publicKey,
           protocolState: statePda,
@@ -236,12 +246,19 @@ export function PartnerStream({
           rewardMint: alloc.bribeMint,
           bribeVault: bribeVaultPda(stream.poolId, alloc.bribeMint, currentEpoch),
           bribeTokenVault: bribeTokensPda(stream.poolId, alloc.bribeMint, currentEpoch),
+          lpMint: alloc.lpMint,
+          partnerLpToken: userAta(alloc.lpMint, wallet.publicKey),
+          solaMint: solaM,
+          solaVault: solaVaultAddr,
+          marketVault,
+          lockPosition: velockPda(wallet.publicKey),
+          partnerPosition: positionPda(wallet.publicKey),
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
         } as any).instruction();
       const tx = await sendTx(connection, wallet, [ix]);
-      setStatus(`✅ Tranche released to this epoch's voters — tx: ${tx.slice(0, 16)}…`);
+      setStatus(`✅ Epoch ${currentEpoch} run — tx: ${tx.slice(0, 16)}…`);
       await fetchStream();
       onChanged();
     } catch (e: any) { setStatus(`❌ ${explainTxError(e)}`); }
@@ -253,19 +270,43 @@ export function PartnerStream({
     const pctDone = (stream.epochsReleased / stream.epochsTotal) * 100;
     const weeksLeft = stream.epochsTotal - stream.epochsReleased;
     return (
-      <div className="card">
+      <div className={`card ${epochOpen && lpOk ? "border-brand-green/40" : ""}`}>
         <div className="flex items-center gap-3 mb-1">
           <span className="text-2xl">⏳</span>
           <div>
-            <h3 className="text-base font-bold text-white">Your bribe schedule</h3>
+            <h3 className="text-base font-bold text-white">This epoch</h3>
             <p className="text-xs text-gray-500">
-              Escrowed once · pays one tranche per epoch · nothing left to sign
+              One call pays your bribe tranche and buys this week of your retainer
             </p>
           </div>
         </div>
 
+        {/* ── The liquidity condition, stated as the program sees it ── */}
+        <div className="mt-4 rounded-xl border border-brand-border bg-brand-dark/60 px-3 py-3">
+          <div className="flex justify-between items-baseline mb-1">
+            <span className="text-[10px] text-gray-500 uppercase tracking-widest">
+              Liquidity condition
+            </span>
+            <span className={`text-[11px] font-mono ${lpOk ? "text-brand-green" : "text-red-400"}`}>
+              {lpOk ? "met" : "not met"}
+            </span>
+          </div>
+          <div className="flex justify-between text-[11px]">
+            <span className="text-gray-500">You hold</span>
+            <span className="text-gray-300 font-mono">{fmt(lpBal, lpDec)} LP</span>
+          </div>
+          <div className="flex justify-between text-[11px]">
+            <span className="text-gray-500">Your deal requires</span>
+            <span className="text-gray-300 font-mono">{fmt(alloc.lpThreshold, lpDec)} LP</span>
+          </div>
+          <p className="text-[10px] text-gray-600 mt-2 leading-relaxed">
+            Read, never held. The protocol takes no custody of your LP — it simply stops paying
+            the epoch your balance drops below the threshold, and resumes the epoch it comes back.
+          </p>
+        </div>
+
         <div className="flex justify-between items-baseline mt-4 mb-1">
-          <span className="text-xs text-gray-400">Tranches released</span>
+          <span className="text-xs text-gray-400">Bribe tranches released</span>
           <span className="text-xs text-white font-mono font-semibold">
             {stream.epochsReleased} / {stream.epochsTotal}
           </span>
@@ -277,10 +318,20 @@ export function PartnerStream({
 
         <div className="flex flex-col gap-1 text-[11px] mb-4">
           <div className="flex justify-between">
-            <span className="text-gray-500">Per epoch</span>
+            <span className="text-gray-500">Bribe per epoch</span>
             <span className="text-gray-300 font-mono">
               {fmt(stream.amountPerEpoch, bribeDec)}
             </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Retainer per epoch</span>
+            <span className="text-gray-300 font-mono">
+              {fmt(alloc.retainerPerEpoch)} hiSOLA
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Epochs earned so far</span>
+            <span className="text-gray-300 font-mono">{alloc.epochsQualified}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-500">Still in escrow</span>
@@ -294,32 +345,52 @@ export function PartnerStream({
           </div>
         </div>
 
-        {spent ? (
-          <p className="text-xs text-brand-green">
-            ✅ Schedule complete — every funded tranche was released. You can escrow a new term
-            below, or keep bribing manually from the Bribe tab.
+        {/* ☢️ The one thing a partner must not miss. */}
+        {epochOpen && lpOk && (
+          <p className="text-xs text-amber-400/90 leading-relaxed mb-3">
+            ⚠️ Epoch {currentEpoch} has not been run. The retainer cannot be back-dated: the
+            chain keeps no record of what your LP balance was last week, so the crank IS the
+            proof, and an epoch nobody runs is gone rather than owed. The bribe half is
+            different — it slips one epoch and loses nothing.
           </p>
-        ) : (
-          <>
-            <p className="text-[11px] text-gray-500 leading-relaxed mb-3">
-              Release is <strong className="text-gray-300">permissionless</strong>: anyone may
-              crank it, and the epoch&apos;s voters are the ones owed the money, so it does not
-              depend on you. The button is here for convenience. A missed epoch is not lost —
-              the schedule simply slips one epoch further out, never paying two at once.
-            </p>
-            <button
-              className="btn-primary w-full"
-              onClick={release}
-              disabled={busy || !canRelease}
-            >
-              {busy ? "Processing…"
-                : canRelease ? `Release this epoch's ${fmt(stream.amountPerEpoch, bribeDec)}`
-                : "This epoch's tranche is already out"}
-            </button>
-            <p className="text-[11px] text-gray-500 mt-2">
-              {weeksLeft} tranche{weeksLeft === 1 ? "" : "s"} left · epoch {currentEpoch}
-            </p>
-          </>
+        )}
+
+        <p className="text-[11px] text-gray-500 leading-relaxed mb-3">
+          Running this is <strong className="text-gray-300">permissionless</strong>: anyone may
+          call it, and the epoch&apos;s voters are the ones owed the bribe, so the money side does
+          not depend on you. The retainer side does — check back each week.
+        </p>
+
+        <button
+          className="btn-primary w-full"
+          onClick={crank}
+          disabled={busy || !canCrank}
+        >
+          {busy ? "Processing…"
+            : canCrank
+              ? tranceDue && retainerDue
+                ? `Run epoch ${currentEpoch} — bribe + ${fmt(alloc.retainerPerEpoch)} hiSOLA`
+                : retainerDue
+                  ? `Claim epoch ${currentEpoch} — ${fmt(alloc.retainerPerEpoch)} hiSOLA`
+                  : "Release this epoch's bribe tranche"
+              : !epochOpen
+                ? "This epoch is already run"
+                : !lpOk
+                  ? "Liquidity below the threshold"
+                  : "Nothing to do this epoch"}
+        </button>
+        <p className="text-[11px] text-gray-500 mt-2">
+          {spent
+            ? "Bribe schedule complete — the retainer keeps running as long as the liquidity is there."
+            : `${weeksLeft} tranche${weeksLeft === 1 ? "" : "s"} left`}
+          {" · "}epoch {currentEpoch}
+        </p>
+
+        {spent && (
+          <p className="text-xs text-brand-green mt-3">
+            ✅ Every funded tranche was released. You can escrow a new term below, or keep
+            bribing manually from the Bribe tab — the retainer is unaffected either way.
+          </p>
         )}
 
         {status && <p className="text-xs text-gray-400 break-all mt-3">{status}</p>}
@@ -327,7 +398,7 @@ export function PartnerStream({
     );
   }
 
-  // ── No schedule yet — the welcome bag is shut ───────────────────────────────
+  // ── No schedule yet — the whole deal is shut ────────────────────────────────
   return (
     <div className="card border-amber-500/30">
       <div className="flex items-center gap-3 mb-1">
@@ -335,17 +406,17 @@ export function PartnerStream({
         <div>
           <h3 className="text-base font-bold text-white">Commit your bribe schedule</h3>
           <p className="text-xs text-gray-500">
-            One signature, then the partnership runs on its own
+            One signature, and the partnership starts
           </p>
         </div>
       </div>
 
       <p className="text-xs text-amber-400/90 leading-relaxed mt-3 mb-4">
-        ⚠️ Your welcome bag of{" "}
-        <span className="font-mono text-white">{fmt(alloc.baseHiSola)}</span> hiSOLA vests
-        nothing until this is done. It is the consideration for the schedule, not a signing
-        bonus — and it starts streaming over 6 months from the moment you escrow, not from the
-        day you were registered.
+        ⚠️ Nothing accrues until this is done — not your{" "}
+        <span className="font-mono text-white">{fmt(alloc.baseHiSola)}</span> hiSOLA bag, not a
+        single epoch of your{" "}
+        <span className="font-mono text-white">{fmt(alloc.retainerPerEpoch)}</span> hiSOLA
+        retainer. The schedule is what they are paid against, so it cannot come second.
       </p>
 
       <div className="flex flex-col gap-3">
@@ -371,7 +442,7 @@ export function PartnerStream({
               className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
               type="text"
               inputMode="decimal"
-              placeholder="300"
+              placeholder={fmt(alloc.minBribePerEpoch, bribeDec)}
               value={perEpoch}
               onChange={(e) => {
                 if (e.target.value === "" || /^\d*\.?\d*$/.test(e.target.value))
@@ -395,8 +466,11 @@ export function PartnerStream({
         </div>
 
         <p className="text-[10px] text-gray-500">
-          1 epoch = 7 days · the {alloc.scheduleEpochs}-epoch rhythm was agreed at registration
-          and cannot be changed here · you hold{" "}
+          1 epoch = 7 days · the {alloc.scheduleEpochs}-epoch rhythm and the{" "}
+          <span className="font-mono text-gray-400">
+            {fmt(alloc.minBribePerEpoch, bribeDec)}
+          </span>{" "}
+          minimum per epoch were agreed at registration · you hold{" "}
           <span className="font-mono text-gray-400">{fmt(walletBal, bribeDec)}</span>
         </p>
 
@@ -421,28 +495,18 @@ export function PartnerStream({
                 {" "}(≈ {Math.round((planOk.nEpochs * 7) / 30.4)} months).
               </li>
               <li>
-                Which earns you{" "}
-                <span className="font-mono text-white">{fmt(planOk.earned)}</span> hiSOLA of
-                your <span className="font-mono">{fmt(alloc.capHiSola)}</span> cap, credited
-                epoch by epoch as it pays out.
+                It delivers your{" "}
+                <span className="font-mono text-white">{fmt(alloc.baseHiSola)}</span> hiSOLA bag
+                in one go, claimable immediately below.
               </li>
               <li>
-                And unlocks the{" "}
-                <span className="font-mono text-white">{fmt(alloc.baseHiSola)}</span> hiSOLA
-                welcome bag, streaming from today over{" "}
-                {Math.round(BASE_BAG_VEST_SECS / 86_400)} days.
+                And it opens the retainer:{" "}
+                <span className="font-mono text-white">{fmt(alloc.retainerPerEpoch)}</span>{" "}
+                hiSOLA per epoch, for as long as your liquidity stays in place — with no cap and
+                no end date.
               </li>
             </ul>
 
-            {/* The two ways a schedule is mis-sized. Both are silent on-chain: the program
-                simply caps or never reaches the cap, and nothing tells you afterwards. */}
-            {planOk.earnedRaw > alloc.capHiSola && (
-              <p className="text-[11px] text-amber-400/90 leading-relaxed">
-                ⚠️ This overshoots your cap. Bribes past{" "}
-                <span className="font-mono">{fmt(alloc.capHiSola)}</span> hiSOLA still pay
-                voters in full, but earn you nothing further.
-              </p>
-            )}
             <p className="text-[11px] text-gray-500 leading-relaxed">
               🔒 The escrow cannot be withdrawn, retimed, or topped up while it runs — that is
               what makes it a commitment. A new term can only be escrowed once this one has
