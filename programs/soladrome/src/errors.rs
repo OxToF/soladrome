@@ -79,6 +79,10 @@ pub enum SoladromeError {
     // ── Partner allocation ────────────────────────────────────────────────────
     #[msg("Partner allocation already claimed — each partner may only claim once")]
     PartnerAlreadyClaimed,
+    /// ⚠️ DEAD since the 1:1 bribe match was removed (2026-08-27) — there is no conversion rate
+    /// anywhere in the partner path any more. Kept, like `NothingEscrowed`, so the ordinal codes
+    /// of every variant below it stay put: Anchor numbers these by declaration order, and
+    /// removing one silently renumbers the rest.
     #[msg("Invalid conversion rate: rate_num and rate_den must both be > 0")]
     InvalidRate,
     #[msg("Bribe token does not match the partner's committed bribe_mint")]
@@ -127,7 +131,7 @@ pub enum SoladromeError {
     BurnBuysNoVotes,
     #[msg("This swap would push the SOLA/USDC pool below the 1 USDC floor — sell through sell_sola instead, it pays 1.00 exactly")]
     AmmBelowFloor,
-    #[msg("Partner allocation is live — it can only be closed once fully claimed (bag vested and bribe cap reached), or while never activated (nothing claimed, nothing bribed)")]
+    #[msg("Partner allocation is live — a retainer that could still be credited this epoch cannot be closed out from under the partner")]
     PartnerAllocationNotSettled,
     #[msg("This bribe stream has paid out every tranche it was funded for")]
     BribeStreamExhausted,
@@ -139,6 +143,16 @@ pub enum SoladromeError {
     BribeStreamStillRunning,
     #[msg("This schedule is not the length the deal was registered for — the rhythm is fixed at registration, not chosen at funding")]
     ScheduleLengthMismatch,
-    #[msg("This schedule does not deliver the committed cap — escrow enough that the bribes earn the full cap_hi_sola")]
+    #[msg("Each tranche is smaller than the bribe the deal was registered for — the size is fixed at registration, not chosen at funding")]
     ScheduleUnderfunded,
+    #[msg("This partner has never escrowed a bribe schedule — nothing accrues, and the bag is the consideration for that schedule")]
+    PartnerStreamNotFunded,
+    #[msg("Nothing to do this epoch — no bribe tranche is due and the retainer is either already credited or unqualified")]
+    NothingToCrank,
+    #[msg("This is not the LP token the partner's deal names")]
+    LpMintMismatch,
+    #[msg("Contributor allocation cap exceeded — the cumulative hiSOLA or oSOLA promised to contributors would pass its ceiling")]
+    ContributorCapExceeded,
+    #[msg("Contributor tranches must be split 50/50 — hiSOLA and oSOLA in equal amounts")]
+    ContributorSplitMismatch,
 }

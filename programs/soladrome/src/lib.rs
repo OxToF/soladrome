@@ -23,12 +23,12 @@ use errors::SoladromeError;
 #[allow(ambiguous_glob_reexports)]
 pub use pol::*;
 use state::{
-    current_epoch, BribeVault, ContributorVesting, FounderHiSolaVesting, FounderVesting,
-    GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo,
-    PartnerAllocation, PartnerBribeStream, ProtocolState, UserBribeClaim, UserEpochVotes,
-    UserPosition, UserVoteConfig, UserVoteReceipt, VeLockPosition, BASE_BAG_VEST_SECS,
-    EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION, MIN_LOCK_DURATION, PRECISION,
-    VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
+    current_epoch, BribeVault, ContributorRegistry, ContributorVesting, FounderHiSolaVesting,
+    FounderVesting, GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum,
+    LpUserCheckpoint, LpUserInfo, PartnerAllocation, PartnerBribeStream, ProtocolState,
+    UserBribeClaim, UserEpochVotes, UserPosition, UserVoteConfig, UserVoteReceipt,
+    VeLockPosition, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION, MIN_LOCK_DURATION,
+    PRECISION, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
 };
 #[allow(ambiguous_glob_reexports)]
 pub use ve::*;
@@ -175,8 +175,24 @@ pub const TEAM_WALLET: &str = "BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA";
 
 // ── Contributor / marketing allocation ────────────────────────────────────────
 pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
+pub const CONTRIBUTOR_REGISTRY_SEED: &[u8] = b"contributor_registry";
 // (CONTRIBUTOR_BORROW_CAP_BPS removed 2026-07-18 with contributor_borrow_usdc — the
 //  contributor bag is ve-escrowed, so its only borrow path is borrow_against_locked, 20%.)
+
+/// Ceiling on contributor hiSOLA, summed over every contributor ever registered.
+///
+/// Until 2026-08-27 there was none: `register_contributor` checked only that one of the two
+/// amounts was non-zero, so the published "a handful of people, small amounts" was enforced by
+/// the shape of a form field and nothing else. The tranche now earns protocol fees
+/// (`fee_shares`), which turns an unbounded field into unbounded dilution of every staker.
+///
+/// 100 000 of each is what the tranche is supposed to be. It is the one number in the
+/// allocation matrix constrained by nothing but intent, which is exactly why it belongs in a
+/// `require!` rather than in a document.
+pub const CONTRIBUTOR_HI_SOLA_CAP: u64 = 100_000_000_000; // 100 000 hiSOLA (6 dec)
+/// Ceiling on contributor oSOLA, summed over every contributor ever registered.
+/// Not drawn from `ECOSYSTEM_TOTAL`, which caps `distribute_o_sola` alone.
+pub const CONTRIBUTOR_O_SOLA_CAP: u64 = 100_000_000_000; // 100 000 oSOLA (6 dec)
 
 // ── Protocol Partner allocation ───────────────────────────────────────────────
 pub const PARTNER_SEED: &[u8] = b"partner";
@@ -1336,8 +1352,15 @@ pub mod soladrome {
         Ok(())
     }
 
-    // One-time ecosystem allocation: 2 M SOLA liquid → authority wallet for marketing & airdrop.
-    // Entirely separate from the founder allocation; protected by `ecosystem_allocated` flag.
+    // One-time team allocation: 250 000 hiSOLA → TEAM_WALLET, locked for life, earning fees.
+    //
+    // ⚠️ The name is the last trace of what this used to be. It minted 2 M liquid SOLA into the
+    // authority's wallet for "marketing & airdrop" until 2026-07-17, which was the single
+    // largest floor-drain vector in the protocol; the ecosystem budget moved to oSOLA via
+    // `distribute_o_sola` and this header went on describing the version that was deleted. The
+    // body's own comment has contradicted it fifteen lines down ever since.
+    //
+    // Protected by `ecosystem_allocated`; entirely separate from the founder allocation.
     pub fn mint_ecosystem_allocation(ctx: Context<MintEcosystemAllocation>) -> Result<()> {
         require!(
             !ctx.accounts.protocol_state.paused,
@@ -1360,13 +1383,17 @@ pub mod soladrome {
         // that reaches circulation through this path is financed. Same as Beradrome (oBERO).
 
         // ── 250 000 → TEAM_WALLET, as hiSOLA locked FOR LIFE (never liquid SOLA) ──
-        // Pays the people who worked unpaid until launch. Delivered via the
-        // claim_partner_allocation pattern: wallet balance stays 0 → borrow_usdc blind
-        // (20% cap not sidesteppable), excluded from total_hi_sola → earns no fees,
-        // never liquid SOLA → sell_sola unreachable → cannot drain the floor. permanent_amount
-        // covers the whole tranche, so unlock_hi_sola can never release it. Unlike the 7M it
-        // DOES vote (up to 4×): the vote guard keys on FOUNDER_WALLET, and this is a distinct
-        // wallet. Liquidity: borrow_against_locked (20%, any ve-locker).
+        // Pays the people who worked unpaid until launch. Wallet balance stays 0 → borrow_usdc
+        // is blind to it (the 20% cap is not sidesteppable), never liquid SOLA → sell_sola is
+        // unreachable → it cannot drain the floor. permanent_amount covers the whole tranche,
+        // so unlock_hi_sola can never release it. Unlike the 7M it DOES vote (up to 4×): the
+        // vote guard keys on the founder wallet, and this is a distinct one.
+        //
+        // ☢️ And since 2026-08-27 it earns fees. It did not, for the same reason the
+        // contributor bag did not: locked for life means `hi_sola` is 0, unfinanced means
+        // `staked_amount` is 0, so `fee_basis` was 0 and could never become anything else.
+        // A tranche whose whole purpose is to pay people paid them nothing — governance rights
+        // and no yield. `fee_shares` fixes that, matched by an increment to `total_hi_sola`.
         let now_ts = Clock::get()?.unix_timestamp;
         let team_lock_end_ts = (now_ts as u64)
             .checked_add(MAX_LOCK_DURATION)
@@ -1414,20 +1441,26 @@ pub mod soladrome {
             lock.permanent_amount = FOUNDER_IMMEDIATE_SOLA;
         }
 
-        // fees_debt snapshotted so the team earns fees only from unlock forward (never, here).
+        // The tranche's fee share, with the accrual carried across — see
+        // `UserPosition::credit_fee_shares`.
         {
             let pos = &mut ctx.accounts.team_position;
             if pos.owner == Pubkey::default() {
                 pos.owner = ctx.accounts.team_wallet.key();
                 pos.bump = ctx.bumps.team_position;
             }
-            pos.fees_debt = acc;
+            pos.credit_fee_shares(acc, FOUNDER_IMMEDIATE_SOLA)?;
         }
 
         let s = &mut ctx.accounts.protocol_state;
         s.fees_per_hi_sola = acc;
         s.last_market_vault_balance = market_balance;
-        // total_hi_sola: UNCHANGED — locked hiSOLA is out of the fee denominator.
+        // The counterpart of the credit above: a real share of the fee stream, taken from the
+        // existing holders in exactly the amount the team receives.
+        s.total_hi_sola = s
+            .total_hi_sola
+            .checked_add(FOUNDER_IMMEDIATE_SOLA)
+            .ok_or(SoladromeError::Overflow)?;
         s.total_sola = s
             .total_sola
             .checked_add(FOUNDER_IMMEDIATE_SOLA)
@@ -1632,14 +1665,24 @@ pub mod soladrome {
     ///
     /// The two sides are not the same kind of thing:
     /// - **hiSOLA** goes into a LIFETIME ve lock (`permanent_amount` covers the whole tranche),
-    ///   so it can never be unlocked or sold. It votes forever and borrows at 20 %, and because
-    ///   it never re-enters `total_hi_sola` it earns no protocol fees, ever.
+    ///   so it can never be unlocked or sold. It votes forever, borrows at 20 %, and earns a
+    ///   real share of protocol fees through `fee_shares` (since 2026-08-25).
     /// - **oSOLA** is an option, not a payment: exercising burns it and pays 1 USDC per unit
     ///   into the floor, so the contributor funds every SOLA they take. It is worth nothing at
     ///   or below the floor.
     ///
     /// Note this oSOLA is NOT drawn against `ecosystem_o_sola_minted` — `ECOSYSTEM_TOTAL` caps
-    /// `distribute_o_sola` only. The bound on contributor oSOLA is whatever the authority types.
+    /// `distribute_o_sola` only. Its bound is `CONTRIBUTOR_O_SOLA_CAP`, enforced below.
+    ///
+    /// ☢️ Two `require!`s were added on 2026-08-27, and both matter more than they look:
+    /// - **A cumulative cap.** There was none: the only limit on what could be promised to
+    ///   contributors was the form field the authority typed into. That was survivable while
+    ///   the tranche earned nothing; now that it earns protocol fees it is unbounded dilution
+    ///   of every staker — exactly the kind of promise that has to live in code to exist.
+    /// - **The 50/50 split.** The two sides are not interchangeable. hiSOLA is permanent
+    ///   governance plus a real share of revenue; oSOLA is an option the holder pays 1 USDC a
+    ///   unit to exercise, financing the floor as they do. Letting one side run without the
+    ///   other turns compensation into either pure dilution or a pure lottery ticket.
     pub fn register_contributor(
         ctx: Context<RegisterContributor>,
         hi_sola_amount: u64,
@@ -1649,6 +1692,41 @@ pub mod soladrome {
             hi_sola_amount > 0 || o_sola_amount > 0,
             SoladromeError::InvalidAmount
         );
+        require!(
+            hi_sola_amount == o_sola_amount,
+            SoladromeError::ContributorSplitMismatch
+        );
+
+        // Cumulative across every contributor ever registered. `init` on the vesting PDA means
+        // one wallet cannot be registered twice, so these totals cannot double-count.
+        {
+            let reg = &mut ctx.accounts.contributor_registry;
+            if reg.bump == 0 {
+                reg.bump = ctx.bumps.contributor_registry;
+            }
+            let hi_total = reg
+                .hi_sola_allocated
+                .checked_add(hi_sola_amount)
+                .ok_or(SoladromeError::Overflow)?;
+            let o_total = reg
+                .o_sola_allocated
+                .checked_add(o_sola_amount)
+                .ok_or(SoladromeError::Overflow)?;
+            require!(
+                hi_total <= CONTRIBUTOR_HI_SOLA_CAP && o_total <= CONTRIBUTOR_O_SOLA_CAP,
+                SoladromeError::ContributorCapExceeded
+            );
+            reg.hi_sola_allocated = hi_total;
+            reg.o_sola_allocated = o_total;
+            msg!(
+                "Contributor budget: {} / {} hiSOLA · {} / {} oSOLA",
+                hi_total,
+                CONTRIBUTOR_HI_SOLA_CAP,
+                o_total,
+                CONTRIBUTOR_O_SOLA_CAP,
+            );
+        }
+
         let v = &mut ctx.accounts.contributor_vesting;
         v.contributor = ctx.accounts.contributor_wallet.key();
         v.hi_sola_amount = hi_sola_amount;
@@ -1841,18 +1919,22 @@ pub mod soladrome {
 
     // ── Protocol Partner allocation ───────────────────────────────────────────
 
-    /// Authority-only: register a protocol partner with a one-time locked hiSOLA allocation.
+    /// Authority-only: register a protocol partner — a signature bag plus a liquidity retainer.
     ///
-    /// Unlike a contributor, whose tranches are claimable in full the moment they are
-    /// registered, a partner earns theirs over time: `claim_partner_allocation` mints only what
-    /// has accrued so far — the streamed welcome bag plus whatever their bribes have earned —
-    /// and it is called as often as there is something new to take. hiSOLA lands directly in
-    /// the ve lock and never touches the wallet, giving immediate voting power while the normal
-    /// wallet-balance borrow path stays closed for the whole lock.
+    /// The deal has exactly two money terms. `base_hi_sola` is the bag: delivered whole by
+    /// `claim_partner_allocation` the moment the partner escrows their bribe schedule, and
+    /// small because it is the only unconditional part. `retainer_per_epoch` is the rate:
+    /// credited one epoch at a time by `crank_partner_epoch`, and only for an epoch in which
+    /// the partner still holds `lp_threshold` of `lp_mint`.
     ///
-    /// `base_hi_sola` is the one-time welcome bag (Founding Partner tier): it streams
-    /// linearly into the partner's vote-locked position over the first 6 months
-    /// (`BASE_BAG_VEST_SECS`) from registration — independent of bribes.
+    /// ⚠️ No total is written down anywhere, and that is deliberate — see `PartnerAllocation`.
+    /// The tiers of 2026-08-26 read 10 / 15 / 20 % of the committed LP over a year of
+    /// maintained liquidity: 1 M LP → 20 000 bag + 3 450/epoch, 500 K → 7 500 + 1 300,
+    /// 200 K → 2 000 + 350. A partner who stays longer simply earns longer.
+    ///
+    /// `lp_threshold` is in LP base units. The tier is negotiated in dollars, the chain sees
+    /// only LP units and there is no oracle, so this is the unit count that matched the agreed
+    /// size on the day it was signed — imprecise on value, exact on "did they withdraw".
     ///
     /// `lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].
     /// Suggested mainnet value for strategic partners: 208 × 604 800 = 125 798 400 s
@@ -1860,14 +1942,21 @@ pub mod soladrome {
     pub fn register_partner(
         ctx: Context<RegisterPartner>,
         bribe_mint: Pubkey,
-        rate_num: u64,
-        rate_den: u64,
-        cap_hi_sola: u64,
+        lp_mint: Pubkey,
+        lp_threshold: u64,
+        retainer_per_epoch: u64,
         base_hi_sola: u64,
         lock_duration_secs: u64,
         schedule_epochs: u64,
+        min_bribe_per_epoch: u64,
     ) -> Result<()> {
-        require!(cap_hi_sola > 0, SoladromeError::InvalidAmount);
+        // A deal that pays nothing per epoch is not a retainer, and one with no liquidity
+        // threshold is a retainer conditioned on nothing — which is the vesting this replaced.
+        require!(retainer_per_epoch > 0, SoladromeError::InvalidAmount);
+        require!(lp_threshold > 0, SoladromeError::InvalidAmount);
+        // The bribe the partner commits to is the consideration for the bag. A zero floor would
+        // let them escrow 52 epochs of one lamport and collect it.
+        require!(min_bribe_per_epoch > 0, SoladromeError::InvalidAmount);
         // The rhythm is a term of the deal. 26 / 52 / 104 epochs are 6 months, a year, two
         // years; the ceiling matches the ve lock's so a schedule can never outrun the lock it
         // is paid under. Zero is rejected here — only legacy accounts read 0, and they read it
@@ -1880,7 +1969,7 @@ pub mod soladrome {
             bribe_mint != Pubkey::default(),
             SoladromeError::InvalidAmount
         );
-        require!(rate_num > 0 && rate_den > 0, SoladromeError::InvalidRate);
+        require!(lp_mint != Pubkey::default(), SoladromeError::InvalidAmount);
         require!(
             lock_duration_secs >= MIN_LOCK_DURATION,
             SoladromeError::InvalidAmount
@@ -1893,88 +1982,74 @@ pub mod soladrome {
         let pa = &mut ctx.accounts.partner_allocation;
         pa.partner = ctx.accounts.partner_wallet.key();
         pa.bribe_mint = bribe_mint;
-        pa.rate_num = rate_num;
-        pa.rate_den = rate_den;
-        pa.cap_hi_sola = cap_hi_sola;
+        pa.lp_mint = lp_mint;
+        pa.lp_threshold = lp_threshold;
+        pa.retainer_per_epoch = retainer_per_epoch;
+        pa.last_credited_epoch = 0;
+        pa.epochs_qualified = 0;
         pa.base_hi_sola = base_hi_sola;
-        pa.total_bribed_credited = 0;
         pa.hi_sola_claimed = 0;
         pa.lock_duration_secs = lock_duration_secs;
         pa.start_ts = Clock::get()?.unix_timestamp;
         pa.schedule_epochs = schedule_epochs;
+        pa.min_bribe_per_epoch = min_bribe_per_epoch;
         pa.stream_start_ts = 0;
+        pa.bag_claimed = false;
         pa.bump = ctx.bumps.partner_allocation;
 
         msg!(
-            "Partner registered: {} | bribe_mint={} | rate={}/{} | cap={} | base={} hiSOLA | lock={}s",
+            "Partner registered: {} | bribe_mint={} | bag={} hiSOLA | retainer={}/epoch | lock={}s",
             pa.partner,
             pa.bribe_mint,
-            pa.rate_num,
-            pa.rate_den,
-            pa.cap_hi_sola,
             pa.base_hi_sola,
+            pa.retainer_per_epoch,
             pa.lock_duration_secs,
         );
-        msg!("Bribe schedule: {} epochs", pa.schedule_epochs);
+        msg!(
+            "Liquidity condition: {} of {} | bribe schedule: {} epochs × {} min",
+            pa.lp_threshold,
+            pa.lp_mint,
+            pa.schedule_epochs,
+            pa.min_bribe_per_epoch
+        );
         Ok(())
     }
 
-    /// Partner claims their one-time hiSOLA allocation.
+    /// Partner claims their signature bag — once, whole, the moment the schedule is escrowed.
     ///
-    /// hiSOLA is minted DIRECTLY into the partner's ve_lock_vault — the wallet
-    /// receives nothing.  This means:
-    /// - Voting power is available immediately via VeLockPosition (up to 4× at max lock).
-    /// - `borrow_usdc` is naturally blocked (wallet hiSOLA balance = 0).
-    /// - `total_hi_sola` is NOT incremented: locked hiSOLA is excluded from the fee
-    ///   accumulator denominator, so existing stakers are not diluted during the lock.
-    /// - `UserPosition.fees_debt` is snapshotted at the current accumulator so the
-    ///   partner earns staking fees only from their eventual `unlock_hi_sola` forward.
+    /// hiSOLA never touches the wallet: it is written straight into the ve lock as
+    /// `permanent_amount`, so it votes from day one (up to 4×), borrows at 20 % through
+    /// `borrow_against_locked`, and can never be unlocked, unstaked or sold. It is unfinanced —
+    /// no USDC ever entered the floor for it — and permanence is what keeps that exposure on
+    /// the 20 % channel instead of the 100 % one.
     ///
-    /// After lock expiry: call `unlock_hi_sola` → hiSOLA returns to wallet → standard
-    /// rules apply (fee share, borrow up to 75 % floor buffer, re-lock for more ve).
+    /// ⚠️ It used to stream linearly over six months and to carry the bribe-earned tranche
+    /// alongside it. Both are gone (2026-08-27): the bag is now the unconditional part of the
+    /// deal and nothing else, and what a partner earns for performing is the retainer, credited
+    /// epoch by epoch against their liquidity by `crank_partner_epoch`.
+    ///
+    /// ☢️ It earns protocol fees, which it did not before. Locked for life means `hi_sola` is 0
+    /// and unfinanced means `staked_amount` is 0, so `fee_basis` was 0 and — the lock being
+    /// permanent — could never become anything else. `fee_shares` is the exception that makes
+    /// the tranche worth something, matched by an increment to `total_hi_sola` so the share is
+    /// real rather than printed.
     pub fn claim_partner_allocation(ctx: Context<ClaimPartnerAllocation>) -> Result<()> {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
         );
-        // Multi-claim entitlement = streamed welcome bag + bribe-earned hiSOLA.
-        //   base_vested  = base_hi_sola × min(elapsed, BASE_BAG_VEST_SECS) / BASE_BAG_VEST_SECS
-        //   bribe_earned = min(cap_hi_sola, total_bribed_credited × rate_num / rate_den)
-        //   entitled     = base_vested + bribe_earned   (mints entitled − hi_sola_claimed)
-        // rate_den is guaranteed > 0 at register_partner, so the division is safe.
         let pa = &ctx.accounts.partner_allocation;
-        let now_ts = Clock::get()?.unix_timestamp;
-        // ☢️ The welcome bag vests from `stream_start_ts`, not from registration.
-        //
-        // A zero stamp means the partner never escrowed a bribe schedule, and vests nothing:
-        // the bag is the consideration for that schedule, so it cannot precede it. Vesting
-        // from `start_ts` instead would hand a partner who funded late a windfall of months
-        // they never committed to, and hand a partner who never funded at all the whole bag —
-        // permanent voting power against a floor that financed none of it.
-        //
-        // Legacy allocations read 0 here, so they fail closed. Funding the stream opens it.
-        let base_vested = if pa.stream_start_ts == 0 {
-            0
-        } else {
-            let elapsed = now_ts.saturating_sub(pa.stream_start_ts).max(0) as u64;
-            if elapsed >= BASE_BAG_VEST_SECS {
-                pa.base_hi_sola
-            } else {
-                ((pa.base_hi_sola as u128)
-                    .checked_mul(elapsed as u128)
-                    .ok_or(SoladromeError::Overflow)?
-                    / BASE_BAG_VEST_SECS as u128) as u64
-            }
-        };
-        let bribe_earned = (pa.total_bribed_credited as u128)
-            .checked_mul(pa.rate_num as u128)
-            .ok_or(SoladromeError::Overflow)?
-            .checked_div(pa.rate_den as u128)
-            .ok_or(SoladromeError::Overflow)?
-            .min(pa.cap_hi_sola as u128) as u64;
-        let entitled = base_vested.saturating_add(bribe_earned);
-        // This call mints only the newly-earned tranche (entitled − already claimed).
-        let amount = entitled.saturating_sub(pa.hi_sola_claimed);
+        // ☢️ No stream, no bag. A zero stamp means the partner never escrowed a bribe schedule:
+        // the bag is the consideration for that schedule, so it cannot precede it. Without this
+        // a partner could register, never bribe a unit, and still hold permanent voting power
+        // and a fee share the floor financed nothing for. Legacy allocations read 0 and fail
+        // closed; funding the stream is the only thing that opens this.
+        require!(
+            pa.stream_start_ts != 0,
+            SoladromeError::PartnerStreamNotFunded
+        );
+        require!(!pa.bag_claimed, SoladromeError::VestingFullyClaimed);
+        let amount = pa.base_hi_sola;
         let lock_duration = pa.lock_duration_secs;
         require!(amount > 0, SoladromeError::NothingToClaim);
 
@@ -1987,24 +2062,16 @@ pub mod soladrome {
             ctx.accounts.protocol_state.total_hi_sola,
         );
 
-        // ── The lock term is fixed by the deal, not by when you claim ────────────
+        // ── The lock term runs from the commitment, not from the claim ───────────
         //
-        // This was `now + lock_duration`, reassigned on every claim, and it made the schedule
-        // the partner was sold strictly worse than dumping. Claiming weekly pushed the unlock
-        // out weekly, so bribing everything at once and claiming once released the bribe-earned
-        // tranche a full `lock_duration` sooner than honouring the agreement. The instrument
-        // rewarded the one behaviour the gauges least wanted.
-        //
-        // The term now runs from the commitment, so every claim computes the same instant and
-        // repeated claims move nothing. Anchored on `stream_start_ts` — the moment the partner
-        // escrowed their schedule — falling back to registration for an allocation with no
-        // stream, which would otherwise anchor on 0 and hand out a lock that expired in 1970.
-        let lock_anchor = if pa.stream_start_ts != 0 {
-            pa.stream_start_ts
-        } else {
-            pa.start_ts
-        };
-        let lock_end_ts = (lock_anchor as u64)
+        // Anchored on `stream_start_ts` — the moment the partner escrowed their schedule — and
+        // never on `now`, which is what it used to be. Under the old multi-claim bag, `now +
+        // duration` was reassigned on every call, so honouring a weekly schedule pushed the
+        // unlock out weekly and dumping everything in week one released the locked tranche a
+        // full `lock_duration` sooner. The instrument rewarded the one behaviour the gauges
+        // least wanted. The bag is permanent now, so this only sets the floor under a term the
+        // partner may extend, but the anchor stays honest.
+        let lock_end_ts = (pa.stream_start_ts as u64)
             .checked_add(lock_duration)
             .ok_or(SoladromeError::Overflow)? as i64;
 
@@ -2049,41 +2116,49 @@ pub mod soladrome {
                 lock.lock_end_ts = lock_end_ts;
             }
 
-            // ── The welcome bag is permanent; the bribe-earned portion is not ──
-            // Every claim sets hi_sola_claimed = entitled = base_vested + bribe_earned, so
-            // after this call the position holds exactly `base_vested` of bag. Assigning
-            // (not adding) is therefore exact and idempotent across repeated claims, and
-            // monotonic because base_vested only grows with elapsed time.
-            // Releasable at expiry = amount_locked − permanent_amount = bribe_earned.
-            // The bag can never be sold — it is unfinanced. It keeps full voting power
-            // forever and stays borrowable at 20%. That is the deal: permanent voting power.
-            lock.permanent_amount = base_vested;
+            // ── The bag is permanent, and adds to whatever is already permanent ──
+            // Adding rather than assigning: the same VeLockPosition also carries the retainer
+            // epochs, each of them permanent too. Assigning here — which was correct while the
+            // bag was the only permanent portion and its vested figure only grew — would wipe
+            // every retainer epoch credited before the partner got round to claiming the bag,
+            // handing them back a releasable, sellable balance nobody financed.
+            lock.permanent_amount = lock
+                .permanent_amount
+                .checked_add(amount)
+                .ok_or(SoladromeError::Overflow)?;
         }
 
-        // ── Snapshot fees_debt at current accumulator ─────────────────────────
-        // The partner earns staking fees only from unlock forward — not during
-        // the lock period when their hiSOLA is excluded from total_hi_sola.
+        // ── The bag earns fees ───────────────────────────────────────────────
+        // See `UserPosition::credit_fee_shares` for why the debt is carried rather than
+        // re-stamped: this position may already be accruing, and `fees_debt` is one scalar for
+        // the whole basis.
         {
             let pos = &mut ctx.accounts.partner_position;
             if pos.owner == Pubkey::default() {
                 pos.owner = ctx.accounts.partner.key();
                 pos.bump = ctx.bumps.partner_position;
             }
-            pos.fees_debt = acc;
+            pos.credit_fee_shares(acc, amount)?;
         }
 
         // ── Update protocol state ─────────────────────────────────────────────
-        // total_sola += amount   (SOLA backing added to sola_vault)
-        // total_hi_sola: UNCHANGED — locked hiSOLA excluded from fee pool,
-        //   matching the semantics of lock_hi_sola (which subtracts from total_hi_sola).
+        // total_sola += amount     (SOLA backing added to sola_vault)
+        // total_hi_sola += amount  — the counterpart of the fee_shares credit above. The share
+        //   is real, not printed: existing holders are diluted by exactly what the partner
+        //   receives, which is the honest way to pay someone out of the fee stream.
         let s = &mut ctx.accounts.protocol_state;
         s.fees_per_hi_sola = acc;
         s.last_market_vault_balance = market_balance;
+        s.total_hi_sola = s
+            .total_hi_sola
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
         s.total_sola = s
             .total_sola
             .checked_add(amount)
             .ok_or(SoladromeError::Overflow)?;
 
+        ctx.accounts.partner_allocation.bag_claimed = true;
         ctx.accounts.partner_allocation.hi_sola_claimed = ctx
             .accounts
             .partner_allocation
@@ -2092,7 +2167,7 @@ pub mod soladrome {
             .ok_or(SoladromeError::Overflow)?;
 
         msg!(
-            "Partner allocation claimed: {} | +{} hiSOLA locked until {} | total claimed {}",
+            "Partner bag claimed: {} | +{} hiSOLA permanent, lock until {} | total {}",
             ctx.accounts.partner.key(),
             amount,
             lock_end_ts,
@@ -2109,12 +2184,11 @@ pub mod soladrome {
     /// `epochs_total × amount_per_epoch` into an escrow the program controls, and
     /// `release_partner_bribe` pays it out one epoch at a time, called by anyone.
     ///
-    /// ☢️ **Funding this is what unlocks the welcome bag.** `stream_start_ts` is stamped on the
-    /// allocation here, and `claim_partner_allocation` vests `base_hi_sola` from that stamp —
-    /// zero while it is zero. Before this existed the bag accrued from registration for
-    /// everyone, so a partner who never bribed a unit still collected permanent voting power
-    /// against a floor that funded it. The bag is now the consideration for the schedule, and
-    /// it starts when the schedule does.
+    /// ☢️ **Funding this is what starts the deal.** `stream_start_ts` is stamped on the
+    /// allocation here, and both `claim_partner_allocation` (the bag) and `crank_partner_epoch`
+    /// (the retainer) refuse to pay anything while it is zero. Before this existed the bag
+    /// accrued from registration for everyone, so a partner who never bribed a unit still
+    /// collected permanent voting power against a floor that funded it.
     ///
     /// One *live* stream per partner. Re-funding is allowed only once the previous schedule has
     /// paid out every tranche it was funded for — that is the renewal path, and it pairs with
@@ -2122,11 +2196,11 @@ pub mod soladrome {
     /// a fresh schedule. Without it, a re-registered partner would find the stream PDA already
     /// taken and their new welcome bag locked shut for good.
     ///
-    /// Topping a *running* stream is deliberately refused: it would re-stamp `stream_start_ts`
-    /// and restart the bag's 6-month clock, letting a partner reset their own vesting at will.
-    /// A partner who wants to bribe beyond their commitment uses `partner_deposit_bribe`, which
-    /// still works and still credits the allocation — there is no ceiling on strengthening
-    /// your own position, only on restarting the gift.
+    /// Topping a *running* stream is deliberately refused: `stream_start_ts` anchors the ve
+    /// lock term, and re-stamping it would let a partner push their own unlock date around at
+    /// will. A partner who wants to bribe beyond their commitment uses `deposit_bribe` like
+    /// anyone else — there is no ceiling on strengthening your own gauge, and since 2026-08-27
+    /// no allocation credit for doing so either.
     pub fn fund_partner_bribe_stream(
         ctx: Context<FundPartnerBribeStream>,
         epochs_total: u64,
@@ -2184,26 +2258,23 @@ pub mod soladrome {
             );
         }
 
+        // ── And each tranche must be the size that was committed ────────────────
+        // The escrow IS the commitment, and the bag is released against it, so a schedule of
+        // the right length but a derisory size is not the deal. This replaces the old check —
+        // "escrow enough that the bribes earn the whole `cap_hi_sola`" — which was arithmetic
+        // on a 1:1 rate that no longer exists. Overshooting is fine and encouraged: extra
+        // bribes pay voters in full and buy the partner nothing beyond the votes they attract,
+        // which is the loop the match used to pay for twice.
+        require!(
+            amount_per_epoch >= pa.min_bribe_per_epoch,
+            SoladromeError::ScheduleUnderfunded
+        );
+
         let total = (epochs_total as u128)
             .checked_mul(amount_per_epoch as u128)
             .ok_or(SoladromeError::Overflow)?;
         require!(total <= u64::MAX as u128, SoladromeError::Overflow);
         let total = total as u64;
-
-        // ── And it must actually deliver what was committed ─────────────────────
-        // The escrow IS the commitment, so a schedule that cannot reach `cap_hi_sola` is not
-        // the deal — it would open the welcome bag against a promise the partner never has to
-        // keep. Overshooting is fine and harmless: bribes past the cap still pay voters in
-        // full, they simply earn no further hiSOLA.
-        let earns = (total as u128)
-            .checked_mul(pa.rate_num as u128)
-            .ok_or(SoladromeError::Overflow)?
-            .checked_div(pa.rate_den as u128)
-            .ok_or(SoladromeError::Overflow)?;
-        require!(
-            earns >= pa.cap_hi_sola as u128,
-            SoladromeError::ScheduleUnderfunded
-        );
 
         // The whole schedule is escrowed up front. This is what the partner is actually
         // committing to, and it is why the bag can be released against it.
@@ -2248,22 +2319,40 @@ pub mod soladrome {
         Ok(())
     }
 
-    /// Permissionless: pay out one tranche of a partner's escrowed bribe schedule.
+    /// Permissionless: run a partner's epoch — release their bribe tranche, and buy this epoch
+    /// of their retainer if their liquidity is still there.
     ///
-    /// Callable by anyone — the caller pays the rent for that epoch's bribe vault, exactly as
-    /// `replay_vote` has any caller pay to replay someone else's vote. The people owed this
-    /// money are the epoch's voters, so leaving the trigger to the partner would put them
-    /// behind the very party whose incentive is to delay.
+    /// **Why the two are one instruction.** The bribe stream already had to be cranked every
+    /// epoch by somebody. Making the retainer a second weekly crank would have doubled the
+    /// operational load and left the two able to drift apart; merged, one transaction per epoch
+    /// per partner runs the whole deal, and the bribe — which someone always has an incentive
+    /// to trigger, since it is the epoch's voters who are owed it — is what keeps the retainer's
+    /// attestation from being forgotten.
     ///
-    /// **The schedule slips, it never batches.** `last_release_epoch < epoch` allows at most one
-    /// tranche per epoch. A missed epoch is not paid twice later: the next call pays the next
-    /// tranche and the stream simply ends one epoch later. Catching up would dump several
-    /// tranches into a single epoch, which is precisely the concentration this replaces.
+    /// **The two halves are independently gated, on purpose.**
+    /// - The bribe tranche is escrowed money that already belongs to the gauge. It is released
+    ///   whether or not the liquidity condition holds: a partner who pulls their LP still owes
+    ///   the voters what they escrowed.
+    /// - The retainer is bought fresh each epoch against `lp_threshold` of `lp_mint`, still
+    ///   held. It keeps paying after the bribe schedule is exhausted — a partner who stays for
+    ///   three years earns for three years — and stops the epoch their liquidity leaves.
     ///
-    /// The tranche lands in the same `BribeVault` a manual `deposit_bribe` would reach, so
-    /// voters claim it identically, and it credits `total_bribed_credited` identically. Nothing
-    /// downstream needs to know a stream exists.
-    pub fn release_partner_bribe(ctx: Context<ReleasePartnerBribe>, epoch: u64) -> Result<()> {
+    /// If neither half can do anything, the call fails rather than burning a fee for nothing.
+    ///
+    /// ☢️ **A missed epoch is lost, not deferred.** The bribe side slips (the stream simply runs
+    /// one epoch longer), but the retainer cannot: the chain keeps no history of an SPL balance,
+    /// so there is no way to establish afterwards that the LP was present five epochs ago. The
+    /// crank *is* the attestation. This is why the front-end fires it automatically.
+    ///
+    /// ⚠️ **What the attestation does and does not prove.** It proves the balance existed at the
+    /// instant of the crank. A partner cranking their own epoch can hold the LP for exactly that
+    /// transaction — add liquidity, crank, remove liquidity — and the program cannot tell.
+    /// Closing that would require custody of the LP, which is the one thing the deal promises
+    /// not to take. What is left is: the counterparty is a named protocol the authority
+    /// registered by hand, the manoeuvre is legible on-chain to anyone reading the pool, and the
+    /// remedy is the renewal — the authority simply does not re-register them. That is a
+    /// reputational guarantee, not a cryptographic one, and it should be described as such.
+    pub fn crank_partner_epoch(ctx: Context<CrankPartnerEpoch>, epoch: u64) -> Result<()> {
         require!(
             !ctx.accounts.protocol_state.paused,
             SoladromeError::ProtocolPaused
@@ -2278,146 +2367,261 @@ pub mod soladrome {
             epoch == current_epoch(clock.unix_timestamp),
             SoladromeError::WrongEpoch
         );
+        // No stream, no deal — the same gate the bag passes through. Nothing to release either,
+        // since an unfunded stream holds nothing.
+        require!(
+            ctx.accounts.partner_allocation.stream_start_ts != 0,
+            SoladromeError::PartnerStreamNotFunded
+        );
 
+        // ── Half one: the escrowed bribe tranche ────────────────────────────────
+        // Unconditional on liquidity, and it slips: `last_release_epoch < epoch` allows at most
+        // one tranche per epoch, and a missed epoch is paid next time rather than batched.
+        // Batching would re-concentrate the bribes, which is the failure the escrow exists to
+        // prevent.
         let stream = &ctx.accounts.bribe_stream;
-        require!(
-            stream.epochs_released < stream.epochs_total,
-            SoladromeError::BribeStreamExhausted
-        );
-        // One per epoch. This single comparison is the whole slip behaviour.
-        require!(
-            stream.last_release_epoch < epoch,
-            SoladromeError::BribeStreamAlreadyReleased
-        );
+        let bribe_due = stream.epochs_released < stream.epochs_total
+            && stream.last_release_epoch < epoch
+            && stream.amount_per_epoch > 0;
 
-        let amount = stream.amount_per_epoch;
-        let partner_key = stream.partner;
-        let stream_bump = stream.bump;
+        if bribe_due {
+            let amount = stream.amount_per_epoch;
+            let partner_key = stream.partner;
+            let stream_bump = stream.bump;
 
-        // First-time vault init, mirroring deposit_bribe / partner_deposit_bribe.
-        if ctx.accounts.bribe_vault.pool_id == Pubkey::default() {
-            ctx.accounts.bribe_vault.pool_id = ctx.accounts.pool_id.key();
-            ctx.accounts.bribe_vault.reward_mint = ctx.accounts.reward_mint.key();
-            ctx.accounts.bribe_vault.epoch = epoch;
-            ctx.accounts.bribe_vault.bump = ctx.bumps.bribe_vault;
+            // First-time vault init, mirroring deposit_bribe.
+            if ctx.accounts.bribe_vault.pool_id == Pubkey::default() {
+                ctx.accounts.bribe_vault.pool_id = ctx.accounts.pool_id.key();
+                ctx.accounts.bribe_vault.reward_mint = ctx.accounts.reward_mint.key();
+                ctx.accounts.bribe_vault.epoch = epoch;
+                ctx.accounts.bribe_vault.bump = ctx.bumps.bribe_vault;
+            }
+
+            // Escrow → this epoch's bribe vault, signed by the stream PDA that owns the escrow.
+            let seeds: &[&[u8]] = &[BRIBE_STREAM_SEED, partner_key.as_ref(), &[stream_bump]];
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.stream_vault.to_account_info(),
+                        to: ctx.accounts.bribe_token_vault.to_account_info(),
+                        authority: ctx.accounts.bribe_stream.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                amount,
+            )?;
+
+            ctx.accounts.bribe_vault.total_bribed = ctx
+                .accounts
+                .bribe_vault
+                .total_bribed
+                .checked_add(amount)
+                .ok_or(SoladromeError::Overflow)?;
+
+            let s = &mut ctx.accounts.bribe_stream;
+            s.epochs_released = s
+                .epochs_released
+                .checked_add(1)
+                .ok_or(SoladromeError::Overflow)?;
+            s.last_release_epoch = epoch;
+
+            msg!(
+                "Bribe tranche {}/{}: +{} to epoch {}",
+                s.epochs_released,
+                s.epochs_total,
+                amount,
+                epoch,
+            );
         }
 
-        // Escrow → this epoch's bribe vault, signed by the stream PDA that owns the escrow.
-        let seeds: &[&[u8]] = &[BRIBE_STREAM_SEED, partner_key.as_ref(), &[stream_bump]];
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.stream_vault.to_account_info(),
-                    to: ctx.accounts.bribe_token_vault.to_account_info(),
-                    authority: ctx.accounts.bribe_stream.to_account_info(),
-                },
-                &[seeds],
-            ),
-            amount,
-        )?;
+        // ── Half two: this epoch of the retainer ────────────────────────────────
+        let pa = &ctx.accounts.partner_allocation;
+        let lp_ok = ctx.accounts.partner_lp_token.amount >= pa.lp_threshold;
+        // `<` and not `!=`: an epoch is credited once and never retroactively, so a crank that
+        // arrives late in the week is fine and a second one in the same week does nothing.
+        let epoch_open = pa.last_credited_epoch < epoch;
+        let retainer_due = lp_ok && epoch_open && pa.retainer_per_epoch > 0;
 
-        ctx.accounts.bribe_vault.total_bribed = ctx
-            .accounts
-            .bribe_vault
-            .total_bribed
-            .checked_add(amount)
-            .ok_or(SoladromeError::Overflow)?;
-
-        // Credited exactly as a manual bribe would be — the allocation cannot tell the
-        // difference, so the cap is reached on the schedule instead of in week one.
-        ctx.accounts.partner_allocation.total_bribed_credited = ctx
-            .accounts
-            .partner_allocation
-            .total_bribed_credited
-            .checked_add(amount)
-            .ok_or(SoladromeError::Overflow)?;
-
-        let s = &mut ctx.accounts.bribe_stream;
-        s.epochs_released = s
-            .epochs_released
-            .checked_add(1)
-            .ok_or(SoladromeError::Overflow)?;
-        s.last_release_epoch = epoch;
-
-        msg!(
-            "Bribe stream release: {} | epoch {} | +{} | tranche {}/{} | credited total {}",
-            partner_key,
-            epoch,
-            amount,
-            s.epochs_released,
-            s.epochs_total,
-            ctx.accounts.partner_allocation.total_bribed_credited,
+        require!(
+            bribe_due || retainer_due,
+            SoladromeError::NothingToCrank
         );
+
+        if retainer_due {
+            let amount = pa.retainer_per_epoch;
+            let lock_end_ts = (pa.stream_start_ts as u64)
+                .checked_add(pa.lock_duration_secs)
+                .ok_or(SoladromeError::Overflow)? as i64;
+
+            // Snapshot the accumulator before any hiSOLA supply change (stake_sola invariant).
+            let market_balance = ctx.accounts.market_vault.amount;
+            let acc = math::advance_accumulator(
+                ctx.accounts.protocol_state.fees_per_hi_sola,
+                market_balance,
+                ctx.accounts.protocol_state.last_market_vault_balance,
+                ctx.accounts.protocol_state.total_hi_sola,
+            );
+
+            let bump = ctx.accounts.protocol_state.bump;
+            let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+
+            // SOLA backing, 1:1, locked in sola_vault — as for every other hiSOLA grant.
+            token::mint_to(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    MintTo {
+                        mint: ctx.accounts.sola_mint.to_account_info(),
+                        to: ctx.accounts.sola_vault.to_account_info(),
+                        authority: ctx.accounts.protocol_state.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                amount,
+            )?;
+
+            // Permanent, like the bag: this epoch was never financed through the curve, so it
+            // must never become a spendable balance that `sell_sola` could redeem against a
+            // floor it did not fund. It votes, it earns fees, it borrows at 20 %.
+            {
+                let lock = &mut ctx.accounts.lock_position;
+                if lock.owner == Pubkey::default() {
+                    lock.owner = ctx.accounts.partner.key();
+                    lock.bump = ctx.bumps.lock_position;
+                }
+                lock.amount_locked = lock
+                    .amount_locked
+                    .checked_add(amount)
+                    .ok_or(SoladromeError::Overflow)?;
+                lock.permanent_amount = lock
+                    .permanent_amount
+                    .checked_add(amount)
+                    .ok_or(SoladromeError::Overflow)?;
+                // Never shorten a lock this partner may have set for longer themselves.
+                if lock_end_ts > lock.lock_end_ts {
+                    lock.lock_end_ts = lock_end_ts;
+                }
+            }
+
+            {
+                let pos = &mut ctx.accounts.partner_position;
+                if pos.owner == Pubkey::default() {
+                    pos.owner = ctx.accounts.partner.key();
+                    pos.bump = ctx.bumps.partner_position;
+                }
+                pos.credit_fee_shares(acc, amount)?;
+            }
+
+            let s = &mut ctx.accounts.protocol_state;
+            s.fees_per_hi_sola = acc;
+            s.last_market_vault_balance = market_balance;
+            // The counterpart of the fee_shares credit: a real share, taken from the existing
+            // holders in exactly the amount the partner receives, not printed alongside theirs.
+            s.total_hi_sola = s
+                .total_hi_sola
+                .checked_add(amount)
+                .ok_or(SoladromeError::Overflow)?;
+            s.total_sola = s
+                .total_sola
+                .checked_add(amount)
+                .ok_or(SoladromeError::Overflow)?;
+
+            let pa = &mut ctx.accounts.partner_allocation;
+            pa.last_credited_epoch = epoch;
+            pa.epochs_qualified = pa
+                .epochs_qualified
+                .checked_add(1)
+                .ok_or(SoladromeError::Overflow)?;
+            pa.hi_sola_claimed = pa
+                .hi_sola_claimed
+                .checked_add(amount)
+                .ok_or(SoladromeError::Overflow)?;
+
+            msg!(
+                "Retainer epoch {}: {} | +{} hiSOLA permanent | {} epochs qualified | total {}",
+                epoch,
+                pa.partner,
+                amount,
+                pa.epochs_qualified,
+                pa.hi_sola_claimed,
+            );
+        } else if epoch_open {
+            // Said out loud, because this is the epoch the partner just lost.
+            msg!(
+                "Retainer epoch {} NOT credited: LP {} < threshold {}",
+                epoch,
+                ctx.accounts.partner_lp_token.amount,
+                ctx.accounts.partner_allocation.lp_threshold,
+            );
+        }
+
         Ok(())
     }
 
     /// Authority-only: close a `PartnerAllocation` PDA and return its rent to the authority
     /// that paid for it at `register_partner`.
     ///
-    /// This is bookkeeping, not a revoke. It only accepts an allocation that has reached a
-    /// **terminal state** — one of exactly two, and nothing in between:
+    /// ☢️ **A retainer has no total, which changes what "terminal" can mean.** The old test read
+    /// `hi_sola_claimed >= base_hi_sola + cap_hi_sola` — a promised total, reached or not. There
+    /// is no promised total now: each epoch is bought separately, so the moment a partner stops
+    /// qualifying there is nothing outstanding to protect. What has to be protected is narrower
+    /// and sharper: **an epoch the partner could still be credited for.**
     ///
-    /// 1. **Fully settled** — `hi_sola_claimed >= base_hi_sola + cap_hi_sola`. The welcome bag
-    ///    ran to term and the bribe-earned side is capped out, so `claim_partner_allocation`
-    ///    would mint 0 from here on and further `partner_deposit_bribe` credits buy nothing
-    ///    (`bribe_earned` is `min`-ed against `cap_hi_sola`). The deal is finished on the
-    ///    numbers; the account is dead weight.
+    /// So the account is closable when the deal cannot pay anything more *right now*:
     ///
-    /// 2. **Never activated** — `hi_sola_claimed == 0 && total_bribed_credited == 0`. The
-    ///    partner never claimed a lamport of hiSOLA and never bribed a single unit: the deal
-    ///    was signed on-chain and then never started. Cancelling it forfeits only the *accrued
-    ///    but untouched* slice of the welcome bag, which is unfinanced (no USDC ever entered
-    ///    the floor for it) and was a gift conditioned on a partnership that did not happen.
+    /// 1. The bag is settled — claimed, or there never was one (`base_hi_sola == 0`). An
+    ///    unclaimed bag is a live entitlement and blocks the close outright.
+    /// 2. The current epoch's retainer is already decided — either it was credited
+    ///    (`last_credited_epoch == current_epoch`), or the partner no longer holds the
+    ///    liquidity that would qualify them (`lp_balance < lp_threshold`).
     ///
-    /// Anything between the two is refused with `PartnerAllocationNotSettled`. That is the line
-    /// that matters: **once a partner has performed — bribed anything, or claimed anything —
-    /// the authority can no longer close the account out from under them.** Their earned,
-    /// still-claimable entitlement survives any admin action.
+    /// The second condition is why this instruction now reads the partner's LP account. Without
+    /// it, the authority could close the account mid-week and take away an epoch the partner had
+    /// already earned by keeping their liquidity in place; with it, a partner who is still
+    /// performing cannot be cut off, and one who has withdrawn can be tidied away immediately
+    /// instead of leaving a dead PDA open forever.
+    ///
+    /// The guarantee that mattered before still holds, in its proper form: **the authority
+    /// cannot delete a claim the partner has already earned.** What it can now do — and could
+    /// not before — is close the account of a partner who simply stopped, which under a retainer
+    /// costs that partner nothing, because there never was a remainder.
     ///
     /// ⚠️ Closing frees the `[b"partner", partner_wallet]` seeds, so `register_partner` can open
-    /// the same PDA again with `hi_sola_claimed`, `total_bribed_credited` and `start_ts` reset
-    /// to zero — a **fresh deal**, including a fresh `base_hi_sola` bag streaming from scratch.
-    /// That is intended for case 1 (renewing a partnership for another term) and for case 2
-    /// (re-registering on corrected terms), but it means close-then-re-register is the one way
-    /// to hand the same wallet a second welcome bag. It takes the authority signature twice and
-    /// is visible on-chain in both instructions.
+    /// the same PDA again with every counter at zero — a **fresh deal**, including a fresh
+    /// `base_hi_sola` bag. That is the renewal path (and the migration path for allocations
+    /// written at the old 160-byte layout), but it means close-then-re-register is the one way
+    /// to hand the same wallet a second bag. It takes the authority signature twice and is
+    /// visible on-chain in both instructions.
     ///
     /// The partner's `VeLockPosition` and `UserPosition` are separate PDAs and are untouched:
-    /// everything already minted stays locked, votes stay counted, `borrow_against_locked`
-    /// keeps working. Nothing is burned here.
+    /// everything already credited stays locked, keeps voting, keeps earning fees, and keeps
+    /// borrowing at 20 %. Nothing is burned here.
     ///
     /// Not pause-gated, matching `register_partner`: this is admin cleanup that moves no tokens.
     pub fn close_partner_allocation(ctx: Context<ClosePartnerAllocation>) -> Result<()> {
         let pa = &ctx.accounts.partner_allocation;
+        let epoch = current_epoch(Clock::get()?.unix_timestamp);
 
-        // `cap_hi_sola > 0` is enforced at register, so this total is always > 0 and a
-        // never-claimed allocation can never accidentally read as settled.
-        let settled_total = pa
-            .base_hi_sola
-            .checked_add(pa.cap_hi_sola)
-            .ok_or(SoladromeError::Overflow)?;
-        // `>=` rather than `==`: claims can only ever reach this total, never pass it
-        // (`entitled` is bounded by base + cap), but the guard should not depend on that.
-        let fully_settled = pa.hi_sola_claimed >= settled_total;
-        let never_activated = pa.hi_sola_claimed == 0 && pa.total_bribed_credited == 0;
+        // An unclaimed bag is a debt, whatever else is true.
+        let bag_settled = pa.bag_claimed || pa.base_hi_sola == 0;
+        // Nothing further can be credited for the epoch in progress: either it already was, or
+        // the liquidity that would have qualified it is gone.
+        let epoch_decided = pa.last_credited_epoch == epoch
+            || ctx.accounts.partner_lp_token.amount < pa.lp_threshold;
 
         require!(
-            fully_settled || never_activated,
+            bag_settled && epoch_decided,
             SoladromeError::PartnerAllocationNotSettled
         );
 
         msg!(
-            "Partner allocation closed: {} | claimed {} of {} | bribed {} | reason={}",
+            "Partner allocation closed: {} | {} hiSOLA over {} epochs | bag {} | last epoch {} of {}",
             pa.partner,
             pa.hi_sola_claimed,
-            settled_total,
-            pa.total_bribed_credited,
-            if fully_settled {
-                "settled"
-            } else {
-                "never activated"
-            },
+            pa.epochs_qualified,
+            if pa.bag_claimed { "claimed" } else { "none" },
+            pa.last_credited_epoch,
+            epoch,
         );
         Ok(())
     }
@@ -2588,82 +2792,11 @@ pub mod soladrome {
         Ok(())
     }
 
-    /// Partner deposits a bribe in their committed `bribe_mint` AND gets credited
-    /// toward their streaming hiSOLA allocation. The tokens flow into the SAME bribe
-    /// vault as `deposit_bribe` (voters benefit identically); the partner's
-    /// `total_bribed_credited` is incremented atomically with the real transfer, so
-    /// allocation can never be credited without genuinely bribing. Only the committed
-    /// `bribe_mint` credits — any other token is rejected.
-    pub fn partner_deposit_bribe(
-        ctx: Context<PartnerDepositBribe>,
-        epoch: u64,
-        amount: u64,
-    ) -> Result<()> {
-        require!(
-            !ctx.accounts.protocol_state.paused,
-            SoladromeError::ProtocolPaused
-        );
-        require!(
-            ctx.accounts.protocol_state.bribes_enabled,
-            SoladromeError::FeatureDisabled
-        );
-        require!(amount > 0, SoladromeError::InvalidAmount);
-        let clock = Clock::get()?;
-        require!(
-            epoch == current_epoch(clock.unix_timestamp),
-            SoladromeError::WrongEpoch
-        );
-        require_keys_eq!(
-            ctx.accounts.reward_mint.key(),
-            ctx.accounts.partner_allocation.bribe_mint,
-            SoladromeError::BribeMintMismatch
-        );
-
-        // First-time vault init (mirror of deposit_bribe).
-        if ctx.accounts.bribe_vault.pool_id == Pubkey::default() {
-            ctx.accounts.bribe_vault.pool_id = ctx.accounts.pool_id.key();
-            ctx.accounts.bribe_vault.reward_mint = ctx.accounts.reward_mint.key();
-            ctx.accounts.bribe_vault.epoch = epoch;
-            ctx.accounts.bribe_vault.bump = ctx.bumps.bribe_vault;
-        }
-
-        // Real transfer into the bribe vault → voters receive it exactly as usual.
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.partner_token.to_account_info(),
-                    to: ctx.accounts.bribe_token_vault.to_account_info(),
-                    authority: ctx.accounts.partner.to_account_info(),
-                },
-            ),
-            amount,
-        )?;
-
-        ctx.accounts.bribe_vault.total_bribed = ctx
-            .accounts
-            .bribe_vault
-            .total_bribed
-            .checked_add(amount)
-            .ok_or(SoladromeError::Overflow)?;
-
-        // Credit the partner's streaming allocation — atomic with the transfer above.
-        ctx.accounts.partner_allocation.total_bribed_credited = ctx
-            .accounts
-            .partner_allocation
-            .total_bribed_credited
-            .checked_add(amount)
-            .ok_or(SoladromeError::Overflow)?;
-
-        msg!(
-            "Partner bribe: {} | +{} (mint {}) | credited total {}",
-            ctx.accounts.partner.key(),
-            amount,
-            ctx.accounts.reward_mint.key(),
-            ctx.accounts.partner_allocation.total_bribed_credited,
-        );
-        Ok(())
-    }
+    // (`partner_deposit_bribe` removed 2026-08-27. It was `deposit_bribe` plus a credit to
+    //  `total_bribed_credited` — the 1:1 match. With the match gone the two instructions were
+    //  byte-for-byte the same operation under different names, and a partner who wants to bribe
+    //  beyond their escrowed schedule uses `deposit_bribe` like every other protocol. One less
+    //  instruction on the audit surface for zero loss of function.)
 
     /// hiSOLA holder directs vote-weight at a pool gauge for the current epoch.
     /// Total allocated across all pools ≤ raw hiSOLA + ve-weighted locked hiSOLA.
@@ -4964,60 +5097,6 @@ pub struct DepositBribe<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
-/// Partner bribes in their committed token and is credited toward the streaming
-/// allocation. Bribe vaults use the SAME seeds as DepositBribe → partner bribes
-/// and ordinary bribes share one vault per (pool, mint, epoch); voters claim normally.
-#[derive(Accounts)]
-#[instruction(epoch: u64)]
-pub struct PartnerDepositBribe<'info> {
-    #[account(mut)]
-    pub partner: Signer<'info>,
-
-    /// Read-only — used only for the pause check.
-    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
-    pub protocol_state: Box<Account<'info, ProtocolState>>,
-
-    /// Partner allocation PDA — credited here. Verified by seeds + owner.
-    #[account(
-        mut,
-        seeds = [PARTNER_SEED, partner.key().as_ref()],
-        bump = partner_allocation.bump,
-        constraint = partner_allocation.partner == partner.key() @ SoladromeError::Unauthorized,
-    )]
-    pub partner_allocation: Box<Account<'info, PartnerAllocation>>,
-
-    /// CHECK: External pool address used as bribe label — validation by seeds only.
-    pub pool_id: UncheckedAccount<'info>,
-
-    pub reward_mint: Box<Account<'info, Mint>>,
-
-    #[account(mut, token::mint = reward_mint, token::authority = partner)]
-    pub partner_token: Box<Account<'info, TokenAccount>>,
-
-    #[account(
-        init_if_needed,
-        payer = partner,
-        space = 8 + BribeVault::LEN,
-        seeds = [b"bribe_vault", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
-        bump,
-    )]
-    pub bribe_vault: Box<Account<'info, BribeVault>>,
-
-    #[account(
-        init_if_needed,
-        payer = partner,
-        token::mint = reward_mint,
-        token::authority = bribe_vault,
-        seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
-        bump,
-    )]
-    pub bribe_token_vault: Box<Account<'info, TokenAccount>>,
-
-    pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
-}
-
 /// Partner escrows their whole bribe schedule in one signature.
 #[derive(Accounts)]
 pub struct FundPartnerBribeStream<'info> {
@@ -5070,15 +5149,17 @@ pub struct FundPartnerBribeStream<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
-/// Anyone cranks one tranche into the current epoch's bribe vault.
+/// Anyone runs a partner's epoch: one bribe tranche into this epoch's vault, and one epoch of
+/// retainer if the liquidity condition still holds.
 #[derive(Accounts)]
 #[instruction(epoch: u64)]
-pub struct ReleasePartnerBribe<'info> {
-    /// Keeper, voter, partner, anyone — pays the rent for a first-time bribe vault.
+pub struct CrankPartnerEpoch<'info> {
+    /// Keeper, voter, partner, anyone — pays the rent for a first-time bribe vault, and for the
+    /// partner's lock/position PDAs if the retainer is the first thing to open them.
     #[account(mut)]
     pub caller: Signer<'info>,
 
-    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
     pub protocol_state: Box<Account<'info, ProtocolState>>,
 
     /// CHECK: The stream's beneficiary. Never signs here; identity is enforced by the seeds
@@ -5135,6 +5216,48 @@ pub struct ReleasePartnerBribe<'info> {
         bump,
     )]
     pub bribe_token_vault: Box<Account<'info, TokenAccount>>,
+
+    // ── The retainer half ───────────────────────────────────────────────────────
+    /// The LP token named in the deal. Pinned to the allocation so the caller cannot swap in a
+    /// mint the partner happens to hold a lot of.
+    #[account(address = partner_allocation.lp_mint @ SoladromeError::LpMintMismatch)]
+    pub lp_mint: Box<Account<'info, Mint>>,
+
+    /// The partner's own LP account, and the whole of the liquidity condition. Read-only: the
+    /// protocol never takes custody of it, it only looks.
+    #[account(token::mint = lp_mint, token::authority = partner)]
+    pub partner_lp_token: Box<Account<'info, TokenAccount>>,
+
+    #[account(mut, address = protocol_state.sola_mint)]
+    pub sola_mint: Box<Account<'info, Mint>>,
+
+    /// Locked SOLA backing — 1 SOLA minted here per hiSOLA of retainer.
+    #[account(mut, address = protocol_state.sola_vault)]
+    pub sola_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Read-only snapshot for the fee accumulator advance.
+    #[account(address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    /// The partner's ve lock — each qualified epoch is added to it, permanently.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + VeLockPosition::LEN,
+        seeds = [VELOCK_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub lock_position: Box<Account<'info, VeLockPosition>>,
+
+    /// The partner's fee position — `fee_shares` grows one retainer epoch at a time.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + UserPosition::LEN,
+        seeds = [POSITION_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub partner_position: Box<Account<'info, UserPosition>>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -5686,6 +5809,16 @@ pub struct RegisterContributor<'info> {
     )]
     pub contributor_vesting: Account<'info, ContributorVesting>,
 
+    /// The running total the cap is enforced against. Opened by the first registration.
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + ContributorRegistry::LEN,
+        seeds = [CONTRIBUTOR_REGISTRY_SEED],
+        bump,
+    )]
+    pub contributor_registry: Account<'info, ContributorRegistry>,
+
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
@@ -5941,6 +6074,15 @@ pub struct ClosePartnerAllocation<'info> {
         constraint = partner_allocation.partner == partner_wallet.key() @ SoladromeError::Unauthorized,
     )]
     pub partner_allocation: Account<'info, PartnerAllocation>,
+
+    /// The LP token named in the deal, and the partner's account of it — read to establish that
+    /// this epoch's retainer can no longer be earned. Pinned to the allocation so the authority
+    /// cannot present an empty account of some other mint to force the close through.
+    #[account(address = partner_allocation.lp_mint @ SoladromeError::LpMintMismatch)]
+    pub lp_mint: Account<'info, Mint>,
+
+    #[account(token::mint = lp_mint, token::authority = partner_wallet)]
+    pub partner_lp_token: Account<'info, TokenAccount>,
 }
 
 // ── Vote carry-over ───────────────────────────────────────────────────────────

@@ -18,10 +18,26 @@ pub const VE_VAULT_SEED: &[u8] = b"ve_vault";
 
 /// Lock hiSOLA for governance voting power.
 ///
-/// Moving hiSOLA from the position balance into `amount_locked` removes it from the fee
-/// accumulator denominator — locked holders trade fee yield for ve power. Subsequent calls on
-/// an existing lock may add more or extend the end date (never shorten). Locking into an
-/// expired position resets it.
+/// ☢️ **Locking no longer costs the holder their fees** (2026-08-27). It used to: the balance
+/// moved out of `hi_sola` and `total_hi_sola` was decremented, so a four-year lock meant four
+/// years of earning nothing — for everyone, on stake they had financed themselves. The obvious
+/// fix would have been to stop decrementing and leave the basis alone, and it would have been a
+/// mistake: the founder's 7M is excluded from the fee pool *only* because every lock is, so
+/// inverting the default turns that exclusion into a special case whose omission is silent and
+/// worth ~89 % of the fee stream.
+///
+/// So the basis is preserved through `fee_shares` instead — see `UserPosition::lock_balance`,
+/// which credits the drop in basis rather than the amount, so unfinanced hiSOLA cannot buy
+/// itself a fee share by locking. `claim_founder_hi_sola` never routes through here and never
+/// credits `fee_shares`, so the 7M stays excluded automatically, by construction rather than by
+/// a name check.
+///
+/// Side effect, accepted deliberately: the 30 % per-address vote cap is computed against
+/// `total_hi_sola`, and locked positions vote at up to 4× while being absent from it. Putting
+/// them back does not loosen the cap — it gives it the meaning it advertises.
+///
+/// Subsequent calls on an existing lock may add more or extend the end date (never shorten).
+/// Locking into an expired position resets it.
 ///
 /// Both sides are ledger figures now: `VeLockPosition.amount_locked` always was one, and
 /// `UserPosition.hi_sola` became one when hiSOLA stopped being a token. The vault this used
@@ -92,27 +108,27 @@ pub fn lock_hi_sola(ctx: Context<LockHiSola>, amount: u64, lock_duration_secs: u
         );
     }
 
-    // ── Checkpoint user fees_debt before locking ─────────────────────────────
-    // Prevents extracting fees accumulated by other stakers during the lock
-    // period: after unlock, fees_debt is updated again so only post-unlock
-    // fees are claimable. Any pre-lock unclaimed fees should be claimed with
-    // `claim_fees` BEFORE calling `lock_hi_sola`.
-    {
+    // ── Move the balance without moving the fee basis ────────────────────────
+    // `fees_debt` is deliberately NOT re-stamped to `acc`. It used to be, and that quietly
+    // confiscated everything the position had accrued but not yet claimed — hence the old
+    // instruction to "claim before locking", a footgun dressed as documentation. The basis is
+    // identical on both sides of `lock_balance`, so pending is identical too, and leaving the
+    // debt alone is exactly right.
+    let credited = {
         let pos = &mut ctx.accounts.user_position;
         if pos.owner == Pubkey::default() {
             pos.owner = ctx.accounts.user.key();
             pos.bump = ctx.bumps.user_position;
         }
-        pos.fees_debt = acc;
-        pos.hi_sola = pos.hi_sola.saturating_sub(amount);
+        pos.lock_balance(amount)?
         // `staked_amount` is deliberately NOT decremented. It records what this wallet
         // financed, which locking does not undo. The `min(staked_amount, hi_sola)` in
-        // `borrow_usdc` and `fee_basis` already collapses to 0 while the balance is locked —
-        // exactly what the emptied ATA used to do — and restores the original cap on unlock,
-        // without a second counter that could drift from the first. Allocations that were
-        // never financed still read `staked_amount = 0` after unlocking, so the 100% channel
-        // stays shut for them and `borrow_against_locked` (20%) remains their only valve.
-    }
+        // `borrow_usdc` still collapses to 0 while the balance is locked — exactly what the
+        // emptied ATA used to do — and restores the original cap on unlock, without a second
+        // counter that could drift from the first. Allocations that were never financed still
+        // read `staked_amount = 0` after unlocking, so the 100% channel stays shut for them and
+        // `borrow_against_locked` (20%) remains their only valve.
+    };
 
     // Update lock position.
     {
@@ -128,13 +144,15 @@ pub fn lock_hi_sola(ctx: Context<LockHiSola>, amount: u64, lock_duration_secs: u
         lock.lock_end_ts = new_lock_end_ts;
     }
 
-    // Remove locked hiSOLA from the fee distribution pool.
+    // Only the part that genuinely left the fee base leaves the denominator. For financed
+    // stake `credited == amount` and this is a no-op — the point of the change. For unfinanced
+    // hiSOLA `credited == 0` and the full amount comes out, exactly as it always did.
     let s = &mut ctx.accounts.protocol_state;
     s.fees_per_hi_sola = acc;
     s.last_market_vault_balance = market_balance;
     s.total_hi_sola = s
         .total_hi_sola
-        .checked_sub(amount)
+        .checked_sub(amount.saturating_sub(credited))
         .ok_or(SoladromeError::Overflow)?;
 
     Ok(())
@@ -174,34 +192,29 @@ pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {
     // its voting power forever and a later unlock can never drain it.
     ctx.accounts.lock_position.amount_locked = permanent;
 
-    // ── Checkpoint user fees_debt at unlock time ─────────────────────────────
-    // Sets the baseline for future claims so the user earns fees only from this
-    // point forward — not retroactively during the period they were locked.
-    {
+    // ── Return the balance, hand back the shares that stood in for it ────────
+    // The exact inverse of the lock, and `fees_debt` is left alone for the same reason: the
+    // basis is unchanged across `unlock_balance`, so nothing is owed differently on either
+    // side of it. `staked_amount` is NOT credited: hiSOLA released by an expired lock was
+    // never financed through the curve, so it must not open the 100% borrow channel. For a
+    // wallet that locked its own financed stake, `staked_amount` was left standing at lock
+    // time and simply becomes effective again here.
+    let debited = {
         let pos = &mut ctx.accounts.user_position;
         if pos.owner == Pubkey::default() {
             pos.owner = ctx.accounts.user.key();
             pos.bump = ctx.bumps.user_position;
         }
-        pos.fees_debt = acc;
-        // Credit the balance — this replaces the vault → ATA transfer. `staked_amount` is
-        // NOT credited: hiSOLA released by an expired lock was never financed through the
-        // curve (partner bribe-earned tranches), so it must not open the 100% borrow channel.
-        // For a wallet that locked its own financed stake, `staked_amount` was left standing
-        // at lock time and simply becomes effective again here.
-        pos.hi_sola = pos
-            .hi_sola
-            .checked_add(amount)
-            .ok_or(SoladromeError::Overflow)?;
-    }
+        pos.unlock_balance(amount)?
+    };
 
-    // Return locked hiSOLA to the fee distribution pool.
+    // Symmetric with the lock: only what re-enters the fee base re-enters the denominator.
     let s = &mut ctx.accounts.protocol_state;
     s.fees_per_hi_sola = acc;
     s.last_market_vault_balance = market_balance;
     s.total_hi_sola = s
         .total_hi_sola
-        .checked_add(amount)
+        .checked_add(amount.saturating_sub(debited))
         .ok_or(SoladromeError::Overflow)?;
 
     Ok(())

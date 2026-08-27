@@ -3,6 +3,8 @@
 
 use anchor_lang::prelude::*;
 
+use crate::errors::SoladromeError;
+
 /// Scaling factor for fee-per-token accumulator (avoids fractional USDC loss).
 pub const PRECISION: u128 = 1_000_000_000_000; // 1e12
 
@@ -36,11 +38,11 @@ pub const VESTING_CLIFF_SECS: u64 = 180 * 24 * 3_600;
 /// Linear vesting window that starts after the cliff. 24 months.
 pub const VESTING_DURATION_SECS: u64 = 720 * 24 * 3_600;
 
-// ── Partner welcome-bag streaming window ──────────────────────────────────────
-/// The one-time partner welcome bag streams linearly over the first 6 months
-/// from `register_partner` (no cliff). Mirrors the founder cliff window so partner
-/// governance ramps in step with the founder's, not instantly on day 1. 6 months, everywhere.
-pub const BASE_BAG_VEST_SECS: u64 = 180 * 24 * 3_600;
+// (BASE_BAG_VEST_SECS removed 2026-08-27 with the streamed welcome bag. The bag is now
+//  delivered whole the moment the partner escrows their bribe schedule — it is the signature
+//  signal, not the compensation, and it is small for that reason. What used to be the rest of
+//  the promised total is now a retainer that is bought one epoch at a time; see
+//  `PartnerAllocation`.)
 
 // (Contributor vesting schedule removed 2026-07-18 — contributors now claim their whole
 //  allocation at launch: hiSOLA into a lifetime ve lock + oSOLA. No cliff, no linear vest.)
@@ -387,6 +389,109 @@ impl UserPosition {
             0
         }
     }
+
+    /// Grant `amount` of hiSOLA that earns fees without being a spendable balance, carrying the
+    /// position's already-accrued fees across the change.
+    ///
+    /// ☢️ `fees_debt` is a single scalar for the whole basis, so widening the basis without
+    /// touching it would hand the new shares a retroactive claim on fees that accrued before
+    /// they existed. Re-stamping it to `acc` instead would forfeit whatever this position had
+    /// already earned — harmless for a fresh account, real for one that was already staking.
+    /// So carry the accrual across exactly: pick the debt that reproduces the same pending
+    /// amount against the new, larger basis. Rounds down, i.e. never in the claimant's favour.
+    ///
+    /// The caller is responsible for the counterpart — `ProtocolState.total_hi_sola` must grow
+    /// by the same `amount`, so the share is real rather than printed and every other holder is
+    /// diluted by exactly what this position receives.
+    pub fn credit_fee_shares(&mut self, acc: u128, amount: u64) -> Result<()> {
+        let old_basis = crate::math::fee_basis(self.staked_amount, self.hi_sola, self.fee_shares);
+        let pending = crate::math::pending_fees(acc, self.fees_debt, old_basis);
+        self.fee_shares = self
+            .fee_shares
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
+        let new_basis = crate::math::fee_basis(self.staked_amount, self.hi_sola, self.fee_shares);
+        self.fees_debt = if pending == 0 || new_basis == 0 {
+            acc
+        } else {
+            acc.saturating_sub((pending as u128 * PRECISION) / new_basis as u128)
+        };
+        Ok(())
+    }
+
+    /// Move `amount` out of the spendable balance and into a ve lock **without changing the fee
+    /// basis**. Returns the `fee_shares` actually credited, which the caller must NOT add to
+    /// `total_hi_sola` — see below.
+    ///
+    /// ☢️ The credit is the *drop in basis*, not `amount`. Crediting `amount` outright would let
+    /// unfinanced hiSOLA buy itself a fee share by locking: a position holding hiSOLA released
+    /// by an expired lock has `staked_amount = 0`, so `fee_basis` is 0 and it earns nothing —
+    /// locking it and crediting the full amount would turn 0 into `amount`, manufacturing a
+    /// claim on the fee stream out of supply that never paid into the floor. The difference is
+    /// zero in that case and exactly `amount` for financed stake, which is the whole rule.
+    ///
+    /// The counterpart for the caller: `total_hi_sola` must fall by `amount − credited`. For
+    /// financed stake that is zero — locking no longer costs the holder their fees, which is
+    /// the change this method exists for — and for unfinanced supply it is the full amount,
+    /// exactly as before.
+    pub fn lock_balance(&mut self, amount: u64) -> Result<u64> {
+        let before = crate::math::fee_basis(self.staked_amount, self.hi_sola, self.fee_shares);
+        self.hi_sola = self
+            .hi_sola
+            .checked_sub(amount)
+            .ok_or(SoladromeError::InvalidAmount)?;
+        let after = crate::math::fee_basis(self.staked_amount, self.hi_sola, self.fee_shares);
+        let credited = before.saturating_sub(after);
+        self.fee_shares = self
+            .fee_shares
+            .checked_add(credited)
+            .ok_or(SoladromeError::Overflow)?;
+        Ok(credited)
+    }
+
+    /// The exact inverse: return `amount` to the spendable balance and give back the shares the
+    /// lock was standing in for. Returns the `fee_shares` debited, and `total_hi_sola` must rise
+    /// by `amount − debited`.
+    ///
+    /// ☢️ The debit is the *rise in basis*, capped at what the position holds, so it can only
+    /// ever reclaim what `lock_balance` granted. This matters because `fee_shares` also carries
+    /// permanent grants — a contributor's bag, a partner's retainer — that are locked for life
+    /// and must survive any unlock. The `min` in `fee_basis` saturates at `staked_amount`, so
+    /// releasing hiSOLA that was never financed raises the basis by nothing and debits nothing.
+    pub fn unlock_balance(&mut self, amount: u64) -> Result<u64> {
+        let before = crate::math::fee_basis(self.staked_amount, self.hi_sola, self.fee_shares);
+        self.hi_sola = self
+            .hi_sola
+            .checked_add(amount)
+            .ok_or(SoladromeError::Overflow)?;
+        let after = crate::math::fee_basis(self.staked_amount, self.hi_sola, self.fee_shares);
+        let debited = after.saturating_sub(before).min(self.fee_shares);
+        self.fee_shares = self.fee_shares.saturating_sub(debited);
+        Ok(debited)
+    }
+}
+
+/// Running total of everything ever promised to contributors, so the cap is a protocol
+/// invariant instead of a habit.
+///
+/// A separate singleton rather than two more fields on `ProtocolState`: that account has 9
+/// spare bytes left and this needs 16. Growing it again would mean a second realloc migration
+/// on the one account whose growth already bricked devnet in July — for a counter that is
+/// written by an authority-only instruction and read by nothing else.
+///
+/// `register_contributor` uses `init`, so one wallet cannot be registered twice and these
+/// totals cannot double-count.
+///
+/// PDA: [b"contributor_registry"]
+#[account]
+pub struct ContributorRegistry {
+    pub hi_sola_allocated: u64,
+    pub o_sola_allocated: u64,
+    pub bump: u8,
+}
+impl ContributorRegistry {
+    // 8 + 8 + 1 = 17 bytes used; 15 spare.
+    pub const LEN: usize = 32;
 }
 
 // Same guard as ProtocolState: every field past `last_borrow_slot` was carved from spare
@@ -727,42 +832,81 @@ impl UserVoteConfig {
 
 // ── Protocol Partner allocation ───────────────────────────────────────────────
 
-/// One-time locked hiSOLA allocation for a protocol partner (Jito, Marinade, Solayer…).
+/// A protocol partner's deal (Jito, Marinade, Solayer…): a signature bag, then a retainer.
 ///
-/// Unlike the contributor system (cliff + linear vesting), the partner receives their
-/// full allocation in a single `claim_partner_allocation` call — but hiSOLA is minted
-/// DIRECTLY into their ve_lock_vault, bypassing the wallet entirely.
+/// ☢️ **This is not a vesting schedule, and the difference is the whole design.** A vesting
+/// promises a total on day one and releases it in slices: the amount exists from the start, the
+/// only condition is that time passes, and the beneficiary is a creditor for the remainder. A
+/// **retainer** has no total, it has a rate. Each epoch is bought separately, against something
+/// verified at that moment — the partner's liquidity, still there, right now.
 ///
-/// Consequences:
-/// - Voting power is immediate via VeLockPosition (up to 4× ve multiplier).
-/// - `borrow_usdc` (wallet path) is blocked (wallet balance = 0); liquidity comes
-///   from `borrow_against_locked` instead — up to 20% of the locked position.
-/// - `total_hi_sola` is NOT incremented — locked hiSOLA is excluded from the
-///   fee accumulator denominator (same semantics as `lock_hi_sola`).
-/// - After lock expiry: `unlock_hi_sola` → hiSOLA back to wallet → standard rules.
+/// Three consequences follow, and they are why the 1:1 bribe match was removed on 2026-08-27:
+/// - A partner who leaves after ten epochs has not forfeited the rest; **there never was a
+///   rest**. Nothing is owed, so nothing has to be revoked, so `close_partner_allocation`
+///   never has to take anything away from anyone.
+/// - There is no cap. The old deal died at `cap_hi_sola`; a partner who keeps their liquidity
+///   in place for three years keeps earning for three years.
+/// - No oracle is needed anywhere. The old `rate_num/rate_den` was a ratio of base units
+///   **frozen for life** at registration: if the partner's token halved, the protocol went on
+///   paying the same hiSOLA per unit, permanently and irrevocably.
+///
+/// What the partner gets: permanent voting power from day one, protocol fees for life on
+/// everything they accrue (`UserPosition.fee_shares`), a 20 % working-capital valve
+/// (`borrow_against_locked`), and no custody of their LP at any point — the protocol never
+/// holds it, it simply stops paying when the balance drops below `lp_threshold`.
 ///
 /// PDA: [b"partner", partner_wallet]
 #[account]
+#[derive(InitSpace)]
 pub struct PartnerAllocation {
-    pub partner: Pubkey,            // beneficiary wallet (immutable after init)
-    pub bribe_mint: Pubkey,         // committed bribe token — only this mint credits the allocation
-    pub rate_num: u64,              // hiSOLA earned per bribe unit = rate_num / rate_den
-    pub rate_den: u64,              // (1:1 = rate_num == rate_den)
-    pub cap_hi_sola: u64, // hard cap on bribe-EARNED hiSOLA (= negotiated commitment); excludes base bag
-    pub total_bribed_credited: u64, // cumulative bribe (bribe_mint base units) deposited via partner_deposit_bribe
-    pub hi_sola_claimed: u64, // cumulative hiSOLA already minted + locked (base + bribe, monotonic)
+    pub partner: Pubkey,    // beneficiary wallet (immutable after init)
+    pub bribe_mint: Pubkey, // committed bribe token — the escrowed stream must be in this mint
+    /// The LP token whose balance is attested every epoch, named in the deal at registration.
+    ///
+    /// Stored rather than derived. Deriving it — "the pool holding `bribe_mint` and the
+    /// protocol's USDC" — would have saved 32 bytes and cost the partner the right to bribe in
+    /// one token while providing liquidity in another, which is the normal shape of an LST
+    /// deal (bribes in the governance token, liquidity in the staked one).
+    pub lp_mint: Pubkey,
+    /// LP tokens the partner must still hold when the epoch is cranked, or that epoch pays
+    /// nothing. Fixed at registration: the tier is negotiated in dollars, the chain only ever
+    /// sees LP units and there is no oracle, so what gets frozen here is the unit count that
+    /// matched the agreed size on the day. Imprecise on value, exact on "did they withdraw".
+    pub lp_threshold: u64,
+    /// hiSOLA credited per qualified epoch — the rate, and the only figure that sets the pace.
+    pub retainer_per_epoch: u64,
+    /// Last epoch the retainer was credited for. One credit per epoch, and never retroactive.
+    ///
+    /// ☢️ Unlike the bribe stream, **this schedule cannot slip**: an epoch nobody cranks is
+    /// lost, not deferred. The chain keeps no history of an SPL balance, so there is no way to
+    /// establish after the fact that the liquidity was present five epochs ago. The crank *is*
+    /// the attestation. That is a real cost of the design and the reason the front-end fires
+    /// it automatically — otherwise a distracted partner loses money through no fault.
+    pub last_credited_epoch: u64,
+    /// How many epochs actually paid. Read by `close_partner_allocation` and by the UI; it is
+    /// the only record that a retainer ever ran, since no total is ever written down.
+    pub epochs_qualified: u32,
+    pub hi_sola_claimed: u64, // cumulative hiSOLA locked for this deal (bag + retainer, monotonic)
     pub lock_duration_secs: u64, // lock duration per claim (validated in [MIN, MAX] at register)
     pub start_ts: i64,        // unix timestamp when register_partner was executed
     pub bump: u8,
-    pub base_hi_sola: u64, // one-time welcome bag (streams over BASE_BAG_VEST_SECS); appended last for backward-compatible upgrades
+    /// The signature bag: delivered whole, once, the moment the bribe schedule is escrowed.
+    ///
+    /// It used to stream over six months, back when it was the compensation. It is now the
+    /// unconditional part of the deal and nothing else, which is precisely why it is small —
+    /// 20 000 / 7 500 / 2 000 hiSOLA across the three tiers, against a retainer that pays the
+    /// rest only while the liquidity is there.
+    pub base_hi_sola: u64,
+    /// Whether the bag has been delivered. Its own flag rather than a comparison against
+    /// `hi_sola_claimed`, which now counts retainer epochs too and would otherwise let a
+    /// partner who cranked first claim the bag a second time.
+    pub bag_claimed: bool,
     /// Unix timestamp at which the partner funded their bribe stream, or 0 if they never did.
     ///
-    /// **This is the gate on the welcome bag.** The bag used to accrue from `start_ts` for
-    /// everyone, which made it an unconditional gift: a partner could register, never bribe a
-    /// unit, and still claim permanent voting power the floor had funded nothing for. It now
-    /// vests from THIS timestamp, so it is earned by committing an escrowed bribe schedule
-    /// (`fund_partner_bribe_stream`) and by nothing else. 0 means no stream, which means no
-    /// bag — legacy accounts read 0 and therefore fail closed, never open.
+    /// **This is the gate on the whole deal** — the bag and the retainer both. A partner could
+    /// otherwise register, never bribe a unit, and still collect permanent voting power the
+    /// floor had funded nothing for. 0 means no stream, which means nothing accrues; legacy
+    /// accounts read 0 and therefore fail closed, never open.
     pub stream_start_ts: i64,
     /// How many epochs the partner's bribes must be spread over, agreed at registration.
     ///
@@ -771,13 +915,35 @@ pub struct PartnerAllocation {
     /// year) or 104 (two years). 0 means unset — legacy allocations only, which accept any
     /// length so an upgrade cannot strand a partner mid-negotiation.
     pub schedule_epochs: u64,
+    /// Smallest per-epoch bribe the escrow may be funded with, in the bribe mint's base units.
+    ///
+    /// The size of the bribe is the other half of the rhythm, and it needs its own floor. The
+    /// old check derived one from `cap_hi_sola` and the 1:1 rate — "escrow enough that the
+    /// bribes earn the whole cap" — which disappeared with the cap. Without a replacement, a
+    /// partner could escrow 52 epochs of one lamport, satisfy every length check, and unlock
+    /// the bag: the schedule would exist and mean nothing.
+    pub min_bribe_per_epoch: u64,
 }
 impl PartnerAllocation {
-    // 32 + 32 + 8*7 + 8 + 8 + 8 + 1 = 145 bytes used; 15 spare.
-    // Carved from the spare bytes on purpose: LEN does not move, so no account grows and no
-    // realloc migration is needed. Growing a live singleton is what bricked devnet in July.
-    pub const LEN: usize = 160;
+    // 32*3 + 8*2 + 8 + 4 + 8*3 + 1 + 8*4 + 1 = 182 bytes used; 10 spare.
+    //
+    // ⚠️ 160 → 192 (2026-08-27). Dropping the 1:1 machinery freed 32 bytes (`rate_num`,
+    // `rate_den`, `cap_hi_sola`, `total_bribed_credited`) and the retainer needs 36 of them,
+    // because the deal now names the LP pool explicitly. `register_partner` uses `init`, so a
+    // live allocation at the old size does not realloc — it must go through
+    // `close_partner_allocation` and be re-registered on the new terms. That is the renewal
+    // path this account already documents, not a workaround: every field the old account holds
+    // would otherwise be read back under a new name with a stale value.
+    pub const LEN: usize = 192;
 }
+
+// Measured against `INIT_SPACE` — the Borsh wire size — for the same reason as UserPosition:
+// `size_of` pads to the struct's alignment and would demand LEN cover bytes that never reach
+// the account. A resize this large deserves a build error rather than a runtime one.
+const _: () = assert!(
+    PartnerAllocation::LEN >= PartnerAllocation::INIT_SPACE,
+    "PartnerAllocation::LEN is too small — update it to fit the struct"
+);
 
 // ── Partner bribe stream ──────────────────────────────────────────────────────
 
