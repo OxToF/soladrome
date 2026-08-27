@@ -334,7 +334,52 @@ export function FounderPanel() {
     }, [raw, connection]);
   }
   useMintDecimals(regBribeMint, setBribeDecimals, setBribeMintErr);
-  useMintDecimals(regLpMint, setLpDecimals, setLpMintErr);
+
+  // ── The LP field takes a pool OR its LP mint ────────────────────────────────
+  // An operator has the pool address to hand — it is what the Pools tab shows and what a
+  // partner quotes. The LP mint is a second PDA derived from it (`[b"lp_mint", pool]`), which
+  // nobody has any reason to know by heart. Asking for the mint and rejecting the pool with
+  // "that address is not an SPL mint" put the one figure that gates the whole retainer behind a
+  // derivation done by hand, on a deal that cannot be edited afterwards. So: paste either.
+  const [resolvedLpMint, setResolvedLpMint] = useState<PublicKey | null>(null);
+  const [lpFromPool, setLpFromPool] = useState(false);
+
+  useEffect(() => {
+    const addr = regLpMint.trim();
+    setResolvedLpMint(null);
+    setLpFromPool(false);
+    if (!addr) { setLpDecimals(null); setLpMintErr(null); return; }
+    let cancelled = false;
+    let key: PublicKey;
+    try { key = new PublicKey(addr); }
+    catch { setLpDecimals(null); setLpMintErr("Not a valid address."); return; }
+    setLpMintErr(null);
+
+    (async () => {
+      // A mint reads back as one directly.
+      const direct = await connection.getParsedAccountInfo(key).catch(() => null);
+      const dec = (direct?.value?.data as any)?.parsed?.info?.decimals;
+      if (typeof dec === "number") {
+        if (cancelled) return;
+        setResolvedLpMint(key); setLpDecimals(dec); setLpMintErr(null);
+        return;
+      }
+      // Otherwise try it as a pool and derive the LP mint the program itself derives.
+      const derived = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_mint"), key.toBuffer()], PROGRAM_ID
+      )[0];
+      const asPool = await connection.getParsedAccountInfo(derived).catch(() => null);
+      const poolDec = (asPool?.value?.data as any)?.parsed?.info?.decimals;
+      if (cancelled) return;
+      if (typeof poolDec === "number") {
+        setResolvedLpMint(derived); setLpDecimals(poolDec); setLpFromPool(true); setLpMintErr(null);
+      } else {
+        setLpDecimals(null);
+        setLpMintErr("Neither an SPL mint nor a Soladrome pool — paste the pool address or its LP mint.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [regLpMint, connection]);
 
   // ── Everything the instruction will write, derived exactly from what was typed ──────
   // One object, so the summary block and the submit handler can never disagree about what
@@ -371,7 +416,8 @@ export function FounderPanel() {
   // The two figures that live in someone else's decimals, and therefore wait for both mints.
   const deal = (() => {
     if (!termsOk) return { err: termsErr as string };
-    if (bribeDecimals === null || lpDecimals === null) return { pending: true as const };
+    if (bribeDecimals === null || lpDecimals === null || resolvedLpMint === null)
+      return { pending: true as const };
 
     const minBribeBase = toBaseUnits(regMinBribe, bribeDecimals);
     if (minBribeBase === null)
@@ -674,7 +720,8 @@ export function FounderPanel() {
       }
       const partnerKey  = new PublicKey(regWallet.trim());
       const bribeMint   = new PublicKey(regBribeMint.trim());
-      const lpMint      = new PublicKey(regLpMint.trim());
+      // The resolved mint, never the raw field — the operator may well have pasted the pool.
+      const lpMint      = resolvedLpMint!;
       const lpFloorBN   = new BN(dealOk.lpBase.toString());
       const retainerBN  = new BN(dealOk.retainerBase.toString());
       const baseBN      = new BN(dealOk.baseBase.toString());
@@ -1130,19 +1177,29 @@ export function FounderPanel() {
           {/* LP mint — the token the retainer is conditioned on */}
           <div>
             <label className="text-[10px] text-gray-500 uppercase tracking-widest mb-1 block">
-              LP mint
+              Pool or LP mint
             </label>
             <input
               className="w-full bg-brand-dark border border-brand-border rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-green"
               type="text"
-              placeholder="LP token of the pool they commit to seed"
+              placeholder="Pool address, or its LP mint — either works"
               value={regLpMint}
               onChange={(e) => setRegLpMint(e.target.value)}
             />
+            {resolvedLpMint && (
+              <p className="text-[10px] mt-1 text-brand-green break-all">
+                {lpFromPool ? "✅ Pool recognised → LP mint " : "✅ LP mint "}
+                <span className="font-mono">{resolvedLpMint.toBase58()}</span>
+                <span className="text-gray-500"> · {lpDecimals} decimals</span>
+              </p>
+            )}
             <p className="text-[10px] text-gray-500 mt-1">
-              Named explicitly, so a partner can bribe in their governance token and provide
-              liquidity in their LST. The protocol never takes custody of it — it reads the
-              balance each epoch and stops paying when it drops.
+              Paste the pool and the LP mint is derived for you — it is a second PDA
+              (<code>[&quot;lp_mint&quot;, pool]</code>), and this is the one field that gates
+              every epoch of the retainer, on a deal that cannot be edited afterwards. Named
+              explicitly rather than inferred from the bribe token, so a partner can bribe in
+              their governance token and provide liquidity in their LST. The protocol never
+              takes custody of it — it reads the balance each epoch and stops paying when it drops.
             </p>
           </div>
 
