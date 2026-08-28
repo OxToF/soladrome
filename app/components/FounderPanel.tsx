@@ -1588,7 +1588,7 @@ export function FounderPanel() {
                 </p>
                 {!dealOk ? (
                   <p className="text-[11px] text-gray-500">
-                    The LP threshold and the bribe floor are written in their own mints\u2019
+                    The LP threshold and the bribe floor are written in their own mints’
                     decimals — enter both mints to see the exact integers.
                   </p>
                 ) : (<>
