@@ -86,6 +86,16 @@ export default function Home() {
     !!protocolState?.founderWallet &&
     wallet.publicKey.toBase58() === protocolState.founderWallet.toBase58();
 
+  // The authority is a SEPARATE wallet from the founder, deliberately. It owns the admin
+  // actions that live in the same panel (`register_partner` is `address =
+  // protocol_state.authority`), so gating that panel on the founder alone hid those actions
+  // from the only wallet that can sign them: connecting the authority made the nav entry
+  // disappear entirely, with nothing to land on.
+  const isAuthority =
+    !!wallet &&
+    !!protocolState?.authority &&
+    wallet.publicKey.toBase58() === protocolState.authority.toBase58();
+
   // Detect ContributorVesting PDA
   useEffect(() => {
     if (!wallet) { setIsContributor(false); return; }
@@ -104,7 +114,7 @@ export default function Home() {
 
   // Visible nav: hide role-specific entries unless applicable
   const visibleRoleFilter = (n: NavItem) => {
-    if (n.founderOnly)     return isFounder;
+    if (n.founderOnly)     return isFounder || isAuthority;
     if (n.contributorOnly) return isContributor;
     if (n.partnerOnly)     return isPartner;
     return true;

@@ -486,13 +486,16 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
       Buffer.from("contributor"),
       contributor.publicKey.toBuffer(),
     ]);
+    // 50/50 is enforced on-chain since 2026-08-27 — the oSOLA side is irrelevant to this test
+    // but no longer optional, and the cumulative cap is what it is registered against.
     await program.methods
-      .registerContributor(new BN(100_000_000), new BN(0))
+      .registerContributor(new BN(100_000_000), new BN(100_000_000))
       .accounts({
         authority: payer.publicKey,
         protocolState: statePda,
         contributorWallet: contributor.publicKey,
         contributorVesting: vesting,
+        contributorRegistry: pda([Buffer.from("contributor_registry")]),
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,
       } as any)

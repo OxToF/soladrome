@@ -1707,9 +1707,16 @@
     {
       "name": "claim_contributor_hi_sola",
       "docs": [
-        "Contributor-only: claim vested hiSOLA (25 % TGE + 75 % linear over 6 months).",
-        "Mints SOLA to sola_vault (locked backing) + hiSOLA to contributor wallet 1:1.",
-        "Also snapshots the fee accumulator so the contributor earns fees from day one."
+        "Contributor-only: claim the whole hiSOLA tranche at once into a LIFETIME ve lock.",
+        "",
+        "⚠️ Not \"25 % TGE + 75 % linear over 6 months\", which is what this said until 2026-08-25",
+        "and has not been true since the schedule was removed on 2026-07-18. There is no cliff",
+        "and no vesting: `claimable` is the entire unclaimed remainder.",
+        "",
+        "Mints SOLA to sola_vault as 1:1 backing and records the hiSOLA as `permanent_amount`,",
+        "so `unlock_hi_sola` can never release any of it. `total_hi_sola` is NOT incremented and",
+        "never will be, which means this tranche earns no protocol fees at any point — it buys",
+        "permanent voting power and a 20 % borrow valve, nothing else."
       ],
       "discriminator": [
         94,
@@ -2953,19 +2960,24 @@
     {
       "name": "claim_partner_allocation",
       "docs": [
-        "Partner claims their one-time hiSOLA allocation.",
+        "Partner claims their signature bag — once, whole, the moment the schedule is escrowed.",
         "",
-        "hiSOLA is minted DIRECTLY into the partner's ve_lock_vault — the wallet",
-        "receives nothing.  This means:",
-        "- Voting power is available immediately via VeLockPosition (up to 4× at max lock).",
-        "- `borrow_usdc` is naturally blocked (wallet hiSOLA balance = 0).",
-        "- `total_hi_sola` is NOT incremented: locked hiSOLA is excluded from the fee",
-        "accumulator denominator, so existing stakers are not diluted during the lock.",
-        "- `UserPosition.fees_debt` is snapshotted at the current accumulator so the",
-        "partner earns staking fees only from their eventual `unlock_hi_sola` forward.",
+        "hiSOLA never touches the wallet: it is written straight into the ve lock as",
+        "`permanent_amount`, so it votes from day one (up to 4×), borrows at 20 % through",
+        "`borrow_against_locked`, and can never be unlocked, unstaked or sold. It is unfinanced —",
+        "no USDC ever entered the floor for it — and permanence is what keeps that exposure on",
+        "the 20 % channel instead of the 100 % one.",
         "",
-        "After lock expiry: call `unlock_hi_sola` → hiSOLA returns to wallet → standard",
-        "rules apply (fee share, borrow up to 75 % floor buffer, re-lock for more ve)."
+        "⚠️ It used to stream linearly over six months and to carry the bribe-earned tranche",
+        "alongside it. Both are gone (2026-08-27): the bag is now the unconditional part of the",
+        "deal and nothing else, and what a partner earns for performing is the retainer, credited",
+        "epoch by epoch against their liquidity by `crank_partner_epoch`.",
+        "",
+        "☢️ It earns protocol fees, which it did not before. Locked for life means `hi_sola` is 0",
+        "and unfinanced means `staked_amount` is 0, so `fee_basis` was 0 and — the lock being",
+        "permanent — could never become anything else. `fee_shares` is the exception that makes",
+        "the tranche worth something, matched by an increment to `total_hi_sola` so the share is",
+        "real rather than printed."
       ],
       "discriminator": [
         112,
@@ -3111,6 +3123,275 @@
         {
           "name": "rent",
           "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_legacy_partner_allocation",
+      "docs": [
+        "Authority-only: close a `PartnerAllocation` written under a layout too small to read.",
+        "",
+        "☢️ **This exists because `close_partner_allocation` cannot help such an account.** That",
+        "instruction takes a typed `Account<PartnerAllocation>`, so Anchor deserializes before a",
+        "single line of it runs — and an account written at 160 bytes has no `lp_mint`, no",
+        "`retainer_per_epoch`, no `min_bribe_per_epoch` to read. It fails at the account level,",
+        "permanently. `register_partner` uses `init`, so the seeds cannot be reopened either:",
+        "without this, growing the struct on 2026-08-27 would have **bricked every allocation",
+        "that predated it**, and the \"close and re-register\" renewal path the design leans on",
+        "would have been a path that did not exist.",
+        "",
+        "**The size check is the entire safety property, and it is `<`, not `!=`.**",
+        "`register_partner` only ever creates accounts at exactly `8 + PartnerAllocation::LEN`, so",
+        "while the layout stands this instruction cannot fire on anything — it is structurally",
+        "inert, not merely guarded by an authority signature. `<` rather than `!=` so that a",
+        "future *shrink* of `LEN` could not suddenly make live, readable accounts deletable:",
+        "strictly smaller means \"written under a layout too small to be read now\", which is the",
+        "only condition that justifies deleting an account without looking at what is inside it.",
+        "",
+        "That is worth stating plainly, because the shape is the dangerous one: an authority",
+        "instruction that removes a partner's account without reading their entitlement. Every",
+        "other partner path refuses to do that, deliberately (see `close_partner_allocation`). The",
+        "justification here is that there is no entitlement left to read — the account cannot be",
+        "interpreted at all, by anyone, ever again.",
+        "",
+        "The discriminator is still checked, so this cannot be pointed at an account of some other",
+        "type that happens to sit at the right seeds. Closing frees `[b\"partner\", wallet]` and",
+        "`register_partner` reopens it at the current layout — a fresh deal, with a fresh bag,",
+        "exactly as after an ordinary close."
+      ],
+      "discriminator": [
+        21,
+        12,
+        75,
+        207,
+        159,
+        248,
+        74,
+        103
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_wallet",
+          "docs": [
+            "It cannot be re-asserted against the stored `partner` field here, because reading that",
+            "field is exactly what this instruction exists to work around."
+          ]
+        },
+        {
+          "name": "partner_allocation",
+          "docs": [
+            "cannot deserialize it. Validated in the body: owned by this program, carrying the",
+            "`PartnerAllocation` discriminator, and strictly smaller than the current layout."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner_wallet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_partner_allocation",
+      "docs": [
+        "Authority-only: close a `PartnerAllocation` PDA and return its rent to the authority",
+        "that paid for it at `register_partner`.",
+        "",
+        "☢️ **A retainer has no total, which changes what \"terminal\" can mean.** The old test read",
+        "`hi_sola_claimed >= base_hi_sola + cap_hi_sola` — a promised total, reached or not. There",
+        "is no promised total now: each epoch is bought separately, so the moment a partner stops",
+        "qualifying there is nothing outstanding to protect. What has to be protected is narrower",
+        "and sharper: **an epoch the partner could still be credited for.**",
+        "",
+        "So the account is closable when the deal cannot pay anything more *right now*:",
+        "",
+        "1. The bag is settled — claimed, or there never was one (`base_hi_sola == 0`). An",
+        "unclaimed bag is a live entitlement and blocks the close outright.",
+        "2. The current epoch's retainer is already decided — either it was credited",
+        "(`last_credited_epoch == current_epoch`), or the partner no longer holds the",
+        "liquidity that would qualify them (`lp_balance < lp_threshold`).",
+        "",
+        "The second condition is why this instruction now reads the partner's LP account. Without",
+        "it, the authority could close the account mid-week and take away an epoch the partner had",
+        "already earned by keeping their liquidity in place; with it, a partner who is still",
+        "performing cannot be cut off, and one who has withdrawn can be tidied away immediately",
+        "instead of leaving a dead PDA open forever.",
+        "",
+        "The guarantee that mattered before still holds, in its proper form: **the authority",
+        "cannot delete a claim the partner has already earned.** What it can now do — and could",
+        "not before — is close the account of a partner who simply stopped, which under a retainer",
+        "costs that partner nothing, because there never was a remainder.",
+        "",
+        "⚠️ Closing frees the `[b\"partner\", partner_wallet]` seeds, so `register_partner` can open",
+        "the same PDA again with every counter at zero — a **fresh deal**, including a fresh",
+        "`base_hi_sola` bag. That is the renewal path (and the migration path for allocations",
+        "written at the old 160-byte layout), but it means close-then-re-register is the one way",
+        "to hand the same wallet a second bag. It takes the authority signature twice and is",
+        "visible on-chain in both instructions.",
+        "",
+        "The partner's `VeLockPosition` and `UserPosition` are separate PDAs and are untouched:",
+        "everything already credited stays locked, keeps voting, keeps earning fees, and keeps",
+        "borrowing at 20 %. Nothing is burned here.",
+        "",
+        "Not pause-gated, matching `register_partner`: this is admin cleanup that moves no tokens."
+      ],
+      "discriminator": [
+        151,
+        113,
+        76,
+        242,
+        124,
+        163,
+        120,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Receives the reclaimed rent — the same account that paid it at `register_partner`."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_wallet",
+          "docs": [
+            "and re-asserted against the stored `partner` field. Never signs, never receives."
+          ]
+        },
+        {
+          "name": "partner_allocation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint",
+          "docs": [
+            "below — so it is never deserialized, which also means a close is not blocked by anything",
+            "about the mint itself."
+          ]
+        },
+        {
+          "name": "partner_lp_token",
+          "docs": [
+            "epoch's retainer can no longer be earned. **Untyped on purpose, and pinned by address.**",
+            "Untyped because a partner who never provided liquidity has no such account, and a typed",
+            "account would fail at the account level — making the partners with no liquidity precisely",
+            "the ones who could not be closed. Pinned because the authority chooses what to pass here:",
+            "without the address constraint they could present any empty account, read a balance of 0",
+            "and close a partner who was still qualifying. `lp_balance_of` returns 0 for an absent",
+            "account, which is the honest reading of \"they hold none\"."
+          ]
+        },
+        {
+          "name": "bribe_stream",
+          "docs": [
+            "close while tranches remain: `crank_partner_epoch` needs the allocation, so closing early",
+            "would strand money the partner has already paid in and the gauge's voters are owed.",
+            "Untyped for the same reason as above — most allocations have no stream account."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner_wallet"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -3486,6 +3767,354 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "crank_partner_epoch",
+      "docs": [
+        "Permissionless: run a partner's epoch — release their bribe tranche, and buy this epoch",
+        "of their retainer if their liquidity is still there.",
+        "",
+        "**Why the two are one instruction.** The bribe stream already had to be cranked every",
+        "epoch by somebody. Making the retainer a second weekly crank would have doubled the",
+        "operational load and left the two able to drift apart; merged, one transaction per epoch",
+        "per partner runs the whole deal, and the bribe — which someone always has an incentive",
+        "to trigger, since it is the epoch's voters who are owed it — is what keeps the retainer's",
+        "attestation from being forgotten.",
+        "",
+        "**The two halves are independently gated, on purpose.**",
+        "- The bribe tranche is escrowed money that already belongs to the gauge. It is released",
+        "whether or not the liquidity condition holds: a partner who pulls their LP still owes",
+        "the voters what they escrowed.",
+        "- The retainer is bought fresh each epoch against `lp_threshold` of `lp_mint`, still",
+        "held. It keeps paying after the bribe schedule is exhausted — a partner who stays for",
+        "three years earns for three years — and stops the epoch their liquidity leaves.",
+        "",
+        "If neither half can do anything, the call fails rather than burning a fee for nothing.",
+        "",
+        "☢️ **A missed epoch is lost, not deferred.** The bribe side slips (the stream simply runs",
+        "one epoch longer), but the retainer cannot: the chain keeps no history of an SPL balance,",
+        "so there is no way to establish afterwards that the LP was present five epochs ago. The",
+        "crank *is* the attestation. This is why the front-end fires it automatically.",
+        "",
+        "⚠️ **What the attestation does and does not prove.** It proves the balance existed at the",
+        "instant of the crank. A partner cranking their own epoch can hold the LP for exactly that",
+        "transaction — add liquidity, crank, remove liquidity — and the program cannot tell.",
+        "Closing that would require custody of the LP, which is the one thing the deal promises",
+        "not to take. What is left is: the counterparty is a named protocol the authority",
+        "registered by hand, the manoeuvre is legible on-chain to anyone reading the pool, and the",
+        "remedy is the renewal — the authority simply does not re-register them. That is a",
+        "reputational guarantee, not a cryptographic one, and it should be described as such."
+      ],
+      "discriminator": [
+        143,
+        200,
+        154,
+        229,
+        120,
+        7,
+        29,
+        154
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Keeper, voter, partner, anyone — pays the rent for a first-time bribe vault, and for the",
+            "partner's lock/position PDAs if the retainer is the first thing to open them."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner",
+          "docs": [
+            "of both PDAs below and re-asserted against the stored `partner` fields."
+          ]
+        },
+        {
+          "name": "bribe_stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_allocation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stream_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_id"
+        },
+        {
+          "name": "reward_mint"
+        },
+        {
+          "name": "bribe_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bribe_token_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_id"
+              },
+              {
+                "kind": "account",
+                "path": "reward_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint",
+          "docs": [
+            "The LP token named in the deal. Pinned to the allocation so the caller cannot swap in a",
+            "mint the partner happens to hold a lot of."
+          ]
+        },
+        {
+          "name": "partner_lp_token",
+          "docs": [
+            "The partner's own LP account, and the whole of the liquidity condition. Read-only: the",
+            "protocol never takes custody of it, it only looks."
+          ]
+        },
+        {
+          "name": "sola_mint",
+          "writable": true
+        },
+        {
+          "name": "sola_vault",
+          "docs": [
+            "Locked SOLA backing — 1 SOLA minted here per hiSOLA of retainer."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read-only snapshot for the fee accumulator advance."
+          ]
+        },
+        {
+          "name": "lock_position",
+          "docs": [
+            "The partner's ve lock — each qualified epoch is added to it, permanently."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_position",
+          "docs": [
+            "The partner's fee position — `fee_shares` grows one retainer epoch at a time."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "epoch",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "create_pool",
@@ -4981,6 +5610,194 @@
       ]
     },
     {
+      "name": "fund_partner_bribe_stream",
+      "docs": [
+        "Partner escrows a bribe schedule: one payment now, one tranche per epoch forever after.",
+        "",
+        "This is the instruction that makes a partnership run on its own. `partner_deposit_bribe`",
+        "can only ever credit the epoch it is called in, so a year of weekly bribes was 52",
+        "signatures with a gap every time one was missed. Here the partner transfers",
+        "`epochs_total × amount_per_epoch` into an escrow the program controls, and",
+        "`release_partner_bribe` pays it out one epoch at a time, called by anyone.",
+        "",
+        "☢️ **Funding this is what starts the deal.** `stream_start_ts` is stamped on the",
+        "allocation here, and both `claim_partner_allocation` (the bag) and `crank_partner_epoch`",
+        "(the retainer) refuse to pay anything while it is zero. Before this existed the bag",
+        "accrued from registration for everyone, so a partner who never bribed a unit still",
+        "collected permanent voting power against a floor that funded it.",
+        "",
+        "One *live* stream per partner. Re-funding is allowed only once the previous schedule has",
+        "paid out every tranche it was funded for — that is the renewal path, and it pairs with",
+        "`close_partner_allocation`: a settled deal closes, re-registers on new terms, and funds",
+        "a fresh schedule. Without it, a re-registered partner would find the stream PDA already",
+        "taken and their new welcome bag locked shut for good.",
+        "",
+        "Topping a *running* stream is deliberately refused: `stream_start_ts` anchors the ve",
+        "lock term, and re-stamping it would let a partner push their own unlock date around at",
+        "will. A partner who wants to bribe beyond their commitment uses `deposit_bribe` like",
+        "anyone else — there is no ceiling on strengthening your own gauge, and since 2026-08-27",
+        "no allocation credit for doing so either."
+      ],
+      "discriminator": [
+        32,
+        112,
+        53,
+        36,
+        34,
+        247,
+        130,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "partner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_allocation",
+          "docs": [
+            "Stamped with `stream_start_ts` here — this is what opens the welcome bag."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_id",
+          "docs": [
+            "on `deposit_bribe` — bribe vaults are keyed by it and nothing dereferences it."
+          ]
+        },
+        {
+          "name": "bribe_mint"
+        },
+        {
+          "name": "partner_token",
+          "writable": true
+        },
+        {
+          "name": "bribe_stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stream_vault",
+          "docs": [
+            "The escrow itself, owned by the stream PDA so only `release_partner_bribe` can move it."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "epochs_total",
+          "type": "u64"
+        },
+        {
+          "name": "amount_per_epoch",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "initialize",
       "docs": [
         "`founder_wallet` is write-once and has no setter — see the note at the head of this",
@@ -5844,186 +6661,6 @@
       "args": []
     },
     {
-      "name": "partner_deposit_bribe",
-      "docs": [
-        "Partner deposits a bribe in their committed `bribe_mint` AND gets credited",
-        "toward their streaming hiSOLA allocation. The tokens flow into the SAME bribe",
-        "vault as `deposit_bribe` (voters benefit identically); the partner's",
-        "`total_bribed_credited` is incremented atomically with the real transfer, so",
-        "allocation can never be credited without genuinely bribing. Only the committed",
-        "`bribe_mint` credits — any other token is rejected."
-      ],
-      "discriminator": [
-        82,
-        194,
-        24,
-        115,
-        184,
-        240,
-        160,
-        196
-      ],
-      "accounts": [
-        {
-          "name": "partner",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "protocol_state",
-          "docs": [
-            "Read-only — used only for the pause check."
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  116,
-                  97,
-                  116,
-                  101
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "partner_allocation",
-          "docs": [
-            "Partner allocation PDA — credited here. Verified by seeds + owner."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  97,
-                  114,
-                  116,
-                  110,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "partner"
-              }
-            ]
-          }
-        },
-        {
-          "name": "pool_id"
-        },
-        {
-          "name": "reward_mint"
-        },
-        {
-          "name": "partner_token",
-          "writable": true
-        },
-        {
-          "name": "bribe_vault",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  98,
-                  101,
-                  95,
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "pool_id"
-              },
-              {
-                "kind": "account",
-                "path": "reward_mint"
-              },
-              {
-                "kind": "arg",
-                "path": "epoch"
-              }
-            ]
-          }
-        },
-        {
-          "name": "bribe_token_vault",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  98,
-                  101,
-                  95,
-                  116,
-                  111,
-                  107,
-                  101,
-                  110,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "pool_id"
-              },
-              {
-                "kind": "account",
-                "path": "reward_mint"
-              },
-              {
-                "kind": "arg",
-                "path": "epoch"
-              }
-            ]
-          }
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "rent",
-          "address": "SysvarRent111111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "epoch",
-          "type": "u64"
-        },
-        {
-          "name": "amount",
-          "type": "u64"
-        }
-      ]
-    },
-    {
       "name": "pause",
       "discriminator": [
         211,
@@ -6068,8 +6705,33 @@
       "name": "register_contributor",
       "docs": [
         "Authority-only: register a contributor wallet with a dual hiSOLA + oSOLA allocation.",
-        "Mirrors the founder structure — hiSOLA (governance + borrow) + oSOLA (liquid options).",
-        "Vesting starts immediately (start_ts = now) — call at launch time."
+        "",
+        "⚠️ There is no vesting, despite the account being named `ContributorVesting`. The cliff",
+        "and linear schedule were removed on 2026-07-18 and both tranches are now claimable in",
+        "full immediately; `start_ts` is kept as a record of when the deal was struck and is read",
+        "by nothing. This comment claimed otherwise until 2026-08-25, as did the two claim",
+        "instructions below — the account name is the last trace of a mechanism that is gone.",
+        "",
+        "The two sides are not the same kind of thing:",
+        "- **hiSOLA** goes into a LIFETIME ve lock (`permanent_amount` covers the whole tranche),",
+        "so it can never be unlocked or sold. It votes forever, borrows at 20 %, and earns a",
+        "real share of protocol fees through `fee_shares` (since 2026-08-25).",
+        "- **oSOLA** is an option, not a payment: exercising burns it and pays 1 USDC per unit",
+        "into the floor, so the contributor funds every SOLA they take. It is worth nothing at",
+        "or below the floor.",
+        "",
+        "Note this oSOLA is NOT drawn against `ecosystem_o_sola_minted` — `ECOSYSTEM_TOTAL` caps",
+        "`distribute_o_sola` only. Its bound is `CONTRIBUTOR_O_SOLA_CAP`, enforced below.",
+        "",
+        "☢️ Two `require!`s were added on 2026-08-27, and both matter more than they look:",
+        "- **A cumulative cap.** There was none: the only limit on what could be promised to",
+        "contributors was the form field the authority typed into. That was survivable while",
+        "the tranche earned nothing; now that it earns protocol fees it is unbounded dilution",
+        "of every staker — exactly the kind of promise that has to live in code to exist.",
+        "- **The 50/50 split.** The two sides are not interchangeable. hiSOLA is permanent",
+        "governance plus a real share of revenue; oSOLA is an option the holder pays 1 USDC a",
+        "unit to exercise, financing the floor as they do. Letting one side run without the",
+        "other turns compensation into either pure dilution or a pure lottery ticket."
       ],
       "discriminator": [
         14,
@@ -6136,6 +6798,42 @@
           }
         },
         {
+          "name": "contributor_registry",
+          "docs": [
+            "The running total the cap is enforced against. Opened by the first registration."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  105,
+                  98,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
         },
@@ -6158,16 +6856,22 @@
     {
       "name": "register_partner",
       "docs": [
-        "Authority-only: register a protocol partner with a one-time locked hiSOLA allocation.",
+        "Authority-only: register a protocol partner — a signature bag plus a liquidity retainer.",
         "",
-        "Unlike contributors (cliff + linear vesting), the partner claims the full amount",
-        "once via `claim_partner_allocation` — hiSOLA is minted directly to their",
-        "ve_lock_vault (never touches the wallet), giving immediate voting power while",
-        "borrow remains blocked for the entire lock duration.",
+        "The deal has exactly two money terms. `base_hi_sola` is the bag: delivered whole by",
+        "`claim_partner_allocation` the moment the partner escrows their bribe schedule, and",
+        "small because it is the only unconditional part. `retainer_per_epoch` is the rate:",
+        "credited one epoch at a time by `crank_partner_epoch`, and only for an epoch in which",
+        "the partner still holds `lp_threshold` of `lp_mint`.",
         "",
-        "`base_hi_sola` is the one-time welcome bag (Founding Partner tier): it streams",
-        "linearly into the partner's vote-locked position over the first 6 months",
-        "(`BASE_BAG_VEST_SECS`) from registration — independent of bribes.",
+        "⚠️ No total is written down anywhere, and that is deliberate — see `PartnerAllocation`.",
+        "The tiers of 2026-08-26 read 10 / 15 / 20 % of the committed LP over a year of",
+        "maintained liquidity: 1 M LP → 20 000 bag + 3 450/epoch, 500 K → 7 500 + 1 300,",
+        "200 K → 2 000 + 350. A partner who stays longer simply earns longer.",
+        "",
+        "`lp_threshold` is in LP base units. The tier is negotiated in dollars, the chain sees",
+        "only LP units and there is no oracle, so this is the unit count that matched the agreed",
+        "size on the day it was signed — imprecise on value, exact on \"did they withdraw\".",
         "",
         "`lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].",
         "Suggested mainnet value for strategic partners: 208 × 604 800 = 125 798 400 s",
@@ -6248,15 +6952,15 @@
           "type": "pubkey"
         },
         {
-          "name": "rate_num",
+          "name": "lp_mint",
+          "type": "pubkey"
+        },
+        {
+          "name": "lp_threshold",
           "type": "u64"
         },
         {
-          "name": "rate_den",
-          "type": "u64"
-        },
-        {
-          "name": "cap_hi_sola",
+          "name": "retainer_per_epoch",
           "type": "u64"
         },
         {
@@ -6265,6 +6969,14 @@
         },
         {
           "name": "lock_duration_secs",
+          "type": "u64"
+        },
+        {
+          "name": "schedule_epochs",
+          "type": "u64"
+        },
+        {
+          "name": "min_bribe_per_epoch",
           "type": "u64"
         }
       ]
@@ -8511,6 +9223,19 @@
       ]
     },
     {
+      "name": "ContributorRegistry",
+      "discriminator": [
+        38,
+        116,
+        61,
+        224,
+        196,
+        203,
+        170,
+        145
+      ]
+    },
+    {
       "name": "ContributorVesting",
       "discriminator": [
         96,
@@ -8638,6 +9363,19 @@
         79,
         239,
         25
+      ]
+    },
+    {
+      "name": "PartnerBribeStream",
+      "discriminator": [
+        143,
+        157,
+        97,
+        211,
+        207,
+        102,
+        108,
+        233
       ]
     },
     {
@@ -8980,6 +9718,66 @@
       "code": 6046,
       "name": "AmmBelowFloor",
       "msg": "This swap would push the SOLA/USDC pool below the 1 USDC floor — sell through sell_sola instead, it pays 1.00 exactly"
+    },
+    {
+      "code": 6047,
+      "name": "PartnerAllocationNotSettled",
+      "msg": "Partner allocation is live — a retainer that could still be credited this epoch cannot be closed out from under the partner"
+    },
+    {
+      "code": 6048,
+      "name": "BribeStreamExhausted",
+      "msg": "This bribe stream has paid out every tranche it was funded for"
+    },
+    {
+      "code": 6049,
+      "name": "BribeStreamAlreadyReleased",
+      "msg": "This epoch's tranche has already been released — the stream pays at most once per epoch"
+    },
+    {
+      "code": 6050,
+      "name": "BribeStreamStillRunning",
+      "msg": "This bribe stream is still running — it can only be replaced once every funded tranche has been released"
+    },
+    {
+      "code": 6051,
+      "name": "ScheduleLengthMismatch",
+      "msg": "This schedule is not the length the deal was registered for — the rhythm is fixed at registration, not chosen at funding"
+    },
+    {
+      "code": 6052,
+      "name": "ScheduleUnderfunded",
+      "msg": "Each tranche is smaller than the bribe the deal was registered for — the size is fixed at registration, not chosen at funding"
+    },
+    {
+      "code": 6053,
+      "name": "PartnerStreamNotFunded",
+      "msg": "This partner has never escrowed a bribe schedule — nothing accrues, and the bag is the consideration for that schedule"
+    },
+    {
+      "code": 6054,
+      "name": "NothingToCrank",
+      "msg": "Nothing to do this epoch — no bribe tranche is due and the retainer is either already credited or unqualified"
+    },
+    {
+      "code": 6055,
+      "name": "LpMintMismatch",
+      "msg": "This is not the LP token the partner's deal names"
+    },
+    {
+      "code": 6056,
+      "name": "ContributorCapExceeded",
+      "msg": "Contributor allocation cap exceeded — the cumulative hiSOLA or oSOLA promised to contributors would pass its ceiling"
+    },
+    {
+      "code": 6057,
+      "name": "ContributorSplitMismatch",
+      "msg": "Contributor tranches must be split 50/50 — hiSOLA and oSOLA in equal amounts"
+    },
+    {
+      "code": 6058,
+      "name": "PartnerAllocationNotLegacy",
+      "msg": "This allocation is readable at the current layout — close it with close_partner_allocation, which checks what the partner is still owed"
     }
   ],
   "types": [
@@ -9078,6 +9876,40 @@
           },
           {
             "name": "total_bribed",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ContributorRegistry",
+      "docs": [
+        "Running total of everything ever promised to contributors, so the cap is a protocol",
+        "invariant instead of a habit.",
+        "",
+        "A separate singleton rather than two more fields on `ProtocolState`: that account has 9",
+        "spare bytes left and this needs 16. Growing it again would mean a second realloc migration",
+        "on the one account whose growth already bricked devnet in July — for a counter that is",
+        "written by an authority-only instruction and read by nothing else.",
+        "",
+        "`register_contributor` uses `init`, so one wallet cannot be registered twice and these",
+        "totals cannot double-count.",
+        "",
+        "PDA: [b\"contributor_registry\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "hi_sola_allocated",
+            "type": "u64"
+          },
+          {
+            "name": "o_sola_allocated",
             "type": "u64"
           },
           {
@@ -9447,19 +10279,28 @@
     {
       "name": "PartnerAllocation",
       "docs": [
-        "One-time locked hiSOLA allocation for a protocol partner (Jito, Marinade, Solayer…).",
+        "A protocol partner's deal (Jito, Marinade, Solayer…): a signature bag, then a retainer.",
         "",
-        "Unlike the contributor system (cliff + linear vesting), the partner receives their",
-        "full allocation in a single `claim_partner_allocation` call — but hiSOLA is minted",
-        "DIRECTLY into their ve_lock_vault, bypassing the wallet entirely.",
+        "☢️ **This is not a vesting schedule, and the difference is the whole design.** A vesting",
+        "promises a total on day one and releases it in slices: the amount exists from the start, the",
+        "only condition is that time passes, and the beneficiary is a creditor for the remainder. A",
+        "**retainer** has no total, it has a rate. Each epoch is bought separately, against something",
+        "verified at that moment — the partner's liquidity, still there, right now.",
         "",
-        "Consequences:",
-        "- Voting power is immediate via VeLockPosition (up to 4× ve multiplier).",
-        "- `borrow_usdc` (wallet path) is blocked (wallet balance = 0); liquidity comes",
-        "from `borrow_against_locked` instead — up to 20% of the locked position.",
-        "- `total_hi_sola` is NOT incremented — locked hiSOLA is excluded from the",
-        "fee accumulator denominator (same semantics as `lock_hi_sola`).",
-        "- After lock expiry: `unlock_hi_sola` → hiSOLA back to wallet → standard rules.",
+        "Three consequences follow, and they are why the 1:1 bribe match was removed on 2026-08-27:",
+        "- A partner who leaves after ten epochs has not forfeited the rest; **there never was a",
+        "rest**. Nothing is owed, so nothing has to be revoked, so `close_partner_allocation`",
+        "never has to take anything away from anyone.",
+        "- There is no cap. The old deal died at `cap_hi_sola`; a partner who keeps their liquidity",
+        "in place for three years keeps earning for three years.",
+        "- No oracle is needed anywhere. The old `rate_num/rate_den` was a ratio of base units",
+        "**frozen for life** at registration: if the partner's token halved, the protocol went on",
+        "paying the same hiSOLA per unit, permanently and irrevocably.",
+        "",
+        "What the partner gets: permanent voting power from day one, protocol fees for life on",
+        "everything they accrue (`UserPosition.fee_shares`), a 20 % working-capital valve",
+        "(`borrow_against_locked`), and no custody of their LP at any point — the protocol never",
+        "holds it, it simply stops paying when the balance drops below `lp_threshold`.",
         "",
         "PDA: [b\"partner\", partner_wallet]"
       ],
@@ -9475,20 +10316,54 @@
             "type": "pubkey"
           },
           {
-            "name": "rate_num",
+            "name": "lp_mint",
+            "docs": [
+              "The LP token whose balance is attested every epoch, named in the deal at registration.",
+              "",
+              "Stored rather than derived. Deriving it — \"the pool holding `bribe_mint` and the",
+              "protocol's USDC\" — would have saved 32 bytes and cost the partner the right to bribe in",
+              "one token while providing liquidity in another, which is the normal shape of an LST",
+              "deal (bribes in the governance token, liquidity in the staked one)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "lp_threshold",
+            "docs": [
+              "LP tokens the partner must still hold when the epoch is cranked, or that epoch pays",
+              "nothing. Fixed at registration: the tier is negotiated in dollars, the chain only ever",
+              "sees LP units and there is no oracle, so what gets frozen here is the unit count that",
+              "matched the agreed size on the day. Imprecise on value, exact on \"did they withdraw\"."
+            ],
             "type": "u64"
           },
           {
-            "name": "rate_den",
+            "name": "retainer_per_epoch",
+            "docs": [
+              "hiSOLA credited per qualified epoch — the rate, and the only figure that sets the pace."
+            ],
             "type": "u64"
           },
           {
-            "name": "cap_hi_sola",
+            "name": "last_credited_epoch",
+            "docs": [
+              "Last epoch the retainer was credited for. One credit per epoch, and never retroactive.",
+              "",
+              "☢️ Unlike the bribe stream, **this schedule cannot slip**: an epoch nobody cranks is",
+              "lost, not deferred. The chain keeps no history of an SPL balance, so there is no way to",
+              "establish after the fact that the liquidity was present five epochs ago. The crank *is*",
+              "the attestation. That is a real cost of the design and the reason the front-end fires",
+              "it automatically — otherwise a distracted partner loses money through no fault."
+            ],
             "type": "u64"
           },
           {
-            "name": "total_bribed_credited",
-            "type": "u64"
+            "name": "epochs_qualified",
+            "docs": [
+              "How many epochs actually paid. Read by `close_partner_allocation` and by the UI; it is",
+              "the only record that a retainer ever ran, since no total is ever written down."
+            ],
+            "type": "u32"
           },
           {
             "name": "hi_sola_claimed",
@@ -9508,7 +10383,127 @@
           },
           {
             "name": "base_hi_sola",
+            "docs": [
+              "The signature bag: delivered whole, once, the moment the bribe schedule is escrowed.",
+              "",
+              "It used to stream over six months, back when it was the compensation. It is now the",
+              "unconditional part of the deal and nothing else, which is precisely why it is small —",
+              "20 000 / 7 500 / 2 000 hiSOLA across the three tiers, against a retainer that pays the",
+              "rest only while the liquidity is there."
+            ],
             "type": "u64"
+          },
+          {
+            "name": "bag_claimed",
+            "docs": [
+              "Whether the bag has been delivered. Its own flag rather than a comparison against",
+              "`hi_sola_claimed`, which now counts retainer epochs too and would otherwise let a",
+              "partner who cranked first claim the bag a second time."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "stream_start_ts",
+            "docs": [
+              "Unix timestamp at which the partner funded their bribe stream, or 0 if they never did.",
+              "",
+              "**This is the gate on the whole deal** — the bag and the retainer both. A partner could",
+              "otherwise register, never bribe a unit, and still collect permanent voting power the",
+              "floor had funded nothing for. 0 means no stream, which means nothing accrues; legacy",
+              "accounts read 0 and therefore fail closed, never open."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "schedule_epochs",
+            "docs": [
+              "How many epochs the partner's bribes must be spread over, agreed at registration.",
+              "",
+              "The rhythm is a term of the deal, not the partner's to pick: `fund_partner_bribe_stream`",
+              "refuses any schedule of a different length. Typical values are 26 (6 months), 52 (a",
+              "year) or 104 (two years). 0 means unset — legacy allocations only, which accept any",
+              "length so an upgrade cannot strand a partner mid-negotiation."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "min_bribe_per_epoch",
+            "docs": [
+              "Smallest per-epoch bribe the escrow may be funded with, in the bribe mint's base units.",
+              "",
+              "The size of the bribe is the other half of the rhythm, and it needs its own floor. The",
+              "old check derived one from `cap_hi_sola` and the 1:1 rate — \"escrow enough that the",
+              "bribes earn the whole cap\" — which disappeared with the cap. Without a replacement, a",
+              "partner could escrow 52 epochs of one lamport, satisfy every length check, and unlock",
+              "the bag: the schedule would exist and mean nothing."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PartnerBribeStream",
+      "docs": [
+        "An escrowed, self-paced bribe schedule: the partner funds it once and it pays out one",
+        "tranche per epoch, forever after, without them signing again.",
+        "",
+        "It exists because `partner_deposit_bribe` requires `epoch == current_epoch`, so a partner",
+        "could only ever bribe the week they were transacting in. Delivering \"300 SOL a week for a",
+        "year\" meant 52 signatures, and missing one meant that gauge got nothing. Worse, the",
+        "incentive ran the other way: every `claim_partner_allocation` resets `lock_end_ts` to",
+        "`now + lock_duration`, so bribing everything at once and claiming once released the",
+        "bribe-earned tranche 52 epochs sooner than paying weekly. The instrument rewarded exactly",
+        "the behaviour the gauges least wanted — one enormous mercenary week, then silence.",
+        "",
+        "Release is **permissionless**, like `replay_vote`: the epoch's voters are the ones owed the",
+        "bribe, so anyone may crank it, and no single keeper can withhold it.",
+        "",
+        "The schedule **slips** rather than catching up. If nobody cranks an epoch, the next call",
+        "pays the next tranche — at most one per epoch, never several at once. Nothing is lost and",
+        "nothing is written retroactively; the stream simply runs longer. Batching missed tranches",
+        "would re-concentrate the bribes, which is the failure this account exists to prevent.",
+        "",
+        "PDA: [b\"bribe_stream\", partner]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "partner",
+            "type": "pubkey"
+          },
+          {
+            "name": "bribe_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_id",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_per_epoch",
+            "type": "u64"
+          },
+          {
+            "name": "epochs_total",
+            "type": "u64"
+          },
+          {
+            "name": "epochs_released",
+            "type": "u64"
+          },
+          {
+            "name": "last_release_epoch",
+            "type": "u64"
+          },
+          {
+            "name": "start_ts",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }
@@ -10047,6 +11042,30 @@
             "docs": [
               "Epoch `vote_locked` was stamped for. A stale stamp means the lock has lapsed —",
               "the votes it backed belong to a closed epoch and their receipts are already immutable."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "fee_shares",
+            "docs": [
+              "hiSOLA that earns protocol fees without being a spendable balance.",
+              "",
+              "Every other fee-earning hiSOLA sits in `hi_sola` and is capped by `staked_amount` — the",
+              "financed-stake rule: fees follow USDC that actually reached the floor. A contributor's",
+              "bag satisfies neither. It is locked for life in `VeLockPosition`, so `hi_sola` is 0, and",
+              "it was never bought through the curve, so `staked_amount` is 0. Their fee basis was",
+              "therefore 0, and being permanent, it would have stayed 0 forever.",
+              "",
+              "That made the bag worthless as compensation, which is the one job it has. Someone who",
+              "funds an audit pays in a currency the floor never sees; the yield their locked hiSOLA",
+              "generates is the entire return on it. `fee_shares` is that exception — added to the",
+              "basis in `math::fee_basis`, and matched by an increment to `total_hi_sola` so the share",
+              "is real rather than printed: every other holder is diluted by exactly what the",
+              "contributor receives.",
+              "",
+              "Deliberately NOT granted to the founder's 7M, which is a dormant anti-capture reserve",
+              "that takes no vote and no fees by design. Carved from spare bytes, so `LEN` does not",
+              "move and no account reallocs."
             ],
             "type": "u64"
           }

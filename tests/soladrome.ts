@@ -1255,17 +1255,30 @@ describe("soladrome", () => {
     );
     assert.equal(lockPos.amountLocked.toNumber(), Number(ONE.toString()), "lock records amount");
     assert.isTrue(lockPos.lockEndTs.toNumber() > 0, "lock_end_ts set");
-    // Locked hiSOLA removed from fee pool
+
+    // ☢️ Locking no longer costs the holder their fees (2026-08-27). This assertion used to
+    // read `total_hi_sola` DECREASED, which was the whole problem: a four-year lock meant four
+    // years of earning nothing on stake the holder had financed themselves. The balance moves
+    // into `fee_shares` instead, so the basis is preserved exactly and the denominator does
+    // not move. Unfinanced hiSOLA is the case that still decrements — it credits nothing here
+    // because `fee_basis` was already 0 for it, which is what stops locking from manufacturing
+    // a fee claim out of supply that never paid into the floor.
+    const posAfter = await program.account.userPosition.fetch(positionPda);
     assert.equal(
-      stateAfter.totalHiSola.toNumber(),
-      stateBefore.totalHiSola.toNumber() - Number(ONE.toString()),
-      "total_hi_sola decreased (locked hiSOLA opted out of fees)"
+      stateAfter.totalHiSola.toString(),
+      stateBefore.totalHiSola.toString(),
+      "financed stake keeps its place in the fee denominator through a lock"
+    );
+    assert.equal(
+      posAfter.feeShares.toString(),
+      ONE.toString(),
+      "the basis moved into fee_shares rather than evaporating"
     );
 
     console.log(
       `✅ lock_hi_sola — 1 hiSOLA locked for 4 weeks, ve_power ≈ ${
         Math.round(Number(ONE.toString()) * 4 * 4 / 104)
-      } units`
+      } units, fee basis preserved`
     );
   });
 
@@ -2698,9 +2711,17 @@ describe("soladrome", () => {
     assert.equal(teamPosAcc.stakedAmount.toString(), "0",
       "and nothing financed — the tranche never paid into the floor");
 
-    // Locked hiSOLA stays out of the fee denominator — the team earns nothing during the lock.
-    assert.equal(after.totalHiSola.toString(), before.totalHiSola.toString(),
-      "total_hi_sola must not grow → team tranche earns no fees while locked");
+    // ☢️ The team tranche earns fees since 2026-08-27, and this assertion is the inverse of
+    // what it used to be. Locked for life meant `hi_sola` 0 and unfinanced meant
+    // `staked_amount` 0, so `fee_basis` was 0 and could never become anything else: a tranche
+    // whose entire purpose is to pay the people who worked unpaid paid them nothing at all.
+    // `fee_shares` is the grant; `total_hi_sola` growing by the same amount is what makes it a
+    // real share of the stream rather than one printed alongside everyone else's.
+    assert.equal(
+      after.totalHiSola.sub(before.totalHiSola).toString(), TEAM_AMOUNT.toString(),
+      "total_hi_sola must grow by the tranche — the share is taken, not printed");
+    assert.equal(teamPosAcc.feeShares.toString(), TEAM_AMOUNT.toString(),
+      "and the fee basis is the tranche itself");
 
     // Locked for LIFE: the whole tranche is permanent, so even after lock_end_ts passes,
     // unlock_hi_sola releases amount_locked − permanent_amount = 0. The 4-year deferred
@@ -2725,7 +2746,7 @@ describe("soladrome", () => {
 
     console.log(
       `✅ [team] 250K hiSOLA locked until epoch-time ${lock.lockEndTs.toString()}, ` +
-      `position balance 0, total_hi_sola unchanged, 0 unfinanced SOLA minted`
+      `position balance 0, fee share credited, 0 unfinanced SOLA minted`
     );
   });
 
@@ -2749,6 +2770,8 @@ describe("soladrome", () => {
         protocolState:      statePda,
         contributorWallet:  contributor.publicKey,
         contributorVesting: vesting,
+        contributorRegistry: anchor.web3.PublicKey.findProgramAddressSync(
+          [Buffer.from("contributor_registry")], program.programId)[0],
         systemProgram:      anchor.web3.SystemProgram.programId,
         rent:               anchor.web3.SYSVAR_RENT_PUBKEY,
       } as any)
@@ -2796,8 +2819,56 @@ describe("soladrome", () => {
       "contributor position holds no spendable hiSOLA (locked, not liquid)");
     assert.equal(cPosAcc.stakedAmount.toString(), "0",
       "and nothing financed — the bag never paid into the floor");
-    assert.equal(after.totalHiSola.toString(), before.totalHiSola.toString(),
-      "total_hi_sola unchanged → locked bag earns no fees");
+    // ☢️ Reversed on 2026-08-25. This used to assert total_hi_sola was UNCHANGED, i.e. that
+    // the bag earned no fees — which made it worthless as compensation. Someone who funds an
+    // audit receives governance and, until this changed, no yield at all.
+    assert.equal(
+      after.totalHiSola.sub(before.totalHiSola).toString(),
+      HI.toString(),
+      "the bag joins the fee denominator — the share is real, not printed"
+    );
+    assert.equal(cPosAcc.feeShares.toString(), HI.toString(),
+      "and is recorded as fee_shares: earns fees without ever being spendable");
+
+    // The point of the whole change: fees actually reach them. Drive real revenue into the
+    // market vault, then let the contributor claim against a basis that is entirely locked.
+    const buyerUsdc = anchor.utils.token.associatedAddress({ mint: usdcMint, owner: wallet.publicKey });
+    const buyerSola = anchor.utils.token.associatedAddress({ mint: solaM, owner: wallet.publicKey });
+    await program.methods.buySola(new BN(400).mul(ONE), new BN(1))
+      .accounts({
+        user:          wallet.publicKey,
+        protocolState: statePda,
+        solaMint:      solaM,
+        userUsdc:      buyerUsdc,
+        userSola:      buyerSola,
+        floorVault:    floorV,
+        marketVault:   marketV,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    // claim_fees pays into an existing ATA, so create the contributor's first.
+    const cUsdcAcc = await getOrCreateAssociatedTokenAccount(
+      connection, wallet.payer, usdcMint, contributor.publicKey
+    );
+    await program.methods.claimFees()
+      .accounts({
+        user:          contributor.publicKey,
+        protocolState: statePda,
+        marketVault:   marketV,
+        userUsdc:      cUsdcAcc.address,
+        userPosition:  cPos,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+      } as any)
+      .signers([contributor])
+      .rpc();
+
+    const earned = await getTokenBalance(connection, cUsdcAcc.address);
+    assert.isTrue(earned > 0n,
+      "a contributor whose entire bag is locked for life must still collect protocol fees");
+    console.log(`✅ [contributor] locked bag earned ${earned} USDC of fees`);
 
     // And claims the oSOLA tranche — to the wallet, floor-neutral until exercised.
     const cOSola = anchor.utils.token.associatedAddress({ mint: oSolaM, owner: contributor.publicKey });

@@ -285,19 +285,18 @@
 
         <!-- Allocation bar -->
         <div class="bg-black/30 rounded-[2rem] p-8 border border-white/5">
-            <p class="text-xs text-gray-500 uppercase tracking-widest mb-6 text-center">Ecosystem Allocation Breakdown — 1,750,000 $SOLA</p>
+            <p class="text-xs text-gray-500 uppercase tracking-widest mb-6 text-center">Ecosystem Allocation Breakdown — 1,750,000 oSOLA</p>
             <div class="flex rounded-full overflow-hidden h-5 mb-4">
-                <div class="bg-gradient-to-r from-[#14F195] to-[#0fba72]" style="width: 50%"></div>
-                <div class="bg-gradient-to-r from-[#9945FF] to-[#7730cc]" style="width: 25%"></div>
-                <div class="bg-gradient-to-r from-yellow-500 to-yellow-600" style="width: 12.5%"></div>
-                <div class="bg-white/20" style="width: 12.5%"></div>
+                <div class="bg-gradient-to-r from-[#14F195] to-[#0fba72]" style="width: 11.43%"></div>
+                <div class="bg-gradient-to-r from-[#9945FF] to-[#7730cc]" style="width: 42.86%"></div>
+                <div class="bg-white/20" style="width: 45.71%"></div>
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#14F195] shrink-0"></span><span class="text-gray-400">Airdrop <span class="text-white font-bold">50%</span></span></div>
-                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#9945FF] shrink-0"></span><span class="text-gray-400">Marketing <span class="text-white font-bold">25%</span></span></div>
-                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-yellow-500 shrink-0"></span><span class="text-gray-400">Contests <span class="text-white font-bold">12.5%</span></span></div>
-                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-white/30 shrink-0"></span><span class="text-gray-400">Reserve <span class="text-white font-bold">12.5%</span></span></div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#14F195] shrink-0"></span><span class="text-gray-400">Genesis airdrop <span class="text-white font-bold">200,000</span></span></div>
+                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#9945FF] shrink-0"></span><span class="text-gray-400">Farm points, pre-TGE LP <span class="text-white font-bold">750,000</span></span></div>
+                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-white/30 shrink-0"></span><span class="text-gray-400">Reserve <span class="text-white font-bold">800,000</span></span></div>
             </div>
+            <p class="text-xs text-gray-500 mt-6 leading-relaxed text-center max-w-2xl mx-auto">Updated 2026-08-27. The previous split (50 / 25 / 12.5 / 12.5) predated the move to oSOLA. All three envelopes are issued through the same capped instruction, so the 1,750,000 total is enforced by the program and not by this page.</p>
         </div>
 
         <!-- Contributor Allocation -->
@@ -307,7 +306,7 @@
                         On-Chain · Claimed at Launch · Locked for Life
                     </div>
                     <h3 class="text-2xl md:text-3xl font-bold">Contributor <span class="gradient-text">Allocation</span></h3>
-                    <p class="text-gray-500 text-sm mt-3 max-w-xl mx-auto">The people who worked unpaid until launch — dev, community managers, mods — are first-class members of the project. A handful of individuals, small amounts, claimed <strong class="text-white">all at once at launch</strong>. <strong class="text-white">Every allocation verifiable on-chain.</strong></p>
+                    <p class="text-gray-500 text-sm mt-3 max-w-xl mx-auto">The people who worked unpaid until launch — dev, community managers, mods — are first-class members of the project. A handful of individuals, small amounts, claimed <strong class="text-white">all at once at launch</strong>, in a <strong class="text-white">50/50 split</strong> capped on-chain at <strong class="text-white">100,000 of each</strong> across every contributor ever registered. <strong class="text-white">Every allocation verifiable on-chain.</strong></p>
                 </div>
 
                 <div class="grid md:grid-cols-2 gap-6 mb-8">
@@ -321,12 +320,13 @@
                             </div>
                         </div>
                         <p class="text-gray-400 text-sm leading-relaxed mb-4">
-                            Claimed at launch via <code class="text-gray-300">claim_contributor_hi_sola</code> and minted <strong class="text-white">straight into a lifetime ve-lock</strong> — the wallet never holds it. It votes (up to 4×) and borrows up to 20%, but can never be sold: same structure as the team tranche and the partner welcome bag.
+                            Claimed at launch via <code class="text-gray-300">claim_contributor_hi_sola</code> and minted <strong class="text-white">straight into a lifetime ve-lock</strong> — the wallet never holds it. It votes (up to 4×), borrows up to 20%, and <strong class="text-white">earns a real share of protocol fees for life</strong> — but can never be sold: same structure as the team tranche and the partner allocation.
                         </p>
                         <div class="bg-black/40 rounded-xl p-4 border border-white/5 space-y-2 text-xs">
                             <div class="flex justify-between"><span class="text-gray-500">Delivery</span><span class="text-white font-semibold">All at launch, no cliff, no vesting</span></div>
                             <div class="flex justify-between"><span class="text-gray-500">Lock</span><span class="text-[#14F195] font-semibold">For life — never liquid SOLA</span></div>
                             <div class="flex justify-between"><span class="text-gray-500">Voting</span><span class="text-white font-semibold">Active, up to 4×</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Protocol fees</span><span class="text-[#14F195] font-semibold">Yes — the bag is locked, so the yield is the pay</span></div>
                             <div class="flex justify-between"><span class="text-gray-500">Borrow</span><span class="text-[#14F195] font-semibold">Up to 20% via borrow_against_locked</span></div>
                         </div>
                     </div>
@@ -363,41 +363,42 @@
         <div class="mt-16">
             <div class="text-center mb-10">
                 <div class="inline-block px-4 py-1.5 mb-4 rounded-full border border-[#9945FF]/30 bg-[#9945FF]/10 text-[#9945FF] text-xs font-bold uppercase tracking-widest">
-                    On-Chain · Bribe-Indexed · Locked 4 Years
+                    On-Chain · Paid Per Epoch · Locked for Life
                 </div>
                 <h3 class="text-2xl md:text-3xl font-bold">Protocol Partner <span class="gradient-text">Allocation</span></h3>
-                <p class="text-gray-500 text-sm mt-3 max-w-2xl mx-auto">Ecosystem protocols become partners by <strong class="text-white">bringing their pool to life with liquidity</strong> — a bribe needs a live gauge to incentivize, but <strong class="text-white">no minimum is enforced</strong>: the deal self-scales. Deposit little and bribe little, and you simply earn little. The <strong class="text-white">tier</strong>, sized by the commitment a partner brings, sets a one-time <strong class="text-white">welcome bag</strong> of hiSOLA <strong class="text-white">locked for life</strong>: permanent voting power, enforced by the program, never sellable. On top of that, every <strong class="text-white">bribe</strong> they deposit is matched <strong class="text-white">1:1</strong> into hiSOLA minted straight into a <strong class="text-white">4-year ve-lock</strong> (releasable at expiry, re-lockable), up to their tier cap. <strong class="text-white">Liquidity earns the bag; bribes earn the cap</strong> — both convert to locked governance, never a liquid grant. The deal runs each epoch <strong class="text-white">until the tier cap is reached</strong>.</p>
+                <p class="text-gray-500 text-sm mt-3 max-w-2xl mx-auto">A partner brings <strong class="text-white">liquidity</strong> to their pool and escrows a <strong class="text-white">bribe schedule</strong>. In exchange they get a small <strong class="text-white">signature bag</strong> of hiSOLA, delivered whole the moment the schedule is escrowed — and then a <strong class="text-white">retainer</strong>: hiSOLA every epoch, for as long as the liquidity is still there. It is <strong class="text-white">not a vesting</strong>. A vesting promises a total on day one and releases it in slices; a retainer has no total, only a rate. Each epoch is bought separately against something checked at that moment. So a partner who leaves has forfeited nothing — there was never a remainder — and one who stays is never capped: three years of liquidity is three years of retainer.</p>
             </div>
 
             <div class="grid md:grid-cols-2 gap-6 mb-8">
-                <!-- Bribe → 1:1 locked hiSOLA -->
+                <!-- The retainer -->
                 <div class="bg-black/30 rounded-2xl p-7 border border-[#9945FF]/30">
                     <div class="flex items-center gap-3 mb-4">
                         <div class="w-10 h-10 rounded-xl bg-[#9945FF]/20 flex items-center justify-center text-lg">🤝</div>
                         <div>
-                            <p class="font-bold text-white">Bribe → 1:1 Locked hiSOLA</p>
-                            <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest">Earned, Not Granted</p>
+                            <p class="font-bold text-white">Liquidity → Retainer</p>
+                            <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest">Bought One Epoch At A Time</p>
                         </div>
                     </div>
-                    <p class="text-gray-400 text-sm leading-relaxed mb-4">Each epoch a partner deposits its committed token into the normal bribe vault via <code class="text-gray-300">partner_deposit_bribe</code> — voters of that gauge claim it exactly like any bribe. In parallel, an equal amount of hiSOLA is credited <strong class="text-white">1:1</strong> and claimed via <code class="text-gray-300">claim_partner_allocation</code> directly into the partner's ve-lock (the wallet never touches it).</p>
+                    <p class="text-gray-400 text-sm leading-relaxed mb-4">Each epoch, <code class="text-gray-300">crank_partner_epoch</code> — callable by anyone — releases one tranche of the escrowed bribes to that gauge's voters and credits one epoch of retainer, provided the partner still holds the LP their deal names. <strong class="text-white">The protocol never takes custody of that LP.</strong> It reads the balance and stops paying if it drops; nothing is seized, and the retainer resumes the epoch it comes back.</p>
                     <div class="bg-black/40 rounded-xl p-4 border border-white/5 space-y-2 text-xs">
-                        <div class="flex justify-between"><span class="text-gray-500">Match rate</span><span class="text-white font-semibold">1:1 bribe → hiSOLA</span></div>
-                        <div class="flex justify-between"><span class="text-gray-500">Lock</span><span class="text-white font-semibold">4 years (208 epochs)</span></div>
-                        <div class="flex justify-between"><span class="text-gray-500">ve-power at full lock</span><span class="text-[#14F195] font-semibold">4× (maximum)</span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Rate</span><span class="text-white font-semibold">hiSOLA per epoch, no cap</span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Condition</span><span class="text-white font-semibold">LP still held, checked each epoch</span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Lock</span><span class="text-white font-semibold">For life — bag and retainer alike</span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">ve-power</span><span class="text-[#14F195] font-semibold">Up to 4× (maximum)</span></div>
                         <div class="flex justify-between"><span class="text-gray-500">Borrow cap</span><span class="text-[#14F195] font-semibold">Up to 20% of locked position</span></div>
-                        <div class="flex justify-between"><span class="text-gray-500">Fee dilution</span><span class="text-white font-semibold">None — locked hiSOLA excluded</span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Protocol fees</span><span class="text-[#14F195] font-semibold">Yes — a real share, for life</span></div>
                     </div>
                 </div>
-                <!-- Welcome bag + tier cap -->
+                <!-- What the partner gets -->
                 <div class="bg-black/30 rounded-2xl p-7 border border-[#14F195]/20">
                     <div class="flex items-center gap-3 mb-4">
                         <div class="w-10 h-10 rounded-xl bg-[#14F195]/10 flex items-center justify-center text-lg">🎁</div>
                         <div>
-                            <p class="font-bold text-white">Welcome Bag + Tier Cap</p>
-                            <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest">Deal Runs Until Cap</p>
+                            <p class="font-bold text-white">Signature Bag + Fees</p>
+                            <p class="text-[#14F195] text-xs font-bold uppercase tracking-widest">Vote From Day One</p>
                         </div>
                     </div>
-                    <p class="text-gray-400 text-sm leading-relaxed mb-4">In exchange for the commitment their tier reflects — liquidity brought and bribes pledged — a partner receives a one-time <strong class="text-white">welcome bag</strong> that streams in over the first 6 months, <strong class="text-white">locked for life</strong>. They then keep earning 1:1 against <strong class="text-white">bribes</strong> until the <strong class="text-white">tier cap</strong> is reached. Once the cap is hit, accrual stops — the partnership target is met. Stop bribing early and the stream simply pauses; whatever was earned stays locked.</p>
+                    <p class="text-gray-400 text-sm leading-relaxed mb-4">The bag is the only unconditional part of the deal, which is why it is the smaller part. It arrives whole the moment the bribe schedule is escrowed — never before, because the schedule is what it is released against. Everything credited, bag and retainer alike, is <strong class="text-white">permanent</strong>: it can never be unlocked, unstaked, or sold at a floor it never financed. What it can do is vote at up to 4×, earn a real share of protocol fees, and back working capital at 20%.</p>
                     <div class="bg-[#9945FF]/10 border border-[#9945FF]/30 rounded-xl p-3">
                         <p class="text-[#9945FF] text-xs font-bold uppercase tracking-widest mb-1">Liquidity Without Selling</p>
                         <p class="text-gray-300 text-xs leading-relaxed">Because the position is locked, the partner draws working capital via <code class="text-gray-400">borrow_against_locked</code> — up to 20% of the locked hiSOLA from the floor vault (2% fee, no interest, no liquidation, fully repayable). Governance stays committed; liquidity stays available.</p>
@@ -407,7 +408,7 @@
 
             <!-- Tier table -->
             <div class="bg-black/30 rounded-[2rem] p-8 border border-white/5 mb-8">
-                <p class="text-xs text-gray-500 uppercase tracking-widest mb-6 text-center">Partner Tiers — sized by the commitment a partner brings · welcome bag locked for life · 1:1 bribe match locked 4 years · 20% borrow</p>
+                <p class="text-xs text-gray-500 uppercase tracking-widest mb-6 text-center">Partner Tiers — 10 / 15 / 20% of the committed LP over a year of maintained liquidity</p>
                 <div class="grid md:grid-cols-3 gap-6">
                     <!-- Tier 1 -->
                     <div class="bg-black/40 rounded-2xl p-6 border border-[#9945FF]/30">
@@ -416,11 +417,11 @@
                             <span class="px-2.5 py-1 rounded-full bg-[#9945FF]/20 text-[#9945FF] text-[10px] font-bold uppercase tracking-widest">Anchor</span>
                         </div>
                         <div class="space-y-2 text-xs">
-                            <div class="flex justify-between border-b border-white/5 pb-2 mb-1"><span class="text-gray-500">Indicative LP</span><span class="text-[#9945FF] font-bold">≥ $1.5M</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Welcome bag</span><span class="text-white font-semibold">250,000 hiSOLA</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Bribe cap</span><span class="text-white font-semibold">750,000 hiSOLA</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Match / Lock</span><span class="text-white font-semibold">1:1 · bag: life · earned: 4y</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">ve-power at full</span><span class="text-[#14F195] font-semibold">~4,000,000 (4×)</span></div>
+                            <div class="flex justify-between border-b border-white/5 pb-2 mb-1"><span class="text-gray-500">LP committed</span><span class="text-[#9945FF] font-bold">$1M</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Signature bag</span><span class="text-white font-semibold">20,000 hiSOLA</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Retainer</span><span class="text-white font-semibold">3,450 hiSOLA / epoch</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">At 52 epochs</span><span class="text-white font-semibold">199,400 · 19.9%</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Lock</span><span class="text-white font-semibold">For life</span></div>
                             <div class="flex justify-between"><span class="text-gray-500">Borrow</span><span class="text-[#14F195] font-semibold">Up to 20%</span></div>
                         </div>
                     </div>
@@ -431,11 +432,11 @@
                             <span class="px-2.5 py-1 rounded-full bg-[#14F195]/20 text-[#14F195] text-[10px] font-bold uppercase tracking-widest">Core</span>
                         </div>
                         <div class="space-y-2 text-xs">
-                            <div class="flex justify-between border-b border-white/5 pb-2 mb-1"><span class="text-gray-500">Indicative LP</span><span class="text-[#14F195] font-bold">$1M – $1.5M</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Welcome bag</span><span class="text-white font-semibold">175,000 hiSOLA</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Bribe cap</span><span class="text-white font-semibold">500,000 hiSOLA</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Match / Lock</span><span class="text-white font-semibold">1:1 · bag: life · earned: 4y</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">ve-power at full</span><span class="text-[#14F195] font-semibold">~2,700,000</span></div>
+                            <div class="flex justify-between border-b border-white/5 pb-2 mb-1"><span class="text-gray-500">LP committed</span><span class="text-[#14F195] font-bold">$500K</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Signature bag</span><span class="text-white font-semibold">7,500 hiSOLA</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Retainer</span><span class="text-white font-semibold">1,300 hiSOLA / epoch</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">At 52 epochs</span><span class="text-white font-semibold">75,100 · 15.0%</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Lock</span><span class="text-white font-semibold">For life</span></div>
                             <div class="flex justify-between"><span class="text-gray-500">Borrow</span><span class="text-[#14F195] font-semibold">Up to 20%</span></div>
                         </div>
                     </div>
@@ -446,16 +447,16 @@
                             <span class="px-2.5 py-1 rounded-full bg-yellow-500/20 text-yellow-400 text-[10px] font-bold uppercase tracking-widest">Ecosystem</span>
                         </div>
                         <div class="space-y-2 text-xs">
-                            <div class="flex justify-between border-b border-white/5 pb-2 mb-1"><span class="text-gray-500">Indicative LP</span><span class="text-yellow-400 font-bold">$500K – $1M</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Welcome bag</span><span class="text-white font-semibold">100,000 hiSOLA</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Bribe cap</span><span class="text-white font-semibold">300,000 hiSOLA</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">Match / Lock</span><span class="text-white font-semibold">1:1 · bag: life · earned: 4y</span></div>
-                            <div class="flex justify-between"><span class="text-gray-500">ve-power at full</span><span class="text-[#14F195] font-semibold">~1,600,000</span></div>
+                            <div class="flex justify-between border-b border-white/5 pb-2 mb-1"><span class="text-gray-500">LP committed</span><span class="text-yellow-400 font-bold">$200K</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Signature bag</span><span class="text-white font-semibold">2,000 hiSOLA</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Retainer</span><span class="text-white font-semibold">350 hiSOLA / epoch</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">At 52 epochs</span><span class="text-white font-semibold">20,200 · 10.1%</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Lock</span><span class="text-white font-semibold">For life</span></div>
                             <div class="flex justify-between"><span class="text-gray-500">Borrow</span><span class="text-[#14F195] font-semibold">Up to 20%</span></div>
                         </div>
                     </div>
                 </div>
-                <p class="text-gray-500 text-xs mt-6 text-center max-w-2xl mx-auto">The <strong class="text-gray-300">scale of liquidity a partner brings</strong> sizes its tier — nothing is enforced on-chain, the LP figures are indicative: a small deposit and a small bribe stream simply earn a small allocation. The tier's welcome bag is <strong class="text-gray-300">locked for life as permanent voting power</strong> (the program refuses to ever release it); <strong class="text-gray-300">bribes</strong> are then matched 1:1 into hiSOLA locked 4 years, releasable and re-lockable at expiry. Both carry <strong class="text-gray-300">20% borrow capacity</strong> against the floor vault. For a given partner the deal continues each epoch until the tier's hiSOLA cap is reached — then accrual stops.</p>
+                <p class="text-gray-500 text-xs mt-6 text-center max-w-2xl mx-auto">The <strong class="text-gray-300">"at 52 epochs" column is an illustration at one year, not a promised total</strong> — the retainer has no total and no end date. The LP threshold is frozen on-chain as a token count when the deal is signed: the tier is negotiated in dollars, and there is no oracle, so it is exact on "did they withdraw" and approximate on value. <strong class="text-gray-300">Updated 2026-08-27</strong>, replacing the 1:1 bribe match — a conversion rate frozen for life with no oracle to correct it, and a cap the partnership died at.</p>
             </div>
         </div>
 
@@ -526,10 +527,11 @@
                 <div class="flex flex-wrap gap-x-6 gap-y-2 text-xs">
                     <span class="text-gray-400"><span class="text-gray-500">Lock:</span> <strong class="text-white">for life</strong> — never liquid SOLA, minted straight into the ve-lock</span>
                     <span class="text-gray-400"><span class="text-gray-500">Voting:</span> <strong class="text-white">active</strong> (up to 4×)</span>
+                    <span class="text-gray-400"><span class="text-gray-500">Fees:</span> <strong class="text-white">yes</strong> — a real share of the fee stream</span>
                     <span class="text-gray-400"><span class="text-gray-500">Borrow:</span> <strong class="text-white">up to 20%</strong> via <code class="text-gray-300">borrow_against_locked</code></span>
                 </div>
             </div>
-            <p class="text-gray-500 text-xs mt-4 leading-relaxed">Compensates the contributors who worked unpaid until launch — dev, community managers, mods — and keep working after it. Separate wallet from the founder reserve: this tranche participates in governance as an ordinary user, but the program refuses to ever release it. Its only liquidity is the same 20% borrow valve as every other unfinanced allocation.</p>
+            <p class="text-gray-500 text-xs mt-4 leading-relaxed">Compensates the contributors who worked unpaid until launch — dev, community managers, mods — and keep working after it. Separate wallet from the founder reserve: this tranche participates in governance as an ordinary user, but the program refuses to ever release it. Its only liquidity is the same 20% borrow valve as every other unfinanced allocation. Since 2026-08-27 it also earns protocol fees: locked for life meant a fee basis of zero that could never become anything else, so a tranche whose whole purpose is to pay people paid them nothing at all.</p>
         </div>
 
         <!-- Floor protection note -->
@@ -687,7 +689,7 @@
                         Solana Grants Applied
                     </span>
                 </div>
-                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing (2% fee → stakers) · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · <strong class="text-white">Ecosystem allocation enforced on-chain</strong> (250K team tranche minted straight into a lifetime ve-lock — voting active, 20% borrow, the team wallet never holds it · 1.75M issued exclusively as oSOLA, hard-capped on-chain, every exercise adds 1 USDC to the floor — zero unbacked $SOLA can ever be minted from it) · <strong class="text-white">Founder reserve escrow</strong> (7M hiSOLA vesting 6-month cliff + 24-month linear, minted directly into a lifetime ve-lock — never reaches a wallet, no vote, no fee share, unlock permanently refused by the program · 5M oSOLA progressive vesting) · <strong class="text-white">Unified 20% borrow cap</strong> (every unfinanced allocation — founder, team, contributor, partner — borrows only via borrow_against_locked at 20%; 75% floor buffer bounds the rest) · <strong class="text-white">Contributor allocation</strong> (claimed at launch — hiSOLA into a lifetime ve-lock + oSOLA · per-wallet PDA · votes, never sellable) · Wallet collection active (airdrop eligibility) · <span class="text-[#9945FF]">Solana Foundation Grants application submitted</span></p>
+                <p class="text-gray-400 text-sm">Bonding curve · Floor price · hiSOLA staking · Borrowing (2% fee → stakers) · ve(3,3) gauge/bribe system · AMM multi-pool (xy=k) · <strong class="text-white">Ecosystem allocation enforced on-chain</strong> (250K team tranche minted straight into a lifetime ve-lock — voting active, protocol fees earned, 20% borrow, the team wallet never holds it · 1.75M issued exclusively as oSOLA, hard-capped on-chain, every exercise adds 1 USDC to the floor — zero unbacked $SOLA can ever be minted from it) · <strong class="text-white">Founder reserve escrow</strong> (7M hiSOLA vesting 6-month cliff + 24-month linear, minted directly into a lifetime ve-lock — never reaches a wallet, no vote, no fee share, unlock permanently refused by the program · 5M oSOLA progressive vesting) · <strong class="text-white">Unified 20% borrow cap</strong> (every unfinanced allocation — founder, team, contributor, partner — borrows only via borrow_against_locked at 20%; 75% floor buffer bounds the rest) · <strong class="text-white">Contributor allocation</strong> (claimed at launch — hiSOLA into a lifetime ve-lock + oSOLA, 50/50, capped on-chain at 100K of each in total · per-wallet PDA · votes, earns fees, never sellable) · Wallet collection active (airdrop eligibility) · <span class="text-[#9945FF]">Solana Foundation Grants application submitted</span></p>
             </div>
             <div class="bg-solana p-8 rounded-2xl border border-[#9945FF]/30">
                 <div class="flex items-center gap-3 mb-2">
