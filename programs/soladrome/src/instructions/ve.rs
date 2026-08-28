@@ -4,15 +4,10 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::TokenAccount;
 
+use crate::constants::*;
 use crate::errors::SoladromeError;
 use crate::math;
-use crate::state::{
-    ProtocolState, UserPosition, VeLockPosition, MAX_LOCK_DURATION, MIN_LOCK_DURATION,
-};
-use crate::{POSITION_SEED, STATE_SEED};
-
-pub const VELOCK_SEED: &[u8] = b"velock";
-pub const VE_VAULT_SEED: &[u8] = b"ve_vault";
+use crate::state::{ProtocolState, UserPosition, VeLockPosition};
 
 // ── Instructions ──────────────────────────────────────────────────────────────
 

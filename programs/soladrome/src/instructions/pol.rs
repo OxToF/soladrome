@@ -7,18 +7,11 @@ use anchor_spl::{
     token::{self, Mint, MintTo, Token, TokenAccount, Transfer},
 };
 
-use crate::amm::AMM_POOL_SEED;
 use crate::amm_math::{self, MINIMUM_LIQUIDITY};
-use crate::amm_state::AmmPool;
+use crate::constants::*;
 use crate::errors::SoladromeError;
 use crate::math;
-use crate::state::{PolState, ProtocolState};
-use crate::{LP_DEAD_PUBKEY, STATE_SEED};
-
-pub const POL_SEED: &[u8] = b"pol";
-pub const POL_USDC_VAULT_SEED: &[u8] = b"pol_usdc_vault";
-pub const POL_SOLA_ATA_SEED: &[u8] = b"pol_sola_ata";
-pub const POL_LP_VAULT_SEED: &[u8] = b"pol_lp_vault";
+use crate::state::{AmmPool, PolState, ProtocolState};
 
 // ── Instructions ──────────────────────────────────────────────────────────────
 

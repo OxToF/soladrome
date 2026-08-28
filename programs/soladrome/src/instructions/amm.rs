@@ -8,19 +8,13 @@ use anchor_spl::{
 };
 
 use crate::amm_math::{self, MINIMUM_LIQUIDITY};
-use crate::amm_state::{sort_mints, AmmPool};
+use crate::constants::*;
 use crate::errors::SoladromeError;
-use crate::state::{LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState, EPOCH_DURATION};
-use crate::{LP_REWARD_PRECISION, STATE_SEED};
+use crate::state::{
+    sort_mints, AmmPool, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState,
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-pub const AMM_POOL_SEED: &[u8] = b"amm_pool";
-pub const LP_MINT_SEED: &[u8] = b"lp_mint";
-pub const VAULT_A_SEED: &[u8] = b"vault_a";
-pub const VAULT_B_SEED: &[u8] = b"vault_b";
-
-pub const MAX_FEE_RATE: u16 = 1_000; // 10% max swap fee
-pub const MAX_PROTOCOL_FEE: u16 = 5_000; // 50% of fee max to protocol
 
 // ── Reward accumulator helpers ────────────────────────────────────────────────
 
@@ -62,7 +56,7 @@ pub fn advance_pool_rewards(pool: &mut AmmPool, now: i64, rate: u32, active: boo
 /// mirroring the epoch/gauge path's `emit_pool_rewards` gate. Off by default.
 pub fn continuous_active(state: &ProtocolState, now: i64) -> bool {
     state.emissions_enabled
-        && crate::state::current_epoch(now) < u64::from(state.continuous_end_epoch)
+        && crate::math::current_epoch(now) < u64::from(state.continuous_end_epoch)
 }
 
 /// Authority-only: approve or revoke a pool's eligibility for continuous oSOLA

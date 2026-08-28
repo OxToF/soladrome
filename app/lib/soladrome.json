@@ -565,16 +565,6 @@
     },
     {
       "name": "borrow_against_locked",
-      "docs": [
-        "Borrow USDC against a vote-locked hiSOLA position (the partner liquidity valve).",
-        "",
-        "Partner hiSOLA lives in the ve_lock_vault (wallet balance = 0), so the normal",
-        "`borrow_usdc` path is unavailable. This draws USDC from the floor reserve using",
-        "the LOCKED position (`VeLockPosition.amount_locked`) as collateral, capped at",
-        "`PARTNER_BORROW_CAP_BPS` (20%). Repay via the standard `repay_usdc` (same",
-        "UserPosition PDA). 2% origination fee → market_vault, 75% floor buffer, no",
-        "interest, no liquidation. Available to any ve-locker, not just partners."
-      ],
       "discriminator": [
         174,
         91,
@@ -877,19 +867,6 @@
     },
     {
       "name": "burn_o_sola_for_votes",
-      "docs": [
-        "Burn oSOLA to gain additional voting power for the current epoch.",
-        "",
-        "Unlike hiSOLA (which gives permanent voting rights + fees + borrow),",
-        "burning oSOLA grants **epoch-scoped** vote weight only — it resets",
-        "with every new epoch (new UserEpochVotes PDA).",
-        "",
-        "The oSOLA bonus is NOT subject to the 30% per-address cap:",
-        "burning tokens is a permanent, deflationary act that justifies",
-        "uncapped influence for that epoch.",
-        "",
-        "Conversion: 1 oSOLA (6 dec) = 1 vote unit (same as 1 hiSOLA)."
-      ],
       "discriminator": [
         24,
         211,
@@ -1203,10 +1180,6 @@
     },
     {
       "name": "checkpoint_lp",
-      "docs": [
-        "Record a time-weighted LP balance snapshot for the caller in a given pool+epoch.",
-        "Must be called before the epoch ends; updates both the user and pool accumulators."
-      ],
       "discriminator": [
         3,
         46,
@@ -1392,11 +1365,6 @@
     },
     {
       "name": "claim_bribe",
-      "docs": [
-        "Claim pro-rata bribe after the voting epoch has ended.",
-        "claimable = total_bribed × user_votes / total_votes  (safe u128 muldiv)",
-        "Creating UserBribeClaim PDA is the idempotency guard (init = fails if exists)."
-      ],
       "discriminator": [
         215,
         71,
@@ -1706,18 +1674,6 @@
     },
     {
       "name": "claim_contributor_hi_sola",
-      "docs": [
-        "Contributor-only: claim the whole hiSOLA tranche at once into a LIFETIME ve lock.",
-        "",
-        "⚠️ Not \"25 % TGE + 75 % linear over 6 months\", which is what this said until 2026-08-25",
-        "and has not been true since the schedule was removed on 2026-07-18. There is no cliff",
-        "and no vesting: `claimable` is the entire unclaimed remainder.",
-        "",
-        "Mints SOLA to sola_vault as 1:1 backing and records the hiSOLA as `permanent_amount`,",
-        "so `unlock_hi_sola` can never release any of it. `total_hi_sola` is NOT incremented and",
-        "never will be, which means this tranche earns no protocol fees at any point — it buys",
-        "permanent voting power and a 20 % borrow valve, nothing else."
-      ],
       "discriminator": [
         94,
         88,
@@ -1865,11 +1821,6 @@
     },
     {
       "name": "claim_contributor_vesting",
-      "docs": [
-        "Contributor-only: claim the full oSOLA tranche at once (no cliff, no vesting).",
-        "Mints oSOLA to the contributor wallet — floor-neutral until exercised, like the",
-        "founder's 5M oSOLA. Exercising pays 1 USDC into the floor, so it is self-financing."
-      ],
       "discriminator": [
         151,
         164,
@@ -2455,10 +2406,6 @@
     },
     {
       "name": "claim_lp_emissions",
-      "docs": [
-        "Mint a user's pro-rata oSOLA share from LP emissions for a given pool+epoch.",
-        "Requires: epoch finalized, user checkpointed during epoch, not yet claimed."
-      ],
       "discriminator": [
         211,
         134,
@@ -2959,26 +2906,6 @@
     },
     {
       "name": "claim_partner_allocation",
-      "docs": [
-        "Partner claims their signature bag — once, whole, the moment the schedule is escrowed.",
-        "",
-        "hiSOLA never touches the wallet: it is written straight into the ve lock as",
-        "`permanent_amount`, so it votes from day one (up to 4×), borrows at 20 % through",
-        "`borrow_against_locked`, and can never be unlocked, unstaked or sold. It is unfinanced —",
-        "no USDC ever entered the floor for it — and permanence is what keeps that exposure on",
-        "the 20 % channel instead of the 100 % one.",
-        "",
-        "⚠️ It used to stream linearly over six months and to carry the bribe-earned tranche",
-        "alongside it. Both are gone (2026-08-27): the bag is now the unconditional part of the",
-        "deal and nothing else, and what a partner earns for performing is the retainer, credited",
-        "epoch by epoch against their liquidity by `crank_partner_epoch`.",
-        "",
-        "☢️ It earns protocol fees, which it did not before. Locked for life means `hi_sola` is 0",
-        "and unfinanced means `staked_amount` is 0, so `fee_basis` was 0 and — the lock being",
-        "permanent — could never become anything else. `fee_shares` is the exception that makes",
-        "the tranche worth something, matched by an increment to `total_hi_sola` so the share is",
-        "real rather than printed."
-      ],
       "discriminator": [
         112,
         123,
@@ -3129,37 +3056,6 @@
     },
     {
       "name": "close_legacy_partner_allocation",
-      "docs": [
-        "Authority-only: close a `PartnerAllocation` written under a layout too small to read.",
-        "",
-        "☢️ **This exists because `close_partner_allocation` cannot help such an account.** That",
-        "instruction takes a typed `Account<PartnerAllocation>`, so Anchor deserializes before a",
-        "single line of it runs — and an account written at 160 bytes has no `lp_mint`, no",
-        "`retainer_per_epoch`, no `min_bribe_per_epoch` to read. It fails at the account level,",
-        "permanently. `register_partner` uses `init`, so the seeds cannot be reopened either:",
-        "without this, growing the struct on 2026-08-27 would have **bricked every allocation",
-        "that predated it**, and the \"close and re-register\" renewal path the design leans on",
-        "would have been a path that did not exist.",
-        "",
-        "**The size check is the entire safety property, and it is `<`, not `!=`.**",
-        "`register_partner` only ever creates accounts at exactly `8 + PartnerAllocation::LEN`, so",
-        "while the layout stands this instruction cannot fire on anything — it is structurally",
-        "inert, not merely guarded by an authority signature. `<` rather than `!=` so that a",
-        "future *shrink* of `LEN` could not suddenly make live, readable accounts deletable:",
-        "strictly smaller means \"written under a layout too small to be read now\", which is the",
-        "only condition that justifies deleting an account without looking at what is inside it.",
-        "",
-        "That is worth stating plainly, because the shape is the dangerous one: an authority",
-        "instruction that removes a partner's account without reading their entitlement. Every",
-        "other partner path refuses to do that, deliberately (see `close_partner_allocation`). The",
-        "justification here is that there is no entitlement left to read — the account cannot be",
-        "interpreted at all, by anyone, ever again.",
-        "",
-        "The discriminator is still checked, so this cannot be pointed at an account of some other",
-        "type that happens to sit at the right seeds. Closing frees `[b\"partner\", wallet]` and",
-        "`register_partner` reopens it at the current layout — a fresh deal, with a fresh bag,",
-        "exactly as after an ordinary close."
-      ],
       "discriminator": [
         21,
         12,
@@ -3233,48 +3129,6 @@
     },
     {
       "name": "close_partner_allocation",
-      "docs": [
-        "Authority-only: close a `PartnerAllocation` PDA and return its rent to the authority",
-        "that paid for it at `register_partner`.",
-        "",
-        "☢️ **A retainer has no total, which changes what \"terminal\" can mean.** The old test read",
-        "`hi_sola_claimed >= base_hi_sola + cap_hi_sola` — a promised total, reached or not. There",
-        "is no promised total now: each epoch is bought separately, so the moment a partner stops",
-        "qualifying there is nothing outstanding to protect. What has to be protected is narrower",
-        "and sharper: **an epoch the partner could still be credited for.**",
-        "",
-        "So the account is closable when the deal cannot pay anything more *right now*:",
-        "",
-        "1. The bag is settled — claimed, or there never was one (`base_hi_sola == 0`). An",
-        "unclaimed bag is a live entitlement and blocks the close outright.",
-        "2. The current epoch's retainer is already decided — either it was credited",
-        "(`last_credited_epoch == current_epoch`), or the partner no longer holds the",
-        "liquidity that would qualify them (`lp_balance < lp_threshold`).",
-        "",
-        "The second condition is why this instruction now reads the partner's LP account. Without",
-        "it, the authority could close the account mid-week and take away an epoch the partner had",
-        "already earned by keeping their liquidity in place; with it, a partner who is still",
-        "performing cannot be cut off, and one who has withdrawn can be tidied away immediately",
-        "instead of leaving a dead PDA open forever.",
-        "",
-        "The guarantee that mattered before still holds, in its proper form: **the authority",
-        "cannot delete a claim the partner has already earned.** What it can now do — and could",
-        "not before — is close the account of a partner who simply stopped, which under a retainer",
-        "costs that partner nothing, because there never was a remainder.",
-        "",
-        "⚠️ Closing frees the `[b\"partner\", partner_wallet]` seeds, so `register_partner` can open",
-        "the same PDA again with every counter at zero — a **fresh deal**, including a fresh",
-        "`base_hi_sola` bag. That is the renewal path (and the migration path for allocations",
-        "written at the old 160-byte layout), but it means close-then-re-register is the one way",
-        "to hand the same wallet a second bag. It takes the authority signature twice and is",
-        "visible on-chain in both instructions.",
-        "",
-        "The partner's `VeLockPosition` and `UserPosition` are separate PDAs and are untouched:",
-        "everything already credited stays locked, keeps voting, keeps earning fees, and keeps",
-        "borrowing at 20 %. Nothing is burned here.",
-        "",
-        "Not pause-gated, matching `register_partner`: this is admin cleanup that moves no tokens."
-      ],
       "discriminator": [
         151,
         113,
@@ -3498,14 +3352,6 @@
     },
     {
       "name": "configure_continuous_emissions",
-      "docs": [
-        "Authority-only: configure the continuous (Masterchef) oSOLA stream used to",
-        "bootstrap liquidity at launch. Sets the per-pool rate and an on-chain expiry",
-        "window of `duration_epochs` from the current epoch, after which emissions",
-        "auto-stop with no manual action. Only pools with `rewards_enabled = true`",
-        "(set via `set_pool_rewards`) actually accrue. Pass `rate_per_sec = 0` or",
-        "`duration_epochs = 0` to disable immediately."
-      ],
       "discriminator": [
         170,
         85,
@@ -3554,23 +3400,6 @@
     },
     {
       "name": "configure_emissions",
-      "docs": [
-        "Authority-only: reconfigure the epoch oSOLA emission decay curve.",
-        "",
-        "Resets the decay clock to the current epoch — the new `initial` becomes",
-        "the emission for epoch 0 of the new schedule.  Use this to:",
-        "- Boost emissions at launch (high `initial`, soft `decay_bps`)",
-        "- Reduce emissions once pools are deep (lower `initial`)",
-        "- Adjust the floor to keep a minimum incentive long-term",
-        "",
-        "`decay_bps` in [1, 10_000]:",
-        "10 000 = no decay (flat forever)",
-        "9 900 = −1 %/epoch  (−40 %/year)",
-        "9 800 = −2 %/epoch  (−65 %/year)",
-        "",
-        "`floor_bps` in [0, 10_000]: minimum emission as % of `initial`.",
-        "1 000 = 10 % floor (recommended — never reaches zero)."
-      ],
       "discriminator": [
         80,
         131,
@@ -3623,29 +3452,6 @@
     },
     {
       "name": "convert_hi_sola",
-      "docs": [
-        "Convert a legacy hiSOLA token balance into the ledger position that replaced it.",
-        "",
-        "MIGRATION ONLY, and it can only be called by the holder. The program has no freeze",
-        "authority and no permanent delegate on the old mint, so it cannot reach into anyone's",
-        "ATA — a wallet that never calls this keeps a token that no instruction reads any more.",
-        "A fresh deployment never needs it.",
-        "",
-        "Sweeps both places the token era could leave hiSOLA:",
-        "- the holder's own ATA, burned with the holder's signature;",
-        "- the global vote-escrow vault, burned under the protocol PDA, for the amount this",
-        "position recorded as escrowed. Without this half, stake taken into custody by a",
-        "vote would have no way out at all — `withdraw_vote_escrow`, its only exit, is",
-        "replaced by this instruction.",
-        "",
-        "Credits `hi_sola` and nothing else. `staked_amount` is untouched (the financed figure",
-        "is already recorded and does not change hands), and so are `total_hi_sola` and the fee",
-        "accumulator: the same stake is being expressed in a different unit, not created. That",
-        "is what makes it safe to run at any time, in any order, against a live protocol.",
-        "",
-        "Deliberately NOT gated on `paused`: recovering your own stake is an exit path, and exit",
-        "paths stay open (same rule as `sell_sola` / `unstake_hi_sola`)."
-      ],
       "discriminator": [
         75,
         33,
@@ -3770,41 +3576,6 @@
     },
     {
       "name": "crank_partner_epoch",
-      "docs": [
-        "Permissionless: run a partner's epoch — release their bribe tranche, and buy this epoch",
-        "of their retainer if their liquidity is still there.",
-        "",
-        "**Why the two are one instruction.** The bribe stream already had to be cranked every",
-        "epoch by somebody. Making the retainer a second weekly crank would have doubled the",
-        "operational load and left the two able to drift apart; merged, one transaction per epoch",
-        "per partner runs the whole deal, and the bribe — which someone always has an incentive",
-        "to trigger, since it is the epoch's voters who are owed it — is what keeps the retainer's",
-        "attestation from being forgotten.",
-        "",
-        "**The two halves are independently gated, on purpose.**",
-        "- The bribe tranche is escrowed money that already belongs to the gauge. It is released",
-        "whether or not the liquidity condition holds: a partner who pulls their LP still owes",
-        "the voters what they escrowed.",
-        "- The retainer is bought fresh each epoch against `lp_threshold` of `lp_mint`, still",
-        "held. It keeps paying after the bribe schedule is exhausted — a partner who stays for",
-        "three years earns for three years — and stops the epoch their liquidity leaves.",
-        "",
-        "If neither half can do anything, the call fails rather than burning a fee for nothing.",
-        "",
-        "☢️ **A missed epoch is lost, not deferred.** The bribe side slips (the stream simply runs",
-        "one epoch longer), but the retainer cannot: the chain keeps no history of an SPL balance,",
-        "so there is no way to establish afterwards that the LP was present five epochs ago. The",
-        "crank *is* the attestation. This is why the front-end fires it automatically.",
-        "",
-        "⚠️ **What the attestation does and does not prove.** It proves the balance existed at the",
-        "instant of the crank. A partner cranking their own epoch can hold the LP for exactly that",
-        "transaction — add liquidity, crank, remove liquidity — and the program cannot tell.",
-        "Closing that would require custody of the LP, which is the one thing the deal promises",
-        "not to take. What is left is: the counterparty is a named protocol the authority",
-        "registered by hand, the manoeuvre is legible on-chain to anyone reading the pool, and the",
-        "remedy is the renewal — the authority simply does not re-register them. That is a",
-        "reputational guarantee, not a cryptographic one, and it should be described as such."
-      ],
       "discriminator": [
         143,
         200,
@@ -4612,10 +4383,6 @@
     },
     {
       "name": "deposit_bribe",
-      "docs": [
-        "Permissionless: any protocol deposits bribe tokens to attract hiSOLA votes.",
-        "epoch must equal the current epoch — bribes target the live voting window."
-      ],
       "discriminator": [
         159,
         44,
@@ -4928,10 +4695,6 @@
     },
     {
       "name": "emit_pool_rewards",
-      "docs": [
-        "Finalize the LP emission allocation for one pool after its epoch has ended.",
-        "Permissionless — anyone can call. Records how much oSOLA this pool's LPs may claim."
-      ],
       "discriminator": [
         175,
         4,
@@ -5282,11 +5045,6 @@
     },
     {
       "name": "flash_arbitrage",
-      "docs": [
-        "Flash-arbitrage: burn oSOLA → mint SOLA → sell on AMM → split profit.",
-        "Caller pays zero USDC upfront. Profitable only when SOLA_AMM > 1 USDC (floor).",
-        "Profit split: CALLER_ARB_SHARE_BPS (10 %) to caller, rest to market_vault → hiSOLA stakers."
-      ],
       "discriminator": [
         153,
         26,
@@ -5611,33 +5369,6 @@
     },
     {
       "name": "fund_partner_bribe_stream",
-      "docs": [
-        "Partner escrows a bribe schedule: one payment now, one tranche per epoch forever after.",
-        "",
-        "This is the instruction that makes a partnership run on its own. `partner_deposit_bribe`",
-        "can only ever credit the epoch it is called in, so a year of weekly bribes was 52",
-        "signatures with a gap every time one was missed. Here the partner transfers",
-        "`epochs_total × amount_per_epoch` into an escrow the program controls, and",
-        "`release_partner_bribe` pays it out one epoch at a time, called by anyone.",
-        "",
-        "☢️ **Funding this is what starts the deal.** `stream_start_ts` is stamped on the",
-        "allocation here, and both `claim_partner_allocation` (the bag) and `crank_partner_epoch`",
-        "(the retainer) refuse to pay anything while it is zero. Before this existed the bag",
-        "accrued from registration for everyone, so a partner who never bribed a unit still",
-        "collected permanent voting power against a floor that funded it.",
-        "",
-        "One *live* stream per partner. Re-funding is allowed only once the previous schedule has",
-        "paid out every tranche it was funded for — that is the renewal path, and it pairs with",
-        "`close_partner_allocation`: a settled deal closes, re-registers on new terms, and funds",
-        "a fresh schedule. Without it, a re-registered partner would find the stream PDA already",
-        "taken and their new welcome bag locked shut for good.",
-        "",
-        "Topping a *running* stream is deliberately refused: `stream_start_ts` anchors the ve",
-        "lock term, and re-stamping it would let a partner push their own unlock date around at",
-        "will. A partner who wants to bribe beyond their commitment uses `deposit_bribe` like",
-        "anyone else — there is no ceiling on strengthening your own gauge, and since 2026-08-27",
-        "no allocation credit for doing so either."
-      ],
       "discriminator": [
         32,
         112,
@@ -5799,12 +5530,6 @@
     },
     {
       "name": "initialize",
-      "docs": [
-        "`founder_wallet` is write-once and has no setter — see the note at the head of this",
-        "file. On mainnet it must be the Ledger `46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4`;",
-        "verify it on-chain before calling `mint_founder_allocation`, because after that the",
-        "12.25M is committed to whatever address is stored here."
-      ],
       "discriminator": [
         175,
         175,
@@ -6276,25 +6001,6 @@
     },
     {
       "name": "migrate_protocol_state",
-      "docs": [
-        "Authority-only: grow the `protocol_state` singleton to the current",
-        "`ProtocolState::LEN`.",
-        "",
-        "A program redeploy never changes the size of an existing account, and",
-        "`LEN` only sizes NEW accounts at `init` — so when a field is appended",
-        "past an already-allocated singleton's capacity, the account must be",
-        "resized in place or every instruction that loads it fails with",
-        "AccountDidNotDeserialize (3003).",
-        "",
-        "`protocol_state` is an `UncheckedAccount` because `Account<ProtocolState>`",
-        "would itself fail to deserialize the short account — the very bug this",
-        "fixes. Safety is preserved anyway: the seeds constraint pins the",
-        "canonical PDA, and the handler checks program ownership, the account",
-        "discriminator, and that the signer matches the stored authority (first",
-        "field after the discriminator, bytes 8..40). Grown bytes are",
-        "zero-initialized by the runtime, so appended fields read their correct",
-        "zero default. Idempotent: once the account is at LEN, calls are no-ops."
-      ],
       "discriminator": [
         29,
         107,
@@ -6352,12 +6058,6 @@
     },
     {
       "name": "migrate_user_position",
-      "docs": [
-        "One-time account migration — expands an existing UserPosition from the",
-        "pre-`last_borrow_slot` layout (LEN=120, space=128) to the current layout",
-        "(LEN=128, space=136).  The 8 new bytes are zeroed so last_borrow_slot=0.",
-        "Permissionless per-user: the owner pays the extra rent and signs."
-      ],
       "discriminator": [
         247,
         89,
@@ -6703,36 +6403,6 @@
     },
     {
       "name": "register_contributor",
-      "docs": [
-        "Authority-only: register a contributor wallet with a dual hiSOLA + oSOLA allocation.",
-        "",
-        "⚠️ There is no vesting, despite the account being named `ContributorVesting`. The cliff",
-        "and linear schedule were removed on 2026-07-18 and both tranches are now claimable in",
-        "full immediately; `start_ts` is kept as a record of when the deal was struck and is read",
-        "by nothing. This comment claimed otherwise until 2026-08-25, as did the two claim",
-        "instructions below — the account name is the last trace of a mechanism that is gone.",
-        "",
-        "The two sides are not the same kind of thing:",
-        "- **hiSOLA** goes into a LIFETIME ve lock (`permanent_amount` covers the whole tranche),",
-        "so it can never be unlocked or sold. It votes forever, borrows at 20 %, and earns a",
-        "real share of protocol fees through `fee_shares` (since 2026-08-25).",
-        "- **oSOLA** is an option, not a payment: exercising burns it and pays 1 USDC per unit",
-        "into the floor, so the contributor funds every SOLA they take. It is worth nothing at",
-        "or below the floor.",
-        "",
-        "Note this oSOLA is NOT drawn against `ecosystem_o_sola_minted` — `ECOSYSTEM_TOTAL` caps",
-        "`distribute_o_sola` only. Its bound is `CONTRIBUTOR_O_SOLA_CAP`, enforced below.",
-        "",
-        "☢️ Two `require!`s were added on 2026-08-27, and both matter more than they look:",
-        "- **A cumulative cap.** There was none: the only limit on what could be promised to",
-        "contributors was the form field the authority typed into. That was survivable while",
-        "the tranche earned nothing; now that it earns protocol fees it is unbounded dilution",
-        "of every staker — exactly the kind of promise that has to live in code to exist.",
-        "- **The 50/50 split.** The two sides are not interchangeable. hiSOLA is permanent",
-        "governance plus a real share of revenue; oSOLA is an option the holder pays 1 USDC a",
-        "unit to exercise, financing the floor as they do. Letting one side run without the",
-        "other turns compensation into either pure dilution or a pure lottery ticket."
-      ],
       "discriminator": [
         14,
         116,
@@ -6855,28 +6525,6 @@
     },
     {
       "name": "register_partner",
-      "docs": [
-        "Authority-only: register a protocol partner — a signature bag plus a liquidity retainer.",
-        "",
-        "The deal has exactly two money terms. `base_hi_sola` is the bag: delivered whole by",
-        "`claim_partner_allocation` the moment the partner escrows their bribe schedule, and",
-        "small because it is the only unconditional part. `retainer_per_epoch` is the rate:",
-        "credited one epoch at a time by `crank_partner_epoch`, and only for an epoch in which",
-        "the partner still holds `lp_threshold` of `lp_mint`.",
-        "",
-        "⚠️ No total is written down anywhere, and that is deliberate — see `PartnerAllocation`.",
-        "The tiers of 2026-08-26 read 10 / 15 / 20 % of the committed LP over a year of",
-        "maintained liquidity: 1 M LP → 20 000 bag + 3 450/epoch, 500 K → 7 500 + 1 300,",
-        "200 K → 2 000 + 350. A partner who stays longer simply earns longer.",
-        "",
-        "`lp_threshold` is in LP base units. The tier is negotiated in dollars, the chain sees",
-        "only LP units and there is no oracle, so this is the unit count that matched the agreed",
-        "size on the day it was signed — imprecise on value, exact on \"did they withdraw\".",
-        "",
-        "`lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].",
-        "Suggested mainnet value for strategic partners: 208 × 604 800 = 125 798 400 s",
-        "(≈ 4 years — the maximum lock, granting full 4× ve-power)."
-      ],
       "discriminator": [
         126,
         105,
@@ -7325,21 +6973,6 @@
     },
     {
       "name": "replay_vote",
-      "docs": [
-        "Permissionless epoch vote carry-over for one pool entry.",
-        "",
-        "Reproduces a single `vote_gauge` call using the owner's saved config.",
-        "The CALLER signs and pays rent; the OWNER's hiSOLA balance and ve-power",
-        "determine the actual vote weight — the owner need not be online.",
-        "",
-        "Call once per pool entry per epoch (up to `config.n_pools` times).",
-        "Fails if `auto_replay = false` (`VoteConfigDisabled`).",
-        "Fails if `pool_id` not found in config (`PoolNotInConfig`).",
-        "Fails if `UserVoteReceipt` already exists — same double-vote guard as",
-        "`vote_gauge`; replay and manual vote for the same pool are mutually exclusive.",
-        "",
-        "The 30% anti-whale cap applies identically to `vote_gauge`."
-      ],
       "discriminator": [
         127,
         188,
@@ -7597,17 +7230,6 @@
     },
     {
       "name": "rollover_bribe",
-      "docs": [
-        "Move remaining (unclaimed) bribe tokens from a past epoch into the current epoch vault.",
-        "",
-        "Two cases:",
-        "• Zero-vote pool (gauge absent or total_votes == 0): rollover allowed immediately",
-        "after the epoch ends — nobody can ever claim, so recycling is safe.",
-        "• Pool with votes: a ROLLOVER_DELAY_EPOCHS grace period is enforced so that",
-        "slow voters are not robbed before they get a chance to claim.",
-        "",
-        "Permissionless — anyone can call this for any (pool, token, old_epoch) triple."
-      ],
       "discriminator": [
         212,
         250,
@@ -7882,20 +7504,6 @@
     },
     {
       "name": "set_exercise_fee",
-      "docs": [
-        "Authority-only: set the oSOLA exercise fee, in basis points **of the gain**.",
-        "",
-        "`fee = bps × (curve_price − 1) × amount`, charged on top of the 1 USDC strike and",
-        "routed to `market_vault` → hiSOLA stakers. Because the fee scales with the gain,",
-        "any value below 10 000 leaves exercise profitable by construction; the",
-        "`MAX_EXERCISE_FEE_BPS` cap exists so the authority cannot destroy oSOLA's value as",
-        "an LP incentive, not to protect solvency (the floor is untouched either way).",
-        "",
-        "`bps = 0` disables the fee and restores the pre-2026-08-05 behaviour exactly.",
-        "This is also what a live singleton reads before this instruction is ever called,",
-        "so the upgrade is a no-op until the authority arms it — unlike the phase flags,",
-        "nothing bricks if it is forgotten."
-      ],
       "discriminator": [
         126,
         199,
@@ -7940,11 +7548,6 @@
     },
     {
       "name": "set_founder_voting",
-      "docs": [
-        "Authority-only break-glass: enable/disable founder gauge voting.",
-        "Default is disabled — the founder's 7M hiSOLA is a dormant anti-capture",
-        "reserve. Flip to `true` only to counter a detected governance takeover."
-      ],
       "discriminator": [
         249,
         101,
@@ -7991,11 +7594,6 @@
     },
     {
       "name": "set_phase_flags",
-      "docs": [
-        "Authority-only: toggle the closed-launch feature gates independently.",
-        "`None` leaves a flag untouched, so a single call can flip only one gate",
-        "(e.g. enabling LP for one partner integration) without disturbing the rest."
-      ],
       "discriminator": [
         111,
         117,
@@ -8152,18 +7750,6 @@
     },
     {
       "name": "set_vote_config",
-      "docs": [
-        "Save or update the caller's persistent gauge vote allocation.",
-        "",
-        "Once `auto_replay = true`, any external caller (keeper, cron bot, partner)",
-        "can invoke `replay_vote` each epoch without the owner signing — enabling",
-        "fully passive bribe collection, identical to Beradrome/Velodrome behaviour.",
-        "",
-        "Constraints:",
-        "- `n_pools` in [1, 5]",
-        "- `bps[0..n_pools]` must sum to exactly 10 000 (100 %)",
-        "- Unused slots: `pools[i] = Pubkey::default()`, `bps[i] = 0`"
-      ],
       "discriminator": [
         64,
         246,
@@ -8966,11 +8552,6 @@
     },
     {
       "name": "vote_gauge",
-      "docs": [
-        "hiSOLA holder directs vote-weight at a pool gauge for the current epoch.",
-        "Total allocated across all pools ≤ raw hiSOLA + ve-weighted locked hiSOLA.",
-        "One UserVoteReceipt per (user, pool, epoch) — double-vote for same pool is blocked."
-      ],
       "discriminator": [
         181,
         240,
