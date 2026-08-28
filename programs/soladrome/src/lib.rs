@@ -1939,6 +1939,12 @@ pub mod soladrome {
     /// `lock_duration_secs` must be in [MIN_LOCK_DURATION, MAX_LOCK_DURATION].
     /// Suggested mainnet value for strategic partners: 208 × 604 800 = 125 798 400 s
     /// (≈ 4 years — the maximum lock, granting full 4× ve-power).
+    ///
+    /// Nine arguments, over clippy's seven. They are the money terms of the deal and each one is
+    /// written verbatim into `PartnerAllocation`; folding them into a struct would move the same
+    /// nine fields behind one name, change the instruction's ABI, and buy nothing an auditor
+    /// reading the account layout does not already see.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_partner(
         ctx: Context<RegisterPartner>,
         bribe_mint: Pubkey,
