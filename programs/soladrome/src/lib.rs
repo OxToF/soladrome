@@ -24,11 +24,11 @@ use errors::SoladromeError;
 pub use pol::*;
 use state::{
     current_epoch, BribeVault, ContributorRegistry, ContributorVesting, FounderHiSolaVesting,
-    FounderVesting, GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum,
-    LpUserCheckpoint, LpUserInfo, PartnerAllocation, PartnerBribeStream, ProtocolState,
-    UserBribeClaim, UserEpochVotes, UserPosition, UserVoteConfig, UserVoteReceipt,
-    VeLockPosition, EPOCH_DURATION, FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION, MIN_LOCK_DURATION,
-    PRECISION, VESTING_CLIFF_SECS, VESTING_DURATION_SECS,
+    FounderVesting, GaugeState, GlobalEpochVotes, LpEpochClaim, LpPoolEpochAccum, LpUserCheckpoint,
+    LpUserInfo, PartnerAllocation, PartnerBribeStream, ProtocolState, UserBribeClaim,
+    UserEpochVotes, UserPosition, UserVoteConfig, UserVoteReceipt, VeLockPosition, EPOCH_DURATION,
+    FLOOR_RESERVE_MIN_BPS, MAX_LOCK_DURATION, MIN_LOCK_DURATION, PRECISION, VESTING_CLIFF_SECS,
+    VESTING_DURATION_SECS,
 };
 #[allow(ambiguous_glob_reexports)]
 pub use ve::*;
@@ -2443,10 +2443,7 @@ pub mod soladrome {
         let epoch_open = pa.last_credited_epoch < epoch;
         let retainer_due = lp_ok && epoch_open && pa.retainer_per_epoch > 0;
 
-        require!(
-            bribe_due || retainer_due,
-            SoladromeError::NothingToCrank
-        );
+        require!(bribe_due || retainer_due, SoladromeError::NothingToCrank);
 
         if retainer_due {
             let amount = pa.retainer_per_epoch;
