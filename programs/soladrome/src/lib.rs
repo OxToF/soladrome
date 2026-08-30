@@ -77,13 +77,6 @@ pub mod soladrome {
         instructions::admin::transfer_authority(ctx)
     }
 
-    pub fn migrate_protocol_state(
-        ctx: Context<MigrateProtocolState>,
-        founder_wallet: Pubkey,
-    ) -> Result<()> {
-        instructions::migrate::migrate_protocol_state(ctx, founder_wallet)
-    }
-
     pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Result<()> {
         instructions::curve::buy_sola(ctx, usdc_in, min_sola_out)
     }
@@ -193,12 +186,6 @@ pub mod soladrome {
         instructions::partners::close_partner_allocation(ctx)
     }
 
-    pub fn close_legacy_partner_allocation(
-        ctx: Context<CloseLegacyPartnerAllocation>,
-    ) -> Result<()> {
-        instructions::partners::close_legacy_partner_allocation(ctx)
-    }
-
     pub fn borrow_against_locked(
         ctx: Context<BorrowAgainstLocked>,
         usdc_amount: u64,
@@ -212,10 +199,6 @@ pub mod soladrome {
 
     pub fn vote_gauge(ctx: Context<VoteGauge>, epoch: u64, votes: u64) -> Result<()> {
         instructions::gauges::vote_gauge(ctx, epoch, votes)
-    }
-
-    pub fn convert_hi_sola(ctx: Context<ConvertHiSola>) -> Result<()> {
-        instructions::stake::convert_hi_sola(ctx)
     }
 
     pub fn configure_emissions(
@@ -283,10 +266,6 @@ pub mod soladrome {
         new_epoch: u64,
     ) -> Result<()> {
         instructions::bribes::rollover_bribe(ctx, old_epoch, new_epoch)
-    }
-
-    pub fn migrate_user_position(_ctx: Context<MigrateUserPosition>) -> Result<()> {
-        instructions::migrate::migrate_user_position(_ctx)
     }
 
     pub fn create_pool(

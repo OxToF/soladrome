@@ -17,9 +17,9 @@ pub const POSITION_SEED: &[u8] = b"position";
 pub const FLOOR_VAULT_SEED: &[u8] = b"floor_vault";
 pub const MARKET_VAULT_SEED: &[u8] = b"market_vault";
 pub const SOLA_VAULT_SEED: &[u8] = b"sola_vault";
-/// Global custody vault for hiSOLA immobilised by voting. Per-user amounts live in
-/// `UserPosition.vote_escrowed`; the vault itself is a single protocol-owned account.
-pub const VOTE_ESCROW_SEED: &[u8] = b"vote_escrow";
+// (VOTE_ESCROW_SEED removed — the global hiSOLA custody vault it addressed belongs to the
+//  token era. Voting marks `UserPosition.vote_locked` instead of moving anything, so there is
+//  no vault to derive. Its last reader was `convert_hi_sola`; see `devnet-legacy`.)
 
 // Market-curve depth. Must stay equal so the start price = floor = 1 USDC/SOLA.
 // N = 1M sizes price discovery, NOT supply: exercise_o_sola mints outside the curve.

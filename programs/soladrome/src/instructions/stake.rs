@@ -6,7 +6,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{self, Burn, Mint, Token, TokenAccount, Transfer},
+    token::{self, Mint, Token, TokenAccount, Transfer},
 };
 
 use crate::constants::*;
@@ -377,108 +377,6 @@ pub fn claim_fees(ctx: Context<ClaimFees>) -> Result<()> {
     Ok(())
 }
 
-/// Convert a legacy hiSOLA token balance into the ledger position that replaced it.
-///
-/// MIGRATION ONLY, and it can only be called by the holder. The program has no freeze
-/// authority and no permanent delegate on the old mint, so it cannot reach into anyone's
-/// ATA — a wallet that never calls this keeps a token that no instruction reads any more.
-/// A fresh deployment never needs it.
-///
-/// Sweeps both places the token era could leave hiSOLA:
-///   - the holder's own ATA, burned with the holder's signature;
-///   - the global vote-escrow vault, burned under the protocol PDA, for the amount this
-///     position recorded as escrowed. Without this half, stake taken into custody by a
-///     vote would have no way out at all — `withdraw_vote_escrow`, its only exit, is
-///     replaced by this instruction.
-///
-/// Credits `hi_sola` and nothing else. `staked_amount` is untouched (the financed figure
-/// is already recorded and does not change hands), and so are `total_hi_sola` and the fee
-/// accumulator: the same stake is being expressed in a different unit, not created. That
-/// is what makes it safe to run at any time, in any order, against a live protocol.
-///
-/// Deliberately NOT gated on `paused`: recovering your own stake is an exit path, and exit
-/// paths stay open (same rule as `sell_sola` / `unstake_hi_sola`).
-pub fn convert_hi_sola(ctx: Context<ConvertHiSola>) -> Result<()> {
-    let bump = ctx.accounts.protocol_state.bump;
-    let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
-
-    let in_wallet = ctx.accounts.user_hi_sola.amount;
-    // Bounded by what the vault actually holds, not by the counter alone: a mismatch
-    // between the two must fail closed on the amount, never abort the whole conversion
-    // and strand the wallet balance with it.
-    let escrowed = ctx
-        .accounts
-        .user_position
-        .vote_escrowed
-        .min(ctx.accounts.vote_escrow_vault.amount);
-    let total = in_wallet
-        .checked_add(escrowed)
-        .ok_or(SoladromeError::Overflow)?;
-    require!(total > 0, SoladromeError::NothingToConvert);
-
-    if ctx.accounts.user_position.owner == Pubkey::default() {
-        ctx.accounts.user_position.owner = ctx.accounts.user.key();
-        ctx.accounts.user_position.bump = ctx.bumps.user_position;
-        // Same stamp as every other lazy position opener: a wallet holding hiSOLA it
-        // never staked (received by transfer, back when that was possible) must not be
-        // born claiming the whole fee history. Its `staked_amount` stays 0, so
-        // `fee_basis` pays it nothing regardless — the stamp is defence in depth.
-        ctx.accounts.user_position.fees_debt = math::advance_accumulator(
-            ctx.accounts.protocol_state.fees_per_hi_sola,
-            ctx.accounts.market_vault.amount,
-            ctx.accounts.protocol_state.last_market_vault_balance,
-            ctx.accounts.protocol_state.total_hi_sola,
-        );
-    }
-
-    if in_wallet > 0 {
-        token::burn(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Burn {
-                    mint: ctx.accounts.hi_sola_mint.to_account_info(),
-                    from: ctx.accounts.user_hi_sola.to_account_info(),
-                    authority: ctx.accounts.user.to_account_info(),
-                },
-            ),
-            in_wallet,
-        )?;
-    }
-
-    if escrowed > 0 {
-        token::burn(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Burn {
-                    mint: ctx.accounts.hi_sola_mint.to_account_info(),
-                    from: ctx.accounts.vote_escrow_vault.to_account_info(),
-                    authority: ctx.accounts.protocol_state.to_account_info(),
-                },
-                &[seeds],
-            ),
-            escrowed,
-        )?;
-    }
-
-    // Zero the legacy counter in the same instruction that empties the vault it tracked,
-    // so a second call converts nothing rather than crediting the escrow twice.
-    ctx.accounts.user_position.vote_escrowed = 0;
-    ctx.accounts.user_position.hi_sola = ctx
-        .accounts
-        .user_position
-        .hi_sola
-        .checked_add(total)
-        .ok_or(SoladromeError::Overflow)?;
-
-    msg!(
-        "hiSOLA converted to position: {} (wallet {} + escrow {})",
-        total,
-        in_wallet,
-        escrowed
-    );
-    Ok(())
-}
-
 #[derive(Accounts)]
 pub struct StakeSola<'info> {
     #[account(mut)]
@@ -619,51 +517,4 @@ pub struct ClaimFees<'info> {
     pub user_position: Account<'info, UserPosition>,
 
     pub token_program: Program<'info, Token>,
-}
-
-/// Return hiSOLA immobilised by voting, once the voted epoch has closed.
-#[derive(Accounts)]
-pub struct ConvertHiSola<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
-    pub protocol_state: Box<Account<'info, ProtocolState>>,
-
-    /// The legacy mint. Kept `mut` because this instruction burns against it — it is the only
-    /// instruction left that touches it at all.
-    #[account(mut, address = protocol_state.hi_sola_mint)]
-    pub hi_sola_mint: Box<Account<'info, Mint>>,
-
-    /// The caller's old token account. Emptied here; nothing refills it.
-    #[account(
-        mut,
-        constraint = user_hi_sola.mint == hi_sola_mint.key() && user_hi_sola.owner == user.key(),
-    )]
-    pub user_hi_sola: Box<Account<'info, TokenAccount>>,
-
-    /// The old global escrow vault. `init_if_needed` would be wrong here — a deployment that
-    /// never escrowed anything has no vault, and creating one just to burn zero from it would
-    /// charge rent for nothing. Pinned by seeds so the only vault this can drain is the real
-    /// one, and the amount is bounded by what this position recorded as escrowed.
-    #[account(mut, seeds = [VOTE_ESCROW_SEED], bump)]
-    pub vote_escrow_vault: Box<Account<'info, TokenAccount>>,
-
-    /// Read-only. Needed to stamp `fees_debt` when this instruction is what first opens the
-    /// caller's UserPosition — a wallet holding hiSOLA it received by transfer may never have
-    /// interacted with the protocol before.
-    #[account(address = protocol_state.market_vault)]
-    pub market_vault: Box<Account<'info, TokenAccount>>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        space = 8 + UserPosition::LEN,
-        seeds = [POSITION_SEED, user.key().as_ref()],
-        bump,
-    )]
-    pub user_position: Box<Account<'info, UserPosition>>,
-
-    pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
 }

@@ -743,80 +743,6 @@ pub fn close_partner_allocation(ctx: Context<ClosePartnerAllocation>) -> Result<
     Ok(())
 }
 
-/// Authority-only: close a `PartnerAllocation` written under a layout too small to read.
-///
-/// ☢️ **This exists because `close_partner_allocation` cannot help such an account.** That
-/// instruction takes a typed `Account<PartnerAllocation>`, so Anchor deserializes before a
-/// single line of it runs — and an account written at 160 bytes has no `lp_mint`, no
-/// `retainer_per_epoch`, no `min_bribe_per_epoch` to read. It fails at the account level,
-/// permanently. `register_partner` uses `init`, so the seeds cannot be reopened either:
-/// without this, growing the struct on 2026-08-27 would have **bricked every allocation
-/// that predated it**, and the "close and re-register" renewal path the design leans on
-/// would have been a path that did not exist.
-///
-/// **The size check is the entire safety property, and it is `<`, not `!=`.**
-/// `register_partner` only ever creates accounts at exactly `8 + PartnerAllocation::LEN`, so
-/// while the layout stands this instruction cannot fire on anything — it is structurally
-/// inert, not merely guarded by an authority signature. `<` rather than `!=` so that a
-/// future *shrink* of `LEN` could not suddenly make live, readable accounts deletable:
-/// strictly smaller means "written under a layout too small to be read now", which is the
-/// only condition that justifies deleting an account without looking at what is inside it.
-///
-/// That is worth stating plainly, because the shape is the dangerous one: an authority
-/// instruction that removes a partner's account without reading their entitlement. Every
-/// other partner path refuses to do that, deliberately (see `close_partner_allocation`). The
-/// justification here is that there is no entitlement left to read — the account cannot be
-/// interpreted at all, by anyone, ever again.
-///
-/// The discriminator is still checked, so this cannot be pointed at an account of some other
-/// type that happens to sit at the right seeds. Closing frees `[b"partner", wallet]` and
-/// `register_partner` reopens it at the current layout — a fresh deal, with a fresh bag,
-/// exactly as after an ordinary close.
-pub fn close_legacy_partner_allocation(ctx: Context<CloseLegacyPartnerAllocation>) -> Result<()> {
-    let info = ctx.accounts.partner_allocation.to_account_info();
-
-    // Owned by this program — otherwise the seeds derivation means nothing.
-    require_keys_eq!(*info.owner, crate::ID, SoladromeError::Unauthorized);
-    // ☢️ The guard. See the note above for why this is `<`.
-    require!(
-        info.data_len() < 8 + PartnerAllocation::LEN,
-        SoladromeError::PartnerAllocationNotLegacy
-    );
-    // And it must actually be one of ours, not some other account at these seeds.
-    {
-        let data = info.try_borrow_data()?;
-        require!(data.len() >= 8, SoladromeError::PartnerAllocationNotLegacy);
-        require!(
-            &data[..8] == PartnerAllocation::DISCRIMINATOR,
-            SoladromeError::PartnerAllocationNotLegacy
-        );
-    }
-
-    // What Anchor's `close = authority` attribute does, by hand — it needs the typed
-    // account this instruction cannot produce. Same three steps, same order: lamports to
-    // the authority, data resized to 0, ownership back to the System Program. Resizing to
-    // zero is what makes the account unrevivable within the transaction: there is no
-    // discriminator left to re-read, and `is_closed` reads exactly this shape.
-    let bytes = info.data_len();
-    let lamports = info.lamports();
-    let authority = ctx.accounts.authority.to_account_info();
-    **authority.try_borrow_mut_lamports()? = authority
-        .lamports()
-        .checked_add(lamports)
-        .ok_or(SoladromeError::Overflow)?;
-    **info.try_borrow_mut_lamports()? = 0;
-    info.assign(&anchor_lang::system_program::ID);
-    info.resize(0)?;
-
-    msg!(
-        "Legacy partner allocation closed: {} | {} bytes, {} lamports reclaimed",
-        ctx.accounts.partner_wallet.key(),
-        bytes,
-        lamports,
-    );
-    Ok(())
-}
-
 /// An SPL token account's balance, or 0 when the account does not exist yet.
 ///
 /// A partner who never provided liquidity has no LP token account at all, and a typed
@@ -1171,30 +1097,4 @@ pub struct ClosePartnerAllocation<'info> {
     /// Untyped for the same reason as above — most allocations have no stream account.
     #[account(seeds = [BRIBE_STREAM_SEED, partner_wallet.key().as_ref()], bump)]
     pub bribe_stream: UncheckedAccount<'info>,
-}
-
-/// Authority reclaims the rent of a `PartnerAllocation` too small to deserialize.
-/// Untyped by necessity — see `close_legacy_partner_allocation` for why, and for why the size
-/// check rather than the signature is what makes this safe.
-#[derive(Accounts)]
-pub struct CloseLegacyPartnerAllocation<'info> {
-    #[account(
-        mut,
-        address = protocol_state.authority @ SoladromeError::Unauthorized,
-    )]
-    pub authority: Signer<'info>,
-
-    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
-    pub protocol_state: Account<'info, ProtocolState>,
-
-    /// CHECK: The partner's beneficiary wallet — identity enforced by the PDA seeds below.
-    /// It cannot be re-asserted against the stored `partner` field here, because reading that
-    /// field is exactly what this instruction exists to work around.
-    pub partner_wallet: UncheckedAccount<'info>,
-
-    /// CHECK: Untyped on purpose — the account is smaller than the current struct, so Anchor
-    /// cannot deserialize it. Validated in the body: owned by this program, carrying the
-    /// `PartnerAllocation` discriminator, and strictly smaller than the current layout.
-    #[account(mut, seeds = [PARTNER_SEED, partner_wallet.key().as_ref()], bump)]
-    pub partner_allocation: UncheckedAccount<'info>,
 }
