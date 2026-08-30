@@ -7,13 +7,20 @@ use anchor_lang::prelude::*;
 
 /// Per-user lock state for ve-weighted governance.
 ///
-/// Locking hiSOLA transfers tokens to ve_lock_vault and removes them from the
-/// fee accumulator denominator. Locked hiSOLA earns ve voting power instead.
+/// Locking moves hiSOLA out of `UserPosition.hi_sola` and into `amount_locked` below. **No
+/// token account is involved on either side.** Both figures are ledger numbers, so there is
+/// nothing to transfer and no vault to hold it: `lock_hi_sola` debits one and credits the
+/// other. Locked hiSOLA earns ve voting power (up to 4×) instead of counting toward the fee
+/// accumulator denominator, and the fee basis it would otherwise forfeit is carried across as
+/// `UserPosition.fee_shares` — see `UserPosition::lock_balance`.
+///
+/// ⚠️ This used to say the tokens moved to a `ve_lock_vault`. That was true while hiSOLA was an
+/// SPL token; that vault, and the seed that derived it, are both gone.
 /// PDA: [b"velock", user]
 #[account]
 pub struct VeLockPosition {
     pub owner: Pubkey,
-    pub amount_locked: u64, // hiSOLA held in ve_lock_vault
+    pub amount_locked: u64, // hiSOLA held by this lock — a ledger figure, not a token balance
     pub lock_end_ts: i64,   // Unix timestamp when lock expires
     pub bump: u8,
     /// Portion of `amount_locked` that can NEVER be unlocked, whatever `lock_end_ts` says.

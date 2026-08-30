@@ -159,8 +159,10 @@ pub const PARTNER_SEED: &[u8] = b"partner";
 pub const BRIBE_STREAM_SEED: &[u8] = b"bribe_stream";
 pub const STREAM_TOKENS_SEED: &[u8] = b"stream_tokens";
 /// Partner borrow cap: max 20 % of their vote-locked hiSOLA position.
-/// Partner positions are locked (wallet balance = 0), so they borrow against the
-/// ve_lock_vault via `borrow_against_locked`. The 75 % floor buffer still applies.
+/// A partner's bag is locked, so `UserPosition.hi_sola` is 0 for them and the ordinary
+/// `borrow_usdc` path sees nothing to lend against. They borrow against
+/// `VeLockPosition.amount_locked` via `borrow_against_locked` instead. The 75 % floor buffer
+/// still applies.
 pub const PARTNER_BORROW_CAP_BPS: u64 = 2_000; // 20 %
 
 // ── Vote carry-over ───────────────────────────────────────────────────────────
@@ -234,8 +236,13 @@ pub const FLOOR_RESERVE_MIN_BPS: u64 = 7_500;
 
 // ── Ve-layer ──────────────────────────────────────────────────────────────────
 pub const VELOCK_SEED: &[u8] = b"velock";
-// (VE_VAULT_SEED removed — `VeLockPosition.amount_locked` was always a ledger figure, so the
-//  ve layer never had a custody vault to address. Unused since the seed was written.)
+// (VE_VAULT_SEED removed. It DID address real vaults once: while hiSOLA was an SPL token the
+//  seed derived a per-user custody account, `[VE_VAULT_SEED, founder | team_wallet | partner]`,
+//  that `lock_hi_sola` and the allocation claims actually transferred into. Those vaults went
+//  away with transferability — locking now moves a number out of `UserPosition.hi_sola` into
+//  `VeLockPosition.amount_locked`, both ledger figures — leaving the seed with no readers. See
+//  `instructions/ve.rs::lock_hi_sola`, and `git log -S VE_VAULT_SEED` for the vaults it used
+//  to derive.)
 
 // ── Protocol-owned liquidity ──────────────────────────────────────────────────
 pub const POL_SEED: &[u8] = b"pol";

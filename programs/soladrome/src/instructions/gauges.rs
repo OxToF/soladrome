@@ -174,8 +174,12 @@ pub fn replay_vote(ctx: Context<ReplayVote>, epoch: u64) -> Result<()> {
     write.cast(votes, power_cap)
 }
 
-/// The six accounts a cast vote writes, gathered so that `vote_gauge` and `replay_vote` write
-/// them through one body instead of two copies of it.
+/// The five accounts a cast vote writes, plus the two it only reads, gathered so that
+/// `vote_gauge` and `replay_vote` write them through one body instead of two copies of it.
+///
+/// Written: `user_position`, `gauge_state`, `user_vote_receipt`, `user_epoch_votes`,
+/// `global_epoch_votes`. Read only: `protocol_state` (held as `&`, so the compiler enforces
+/// that voting cannot mutate it) and `market_vault`, of which only `.amount` is carried in.
 ///
 /// ☢️ **Why this exists.** The two instructions must cast *identical weight through different
 /// entry points*: same snapshot rule, same 30% cap, same lazily-opened position with the same

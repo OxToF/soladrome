@@ -273,13 +273,21 @@ floor_vault_post + total_usdc_borrowed ≥ total_purchased_sola
 
 oSOLA is not pre-minted (except contributor/partner/founder vesting tranches). It is distributed as LP rewards through two complementary mechanisms:
 
-**Masterchef (continuous, per-pool):**
-- `OSOLA_EMISSION_PER_SEC` per pool per second — calibrated at mainnet deploy
+**Masterchef (continuous, per-pool) — FLAT, it does not decay:**
+- `ProtocolState.continuous_rate_per_sec` per approved pool per second, set at runtime by
+  `configure_continuous_emissions` and bounded by an on-chain expiry epoch. It is **0 at
+  `initialize`**, so the stream is off until the authority turns it on.
 - Distributed proportionally to LP share within each pool
 - Updates lazily on every add/remove/claim interaction
+- ⚠️ **It is a flat rate for as long as it runs — the decay below belongs to the epoch system
+  only.** It also **multiplies** with the number of approved pools (`rate × elapsed`, computed
+  per pool), where the epoch pot **divides** between them. Two different shapes; do not reason
+  about one from the other.
+- (This used to be a compile-time `OSOLA_EMISSION_PER_SEC` constant. It is not one any more,
+  and there is no constant to look up.)
 
 **Epoch-based (governance-weighted, decaying):**
-- Initial emission: `osola_emission_initial` — default 10,000 oSOLA/epoch total
+- Initial emission: `osola_emission_initial` — **20,000 oSOLA/epoch**, written by `initialize`
 - Split across pools proportionally to hiSOLA gauge vote weight
 - **Automatic exponential decay** each epoch: `emission × (osola_emission_decay_bps / 10_000)`
   - Default: 9,900 bps = −1 %/epoch (≈ −40 %/year)
