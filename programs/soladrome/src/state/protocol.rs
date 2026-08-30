@@ -162,12 +162,10 @@ pub struct ProtocolState {
     /// note at the head of lib.rs.
     ///
     /// ⚠️ The 32 bytes did NOT fit in the 9 spare bytes this singleton had left, so unlike
-    /// every field above it this one grew `LEN` (416 → 448). On a fresh deployment `initialize`
-    /// allocates at the current `LEN` and writes this field in the same instruction, so the
-    /// question never arises. A singleton that predates the growth needs a realloc, which is
-    /// what the `migrate_protocol_state` instruction on `devnet-legacy` is for; it is not part
-    /// of this artefact. Either way `Pubkey::default()` matches no signer, so an unwritten
-    /// field fails every founder guard closed rather than open.
+    /// every field above it this one grew `LEN` (416 → 448) and needs a realloc on any live
+    /// deployment — that is what `migrate_protocol_state` is for. Legacy accounts read all
+    /// zeros here until migrated, and `Pubkey::default()` matches no signer, so every founder
+    /// guard fails closed in the interval rather than open.
     pub founder_wallet: Pubkey,
 }
 
@@ -187,8 +185,8 @@ impl ProtocolState {
     //
     // ⚠️ 416 → 448 (2026-08-23). Every field before `founder_wallet` was carved from spare
     // bytes precisely to avoid this, but 9 spare bytes cannot hold a 32-byte key. Growing a
-    // live singleton is what caused the 3003 devnet brick in July — which is why nothing in
-    // this program reallocs it. `initialize` allocates at LEN once; there is no resize path.
+    // live singleton is what caused the 3003 devnet brick in July, so the growth goes through
+    // `migrate_protocol_state` (realloc, zero-filled) and nothing else.
     pub const LEN: usize = 448;
 }
 

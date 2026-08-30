@@ -3055,6 +3055,79 @@
       "args": []
     },
     {
+      "name": "close_legacy_partner_allocation",
+      "discriminator": [
+        21,
+        12,
+        75,
+        207,
+        159,
+        248,
+        74,
+        103
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_wallet",
+          "docs": [
+            "It cannot be re-asserted against the stored `partner` field here, because reading that",
+            "field is exactly what this instruction exists to work around."
+          ]
+        },
+        {
+          "name": "partner_allocation",
+          "docs": [
+            "cannot deserialize it. Validated in the body: owned by this program, carrying the",
+            "`PartnerAllocation` discriminator, and strictly smaller than the current layout."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner_wallet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_partner_allocation",
       "discriminator": [
         151,
@@ -3376,6 +3449,130 @@
           "type": "u16"
         }
       ]
+    },
+    {
+      "name": "convert_hi_sola",
+      "discriminator": [
+        75,
+        33,
+        40,
+        144,
+        152,
+        134,
+        0,
+        242
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "hi_sola_mint",
+          "docs": [
+            "The legacy mint. Kept `mut` because this instruction burns against it — it is the only",
+            "instruction left that touches it at all."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_hi_sola",
+          "docs": [
+            "The caller's old token account. Emptied here; nothing refills it."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vote_escrow_vault",
+          "docs": [
+            "The old global escrow vault. `init_if_needed` would be wrong here — a deployment that",
+            "never escrowed anything has no vault, and creating one just to burn zero from it would",
+            "charge rent for nothing. Pinned by seeds so the only vault this can drain is the real",
+            "one, and the amount is bounded by what this position recorded as escrowed."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  116,
+                  101,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read-only. Needed to stamp `fees_debt` when this instruction is what first opens the",
+            "caller's UserPosition — a wallet holding hiSOLA it received by transfer may never have",
+            "interacted with the protocol before."
+          ]
+        },
+        {
+          "name": "user_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "crank_partner_epoch",
@@ -5801,6 +5998,113 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "migrate_protocol_state",
+      "discriminator": [
+        29,
+        107,
+        8,
+        182,
+        172,
+        205,
+        210,
+        178
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Must match the authority stored in protocol_state (checked in the",
+            "handler against the raw bytes); also pays the rent top-up."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "discriminator and stored authority are verified in the handler. Cannot",
+            "be `Account<ProtocolState>`: a pre-migration account is too short to",
+            "deserialize — that is the bug this instruction fixes."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "founder_wallet",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "migrate_user_position",
+      "discriminator": [
+        247,
+        89,
+        105,
+        105,
+        212,
+        67,
+        232,
+        16
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "user_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "mint_ecosystem_allocation",
@@ -8983,68 +9287,78 @@
     },
     {
       "code": 6044,
+      "name": "NothingToConvert",
+      "msg": "No legacy hiSOLA to convert — this wallet holds no tokens and no vote escrow"
+    },
+    {
+      "code": 6045,
       "name": "BurnBuysNoVotes",
       "msg": "This burn would buy no votes — the oSOLA bonus is bounded by hiSOLA + ve power, and that ceiling is already reached"
     },
     {
-      "code": 6045,
+      "code": 6046,
       "name": "AmmBelowFloor",
       "msg": "This swap would push the SOLA/USDC pool below the 1 USDC floor — sell through sell_sola instead, it pays 1.00 exactly"
     },
     {
-      "code": 6046,
+      "code": 6047,
       "name": "PartnerAllocationNotSettled",
       "msg": "Partner allocation is live — a retainer that could still be credited this epoch cannot be closed out from under the partner"
     },
     {
-      "code": 6047,
+      "code": 6048,
       "name": "BribeStreamExhausted",
       "msg": "This bribe stream has paid out every tranche it was funded for"
     },
     {
-      "code": 6048,
+      "code": 6049,
       "name": "BribeStreamAlreadyReleased",
       "msg": "This epoch's tranche has already been released — the stream pays at most once per epoch"
     },
     {
-      "code": 6049,
+      "code": 6050,
       "name": "BribeStreamStillRunning",
       "msg": "This bribe stream is still running — it can only be replaced once every funded tranche has been released"
     },
     {
-      "code": 6050,
+      "code": 6051,
       "name": "ScheduleLengthMismatch",
       "msg": "This schedule is not the length the deal was registered for — the rhythm is fixed at registration, not chosen at funding"
     },
     {
-      "code": 6051,
+      "code": 6052,
       "name": "ScheduleUnderfunded",
       "msg": "Each tranche is smaller than the bribe the deal was registered for — the size is fixed at registration, not chosen at funding"
     },
     {
-      "code": 6052,
+      "code": 6053,
       "name": "PartnerStreamNotFunded",
       "msg": "This partner has never escrowed a bribe schedule — nothing accrues, and the bag is the consideration for that schedule"
     },
     {
-      "code": 6053,
+      "code": 6054,
       "name": "NothingToCrank",
       "msg": "Nothing to do this epoch — no bribe tranche is due and the retainer is either already credited or unqualified"
     },
     {
-      "code": 6054,
+      "code": 6055,
       "name": "LpMintMismatch",
       "msg": "This is not the LP token the partner's deal names"
     },
     {
-      "code": 6055,
+      "code": 6056,
       "name": "ContributorCapExceeded",
       "msg": "Contributor allocation cap exceeded — the cumulative hiSOLA or oSOLA promised to contributors would pass its ceiling"
     },
     {
-      "code": 6056,
+      "code": 6057,
       "name": "ContributorSplitMismatch",
       "msg": "Contributor tranches must be split 50/50 — hiSOLA and oSOLA in equal amounts"
+    },
+    {
+      "code": 6058,
+      "name": "PartnerAllocationNotLegacy",
+      "msg": "This allocation is readable at the current layout — close it with close_partner_allocation, which checks what the partner is still owed"
     }
   ],
   "types": [
@@ -10105,12 +10419,10 @@
               "note at the head of lib.rs.",
               "",
               "⚠️ The 32 bytes did NOT fit in the 9 spare bytes this singleton had left, so unlike",
-              "every field above it this one grew `LEN` (416 → 448). On a fresh deployment `initialize`",
-              "allocates at the current `LEN` and writes this field in the same instruction, so the",
-              "question never arises. A singleton that predates the growth needs a realloc, which is",
-              "what the `migrate_protocol_state` instruction on `devnet-legacy` is for; it is not part",
-              "of this artefact. Either way `Pubkey::default()` matches no signer, so an unwritten",
-              "field fails every founder guard closed rather than open."
+              "every field above it this one grew `LEN` (416 → 448) and needs a realloc on any live",
+              "deployment — that is what `migrate_protocol_state` is for. Legacy accounts read all",
+              "zeros here until migrated, and `Pubkey::default()` matches no signer, so every founder",
+              "guard fails closed in the interval rather than open."
             ],
             "type": "pubkey"
           }
@@ -10223,29 +10535,27 @@
           {
             "name": "vote_escrowed",
             "docs": [
-              "⚠️ LEGACY, INERT — hiSOLA left in the global vote-escrow vault by the token era.",
+              "⚠️ LEGACY — hiSOLA left in the global vote-escrow vault by the token era.",
               "",
               "Written only by the pre-ledger `vote_gauge`, which took custody of the SPL tokens",
-              "backing a vote because a plain SPL balance could otherwise vote, move to a fresh wallet,",
-              "and vote again. hiSOLA is no longer a token. **No instruction in this program reads or",
-              "writes either of these two fields** — they are 16 bytes that a fresh deployment leaves",
-              "at zero for the life of the protocol. The one instruction that ever read them,",
-              "`convert_hi_sola`, drained the stranded vault into `hi_sola` and lives on",
-              "`devnet-legacy` with the other migrations.",
+              "backing a vote because a plain SPL balance could otherwise vote, move to a fresh",
+              "wallet, and vote again. hiSOLA is no longer a token, so nothing writes this field any",
+              "more: the only code that still READS it is `convert_hi_sola`, which pulls the stranded",
+              "tokens out of that vault and credits them to `hi_sola` below.",
               "",
-              "Kept rather than deleted so that the byte layout of a live devnet position is identical",
-              "under both branches: `devnet-legacy` must be this artefact plus four instructions, not a",
-              "different account layout. Deliberately NOT reused as the new vote-lock counter either —",
-              "a wallet that voted before converting would have overwritten the amount still sitting in",
-              "the vault and orphaned its tokens. New meaning, new bytes; see `vote_locked`."
+              "Deliberately NOT reused as the new vote-lock counter, even though the bytes are free",
+              "once conversion has run. A wallet that voted before converting would have overwritten",
+              "the amount still sitting in the vault, and its tokens would have been orphaned with no",
+              "record of who owned them. New meaning, new bytes — see `vote_locked`."
             ],
             "type": "u64"
           },
           {
             "name": "escrow_epoch",
             "docs": [
-              "⚠️ LEGACY, INERT — epoch the escrow above was last topped up for. Same status as the",
-              "field above: never read, never written, kept only to hold the layout."
+              "⚠️ LEGACY — epoch the escrow above was last topped up for. Dead: the release path it",
+              "gated (`withdraw_vote_escrow`) is gone, replaced by `convert_hi_sola`. Kept so the",
+              "byte layout of live positions is untouched."
             ],
             "type": "u64"
           },
@@ -10288,8 +10598,8 @@
               "ve-locked hiSOLA is NOT counted here — it moves to `VeLockPosition.amount_locked`,",
               "which was already a ledger figure and stays one.",
               "",
-              "Appended in spare bytes, so `LEN` did not move. On a fresh deployment the only writers",
-              "are `stake_sola`, `unstake_hi_sola` and the allocation claim paths."
+              "Appended in spare bytes. Legacy positions read 0 until their owner calls",
+              "`convert_hi_sola`, which burns their tokens and credits the balance here."
             ],
             "type": "u64"
           },

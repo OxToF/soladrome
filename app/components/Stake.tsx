@@ -35,6 +35,8 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
   // Immobilised by this epoch's votes — shown so "why can't I unstake it all" is answered
   // on the card rather than by a VoteEscrowLocked error after signing.
   const [voteLocked, setVoteLocked] = useState<number>(0);
+  // Legacy SPL hiSOLA still stranded in the old escrow vault, recoverable by converting.
+  const [legacyHiSola, setLegacyHiSola] = useState<number>(0);
 
   const fetchBalance = useCallback(async () => {
     if (!wallet) { setBalance(null); return; }
@@ -47,6 +49,16 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
         const free = pos.hiSola > pos.voteLocked ? pos.hiSola - pos.voteLocked : BigInt(0);
         setBalance(Number(free) / 1e6);
         setVoteLocked(Number(pos.voteLocked) / 1e6);
+        // Both halves of the legacy sweep: tokens still in the old ATA, plus whatever the
+        // position records as stuck in the global escrow vault.
+        let inWallet = 0;
+        try {
+          const legacy = await connection.getTokenAccountBalance(
+            userAta(hiSolaM, wallet.publicKey)
+          );
+          inWallet = Number(legacy.value.uiAmount ?? 0);
+        } catch { /* no legacy token account — the normal case for a new wallet */ }
+        setLegacyHiSola(inWallet + Number(pos.voteEscrowed) / 1e6);
       } catch { setBalance(0); }
     } else {
       const mint = tab === "stake" ? solaM : oSolaM;
@@ -125,6 +137,43 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
     finally { setLoading(false); }
   }
 
+  /// Sweep a legacy SPL hiSOLA balance into the position that replaced it.
+  ///
+  /// Only devnet wallets from before the change have anything to sweep. It burns the old
+  /// tokens — from the wallet and from the global vote-escrow vault — and credits the
+  /// position by the same amount. Nothing else moves, so it is safe to run at any time; but
+  /// it can only be run BY the holder, since the program has no authority over their tokens.
+  async function convertLegacy() {
+    if (!wallet) return;
+    setLoading(true); setStatus("");
+    try {
+      const provider = new AnchorProvider(connection, wallet, {});
+      const program  = getProgram(provider);
+      const [voteEscrowVault] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vote_escrow")], PROGRAM_ID
+      );
+      const ix = await program.methods
+        .convertHiSola()
+        .accounts({
+          user:            wallet.publicKey,
+          protocolState:   statePda,
+          hiSolaMint:      hiSolaM,
+          userHiSola:      userAta(hiSolaM, wallet.publicKey),
+          voteEscrowVault,
+          marketVault,
+          userPosition:    positionPda(wallet.publicKey),
+          tokenProgram:    TOKEN_PROGRAM_ID,
+          systemProgram:   SystemProgram.programId,
+        } as any)
+        .instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
+      setStatus(`✅ hiSOLA converti en position — tx: ${tx.slice(0, 16)}…`);
+      fetchBalance();
+      window.dispatchEvent(new CustomEvent("soladrome:refresh"));
+    } catch (e: any) { setStatus(`❌ ${e?.message ?? e}`); }
+    finally { setLoading(false); }
+  }
+
   async function submit() {
     if (!wallet || !amount) return;
     setLoading(true);
@@ -136,6 +185,21 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
       const position   = positionPda(wallet.publicKey);
 
       if (tab === "stake") {
+        // Auto-migrate user_position if it exists with the old 128-byte layout
+        const posInfo = await connection.getAccountInfo(position);
+        if (posInfo && posInfo.data.length === 128) {
+          setStatus("Migrating account layout…");
+          const migIx = await program.methods
+            .migrateUserPosition()
+            .accounts({
+              user: wallet.publicKey,
+              userPosition: position,
+              systemProgram: SystemProgram.programId,
+            } as any)
+            .instruction();
+          await sendTx(connection, wallet, [migIx]);
+        }
+
         // user_usdc receives any pending fees auto-harvested when adding to an
         // existing stake (mirrors unstake). usdcMint comes from on-chain state.
         const stakeUserUsdc = usdcMint ? userAta(usdcMint, wallet.publicKey) : null;
@@ -160,6 +224,21 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
         trackQuest(wallet.publicKey.toBase58(), "stake");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
+        // Auto-migrate user_position if it exists with the old 128-byte layout
+        const posInfo = await connection.getAccountInfo(position);
+        if (posInfo && posInfo.data.length === 128) {
+          setStatus("Migrating account layout…");
+          const migIx = await program.methods
+            .migrateUserPosition()
+            .accounts({
+              user: wallet.publicKey,
+              userPosition: position,
+              systemProgram: SystemProgram.programId,
+            } as any)
+            .instruction();
+          await sendTx(connection, wallet, [migIx]);
+        }
+
         const userUsdc = usdcMint ? userAta(usdcMint, wallet.publicKey) : null;
 
         // Founder vesting lock: pass the vesting PDA when the caller is the founder,
@@ -225,6 +304,28 @@ export function Stake({ embedded = false }: { embedded?: boolean }) {
           </button>
         ))}
       </div>
+
+      {/* Legacy hiSOLA sweep. Only ever shown to wallets that held the old SPL token —
+          nothing mints it any more, so for everyone else this is dead UI. */}
+      {tab === "unstake" && legacyHiSola > 0 && (
+        <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/5 px-3 py-3 mb-3 text-xs text-yellow-200">
+          <p className="mb-2">
+            <span className="font-bold">
+              {legacyHiSola.toLocaleString(undefined, { maximumFractionDigits: 4 })} hiSOLA
+            </span>{" "}
+            sont encore sous l&apos;ancien format token. hiSOLA est devenu une position non
+            transférable : convertis-les pour les revoir dans ton solde, voter avec, et les
+            unstake. Rien d&apos;autre ne bouge — ni ta dette, ni tes frais, ni ton stake.
+          </p>
+          <button
+            className="btn-secondary w-full text-xs py-2"
+            onClick={convertLegacy}
+            disabled={loading}
+          >
+            {loading ? "…" : "Convertir mes hiSOLA"}
+          </button>
+        </div>
+      )}
 
       {/* What this epoch's votes still hold. Answers "why is my balance short" before the
           transaction fails, rather than after. */}

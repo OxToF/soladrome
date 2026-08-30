@@ -647,6 +647,16 @@ export function FounderPanel() {
       const program  = getProgram(provider);
       const founder  = wallet.publicKey;
 
+      // Auto-migrate if UserPosition is on old 128-byte layout
+      const posInfo = await connection.getAccountInfo(positionPda(founder));
+      if (posInfo && posInfo.data.length < 136) {
+        setStatus("⚙️ Migrating position account…");
+        const migIx = await program.methods.migrateUserPosition()
+          .accounts({ user: founder, userPosition: positionPda(founder), systemProgram: SystemProgram.programId } as any)
+          .instruction();
+        await sendTx(connection, wallet, [migIx]);
+      }
+
       const ix = await program.methods
         .claimFounderHiSola()
         .accounts({

@@ -8,11 +8,6 @@
 //! are. `lib.rs` is a dispatcher and holds neither.
 //!
 //! `amm`, `pol` and `ve` were already shaped this way and moved here unchanged.
-//!
-//! There is no `migrate` module. Account-layout migrations only make sense against a deployment
-//! that predates a struct change, and this branch is the fresh-deploy artefact — every one of
-//! them was inert here. They live on `devnet-legacy`, which is this tree plus those four
-//! instructions and nothing else; see the audit package's "Deliberately not audited" section.
 
 pub mod admin;
 pub mod amm;
@@ -21,6 +16,7 @@ pub mod bribes;
 pub mod curve;
 pub mod emissions;
 pub mod gauges;
+pub mod migrate;
 pub mod partners;
 pub mod pol;
 pub mod stake;
@@ -35,6 +31,7 @@ pub use bribes::*;
 pub use curve::*;
 pub use emissions::*;
 pub use gauges::*;
+pub use migrate::*;
 pub use partners::*;
 #[allow(ambiguous_glob_reexports)]
 pub use pol::*;

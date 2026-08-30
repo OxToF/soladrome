@@ -125,6 +125,8 @@ pub enum SoladromeError {
     EpochAlreadyFinalized,
     #[msg("POL skim exceeds pol_split_bps of the uncredited fee growth")]
     PolSplitExceeded,
+    #[msg("No legacy hiSOLA to convert — this wallet holds no tokens and no vote escrow")]
+    NothingToConvert,
     #[msg("This burn would buy no votes — the oSOLA bonus is bounded by hiSOLA + ve power, and that ceiling is already reached")]
     BurnBuysNoVotes,
     #[msg("This swap would push the SOLA/USDC pool below the 1 USDC floor — sell through sell_sola instead, it pays 1.00 exactly")]
@@ -153,4 +155,6 @@ pub enum SoladromeError {
     ContributorCapExceeded,
     #[msg("Contributor tranches must be split 50/50 — hiSOLA and oSOLA in equal amounts")]
     ContributorSplitMismatch,
+    #[msg("This allocation is readable at the current layout — close it with close_partner_allocation, which checks what the partner is still owed")]
+    PartnerAllocationNotLegacy,
 }

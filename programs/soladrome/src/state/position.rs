@@ -21,24 +21,22 @@ pub struct UserPosition {
     /// flash-borrow attacks where USDC is borrowed and repaid atomically.
     pub last_borrow_slot: u64,
 
-    /// ⚠️ LEGACY, INERT — hiSOLA left in the global vote-escrow vault by the token era.
+    /// ⚠️ LEGACY — hiSOLA left in the global vote-escrow vault by the token era.
     ///
     /// Written only by the pre-ledger `vote_gauge`, which took custody of the SPL tokens
-    /// backing a vote because a plain SPL balance could otherwise vote, move to a fresh wallet,
-    /// and vote again. hiSOLA is no longer a token. **No instruction in this program reads or
-    /// writes either of these two fields** — they are 16 bytes that a fresh deployment leaves
-    /// at zero for the life of the protocol. The one instruction that ever read them,
-    /// `convert_hi_sola`, drained the stranded vault into `hi_sola` and lives on
-    /// `devnet-legacy` with the other migrations.
+    /// backing a vote because a plain SPL balance could otherwise vote, move to a fresh
+    /// wallet, and vote again. hiSOLA is no longer a token, so nothing writes this field any
+    /// more: the only code that still READS it is `convert_hi_sola`, which pulls the stranded
+    /// tokens out of that vault and credits them to `hi_sola` below.
     ///
-    /// Kept rather than deleted so that the byte layout of a live devnet position is identical
-    /// under both branches: `devnet-legacy` must be this artefact plus four instructions, not a
-    /// different account layout. Deliberately NOT reused as the new vote-lock counter either —
-    /// a wallet that voted before converting would have overwritten the amount still sitting in
-    /// the vault and orphaned its tokens. New meaning, new bytes; see `vote_locked`.
+    /// Deliberately NOT reused as the new vote-lock counter, even though the bytes are free
+    /// once conversion has run. A wallet that voted before converting would have overwritten
+    /// the amount still sitting in the vault, and its tokens would have been orphaned with no
+    /// record of who owned them. New meaning, new bytes — see `vote_locked`.
     pub vote_escrowed: u64,
-    /// ⚠️ LEGACY, INERT — epoch the escrow above was last topped up for. Same status as the
-    /// field above: never read, never written, kept only to hold the layout.
+    /// ⚠️ LEGACY — epoch the escrow above was last topped up for. Dead: the release path it
+    /// gated (`withdraw_vote_escrow`) is gone, replaced by `convert_hi_sola`. Kept so the
+    /// byte layout of live positions is untouched.
     pub escrow_epoch: u64,
 
     /// hiSOLA this wallet obtained by actually paying into the protocol — incremented by
@@ -73,8 +71,8 @@ pub struct UserPosition {
     /// ve-locked hiSOLA is NOT counted here — it moves to `VeLockPosition.amount_locked`,
     /// which was already a ledger figure and stays one.
     ///
-    /// Appended in spare bytes, so `LEN` did not move. On a fresh deployment the only writers
-    /// are `stake_sola`, `unstake_hi_sola` and the allocation claim paths.
+    /// Appended in spare bytes. Legacy positions read 0 until their owner calls
+    /// `convert_hi_sola`, which burns their tokens and credits the balance here.
     pub hi_sola: u64,
 
     /// hiSOLA immobilised by the votes cast in `vote_lock_epoch`, in ledger units.

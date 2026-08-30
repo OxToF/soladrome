@@ -40,6 +40,16 @@ export function ClaimFees() {
       const userUsdc   = userAta(usdcMintPk, wallet.publicKey);
       const position   = positionPda(wallet.publicKey);
 
+      // Auto-migrate UserPosition if on old 128-byte layout
+      const posInfo = await connection.getAccountInfo(position);
+      if (posInfo && posInfo.data.length === 128) {
+        setStatus("Migrating account layout…");
+        const migIx = await program.methods.migrateUserPosition()
+          .accounts({ user: wallet.publicKey, userPosition: position, systemProgram: SystemProgram.programId } as any)
+          .instruction();
+        await sendTx(connection, wallet, [migIx]);
+      }
+
       const ix = await program.methods
         .claimFees()
         .accounts({
