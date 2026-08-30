@@ -28,8 +28,10 @@ pub const SOLA_VAULT_SEED: &[u8] = b"sola_vault";
 pub const INIT_VIRTUAL_USDC: u64 = 1_000_000_000_000; // 1 000 000 USDC (6 dec)
 pub const INIT_VIRTUAL_SOLA: u64 = 1_000_000_000_000; // 1 000 000 SOLA (6 dec)  – floor = 1:1
 
-/// Total oSOLA minted per epoch, split proportionally across voted pools (legacy gauge system).
-pub const LP_EMISSION_PER_EPOCH: u64 = 10_000 * 1_000_000; // 10 000 oSOLA (6 dec)
+// (LP_EMISSION_PER_EPOCH removed — a compile-time per-epoch emission was superseded by
+//  `ProtocolState.osola_emission_initial`, which `configure_emissions` sets at runtime. The
+//  constant had no readers; it only made it look as though 10 000/epoch were fixed in the
+//  binary, which would have been the wrong number to audit against.)
 
 /// Maximum voting power any single address may allocate in one epoch,
 /// expressed as a fraction of total_hi_sola (basis points, 10 000 = 100%).
@@ -52,9 +54,9 @@ pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
 pub const ROLLOVER_DELAY_EPOCHS: u64 = 2;
 
 // Founder allocation — 12% of reference 100 M-token supply, 7% auto-staked.
-/// Total founder allocation across all three tranches (reference only — never used as a cap).
-/// 7M hiSOLA (vesting) + 5M oSOLA (vesting) + 250k SOLA (immediate liquid) = 12.25M
-pub const FOUNDER_TOTAL: u64 = 12_250_000_000_000; // 12 250 000 SOLA (6 dec)
+// The three tranches below sum to 12.25M. There is deliberately no FOUNDER_TOTAL constant
+// holding that sum: it was never used as a cap, and a total that no `require!` reads is a
+// number an auditor has to chase to discover it enforces nothing.
 pub const FOUNDER_STAKE: u64 = 7_000_000_000_000; //  7 000 000 SOLA → hiSOLA (governance vesting)
 /// 5 000 000 oSOLA — held in vesting vault, released linearly after cliff.
 pub const FOUNDER_LIQUID: u64 = 5_000_000_000_000; //  5 000 000 oSOLA vesting tranche
@@ -232,7 +234,8 @@ pub const FLOOR_RESERVE_MIN_BPS: u64 = 7_500;
 
 // ── Ve-layer ──────────────────────────────────────────────────────────────────
 pub const VELOCK_SEED: &[u8] = b"velock";
-pub const VE_VAULT_SEED: &[u8] = b"ve_vault";
+// (VE_VAULT_SEED removed — `VeLockPosition.amount_locked` was always a ledger figure, so the
+//  ve layer never had a custody vault to address. Unused since the seed was written.)
 
 // ── Protocol-owned liquidity ──────────────────────────────────────────────────
 pub const POL_SEED: &[u8] = b"pol";

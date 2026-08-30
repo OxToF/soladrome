@@ -49,121 +49,34 @@ pub fn vote_gauge(ctx: Context<VoteGauge>, epoch: u64, votes: u64) -> Result<()>
     // hiSOLA pool — never closed. `hi_sola` cannot be acquired from anyone; the only ways
     // in are `stake_sola` (financed) and `unlock_hi_sola` (an allocation the protocol
     // itself granted), so voting power now belongs to whoever the protocol says it does.
-    let hi_sola_balance = ctx.accounts.user_position.hi_sola;
     let ve_power = ve::try_load_ve_power(
         &ctx.accounts.lock_position,
         &ctx.accounts.user.key(),
         clock.unix_timestamp,
     );
-    let total_power = hi_sola_balance.saturating_add(ve_power);
 
-    // Init UserEpochVotes on first vote — snapshot total_power as the epoch-wide cap.
-    // Snapshotting here stops a user voting with a lock, letting it expire, then voting
-    // again on a fresh balance that exceeds the original cap. The snapshot is immutable
-    // once set; subsequent votes check against it, not live power.
-    //
-    // The duplication it could never stop — move the balance to a fresh wallet, which
-    // gets its own snapshot and votes the same stake again while the first wallet's
-    // `init`-created receipt still counts — is gone with transferability itself.
-    if ctx.accounts.user_epoch_votes.epoch == 0 {
-        ctx.accounts.user_epoch_votes.epoch = epoch;
-        ctx.accounts.user_epoch_votes.total_power_snapshot = total_power;
-        ctx.accounts.user_epoch_votes.ve_power_snapshot = ve_power;
-        ctx.accounts.user_epoch_votes.bump = ctx.bumps.user_epoch_votes;
-    }
-
-    // ── 30% per-address cap applies only to hiSOLA governance power ─────
-    // The oSOLA burn bonus is added on top of the capped hiSOLA portion, for the current
-    // epoch only. It is NOT unbounded, and the bound is not here:
-    // `lock_vote_backing` below requires `new_total - ve_power_snapshot <= hi_sola` and
-    // has no bonus term, so the real ceiling on a wallet's cumulative votes is
-    // `hi_sola + ve_power_snapshot` — the power it held before burning anything.
-    //
-    // So the bonus buys exactly one thing: the ground the 30% global cap took away,
-    // never more. Once `total_hi_sola` is large enough that the global cap stops binding,
-    // it buys nothing at all. `burn_o_sola_for_votes` refuses a burn beyond that usable
-    // margin rather than destroying oSOLA for votes that could never be cast; the
-    // arithmetic is spelled out there, and pinned in tests/bankrun_osola_bonus.ts.
-    let hi_sola_cap = ctx.accounts.user_epoch_votes.total_power_snapshot;
-    let o_sola_bonus = ctx.accounts.user_epoch_votes.o_sola_bonus;
-
-    let global_cap = ctx
-        .accounts
-        .protocol_state
-        .total_hi_sola
-        .saturating_mul(VOTE_WEIGHT_CAP_BPS)
-        / 10_000;
-    let effective_hi_sola = hi_sola_cap.min(global_cap);
-
-    // Total power = capped hiSOLA portion + uncapped oSOLA burn bonus
-    let power_cap = effective_hi_sola.saturating_add(o_sola_bonus);
-
-    let already_allocated = ctx.accounts.user_epoch_votes.allocated;
-    let new_total = already_allocated
-        .checked_add(votes)
-        .ok_or(SoladromeError::Overflow)?;
-    require!(new_total <= power_cap, SoladromeError::VoteOverflow);
-
-    // Immobilise the backing stake before any tally is written.
-    if ctx.accounts.user_position.owner == Pubkey::default() {
-        ctx.accounts.user_position.owner = ctx.accounts.user.key();
-        ctx.accounts.user_position.bump = ctx.bumps.user_position;
-        // SECURITY: stamp the accumulator, exactly as stake_sola / unstake_hi_sola /
-        // borrow_usdc do when they lazily open a position. Without it the position is
-        // born with `fees_debt = 0` and `claim_fees` reads this wallet as having been
-        // staked since genesis. The accumulator is deliberately NOT persisted here (nor
-        // is last_market_vault_balance touched): we only need the highest value it could
-        // legitimately hold right now, so that nothing accrued before this moment is
-        // claimable. Same treatment as borrow_usdc.
-        ctx.accounts.user_position.fees_debt = math::advance_accumulator(
-            ctx.accounts.protocol_state.fees_per_hi_sola,
-            ctx.accounts.market_vault.amount,
-            ctx.accounts.protocol_state.last_market_vault_balance,
-            ctx.accounts.protocol_state.total_hi_sola,
-        );
-    }
-    lock_vote_backing(
-        &mut ctx.accounts.user_position,
-        new_total,
-        ctx.accounts.user_epoch_votes.ve_power_snapshot,
+    let mut write = VoteWrite {
+        protocol_state: &ctx.accounts.protocol_state,
+        market_vault_amount: ctx.accounts.market_vault.amount,
+        user_position: &mut ctx.accounts.user_position,
+        gauge_state: &mut ctx.accounts.gauge_state,
+        user_vote_receipt: &mut ctx.accounts.user_vote_receipt,
+        user_epoch_votes: &mut ctx.accounts.user_epoch_votes,
+        global_epoch_votes: &mut ctx.accounts.global_epoch_votes,
+        user: ctx.accounts.user.key(),
+        pool_id: ctx.accounts.pool_id.key(),
         epoch,
-    )?;
+        bumps: VoteBumps {
+            user_position: ctx.bumps.user_position,
+            gauge_state: ctx.bumps.gauge_state,
+            user_vote_receipt: ctx.bumps.user_vote_receipt,
+            user_epoch_votes: ctx.bumps.user_epoch_votes,
+            global_epoch_votes: ctx.bumps.global_epoch_votes,
+        },
+    };
 
-    // Init GaugeState if first vote for this pool this epoch
-    if ctx.accounts.gauge_state.pool_id == Pubkey::default() {
-        ctx.accounts.gauge_state.pool_id = ctx.accounts.pool_id.key();
-        ctx.accounts.gauge_state.epoch = epoch;
-        ctx.accounts.gauge_state.bump = ctx.bumps.gauge_state;
-    }
-    ctx.accounts.gauge_state.total_votes = ctx
-        .accounts
-        .gauge_state
-        .total_votes
-        .checked_add(votes)
-        .ok_or(SoladromeError::Overflow)?;
-
-    // Record vote receipt (init enforces one-shot per pool per epoch)
-    ctx.accounts.user_vote_receipt.user = ctx.accounts.user.key();
-    ctx.accounts.user_vote_receipt.pool_id = ctx.accounts.pool_id.key();
-    ctx.accounts.user_vote_receipt.epoch = epoch;
-    ctx.accounts.user_vote_receipt.votes = votes;
-    ctx.accounts.user_vote_receipt.bump = ctx.bumps.user_vote_receipt;
-
-    // Persist allocation counter
-    ctx.accounts.user_epoch_votes.allocated = new_total;
-
-    // Update global vote total (denominator for LP emissions)
-    let gev = &mut ctx.accounts.global_epoch_votes;
-    if gev.epoch == 0 {
-        gev.epoch = epoch;
-        gev.bump = ctx.bumps.global_epoch_votes;
-    }
-    gev.total_votes = gev
-        .total_votes
-        .checked_add(votes)
-        .ok_or(SoladromeError::Overflow)?;
-
-    Ok(())
+    let (_, power_cap) = write.open_epoch(ve_power);
+    write.cast(votes, power_cap)
 }
 
 /// Permissionless epoch vote carry-over for one pool entry.
@@ -218,37 +131,39 @@ pub fn replay_vote(ctx: Context<ReplayVote>, epoch: u64) -> Result<()> {
         .ok_or(SoladromeError::PoolNotInConfig)?;
     let pool_bps = ctx.accounts.vote_config.bps[pool_idx] as u128;
 
-    // Compute voting power — same formula and same source as vote_gauge. A recurring
-    // voter's balance simply stays on their position from one epoch to the next.
-    let hi_sola_balance = ctx.accounts.user_position.hi_sola;
+    // Voting power — same formula and same source as vote_gauge, because it is the same code.
+    // A recurring voter's balance simply stays on their position from one epoch to the next.
     let ve_power = ve::try_load_ve_power(
         &ctx.accounts.lock_position,
         &ctx.accounts.user.key(),
         clock.unix_timestamp,
     );
-    let total_power = hi_sola_balance.saturating_add(ve_power);
 
-    // Init UserEpochVotes on first vote this epoch (snapshot total_power)
-    if ctx.accounts.user_epoch_votes.epoch == 0 {
-        ctx.accounts.user_epoch_votes.epoch = epoch;
-        ctx.accounts.user_epoch_votes.total_power_snapshot = total_power;
-        ctx.accounts.user_epoch_votes.ve_power_snapshot = ve_power;
-        ctx.accounts.user_epoch_votes.bump = ctx.bumps.user_epoch_votes;
-    }
+    let mut write = VoteWrite {
+        protocol_state: &ctx.accounts.protocol_state,
+        market_vault_amount: ctx.accounts.market_vault.amount,
+        user_position: &mut ctx.accounts.user_position,
+        gauge_state: &mut ctx.accounts.gauge_state,
+        user_vote_receipt: &mut ctx.accounts.user_vote_receipt,
+        user_epoch_votes: &mut ctx.accounts.user_epoch_votes,
+        global_epoch_votes: &mut ctx.accounts.global_epoch_votes,
+        user: ctx.accounts.user.key(),
+        pool_id: pool_key,
+        epoch,
+        bumps: VoteBumps {
+            user_position: ctx.bumps.user_position,
+            gauge_state: ctx.bumps.gauge_state,
+            user_vote_receipt: ctx.bumps.user_vote_receipt,
+            user_epoch_votes: ctx.bumps.user_epoch_votes,
+            global_epoch_votes: ctx.bumps.global_epoch_votes,
+        },
+    };
 
-    // Apply 30% per-address cap on hiSOLA portion (oSOLA bonus stays uncapped)
-    let snapshot = ctx.accounts.user_epoch_votes.total_power_snapshot;
-    let o_sola_bonus = ctx.accounts.user_epoch_votes.o_sola_bonus;
-    let global_cap = ctx
-        .accounts
-        .protocol_state
-        .total_hi_sola
-        .saturating_mul(VOTE_WEIGHT_CAP_BPS)
-        / 10_000;
-    let effective_snapshot = snapshot.min(global_cap);
-    let power_cap = effective_snapshot.saturating_add(o_sola_bonus);
+    let (effective_snapshot, power_cap) = write.open_epoch(ve_power);
 
-    // Votes for this pool = effective_snapshot × bps / 10 000
+    // The one thing a replay does that a manual vote does not: it derives the weight from the
+    // saved config instead of taking it as an argument. Everything after this line is shared.
+    // Votes for this pool = effective_snapshot × bps / 10 000.
     let votes = (effective_snapshot as u128)
         .checked_mul(pool_bps)
         .ok_or(SoladromeError::Overflow)?
@@ -256,71 +171,164 @@ pub fn replay_vote(ctx: Context<ReplayVote>, epoch: u64) -> Result<()> {
         .ok_or(SoladromeError::Overflow)? as u64;
     require!(votes > 0, SoladromeError::InvalidAmount);
 
-    // Overflow / cap check
-    let already_allocated = ctx.accounts.user_epoch_votes.allocated;
-    let new_total = already_allocated
-        .checked_add(votes)
-        .ok_or(SoladromeError::Overflow)?;
-    require!(new_total <= power_cap, SoladromeError::VoteOverflow);
+    write.cast(votes, power_cap)
+}
 
-    // Same vote lock as vote_gauge. The replay cannot move anything — there is nothing to
-    // move — and fails with InsufficientVoteBacking if the owner's balance no longer
-    // covers the weight their config asks for (e.g. they unstaked since).
-    if ctx.accounts.user_position.owner == Pubkey::default() {
-        ctx.accounts.user_position.owner = ctx.accounts.user.key();
-        ctx.accounts.user_position.bump = ctx.bumps.user_position;
-        // SECURITY: same accumulator stamp as vote_gauge — a position opened by a replay
-        // must not be born claiming the whole fee history either. Unreachable in practice
-        // (a position with no balance backs no votes), but the stamp costs nothing.
-        ctx.accounts.user_position.fees_debt = math::advance_accumulator(
-            ctx.accounts.protocol_state.fees_per_hi_sola,
-            ctx.accounts.market_vault.amount,
-            ctx.accounts.protocol_state.last_market_vault_balance,
-            ctx.accounts.protocol_state.total_hi_sola,
-        );
+/// The six accounts a cast vote writes, gathered so that `vote_gauge` and `replay_vote` write
+/// them through one body instead of two copies of it.
+///
+/// ☢️ **Why this exists.** The two instructions must cast *identical weight through different
+/// entry points*: same snapshot rule, same 30% cap, same lazily-opened position with the same
+/// `fees_debt` stamp, same vote lock, same three tallies. That was previously ~55 lines
+/// duplicated verbatim, with a comment in each copy asking the reader to check it against the
+/// other. Anything that drifted between them would have been a silent difference in what a
+/// permissionless replay can do versus what the owner can do — the exact shape of bug the
+/// permissionless path is most dangerous for.
+///
+/// The struct is the only way to share it: the two `#[derive(Accounts)]` contexts are distinct
+/// types (different payer, different signer, an extra `vote_config`), so there is no `ctx` to
+/// pass. Field borrows out of `ctx.accounts` are disjoint, so building this costs nothing.
+struct VoteWrite<'a> {
+    protocol_state: &'a ProtocolState,
+    /// `market_vault.amount`. Read only to stamp `fees_debt` on a position this call opens.
+    market_vault_amount: u64,
+    user_position: &'a mut UserPosition,
+    gauge_state: &'a mut GaugeState,
+    user_vote_receipt: &'a mut UserVoteReceipt,
+    user_epoch_votes: &'a mut UserEpochVotes,
+    global_epoch_votes: &'a mut GlobalEpochVotes,
+    user: Pubkey,
+    pool_id: Pubkey,
+    epoch: u64,
+    bumps: VoteBumps,
+}
+
+/// PDA bumps, needed only on the calls that create the account they belong to.
+struct VoteBumps {
+    user_position: u8,
+    gauge_state: u8,
+    user_vote_receipt: u8,
+    user_epoch_votes: u8,
+    global_epoch_votes: u8,
+}
+
+impl VoteWrite<'_> {
+    /// Open `UserEpochVotes` if this is its first touch this epoch, and return
+    /// `(effective_hi_sola, power_cap)` — the two ceilings every vote is measured against.
+    ///
+    /// The snapshot stops a user voting with a lock, letting it expire, then voting again on a
+    /// fresh balance that exceeds the original cap. It is immutable once set; later votes in
+    /// the epoch check against it, not against live power. (The duplication it could never
+    /// stop — move the balance to a fresh wallet, which gets its own snapshot and votes the
+    /// same stake again while the first wallet's `init`-created receipt still counts — is gone
+    /// with transferability itself.)
+    ///
+    /// ── 30% per-address cap applies only to hiSOLA governance power ─────
+    /// The oSOLA burn bonus is added on top of the capped hiSOLA portion, for the current epoch
+    /// only. It is NOT unbounded, and the bound is not here: `lock_vote_backing` requires
+    /// `new_total - ve_power_snapshot <= hi_sola` and has no bonus term, so the real ceiling on
+    /// a wallet's cumulative votes is `hi_sola + ve_power_snapshot` — the power it held before
+    /// burning anything.
+    ///
+    /// So the bonus buys exactly one thing: the ground the 30% global cap took away, never
+    /// more. Once `total_hi_sola` is large enough that the global cap stops binding, it buys
+    /// nothing at all. `burn_o_sola_for_votes` refuses a burn beyond that usable margin rather
+    /// than destroying oSOLA for votes that could never be cast; the arithmetic is spelled out
+    /// there, and pinned in tests/bankrun_osola_bonus.ts.
+    fn open_epoch(&mut self, ve_power: u64) -> (u64, u64) {
+        if self.user_epoch_votes.epoch == 0 {
+            self.user_epoch_votes.epoch = self.epoch;
+            self.user_epoch_votes.total_power_snapshot =
+                self.user_position.hi_sola.saturating_add(ve_power);
+            self.user_epoch_votes.ve_power_snapshot = ve_power;
+            self.user_epoch_votes.bump = self.bumps.user_epoch_votes;
+        }
+
+        let global_cap = self
+            .protocol_state
+            .total_hi_sola
+            .saturating_mul(VOTE_WEIGHT_CAP_BPS)
+            / 10_000;
+        let effective_hi_sola = self.user_epoch_votes.total_power_snapshot.min(global_cap);
+
+        // Total power = capped hiSOLA portion + uncapped oSOLA burn bonus
+        let power_cap = effective_hi_sola.saturating_add(self.user_epoch_votes.o_sola_bonus);
+        (effective_hi_sola, power_cap)
     }
-    lock_vote_backing(
-        &mut ctx.accounts.user_position,
-        new_total,
-        ctx.accounts.user_epoch_votes.ve_power_snapshot,
-        epoch,
-    )?;
 
-    // Init GaugeState if first vote for this pool this epoch
-    if ctx.accounts.gauge_state.pool_id == Pubkey::default() {
-        ctx.accounts.gauge_state.pool_id = pool_key;
-        ctx.accounts.gauge_state.epoch = epoch;
-        ctx.accounts.gauge_state.bump = ctx.bumps.gauge_state;
+    /// Check `votes` against the cap, immobilise the backing stake, then write the receipt and
+    /// the two tallies. Nothing here is allowed to differ between the two entry points.
+    fn cast(self, votes: u64, power_cap: u64) -> Result<()> {
+        let new_total = self
+            .user_epoch_votes
+            .allocated
+            .checked_add(votes)
+            .ok_or(SoladromeError::Overflow)?;
+        require!(new_total <= power_cap, SoladromeError::VoteOverflow);
+
+        // Immobilise the backing stake before any tally is written. On the replay path this
+        // fails with InsufficientVoteBacking if the owner's balance no longer covers the weight
+        // their config asks for (e.g. they unstaked since).
+        if self.user_position.owner == Pubkey::default() {
+            self.user_position.owner = self.user;
+            self.user_position.bump = self.bumps.user_position;
+            // SECURITY: stamp the accumulator, exactly as stake_sola / unstake_hi_sola /
+            // borrow_usdc do when they lazily open a position. Without it the position is born
+            // with `fees_debt = 0` and `claim_fees` reads this wallet as having been staked
+            // since genesis. The accumulator is deliberately NOT persisted here (nor is
+            // last_market_vault_balance touched): we only need the highest value it could
+            // legitimately hold right now, so that nothing accrued before this moment is
+            // claimable. Same treatment as borrow_usdc.
+            self.user_position.fees_debt = math::advance_accumulator(
+                self.protocol_state.fees_per_hi_sola,
+                self.market_vault_amount,
+                self.protocol_state.last_market_vault_balance,
+                self.protocol_state.total_hi_sola,
+            );
+        }
+        lock_vote_backing(
+            self.user_position,
+            new_total,
+            self.user_epoch_votes.ve_power_snapshot,
+            self.epoch,
+        )?;
+
+        // Init GaugeState if first vote for this pool this epoch
+        if self.gauge_state.pool_id == Pubkey::default() {
+            self.gauge_state.pool_id = self.pool_id;
+            self.gauge_state.epoch = self.epoch;
+            self.gauge_state.bump = self.bumps.gauge_state;
+        }
+        self.gauge_state.total_votes = self
+            .gauge_state
+            .total_votes
+            .checked_add(votes)
+            .ok_or(SoladromeError::Overflow)?;
+
+        // Record vote receipt (init enforces one-shot per pool per epoch, and makes a manual
+        // vote and a replay for the same pool mutually exclusive)
+        self.user_vote_receipt.user = self.user;
+        self.user_vote_receipt.pool_id = self.pool_id;
+        self.user_vote_receipt.epoch = self.epoch;
+        self.user_vote_receipt.votes = votes;
+        self.user_vote_receipt.bump = self.bumps.user_vote_receipt;
+
+        // Persist allocation counter
+        self.user_epoch_votes.allocated = new_total;
+
+        // Update global vote total (denominator for LP emissions)
+        if self.global_epoch_votes.epoch == 0 {
+            self.global_epoch_votes.epoch = self.epoch;
+            self.global_epoch_votes.bump = self.bumps.global_epoch_votes;
+        }
+        self.global_epoch_votes.total_votes = self
+            .global_epoch_votes
+            .total_votes
+            .checked_add(votes)
+            .ok_or(SoladromeError::Overflow)?;
+
+        Ok(())
     }
-    ctx.accounts.gauge_state.total_votes = ctx
-        .accounts
-        .gauge_state
-        .total_votes
-        .checked_add(votes)
-        .ok_or(SoladromeError::Overflow)?;
-
-    // Write UserVoteReceipt (init = replay-proof, one per pool per epoch)
-    ctx.accounts.user_vote_receipt.user = ctx.accounts.user.key();
-    ctx.accounts.user_vote_receipt.pool_id = pool_key;
-    ctx.accounts.user_vote_receipt.epoch = epoch;
-    ctx.accounts.user_vote_receipt.votes = votes;
-    ctx.accounts.user_vote_receipt.bump = ctx.bumps.user_vote_receipt;
-
-    ctx.accounts.user_epoch_votes.allocated = new_total;
-
-    // Init / update GlobalEpochVotes
-    if ctx.accounts.global_epoch_votes.epoch == 0 {
-        ctx.accounts.global_epoch_votes.epoch = epoch;
-        ctx.accounts.global_epoch_votes.bump = ctx.bumps.global_epoch_votes;
-    }
-    ctx.accounts.global_epoch_votes.total_votes = ctx
-        .accounts
-        .global_epoch_votes
-        .total_votes
-        .checked_add(votes)
-        .ok_or(SoladromeError::Overflow)?;
-
-    Ok(())
 }
 
 /// Save or update the caller's persistent gauge vote allocation.

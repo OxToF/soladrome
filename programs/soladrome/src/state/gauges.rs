@@ -71,7 +71,8 @@ const _: () = assert!(
 );
 
 /// Total hiSOLA vote-weight cast across ALL pools in one epoch.
-/// Used as denominator when splitting LP_EMISSION_PER_EPOCH across pools.
+/// Used as denominator when splitting the epoch's oSOLA emission across pools — the amount
+/// itself comes from `ProtocolState.osola_emission_initial` and its decay, not a constant.
 /// PDA: [b"epoch_votes", epoch_le8]
 #[account]
 pub struct GlobalEpochVotes {

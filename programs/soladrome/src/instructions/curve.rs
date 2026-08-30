@@ -9,7 +9,6 @@ use anchor_spl::{
     token::{self, Burn, Mint, MintTo, Token, TokenAccount, Transfer},
 };
 
-use crate::amm_math;
 use crate::constants::*;
 use crate::errors::SoladromeError;
 use crate::instructions::amm;
@@ -397,17 +396,13 @@ pub fn flash_arbitrage(
     let mint_b = pool.token_b_mint;
     let sola_is_a = mint_a == ctx.accounts.protocol_state.sola_mint;
 
-    let fee_rate = pool.fee_rate as u128;
-    let fee_total = amount_osola as u128 * fee_rate / 10_000;
-    let amount_net = (amount_osola as u128 - fee_total) as u64;
-
-    let (reserve_in, reserve_out) = if sola_is_a {
-        (pool.reserve_a, pool.reserve_b)
-    } else {
-        (pool.reserve_b, pool.reserve_a)
-    };
-
-    let usdc_out = amm_math::swap_out(reserve_in, reserve_out, amount_net)?;
+    // Same quote the public `swap` gets, from the same function — see `amm::quote_swap` for why
+    // this arbitrage path must never price its own trade. `fee_protocol` is ignored here: this
+    // path burns the whole fee rather than splitting it, see below.
+    let quote = amm::quote_swap(pool, amount_osola, sola_is_a)?;
+    let fee_total = quote.fee_total;
+    let amount_net = quote.amount_net;
+    let usdc_out = quote.amount_out;
 
     let pool_seeds: &[&[u8]] = &[
         AMM_POOL_SEED,
@@ -463,7 +458,7 @@ pub fn flash_arbitrage(
     // SOLA is still in caller_sola. Burn it now so that total_sola (already
     // incremented by amount_osola above) stays accurate and no unbacked SOLA
     // leaks into circulation.
-    let fee_total_u64 = fee_total as u64;
+    let fee_total_u64 = fee_total;
     if fee_total_u64 > 0 {
         token::burn(
             CpiContext::new(
@@ -498,25 +493,9 @@ pub fn flash_arbitrage(
     let cont_active = amm::continuous_active(&ctx.accounts.protocol_state, clock_now);
     let pool = &mut ctx.accounts.pool;
     amm::advance_pool_rewards(pool, clock_now, cont_rate, cont_active);
-    if sola_is_a {
-        pool.reserve_a = pool
-            .reserve_a
-            .checked_add(amount_net)
-            .ok_or(SoladromeError::Overflow)?;
-        pool.reserve_b = pool
-            .reserve_b
-            .checked_sub(usdc_out)
-            .ok_or(SoladromeError::Overflow)?;
-    } else {
-        pool.reserve_b = pool
-            .reserve_b
-            .checked_add(amount_net)
-            .ok_or(SoladromeError::Overflow)?;
-        pool.reserve_a = pool
-            .reserve_a
-            .checked_sub(usdc_out)
-            .ok_or(SoladromeError::Overflow)?;
-    }
+    // Only `amount_net` was transferred into the vault (the fee was burned, not deposited), so
+    // that is what the reserve grows by — vault and reserve stay equal.
+    amm::apply_swap_reserves(pool, sola_is_a, amount_net, usdc_out)?;
 
     // ☢️ Floor guard — the pool may not be LEFT below 1.00, however profitable the
     // trade was on average. The check below constrains the average price only; see
