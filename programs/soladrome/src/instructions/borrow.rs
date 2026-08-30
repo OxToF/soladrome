@@ -183,8 +183,9 @@ pub fn repay_usdc(ctx: Context<RepayUsdc>, usdc_amount: u64) -> Result<()> {
 
 /// Borrow USDC against a vote-locked hiSOLA position (the partner liquidity valve).
 ///
-/// Partner hiSOLA lives in the ve_lock_vault (wallet balance = 0), so the normal
-/// `borrow_usdc` path is unavailable. This draws USDC from the floor reserve using
+/// A partner's hiSOLA sits in their `VeLockPosition`, so `UserPosition.hi_sola` reads 0 for
+/// them and the normal `borrow_usdc` path finds nothing to lend against. (No vault is
+/// involved: both are ledger figures.) This draws USDC from the floor reserve using
 /// the LOCKED position (`VeLockPosition.amount_locked`) as collateral, capped at
 /// `PARTNER_BORROW_CAP_BPS` (20%). Repay via the standard `repay_usdc` (same
 /// UserPosition PDA). 2% origination fee → market_vault, 75% floor buffer, no

@@ -819,8 +819,15 @@ pub struct RegisterPartner<'info> {
 }
 
 /// Partner claims their one-time hiSOLA allocation.
-/// hiSOLA is minted directly to ve_lock_vault — wallet never receives hiSOLA.
-/// VeLockPosition is created; UserPosition.fees_debt is snapshotted.
+///
+/// Two halves, and only one of them is a token: SOLA equal to the bag is minted to
+/// `sola_vault` as its 1:1 backing, while the hiSOLA side is a ledger credit added to
+/// `VeLockPosition.amount_locked` and to `permanent_amount` (added, never assigned — the same
+/// position carries the retainer epochs). `UserPosition.hi_sola` stays 0, so the bag never
+/// becomes a spendable balance and `borrow_usdc` sees nothing to lend against; the 20 %
+/// `borrow_against_locked` valve is the only channel. The bag also earns protocol fees via
+/// `credit_fee_shares`, matched by a `total_hi_sola` increment so the share is real rather
+/// than printed.
 #[derive(Accounts)]
 pub struct ClaimPartnerAllocation<'info> {
     #[account(mut)]
