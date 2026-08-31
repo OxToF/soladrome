@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (C) 2025 Soladrome Labs
 
+use crate::constants::{EPOCH_DURATION, MAX_LOCK_DURATION, MAX_VE_MULTIPLIER, PRECISION};
 use crate::errors::SoladromeError;
-use crate::state::{MAX_LOCK_DURATION, MAX_VE_MULTIPLIER, PRECISION};
 use anchor_lang::prelude::*;
 
 /// SOLA out when buying with `usdc_in`.
@@ -140,4 +140,10 @@ pub fn ve_power(amount_locked: u64, lock_end_ts: i64, current_ts: i64) -> u64 {
         .saturating_mul(MAX_VE_MULTIPLIER as u128)
         / MAX_LOCK_DURATION as u128)
         .min(u64::MAX as u128) as u64
+}
+
+// ── Epochs ────────────────────────────────────────────────────────────────
+
+pub fn current_epoch(unix_ts: i64) -> u64 {
+    (unix_ts.max(0) as u64) / EPOCH_DURATION
 }

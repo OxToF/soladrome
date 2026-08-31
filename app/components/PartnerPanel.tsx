@@ -166,20 +166,6 @@ export function PartnerPanel() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
 
-      // Auto-migrate UserPosition if it was created with the old 128-byte layout
-      // (before last_borrow_slot was added — ConstraintSpace: Left 136, Right 128)
-      const posInfo = await connection.getAccountInfo(positionPda(wallet.publicKey));
-      if (posInfo && posInfo.data.length < 136) {
-        setStatus("⚙️ Migrating position account…");
-        const migIx = await program.methods.migrateUserPosition()
-          .accounts({
-            user:         wallet.publicKey,
-            userPosition: positionPda(wallet.publicKey),
-            systemProgram: SystemProgram.programId,
-          } as any).instruction();
-        await sendTx(connection, wallet, [migIx]);
-      }
-
       const ix = await program.methods.claimPartnerAllocation()
         .accounts({
           partner:          wallet.publicKey,

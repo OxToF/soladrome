@@ -107,14 +107,7 @@ export function ContributorPanel() {
       const program  = getProgram(provider);
       const me       = wallet.publicKey;
 
-      // Migrate a legacy 128-byte UserPosition if one exists (from prior staking).
       const ixs: any[] = [];
-      const posInfo = await connection.getAccountInfo(positionPda(me));
-      if (posInfo && posInfo.data.length < 136) {
-        ixs.push(await program.methods.migrateUserPosition()
-          .accounts({ user: me, userPosition: positionPda(me), systemProgram: SystemProgram.programId } as any)
-          .instruction());
-      }
 
       ixs.push(await program.methods.claimContributorHiSola()
         .accounts({

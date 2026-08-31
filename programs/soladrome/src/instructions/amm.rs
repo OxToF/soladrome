@@ -8,19 +8,13 @@ use anchor_spl::{
 };
 
 use crate::amm_math::{self, MINIMUM_LIQUIDITY};
-use crate::amm_state::{sort_mints, AmmPool};
+use crate::constants::*;
 use crate::errors::SoladromeError;
-use crate::state::{LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState, EPOCH_DURATION};
-use crate::{LP_REWARD_PRECISION, STATE_SEED};
+use crate::state::{
+    sort_mints, AmmPool, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState,
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-pub const AMM_POOL_SEED: &[u8] = b"amm_pool";
-pub const LP_MINT_SEED: &[u8] = b"lp_mint";
-pub const VAULT_A_SEED: &[u8] = b"vault_a";
-pub const VAULT_B_SEED: &[u8] = b"vault_b";
-
-pub const MAX_FEE_RATE: u16 = 1_000; // 10% max swap fee
-pub const MAX_PROTOCOL_FEE: u16 = 5_000; // 50% of fee max to protocol
 
 // ── Reward accumulator helpers ────────────────────────────────────────────────
 
@@ -62,7 +56,7 @@ pub fn advance_pool_rewards(pool: &mut AmmPool, now: i64, rate: u32, active: boo
 /// mirroring the epoch/gauge path's `emit_pool_rewards` gate. Off by default.
 pub fn continuous_active(state: &ProtocolState, now: i64) -> bool {
     state.emissions_enabled
-        && crate::state::current_epoch(now) < u64::from(state.continuous_end_epoch)
+        && crate::math::current_epoch(now) < u64::from(state.continuous_end_epoch)
 }
 
 /// Authority-only: approve or revoke a pool's eligibility for continuous oSOLA
@@ -158,6 +152,95 @@ pub fn require_floor_respected(pool: &AmmPool, state: &ProtocolState) -> Result<
     // price >= 1 <=> usdc >= sola. Compared as integers: both mints are 6 decimals, so there
     // is no division and no rounding direction to get wrong.
     require!(reserve_usdc >= reserve_sola, SoladromeError::AmmBelowFloor);
+    Ok(())
+}
+
+/// The arithmetic of one constant-product swap: what the fee takes, what reaches the curve,
+/// and what comes out.
+///
+/// All four figures are in base units of their own side. `fee_total` and `amount_net` are on
+/// the INPUT token, `amount_out` on the output token.
+pub struct SwapQuote {
+    /// Total swap fee, `amount_in × fee_rate / 10 000`.
+    pub fee_total: u64,
+    /// The protocol's share of `fee_total`. Whether it is actually routed to `market_vault` is
+    /// the caller's decision — see `swap`, which routes it only for USDC-denominated input.
+    pub fee_protocol: u64,
+    /// `amount_in − fee_total`: the only part the curve prices.
+    pub amount_net: u64,
+    /// Output for `amount_net` against the current reserves.
+    pub amount_out: u64,
+}
+
+/// Price a swap against `pool`'s current reserves. `in_is_a` selects the input side.
+///
+/// ☢️ **Shared deliberately between `swap` and `flash_arbitrage`.** The two used to carry
+/// separate copies of this arithmetic, and `flash_arbitrage` does NOT call `swap` — it moves
+/// tokens itself, because it burns the fee remainder instead of leaving it to the LPs and mints
+/// its input from the floor rather than taking it from a wallet. That is a real difference and
+/// it stays. What must never be a difference is the *price*: two hand-rolled copies of a
+/// constant-product quote is one edit away from an arbitrage path that pays a different rate
+/// than the public one. There is now a single expression of it, and `swap_out` has exactly one
+/// caller shape to review.
+///
+/// Reads the pool and returns; writes nothing. `apply_swap_reserves` is the counterpart.
+pub fn quote_swap(pool: &AmmPool, amount_in: u64, in_is_a: bool) -> Result<SwapQuote> {
+    let amount_in_u128 = amount_in as u128;
+    let fee_total = amount_in_u128 * pool.fee_rate as u128 / 10_000;
+    let fee_protocol = fee_total * pool.protocol_fee_bps as u128 / 10_000;
+    let amount_net = amount_in_u128 - fee_total;
+
+    let (reserve_in, reserve_out) = if in_is_a {
+        (pool.reserve_a, pool.reserve_b)
+    } else {
+        (pool.reserve_b, pool.reserve_a)
+    };
+    let amount_out = amm_math::swap_out(reserve_in, reserve_out, amount_net as u64)?;
+
+    Ok(SwapQuote {
+        fee_total: fee_total as u64,
+        fee_protocol: fee_protocol as u64,
+        amount_net: amount_net as u64,
+        amount_out,
+    })
+}
+
+/// Book a swap's effect on the reserves: the input side grows by `reserve_in_delta`, the output
+/// side falls by `amount_out`.
+///
+/// `reserve_in_delta` is a parameter rather than a field of `SwapQuote` because the two callers
+/// legitimately credit different amounts. `swap` credits `amount_in` minus only the fee it
+/// actually moved out to `market_vault`, so the LP half of the fee stays in the reserves and
+/// is earned by the LPs. `flash_arbitrage` credits `amount_net` and burns the fee, which never
+/// enters the pool at all. Both must still leave the vault balance and the reserve figure
+/// agreeing exactly — a divergence between them grows without bound and corrupts withdrawals.
+pub fn apply_swap_reserves(
+    pool: &mut AmmPool,
+    in_is_a: bool,
+    reserve_in_delta: u64,
+    amount_out: u64,
+) -> Result<()> {
+    let (reserve_in, reserve_out) = if in_is_a {
+        (pool.reserve_a, pool.reserve_b)
+    } else {
+        (pool.reserve_b, pool.reserve_a)
+    };
+    // Both arms computed before either is stored, so a failing `checked_sub` cannot leave the
+    // input side already credited. (Solana reverts the whole instruction anyway; this keeps the
+    // function correct on its own terms rather than relying on that.)
+    let new_in = reserve_in
+        .checked_add(reserve_in_delta)
+        .ok_or(SoladromeError::Overflow)?;
+    let new_out = reserve_out
+        .checked_sub(amount_out)
+        .ok_or(SoladromeError::Overflow)?;
+    if in_is_a {
+        pool.reserve_a = new_in;
+        pool.reserve_b = new_out;
+    } else {
+        pool.reserve_b = new_in;
+        pool.reserve_a = new_out;
+    }
     Ok(())
 }
 
@@ -536,21 +619,9 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
     require!(amount_in > 0, SoladromeError::InvalidAmount);
 
     let pool = &ctx.accounts.pool;
-    let fee_rate = pool.fee_rate as u128;
-    let proto_bps = pool.protocol_fee_bps as u128;
-
-    let amount_in_u128 = amount_in as u128;
-    let fee_total = amount_in_u128 * fee_rate / 10_000;
-    let fee_protocol = fee_total * proto_bps / 10_000;
-    let amount_in_net = amount_in_u128 - fee_total;
-
-    let (reserve_in, reserve_out) = if a_to_b {
-        (pool.reserve_a, pool.reserve_b)
-    } else {
-        (pool.reserve_b, pool.reserve_a)
-    };
-
-    let amount_out = amm_math::swap_out(reserve_in, reserve_out, amount_in_net as u64)?;
+    let quote = quote_swap(pool, amount_in, a_to_b)?;
+    let amount_out = quote.amount_out;
+    let fee_protocol = quote.fee_protocol;
     require!(amount_out >= min_out, SoladromeError::SlippageExceeded);
 
     let pool_bump = pool.bump;
@@ -603,7 +674,7 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
 
     // Only route protocol fee to market_vault if the input token matches the market_vault mint (USDC).
     // For non-USDC pools (e.g. oSOLA/SOLA), the protocol fee stays in reserves as LP revenue.
-    let mut fee_routed: u128 = 0;
+    let mut fee_routed: u64 = 0;
     if fee_protocol > 0 {
         let input_vault_mint = if a_to_b {
             ctx.accounts.token_a_vault.mint
@@ -611,7 +682,7 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
             ctx.accounts.token_b_vault.mint
         };
         if input_vault_mint == ctx.accounts.market_vault.mint {
-            let fee_proto_u64 = fee_protocol as u64;
+            let fee_proto_u64 = fee_protocol;
             token::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
@@ -633,33 +704,23 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
                 .protocol_state
                 .accumulated_fees
                 .saturating_add(fee_proto_u64);
-            fee_routed = fee_protocol;
+            fee_routed = fee_proto_u64;
         }
         // else: fee stays in vault — LP earns 100% of the swap fee for non-USDC pools
     }
 
+    // The vault received the FULL `amount_in`; only the protocol's share (when it was actually
+    // routed out) has left again. Everything still sitting there is reserve, which is how the
+    // LP half of the fee becomes LP revenue.
     let pool = &mut ctx.accounts.pool;
-    if a_to_b {
-        let net_a = (amount_in as u128 - fee_routed) as u64;
-        pool.reserve_a = pool
-            .reserve_a
-            .checked_add(net_a)
-            .ok_or(SoladromeError::Overflow)?;
-        pool.reserve_b = pool
-            .reserve_b
-            .checked_sub(amount_out)
-            .ok_or(SoladromeError::Overflow)?;
-    } else {
-        let net_b = (amount_in as u128 - fee_routed) as u64;
-        pool.reserve_b = pool
-            .reserve_b
-            .checked_add(net_b)
-            .ok_or(SoladromeError::Overflow)?;
-        pool.reserve_a = pool
-            .reserve_a
-            .checked_sub(amount_out)
-            .ok_or(SoladromeError::Overflow)?;
-    }
+    apply_swap_reserves(
+        pool,
+        a_to_b,
+        amount_in
+            .checked_sub(fee_routed)
+            .ok_or(SoladromeError::Overflow)?,
+        amount_out,
+    )?;
 
     // ☢️ The SOLA/USDC pool may never print below the floor. See
     // `require_floor_respected` — the reasoning lives there, with the other call site.

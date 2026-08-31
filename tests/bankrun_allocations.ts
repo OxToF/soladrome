@@ -1140,43 +1140,6 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     );
   });
 
-  it("☢️ [close] the legacy escape refuses an account it could have read", async () => {
-    // The instruction that stops a struct resize from bricking every allocation written before
-    // it. Its whole safety property is the size check, not the authority signature: while the
-    // layout stands, `register_partner` only ever writes accounts at exactly the current size,
-    // so this must be inert on every one of them. A live, readable allocation offered to it is
-    // the test that matters — if this ever passes, the authority can delete a partner's
-    // entitlement without reading what they are owed, which is the one thing the partner path
-    // refuses to allow.
-    const partner = await livePartner();
-    await claimPartner(partner).rpc();
-    await crankEpoch(partner.publicKey);
-
-    await expectFailure(
-      () =>
-        program.methods
-          .closeLegacyPartnerAllocation()
-          .accounts({
-            authority: payer.publicKey,
-            protocolState: statePda,
-            partnerWallet: partner.publicKey,
-            partnerAllocation: partnerPda(partner.publicKey),
-          } as any)
-          .rpc(),
-      "PartnerAllocationNotLegacy"
-    );
-    assert.isTrue(
-      await accountExists(partnerPda(partner.publicKey)),
-      "the refused close took nothing"
-    );
-
-    // And the ordinary path still works on it, because it can read what is owed.
-    await burnLp(partner, LP_THRESHOLD);
-    await drainEscrow(partner);
-    await closePartner(partner.publicKey, payer.publicKey).rpc();
-    assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
-  });
-
   it("[close] re-registering a closed wallet is a FRESH deal, bag and all", async () => {
     // The documented consequence of freeing the seeds, asserted rather than assumed: this is
     // the one path that hands the same wallet a second bag, and it is also the migration path
