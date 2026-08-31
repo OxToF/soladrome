@@ -74,6 +74,16 @@ jobs:
       # In-process — no validator, ~2s once the .so is built.
       - name: Bankrun suite
         run: npx ts-mocha -p ./tsconfig.json -t 1000000 "tests/bankrun*.ts"
+        env:
+          # Node 22.18+ enables native TypeScript type-stripping by default, and
+          # it claims `.ts` before ts-node's require hook can. It reads the ESM
+          # syntax, serves the file as ESM, and `require()` fails — so mocha
+          # retries with `import()`, where `BN` is no longer a statically
+          # analysable named export of `@coral-xyz/anchor` (CommonJS) and the
+          # run dies on a SyntaxError. Node 24 resolves it the other way, which
+          # is why this passes locally and failed here. Hand the file back to
+          # ts-node and the version stops mattering.
+          NODE_OPTIONS: --no-experimental-strip-types
 
   # ── 2. Cargo unit tests ───────────────────────────────────────────────────
   cargo-test:
@@ -166,6 +176,10 @@ jobs:
         env:
           ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
           ANCHOR_WALLET: /home/runner/.config/solana/id.json
+          # This file happens to load without it, but the loader race above is
+          # not file-specific by design — set it here too rather than depend on
+          # which side of the coin lands.
+          NODE_OPTIONS: --no-experimental-strip-types
 
   # ── 4. Frontend lint & build ──────────────────────────────────────────────
   frontend:
