@@ -11,9 +11,13 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # ── 1. Smart contract checks ──────────────────────────────────────────────
+  # ── 1. Smart contract checks + the bankrun suite ──────────────────────────
+  # The bankrun tests run here rather than in a job of their own: they need
+  # `target/deploy/soladrome.so`, which `startAnchor(".")` loads from the tree,
+  # and this is the job that already builds it. A separate job would either
+  # rebuild it (~5 min) or ship it between jobs as an artefact.
   anchor-check:
-    name: Anchor Build & Lint
+    name: Anchor Build, Lint & Bankrun
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +58,23 @@ jobs:
       - name: Anchor build (compile check)
         run: anchor build
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+          cache-dependency-path: yarn.lock
+
+      - name: Install test dependencies
+        run: yarn install --frozen-lockfile
+
+      # 69 cases covering the protocol economics: emission cycle and its
+      # ceilings, the continuous stream, borrow-collateral recycling, the
+      # floor guard, partner allocations, and the SPL-only token boundary.
+      # In-process — no validator, ~2s once the .so is built.
+      - name: Bankrun suite
+        run: npx ts-mocha -p ./tsconfig.json -t 1000000 "tests/bankrun*.ts"
+
   # ── 2. Cargo unit tests ───────────────────────────────────────────────────
   cargo-test:
     name: Cargo Unit Tests
@@ -72,7 +93,81 @@ jobs:
       - name: Run cargo tests
         run: cargo test --manifest-path programs/soladrome/Cargo.toml
 
-  # ── 3. Frontend lint & build ──────────────────────────────────────────────
+  # ── 3. Integration suite against a real validator ─────────────────────────
+  # The 36 cases in tests/soladrome.ts that bankrun cannot host: curve
+  # invariants, POL, and the founder/team/contributor allocation paths.
+  # `--reset` is not optional — state left by a previous run makes tests pass
+  # that fail from cold (see CLAUDE.md).
+  integration:
+    name: Integration Tests (validator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89.0"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI
+        run: |
+          curl -sSfL -o anchor \
+            https://github.com/coral-xyz/anchor/releases/download/v0.32.1/anchor-0.32.1-x86_64-unknown-linux-gnu
+          chmod +x anchor
+          sudo mv anchor /usr/local/bin/anchor
+
+      - name: Anchor build
+        run: anchor build
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+          cache-dependency-path: yarn.lock
+
+      - name: Install test dependencies
+        run: yarn install --frozen-lockfile
+
+      # The suite has no hardcoded wallet — it calls `initialize` itself — so a
+      # throwaway CI keypair is enough. Nothing here signs anything real.
+      - name: Create a throwaway keypair
+        run: |
+          mkdir -p ~/.config/solana
+          solana-keygen new --no-bip39-passphrase --silent -o ~/.config/solana/id.json
+          solana address
+
+      - name: Start the validator
+        run: |
+          PROGRAM_ID=$(awk '/\[programs.localnet\]/{f=1;next} f&&/soladrome/{print $3;exit}' Anchor.toml | tr -d '"')
+          echo "Preloading $PROGRAM_ID"
+          solana-test-validator --reset --quiet --ledger /tmp/test-ledger \
+            --bpf-program "$PROGRAM_ID" target/deploy/soladrome.so &
+          for i in $(seq 1 60); do
+            solana --url http://127.0.0.1:8899 cluster-version >/dev/null 2>&1 && break
+            sleep 2
+          done
+          solana --url http://127.0.0.1:8899 cluster-version
+          solana --url http://127.0.0.1:8899 airdrop 500 "$(solana address)"
+
+      - name: Integration suite
+        run: npx ts-mocha -p ./tsconfig.json -t 1000000 "tests/soladrome.ts"
+        env:
+          ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
+          ANCHOR_WALLET: /home/runner/.config/solana/id.json
+
+  # ── 4. Frontend lint & build ──────────────────────────────────────────────
   frontend:
     name: Frontend Lint & Build
     runs-on: ubuntu-latest
