@@ -1875,6 +1875,8 @@ describe("soladrome", () => {
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: anchor.web3.SystemProgram.programId,
           rent:         anchor.web3.SYSVAR_RENT_PUBKEY,
+          tokenAProgram: TOKEN_PROGRAM_ID,
+          tokenBProgram: TOKEN_PROGRAM_ID,
         } as any)
         .rpc();
     }

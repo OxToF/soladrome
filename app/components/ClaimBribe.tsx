@@ -10,7 +10,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { getProgram, sendTx } from "@/lib/program";
+import { getProgram, sendTx, getMintProgram } from "@/lib/program";
 import { trackQuest } from "@/lib/quests";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { StatusBanner } from "./ui/StatusBanner";
@@ -215,7 +215,10 @@ export function ClaimBribe() {
       const { pool, epoch: ep } = selected;
       const bribeVault      = bribeVaultPda(pool, selectedMint, ep);
       const bribeTokenVault = bribeTokensPda(pool, selectedMint, ep);
-      const userRewardAta   = getAssociatedTokenAddressSync(selectedMint, wallet.publicKey);
+      // The reward mint is the briber's choice, so it may be Token-2022 — and the ATA the
+      // program will create for the claimer is seeded with that program, not Tokenkeg.
+      const rewardProgram   = await getMintProgram(connection, selectedMint);
+      const userRewardAta   = getAssociatedTokenAddressSync(selectedMint, wallet.publicKey, false, rewardProgram);
       const gaugeState      = gaugePda(pool, ep);
       const userVoteReceipt = votePda(wallet.publicKey, pool, ep);
       const userBribeClaim  = claimPda(wallet.publicKey, pool, selectedMint, ep);
@@ -226,7 +229,7 @@ export function ClaimBribe() {
           user: wallet.publicKey, poolId: pool, rewardMint: selectedMint,
           bribeVault, bribeTokenVault, userRewardAta,
           gaugeState, userVoteReceipt, userBribeClaim,
-          tokenProgram: TOKEN_PROGRAM_ID,
+          tokenProgram: rewardProgram,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,

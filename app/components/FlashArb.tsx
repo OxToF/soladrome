@@ -246,12 +246,17 @@ export function FlashArb() {
         .ammSwap(fromUi(amt), minOut, aToB)
         .accounts({
           user: wallet.publicKey, pool: poolPk,
+          tokenAMint: pool.tokenAMint as PublicKey,
+          tokenBMint: pool.tokenBMint as PublicKey,
           tokenAVault: pool.tokenAVault as PublicKey,
           tokenBVault: pool.tokenBVault as PublicKey,
           userTokenIn: userUsdc, userTokenOut: userSola,
           marketVault: s.marketVault as PublicKey,
           protocolState: statePda,
-          tokenProgram: TOKEN_PROGRAM_ID,
+          // This path is pinned on-chain to the SOLA/USDC pair, and both of those mints are
+          // protocol-side classic SPL Token — so neither side can be Token-2022 here.
+          tokenAProgram: TOKEN_PROGRAM_ID,
+          tokenBProgram: TOKEN_PROGRAM_ID,
         } as any)
         .instruction();
 

@@ -9,6 +9,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   getProgram, statePda, solaM, solaVaultAddr, marketVault, positionPda,
   PROGRAM_ID, sendTx, userAta, explainTxError,
+  getMintProgram,
 } from "@/lib/program";
 
 const EPOCH_DURATION = 604_800; // state.rs
@@ -204,6 +205,8 @@ export function PartnerStream({
 
       const provider = new AnchorProvider(connection, wallet, {});
       const program = getProgram(provider);
+      // The bribe token is the partner's own choice — it may well be Token-2022 (USDG, PYUSD).
+      const bribeProgram = await getMintProgram(connection, alloc.bribeMint);
       const ix = await program.methods
         .fundPartnerBribeStream(new BN(planOk.nEpochs), new BN(perBase!.toString()))
         .accounts({
@@ -212,10 +215,10 @@ export function PartnerStream({
           partnerAllocation: partnerPda(wallet.publicKey),
           poolId: pool,
           bribeMint: alloc.bribeMint,
-          partnerToken: userAta(alloc.bribeMint, wallet.publicKey),
+          partnerToken: userAta(alloc.bribeMint, wallet.publicKey, bribeProgram),
           bribeStream: streamPda(wallet.publicKey),
           streamVault: streamVaultPda(wallet.publicKey),
-          tokenProgram: TOKEN_PROGRAM_ID,
+          tokenProgram: bribeProgram,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
         } as any).instruction();
@@ -233,6 +236,7 @@ export function PartnerStream({
     try {
       const provider = new AnchorProvider(connection, wallet, {});
       const program = getProgram(provider);
+      const bribeProgram = await getMintProgram(connection, alloc.bribeMint);
       const ix = await program.methods
         .crankPartnerEpoch(new BN(currentEpoch))
         .accounts({
@@ -253,6 +257,9 @@ export function PartnerStream({
           marketVault,
           lockPosition: velockPda(wallet.publicKey),
           partnerPosition: positionPda(wallet.publicKey),
+          // ☢️ Two programs: the bribe tranche moves the partner's token, the retainer mints
+          // SOLA. SOLA and the LP mint are always classic SPL Token.
+          bribeTokenProgram: bribeProgram,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,

@@ -4,7 +4,11 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{self, Burn, Mint, MintTo, Token, TokenAccount, Transfer},
+    token::{self, Burn, Mint, MintTo, Token, TokenAccount},
+    token_interface::{
+        self, Mint as MintInterface, TokenAccount as TokenAccountInterface, TokenInterface,
+        TransferChecked,
+    },
 };
 
 use crate::amm_math::{self, MINIMUM_LIQUIDITY};
@@ -13,6 +17,21 @@ use crate::errors::SoladromeError;
 use crate::state::{
     sort_mints, AmmPool, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState,
 };
+use crate::token_ext::require_supported_mint;
+
+// ── Token programs: which mint is served by which ─────────────────────────────
+//
+// ☢️ A pool's two sides may live in DIFFERENT token programs, and the flagship case is exactly
+// that: an xStock (Token-2022) quoted in USDC (classic SPL Token). So `token_a_program` and
+// `token_b_program` are two separate accounts, each checked against its own mint's owner by
+// Anchor's `token::token_program` constraint. Collapsing them into one would have refused the
+// only pair shape this migration was undertaken for.
+//
+// The protocol's OWN mints — SOLA, oSOLA and every pool's LP mint — stay pinned to classic SPL
+// Token through the unchanged `token_program: Program<'info, Token>`. They are minted by this
+// program with no extensions, and pinning them keeps the interface surface confined to mints
+// the protocol does not control. That is why several contexts below carry three token programs:
+// two for the pair, one for the protocol's own tokens.
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -264,6 +283,13 @@ pub fn create_pool(ctx: Context<CreatePool>, fee_rate: u16, protocol_fee_bps: u1
         SoladromeError::InvalidAmount
     );
 
+    // ☢️ Admission control runs BEFORE anything is written, and it is the only place a
+    // third-party mint is inspected. See `token_ext::require_supported_mint` for what is
+    // refused, what is deliberately allowed, and why the check cannot be deferred to
+    // transfer time (the pool seeds are `init`, so a bad admission is unrecoverable).
+    require_supported_mint(&ctx.accounts.token_a_mint)?;
+    require_supported_mint(&ctx.accounts.token_b_mint)?;
+
     let mint_a_key = ctx.accounts.token_a_mint.key();
     let mint_b_key = ctx.accounts.token_b_mint.key();
     require!(mint_a_key != mint_b_key, SoladromeError::InvalidPoolTokens);
@@ -315,29 +341,33 @@ pub fn add_liquidity(
     require!(lp_out >= min_lp, SoladromeError::SlippageExceeded);
 
     // Transfer token A from user → vault_a
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            ctx.accounts.token_a_program.to_account_info(),
+            TransferChecked {
                 from: ctx.accounts.user_token_a.to_account_info(),
+                mint: ctx.accounts.token_a_mint.to_account_info(),
                 to: ctx.accounts.token_a_vault.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
         actual_a,
+        ctx.accounts.token_a_mint.decimals,
     )?;
 
     // Transfer token B from user → vault_b
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            ctx.accounts.token_b_program.to_account_info(),
+            TransferChecked {
                 from: ctx.accounts.user_token_b.to_account_info(),
+                mint: ctx.accounts.token_b_mint.to_account_info(),
                 to: ctx.accounts.token_b_vault.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
         actual_b,
+        ctx.accounts.token_b_mint.decimals,
     )?;
 
     // Extract values we'll need for seeds before any mutable borrows
@@ -522,30 +552,34 @@ pub fn remove_liquidity(
         &[pool_bump],
     ];
 
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            ctx.accounts.token_a_program.to_account_info(),
+            TransferChecked {
                 from: ctx.accounts.token_a_vault.to_account_info(),
+                mint: ctx.accounts.token_a_mint.to_account_info(),
                 to: ctx.accounts.user_token_a.to_account_info(),
                 authority: ctx.accounts.pool.to_account_info(),
             },
             &[pool_seeds],
         ),
         amount_a,
+        ctx.accounts.token_a_mint.decimals,
     )?;
 
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            ctx.accounts.token_b_program.to_account_info(),
+            TransferChecked {
                 from: ctx.accounts.token_b_vault.to_account_info(),
+                mint: ctx.accounts.token_b_mint.to_account_info(),
                 to: ctx.accounts.user_token_b.to_account_info(),
                 authority: ctx.accounts.pool.to_account_info(),
             },
             &[pool_seeds],
         ),
         amount_b,
+        ctx.accounts.token_b_mint.decimals,
     )?;
 
     let pool = &mut ctx.accounts.pool;
@@ -631,45 +665,60 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
         ctx.accounts.pool.token_b_mint.as_ref(),
         &[pool_bump],
     ];
-    let (vault_in, vault_out, user_in, user_out) = if a_to_b {
+    // Each side carries its own mint, decimals and token program: the two halves of a pair may
+    // be served by different programs (Token-2022 xStock against classic-SPL USDC), so the
+    // input leg and the output leg are routed independently.
+    let (vault_in, vault_out, mint_in, mint_out, prog_in, prog_out, dec_in, dec_out) = if a_to_b {
         (
             ctx.accounts.token_a_vault.to_account_info(),
             ctx.accounts.token_b_vault.to_account_info(),
-            ctx.accounts.user_token_in.to_account_info(),
-            ctx.accounts.user_token_out.to_account_info(),
+            ctx.accounts.token_a_mint.to_account_info(),
+            ctx.accounts.token_b_mint.to_account_info(),
+            ctx.accounts.token_a_program.to_account_info(),
+            ctx.accounts.token_b_program.to_account_info(),
+            ctx.accounts.token_a_mint.decimals,
+            ctx.accounts.token_b_mint.decimals,
         )
     } else {
         (
             ctx.accounts.token_b_vault.to_account_info(),
             ctx.accounts.token_a_vault.to_account_info(),
-            ctx.accounts.user_token_in.to_account_info(),
-            ctx.accounts.user_token_out.to_account_info(),
+            ctx.accounts.token_b_mint.to_account_info(),
+            ctx.accounts.token_a_mint.to_account_info(),
+            ctx.accounts.token_b_program.to_account_info(),
+            ctx.accounts.token_a_program.to_account_info(),
+            ctx.accounts.token_b_mint.decimals,
+            ctx.accounts.token_a_mint.decimals,
         )
     };
 
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: user_in,
-                to: vault_in,
+            prog_in.clone(),
+            TransferChecked {
+                from: ctx.accounts.user_token_in.to_account_info(),
+                mint: mint_in.clone(),
+                to: vault_in.clone(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
         amount_in,
+        dec_in,
     )?;
 
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            prog_out,
+            TransferChecked {
                 from: vault_out,
-                to: user_out,
+                mint: mint_out,
+                to: ctx.accounts.user_token_out.to_account_info(),
                 authority: ctx.accounts.pool.to_account_info(),
             },
             &[pool_seeds],
         ),
         amount_out,
+        dec_out,
     )?;
 
     // Only route protocol fee to market_vault if the input token matches the market_vault mint (USDC).
@@ -683,21 +732,21 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
         };
         if input_vault_mint == ctx.accounts.market_vault.mint {
             let fee_proto_u64 = fee_protocol;
-            token::transfer(
+            // The fee leaves the INPUT vault, so it moves under the input side's mint and
+            // program — the equality just tested guarantees `market_vault` holds that same mint.
+            token_interface::transfer_checked(
                 CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: if a_to_b {
-                            ctx.accounts.token_a_vault.to_account_info()
-                        } else {
-                            ctx.accounts.token_b_vault.to_account_info()
-                        },
+                    prog_in,
+                    TransferChecked {
+                        from: vault_in,
+                        mint: mint_in,
                         to: ctx.accounts.market_vault.to_account_info(),
                         authority: ctx.accounts.pool.to_account_info(),
                     },
                     &[pool_seeds],
                 ),
                 fee_proto_u64,
+                dec_in,
             )?;
             ctx.accounts.protocol_state.accumulated_fees = ctx
                 .accounts
@@ -826,8 +875,11 @@ pub struct CreatePool<'info> {
     #[account(seeds = [crate::STATE_SEED], bump = protocol_state.bump)]
     pub protocol_state: Box<Account<'info, crate::state::ProtocolState>>,
 
-    pub token_a_mint: Box<Account<'info, Mint>>,
-    pub token_b_mint: Box<Account<'info, Mint>>,
+    #[account(mint::token_program = token_a_program)]
+    pub token_a_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    #[account(mint::token_program = token_b_program)]
+    pub token_b_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     #[account(
         init,
@@ -838,11 +890,15 @@ pub struct CreatePool<'info> {
     )]
     pub pool: Box<Account<'info, AmmPool>>,
 
+    /// The pool's LP token. Minted by this program, no extensions, and deliberately pinned to
+    /// classic SPL Token: every wallet, ATA and integration that touches an LP balance keeps
+    /// working unchanged, whatever the pair's own mints are.
     #[account(
         init,
         payer = creator,
         mint::decimals = 6,
         mint::authority = pool,
+        mint::token_program = token_program,
         seeds = [LP_MINT_SEED, pool.key().as_ref()],
         bump,
     )]
@@ -853,21 +909,28 @@ pub struct CreatePool<'info> {
         payer = creator,
         token::mint = token_a_mint,
         token::authority = pool,
+        token::token_program = token_a_program,
         seeds = [VAULT_A_SEED, pool.key().as_ref()],
         bump,
     )]
-    pub token_a_vault: Box<Account<'info, TokenAccount>>,
+    pub token_a_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(
         init,
         payer = creator,
         token::mint = token_b_mint,
         token::authority = pool,
+        token::token_program = token_b_program,
         seeds = [VAULT_B_SEED, pool.key().as_ref()],
         bump,
     )]
-    pub token_b_vault: Box<Account<'info, TokenAccount>>,
+    pub token_b_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
+    /// Serves `token_a_mint` — classic SPL Token or Token-2022, checked against the mint's owner.
+    pub token_a_program: Interface<'info, TokenInterface>,
+    /// Serves `token_b_mint`. May differ from `token_a_program`; that is the point.
+    pub token_b_program: Interface<'info, TokenInterface>,
+    /// Serves the protocol's own LP mint, always classic SPL Token.
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -888,23 +951,32 @@ pub struct AddLiquidity<'info> {
     #[account(mut, address = pool.lp_mint)]
     pub lp_mint: Box<Account<'info, Mint>>,
 
+    /// Pair mints — needed by `transfer_checked`, which prices the move against the mint's own
+    /// decimals rather than trusting the caller's figure.
+    #[account(address = pool.token_a_mint, mint::token_program = token_a_program)]
+    pub token_a_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    #[account(address = pool.token_b_mint, mint::token_program = token_b_program)]
+    pub token_b_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
     #[account(mut, address = pool.token_a_vault)]
-    pub token_a_vault: Box<Account<'info, TokenAccount>>,
+    pub token_a_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(mut, address = pool.token_b_vault)]
-    pub token_b_vault: Box<Account<'info, TokenAccount>>,
+    pub token_b_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    #[account(mut, token::mint = pool.token_a_mint, token::authority = user)]
-    pub user_token_a: Box<Account<'info, TokenAccount>>,
+    #[account(mut, token::mint = token_a_mint, token::authority = user)]
+    pub user_token_a: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    #[account(mut, token::mint = pool.token_b_mint, token::authority = user)]
-    pub user_token_b: Box<Account<'info, TokenAccount>>,
+    #[account(mut, token::mint = token_b_mint, token::authority = user)]
+    pub user_token_b: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(
         init_if_needed,
         payer = user,
         associated_token::mint = lp_mint,
         associated_token::authority = user,
+        associated_token::token_program = token_program,
     )]
     pub user_lp: Box<Account<'info, TokenAccount>>,
 
@@ -915,6 +987,7 @@ pub struct AddLiquidity<'info> {
         payer = user,
         associated_token::mint = lp_mint,
         associated_token::authority = lp_dead,
+        associated_token::token_program = token_program,
     )]
     pub lp_dead_ata: Box<Account<'info, TokenAccount>>,
 
@@ -946,10 +1019,16 @@ pub struct AddLiquidity<'info> {
         payer = user,
         associated_token::mint = o_sola_mint,
         associated_token::authority = user,
+        associated_token::token_program = token_program,
     )]
     pub user_o_sola: Box<Account<'info, TokenAccount>>,
 
     pub rent: Sysvar<'info, Rent>,
+    /// Serves `token_a_mint`.
+    pub token_a_program: Interface<'info, TokenInterface>,
+    /// Serves `token_b_mint`.
+    pub token_b_program: Interface<'info, TokenInterface>,
+    /// Serves the protocol's own mints (LP, oSOLA), always classic SPL Token.
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -970,11 +1049,18 @@ pub struct RemoveLiquidity<'info> {
     #[account(mut, address = pool.lp_mint)]
     pub lp_mint: Box<Account<'info, Mint>>,
 
+    /// Pair mints — needed by `transfer_checked` on the way out.
+    #[account(address = pool.token_a_mint, mint::token_program = token_a_program)]
+    pub token_a_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    #[account(address = pool.token_b_mint, mint::token_program = token_b_program)]
+    pub token_b_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
     #[account(mut, address = pool.token_a_vault)]
-    pub token_a_vault: Box<Account<'info, TokenAccount>>,
+    pub token_a_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(mut, address = pool.token_b_vault)]
-    pub token_b_vault: Box<Account<'info, TokenAccount>>,
+    pub token_b_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(mut, token::mint = lp_mint, token::authority = user)]
     pub user_lp: Box<Account<'info, TokenAccount>>,
@@ -988,7 +1074,7 @@ pub struct RemoveLiquidity<'info> {
         constraint = user_token_a.mint  == token_a_vault.mint @ SoladromeError::InvalidPoolTokens,
         constraint = user_token_a.owner == user.key()         @ SoladromeError::Unauthorized,
     )]
-    pub user_token_a: Box<Account<'info, TokenAccount>>,
+    pub user_token_a: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// User's token-B ATA (must already exist).
     #[account(
@@ -996,7 +1082,7 @@ pub struct RemoveLiquidity<'info> {
         constraint = user_token_b.mint  == token_b_vault.mint @ SoladromeError::InvalidPoolTokens,
         constraint = user_token_b.owner == user.key()         @ SoladromeError::Unauthorized,
     )]
-    pub user_token_b: Box<Account<'info, TokenAccount>>,
+    pub user_token_b: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// Per-user continuous oSOLA reward state for this pool.
     #[account(
@@ -1022,10 +1108,16 @@ pub struct RemoveLiquidity<'info> {
         payer = user,
         associated_token::mint = o_sola_mint,
         associated_token::authority = user,
+        associated_token::token_program = token_program,
     )]
     pub user_o_sola: Box<Account<'info, TokenAccount>>,
 
     pub rent: Sysvar<'info, Rent>,
+    /// Serves `token_a_mint`.
+    pub token_a_program: Interface<'info, TokenInterface>,
+    /// Serves `token_b_mint`.
+    pub token_b_program: Interface<'info, TokenInterface>,
+    /// Serves the protocol's own mints (LP, oSOLA), always classic SPL Token.
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -1092,29 +1184,39 @@ pub struct Swap<'info> {
     )]
     pub pool: Box<Account<'info, AmmPool>>,
 
+    /// Pair mints — `transfer_checked` reads the decimals from the mint itself.
+    #[account(address = pool.token_a_mint, mint::token_program = token_a_program)]
+    pub token_a_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    #[account(address = pool.token_b_mint, mint::token_program = token_b_program)]
+    pub token_b_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
     #[account(mut, address = pool.token_a_vault)]
-    pub token_a_vault: Box<Account<'info, TokenAccount>>,
+    pub token_a_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(mut, address = pool.token_b_vault)]
-    pub token_b_vault: Box<Account<'info, TokenAccount>>,
+    pub token_b_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// User's input token ATA (token_a if a_to_b, token_b otherwise).
     // M-02 FIX: explicit authority check so a caller cannot pass someone else's
     // token account as the input source (SPL enforces this too, but belt-and-suspenders).
     #[account(mut, constraint = user_token_in.owner == user.key() @ SoladromeError::Unauthorized)]
-    pub user_token_in: Box<Account<'info, TokenAccount>>,
+    pub user_token_in: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// User's output token ATA — intentionally unconstrained on owner so integrators
     /// can direct swap output to a different recipient account if desired.
     #[account(mut)]
-    pub user_token_out: Box<Account<'info, TokenAccount>>,
+    pub user_token_out: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// Protocol market vault — receives the protocol fee portion (in input token).
     #[account(mut, address = protocol_state.market_vault)]
-    pub market_vault: Box<Account<'info, TokenAccount>>,
+    pub market_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
     pub protocol_state: Box<Account<'info, ProtocolState>>,
 
-    pub token_program: Program<'info, Token>,
+    /// Serves `token_a_mint`.
+    pub token_a_program: Interface<'info, TokenInterface>,
+    /// Serves `token_b_mint`. May differ from `token_a_program`.
+    pub token_b_program: Interface<'info, TokenInterface>,
 }

@@ -5,13 +5,25 @@
 //! per-epoch retainer crank.
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
+use anchor_spl::token_interface::{
+    self, Mint as MintInterface, TokenAccount as TokenAccountInterface, TokenInterface,
+    TransferChecked,
+};
+
+// ☢️ The partner path is the one place where a third-party mint and a protocol mint move in the
+// SAME instruction: `crank_partner_epoch` releases a bribe tranche (`bribe_mint`, possibly
+// Token-2022) and mints SOLA backing for the retainer (always classic SPL Token). One
+// `token_program` account cannot be both, so the context carries two — `bribe_token_program`
+// for the escrow leg and `token_program` for the SOLA leg. Collapsing them would make every
+// crank fail the moment a partner bribes in USDG.
 
 use crate::constants::*;
 use crate::errors::SoladromeError;
 use crate::math;
 use crate::math::*;
 use crate::state::*;
+use crate::token_ext::require_supported_mint;
 
 /// Authority-only: register a protocol partner — a signature bag plus a liquidity retainer.
 ///
@@ -338,6 +350,10 @@ pub fn fund_partner_bribe_stream(
         }
     }
 
+    // The escrowed token ends up in a bribe pot like any other, so it faces the same
+    // admission gate — a fee-skimming mint would under-fund every tranche it later releases.
+    require_supported_mint(&ctx.accounts.bribe_mint)?;
+
     // Only the token the deal was written in credits the allocation, so escrowing anything
     // else would lock funds that `release_partner_bribe` could never pay out.
     require_keys_eq!(
@@ -378,16 +394,18 @@ pub fn fund_partner_bribe_stream(
 
     // The whole schedule is escrowed up front. This is what the partner is actually
     // committing to, and it is why the bag can be released against it.
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: ctx.accounts.partner_token.to_account_info(),
+                mint: ctx.accounts.bribe_mint.to_account_info(),
                 to: ctx.accounts.stream_vault.to_account_info(),
                 authority: ctx.accounts.partner.to_account_info(),
             },
         ),
         total,
+        ctx.accounts.bribe_mint.decimals,
     )?;
 
     let now_ts = Clock::get()?.unix_timestamp;
@@ -499,17 +517,22 @@ pub fn crank_partner_epoch(ctx: Context<CrankPartnerEpoch>, epoch: u64) -> Resul
 
         // Escrow → this epoch's bribe vault, signed by the stream PDA that owns the escrow.
         let seeds: &[&[u8]] = &[BRIBE_STREAM_SEED, partner_key.as_ref(), &[stream_bump]];
-        token::transfer(
+        // ☢️ `bribe_token_program`, not `token_program`: this leg moves the partner's own
+        // token, which may be Token-2022, while the retainer leg below mints SOLA through
+        // classic SPL Token. The two programs are distinct accounts for that reason.
+        token_interface::transfer_checked(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
+                ctx.accounts.bribe_token_program.to_account_info(),
+                TransferChecked {
                     from: ctx.accounts.stream_vault.to_account_info(),
+                    mint: ctx.accounts.reward_mint.to_account_info(),
                     to: ctx.accounts.bribe_token_vault.to_account_info(),
                     authority: ctx.accounts.bribe_stream.to_account_info(),
                 },
                 &[seeds],
             ),
             amount,
+            ctx.accounts.reward_mint.decimals,
         )?;
 
         ctx.accounts.bribe_vault.total_bribed = ctx
@@ -904,10 +927,10 @@ pub struct FundPartnerBribeStream<'info> {
     /// on `deposit_bribe` — bribe vaults are keyed by it and nothing dereferences it.
     pub pool_id: UncheckedAccount<'info>,
 
-    pub bribe_mint: Box<Account<'info, Mint>>,
+    pub bribe_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     #[account(mut, token::mint = bribe_mint, token::authority = partner)]
-    pub partner_token: Box<Account<'info, TokenAccount>>,
+    pub partner_token: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(
         init_if_needed,
@@ -927,9 +950,10 @@ pub struct FundPartnerBribeStream<'info> {
         seeds = [STREAM_TOKENS_SEED, partner.key().as_ref()],
         bump,
     )]
-    pub stream_vault: Box<Account<'info, TokenAccount>>,
+    pub stream_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    pub token_program: Program<'info, Token>,
+    /// Serves `bribe_mint` — the only token this instruction moves.
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
@@ -976,12 +1000,12 @@ pub struct CrankPartnerEpoch<'info> {
         seeds = [STREAM_TOKENS_SEED, partner.key().as_ref()],
         bump,
     )]
-    pub stream_vault: Box<Account<'info, TokenAccount>>,
+    pub stream_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// CHECK: Bribe label, as everywhere else in this system.
     pub pool_id: UncheckedAccount<'info>,
 
-    pub reward_mint: Box<Account<'info, Mint>>,
+    pub reward_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     #[account(
         init_if_needed,
@@ -997,10 +1021,11 @@ pub struct CrankPartnerEpoch<'info> {
         payer = caller,
         token::mint = reward_mint,
         token::authority = bribe_vault,
+        token::token_program = bribe_token_program,
         seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
         bump,
     )]
-    pub bribe_token_vault: Box<Account<'info, TokenAccount>>,
+    pub bribe_token_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     // ── The retainer half ───────────────────────────────────────────────────────
     /// The LP token named in the deal. Pinned to the allocation so the caller cannot swap in a
@@ -1044,6 +1069,9 @@ pub struct CrankPartnerEpoch<'info> {
     )]
     pub partner_position: Box<Account<'info, UserPosition>>,
 
+    /// Serves `reward_mint` — the partner's bribe token, classic SPL Token or Token-2022.
+    pub bribe_token_program: Interface<'info, TokenInterface>,
+    /// Serves SOLA and the LP mint, both always classic SPL Token.
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,

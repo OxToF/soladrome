@@ -182,13 +182,105 @@ pub fn emit_pool_rewards(ctx: Context<EmitPoolRewards>, epoch: u64) -> Result<()
         ctx.accounts.protocol_state.osola_emission_floor_bps,
     );
 
-    pool_accum.osola_allocated = (epoch_total as u128)
+    let vote_share = (epoch_total as u128)
         .checked_mul(pool_votes)
         .ok_or(SoladromeError::Overflow)?
         .checked_div(total_votes)
         .ok_or(SoladromeError::Overflow)? as u64;
+
+    // Fold in anything `recycle_lp_emissions` rolled forward from this pool's earlier epochs.
+    // The carry is consumed here and nowhere else: once `finalized` is set, the accum is a
+    // claim target and `carry_in` is inert, which is what keeps the two figures from being
+    // counted twice.
+    pool_accum.osola_allocated = vote_share
+        .checked_add(pool_accum.carry_in)
+        .ok_or(SoladromeError::Overflow)?;
     pool_accum.finalized = true;
 
+    Ok(())
+}
+
+/// Roll one settled epoch's unclaimed LP emission residue forward into the pool's current epoch.
+///
+/// Permissionless, and deliberately shaped like `rollover_bribe`, which solves the same problem
+/// one layer up: a pot sized for a week, partly unclaimed, that would otherwise sit dead.
+///
+/// **What the residue is, stated precisely.** `emit_pool_rewards` sizes a (pool, epoch) pot from
+/// the gauge vote; `claim_lp_emissions` mints against it. oSOLA is minted **on claim**, so an
+/// unclaimed residue is not tokens sitting somewhere — it is emission the schedule intended for
+/// this pool's LPs that simply never came into existence. Nothing is at risk and no cap is
+/// breached (`osola_claimed` still ceilings the pot). What is lost is budget: an epoch where
+/// half the LPs never claimed quietly emits half of what the curve says it emits, and the
+/// published schedule stops describing reality.
+///
+/// **Why the destination is the current epoch of the same pool.** The residue was voted to this
+/// pool, so it stays with this pool's LPs rather than being socialised; and the current epoch is
+/// the only one that cannot already be a claim target, since `emit_pool_rewards` refuses to
+/// finalize an epoch before it has ended. Crediting a finalized epoch would hand the whole carry
+/// to whoever claimed last, purely for claiming late.
+///
+/// **The grace period is the same `ROLLOVER_DELAY_EPOCHS` a bribe rollover waits**, and for the
+/// same reason: a slow LP must not be robbed of a claim that is still legitimately open.
+///
+/// **Draining is marked by settling, not by a flag.** Setting `osola_claimed = osola_allocated`
+/// on the source leaves `remaining` at zero, so the residue can be recycled exactly once and a
+/// later claim against that epoch finds an empty pot — which is precisely what the grace period
+/// exists to make unlikely, and what it means for the epoch to be closed.
+///
+/// ⚠️ **Known limitation, not a defect.** The carry only becomes claimable when the destination
+/// epoch is finalized, which needs votes. A pool that never receives another vote strands its
+/// carry — but such a pool receives no emissions at all, so nothing that would otherwise have
+/// been distributed is withheld. The oSOLA was never minted; it is not owed to anyone.
+pub fn recycle_lp_emissions(
+    ctx: Context<RecycleLpEmissions>,
+    old_epoch: u64,
+    new_epoch: u64,
+) -> Result<()> {
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        SoladromeError::ProtocolPaused
+    );
+
+    let clock = Clock::get()?;
+    let curr_epoch = math::current_epoch(clock.unix_timestamp);
+    require!(new_epoch == curr_epoch, SoladromeError::WrongEpoch);
+    require!(old_epoch < curr_epoch, SoladromeError::EpochNotEnded);
+    require!(
+        curr_epoch >= old_epoch.saturating_add(ROLLOVER_DELAY_EPOCHS),
+        SoladromeError::RolloverTooEarly
+    );
+
+    let src = &ctx.accounts.old_pool_epoch_accum;
+    require!(src.finalized, SoladromeError::EpochNotFinalized);
+
+    let residue = src.osola_allocated.saturating_sub(src.osola_claimed);
+    require!(residue > 0, SoladromeError::NothingToClaim);
+
+    // The destination must still be open. `emit_pool_rewards` cannot finalize an epoch that has
+    // not ended, so for `new_epoch == curr_epoch` this holds by construction — asserted anyway,
+    // because it is the property that makes crediting the carry fair rather than a race.
+    require!(
+        !ctx.accounts.new_pool_epoch_accum.finalized,
+        SoladromeError::EpochAlreadyFinalized
+    );
+
+    ctx.accounts.new_pool_epoch_accum.carry_in = ctx
+        .accounts
+        .new_pool_epoch_accum
+        .carry_in
+        .checked_add(residue)
+        .ok_or(SoladromeError::Overflow)?;
+
+    // Settle the source: allocated == claimed leaves nothing to recycle or claim a second time.
+    ctx.accounts.old_pool_epoch_accum.osola_claimed = src.osola_allocated;
+
+    msg!(
+        "Recycled {} oSOLA residue: pool {} epoch {} → epoch {}",
+        residue,
+        ctx.accounts.pool.key(),
+        old_epoch,
+        new_epoch,
+    );
     Ok(())
 }
 
@@ -428,6 +520,49 @@ pub struct EmitPoolRewards<'info> {
         bump,
     )]
     pub pool_epoch_accum: Box<Account<'info, LpPoolEpochAccum>>,
+
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+/// Move a settled epoch's unclaimed LP emission residue into the pool's current epoch.
+/// Permissionless — anyone may call it for any (pool, old_epoch) once the grace period is up.
+#[derive(Accounts)]
+#[instruction(old_epoch: u64, new_epoch: u64)]
+pub struct RecycleLpEmissions<'info> {
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    /// Read-only — used only for the pause check.
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(
+        seeds = [b"amm_pool", pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Box<Account<'info, AmmPool>>,
+
+    /// Source: the settled epoch whose pot was never fully claimed. The seeds pin it to this
+    /// pool, so the caller cannot present another pool's richer accum.
+    #[account(
+        mut,
+        seeds = [b"lp_pool_epoch", pool.key().as_ref(), old_epoch.to_le_bytes().as_ref()],
+        bump = old_pool_epoch_accum.bump,
+    )]
+    pub old_pool_epoch_accum: Box<Account<'info, LpPoolEpochAccum>>,
+
+    /// Destination: the current epoch's accum for the same pool. `init_if_needed` because the
+    /// pool may not have been checkpointed yet this epoch — in which case only `carry_in` is
+    /// written and the account stays blank for `emit_pool_rewards` to initialise properly.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + LpPoolEpochAccum::LEN,
+        seeds = [b"lp_pool_epoch", pool.key().as_ref(), new_epoch.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub new_pool_epoch_accum: Box<Account<'info, LpPoolEpochAccum>>,
 
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
