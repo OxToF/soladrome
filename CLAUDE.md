@@ -142,15 +142,21 @@ the launch figure, so it silently goes wrong every time the launch figure moves.
 
 ### Program layout (`programs/soladrome/src/`)
 
+⚠️ This table described a flat tree until 2026-09-01 and was wrong from the 2026-08-30
+restructure onward: there is no top-level `state.rs`, `amm.rs` or `amm_state.rs` any more.
+Handlers and their `#[derive(Accounts)]` contexts live together under `instructions/`, and the
+account structs under `state/`.
+
 | File | Role |
 |---|---|
-| `lib.rs` | All instruction entry points + every `#[derive(Accounts)]` context |
-| `state.rs` | On-chain account structs: `ProtocolState`, `UserPosition`, bribe/gauge PDAs |
-| `math.rs` | Bonding curve math: `sola_out()`, `advance_accumulator()`, `pending_fees()` |
+| `lib.rs` | **Dispatch only** — one wrapper per instruction plus `declare_id!`. No logic, no contexts |
+| `constants.rs` | Seeds, allocation sizes, caps, fee rates |
 | `errors.rs` | `SoladromeError` enum |
-| `amm.rs` | AMM instruction logic + account contexts (`CreatePool`, `AddLiquidity`, `RemoveLiquidity`, `Swap`) |
-| `amm_state.rs` | `AmmPool` struct, `sort_mints()` |
+| `math.rs` | Bonding curve math: `sola_out()`, `advance_accumulator()`, `pending_fees()` |
 | `amm_math.rs` | `swap_out()`, `lp_for_deposit()`, `tokens_for_lp()`, `isqrt()`, `MINIMUM_LIQUIDITY` |
+| `token_ext.rs` | **Token-2022 admission** — which mint extensions are refused, and why |
+| `instructions/*.rs` | One file per domain: `admin`, `amm`, `borrow`, `bribes`, `curve`, `emissions`, `gauges`, `partners`, `pol`, `stake`, `ve`, `vesting`. Each owns both its handlers and its account contexts |
+| `state/*.rs` | The 22 on-chain account types, incl. `AmmPool` and `sort_mints()` |
 
 ### Two separate systems share one codebase
 
@@ -168,6 +174,49 @@ the launch figure, so it silently goes wrong every time the launch figure moves.
 - Protocol fee from swaps routes to the global `market_vault` → feeds hiSOLA stakers
 - First LP deposit locks `MINIMUM_LIQUIDITY = 1_000` to `LP_DEAD_PUBKEY` (System Program)
 - `lp_for_deposit()` auto-rebalances to the limiting token side on subsequent deposits
+
+### ☢️ Token-2022 — supported since 2026-09-01, and NOT bounded to the AMM
+
+**A third-party mint enters the program in exactly three places**, and the second was missed on
+the first reading of this migration:
+
+1. `amm.rs` — a pool's two mints.
+2. `bribes.rs` — **`reward_mint` is arbitrary**, so a partner bribing in USDG never touches the
+   AMM at all.
+3. `partners.rs` — `bribe_mint` / `reward_mint` on the escrowed bribe stream.
+
+Everywhere else the mint is SOLA, oSOLA, USDC or a protocol LP mint. Curve, floor, staking,
+borrow and ve never see a Token-2022 mint.
+
+**A pool carries TWO token programs.** Its sides may be served by different ones — an xStock
+(Token-2022) quoted in USDC (classic SPL) is the shape the feature exists for — so
+`create_pool`, `add_liquidity`, `remove_liquidity` and `amm_swap` each take `token_a_program`
+and `token_b_program`, each bound to its mint by `mint::token_program`. Collapsing them into one
+would refuse the only pair shape worth having. `crank_partner_epoch` carries two for a different
+reason: it moves a bribe tranche (possibly T22) and mints SOLA (always SPL) in one instruction.
+
+**The protocol's own mints stay classic SPL Token** — SOLA, oSOLA and every pool's LP mint,
+through the separate `token_program` account. Keep it that way: it is what leaves wallets, ATAs
+and every LP integration untouched, and confines the interface surface to mints we do not
+control.
+
+**`token_ext::require_supported_mint` is the whole admission policy.** Refuses a transfer fee
+(the vault would receive less than the amount booked into `reserve_a` / `total_bribed`, silently
+and cumulatively), an **armed** transfer hook (transfers need accounts we do not pass, so
+`remove_liquidity` would revert and lock LP funds), and `DefaultAccountState::Frozen` (vault born
+unable to move). Deliberately **allows** a permanent delegate, a pausable config and a scaled UI
+amount — refusing those would exclude the xStocks, which is the entire point.
+
+⚠️ The gate is at **admission**, never at transfer time. Pool and bribe-vault seeds are `init`,
+so a mint found bad after the accounts exist leaves a residue that can never be cleared and the
+pair becomes permanently unopenable — the same shape as the July 2026 devnet brick.
+
+☢️ **Residual risk, disclosed and not closable here:** the xStocks' hook slot is unarmed today
+and armable at any time. We refuse an already-armed mint; we cannot refuse one armed later.
+
+⚠️ **Off-chain caution:** `ScaledUiAmountConfig` is harmless on-chain (the AMM works in base
+units) but any pricing or points code that reads decimals without the scale factor is wrong by
+the split ratio.
 
 **Gauge / Bribe system**
 - 7-day epochs (`EPOCH_DURATION = 604_800 s`); `current_epoch = unix_ts / EPOCH_DURATION`
@@ -399,7 +448,9 @@ renewal path, the migration path for the old 160-byte layout, and the only way o
 second bag.
 
 **`partner_deposit_bribe` was deleted** — without the match it was `deposit_bribe` renamed.
-**57 instructions** (−1 for that deletion, +1 for `close_legacy_partner_allocation`). Seventeen
+**57 instructions at the time** (−1 for that deletion, +1 for `close_legacy_partner_allocation`).
+⚠️ Since then the 2026-08-30 restructure took it to 53 and `recycle_lp_emissions` brought it to
+**54** — see STATUS.md, which is the file to trust for counts. Seventeen
 `[partner]`/`[crank]`/`[close]`/`[stream]` cases in `tests/bankrun_allocations.ts`.
 
 ⚠️ **`PartnerAllocation` grew 160 → 192, and that needed an escape hatch.** `register_partner`
