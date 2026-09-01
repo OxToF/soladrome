@@ -6,7 +6,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { getProgram, fromUi, toUi, sendTx } from "@/lib/program";
+import { getProgram, fromUi, toUi, sendTx, getMintProgram } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochLabel } from "@/lib/epoch";
 import { StatusBanner } from "./ui/StatusBanner";
@@ -166,6 +166,7 @@ export function Gauge() {
       const oldGaugeState      = gaugePda(pool, oldEp);
       const newBribeVault      = bribeVaultPda(pool, mint, newEp);
       const newBribeTokenVault = bribeTokensPda(pool, mint, newEp);
+      const rewardProgram      = await getMintProgram(connection, mint);
 
       const ix = await program.methods
         .rolloverBribe(new BN(oldEp), new BN(newEp))
@@ -173,7 +174,7 @@ export function Gauge() {
           payer: wallet.publicKey, poolId: pool, rewardMint: mint,
           oldBribeVault, oldBribeTokenVault, oldGaugeState,
           newBribeVault, newBribeTokenVault,
-          tokenProgram: TOKEN_PROGRAM_ID,
+          tokenProgram: rewardProgram,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
         } as any).instruction();
@@ -202,7 +203,10 @@ export function Gauge() {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
       const ep = currentEpoch(); // recalculate just before tx, never stale
-      const depositorToken  = getAssociatedTokenAddressSync(mint, wallet.publicKey);
+      // The reward mint is whatever the briber chose — it may be Token-2022 (USDG, PYUSD, an
+      // xStock), which also decides how their ATA is derived.
+      const rewardProgram   = await getMintProgram(connection, mint);
+      const depositorToken  = getAssociatedTokenAddressSync(mint, wallet.publicKey, false, rewardProgram);
       const bribeVault      = bribeVaultPda(pool, mint, ep);
       const bribeTokenVault = bribeTokensPda(pool, mint, ep);
       const ix = await program.methods
@@ -211,7 +215,7 @@ export function Gauge() {
           depositor: wallet.publicKey, poolId: pool, rewardMint: mint,
           depositorToken, bribeVault, bribeTokenVault,
           protocolState: statePda,
-          tokenProgram: TOKEN_PROGRAM_ID,
+          tokenProgram: rewardProgram,
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
         } as any).instruction();

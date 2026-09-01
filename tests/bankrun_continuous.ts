@@ -269,6 +269,8 @@ describe("soladrome — bankrun (continuous emission stream)", () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
 
@@ -278,6 +280,8 @@ describe("soladrome — bankrun (continuous emission stream)", () => {
         user: payer.publicKey,
         pool: poolPda,
         lpMint,
+        tokenAMint: mintA,
+        tokenBMint: mintB,
         tokenAVault: vaultA,
         tokenBVault: vaultB,
         userTokenA: mintA.equals(usdcMint) ? userUsdc : userTkn,
@@ -293,6 +297,8 @@ describe("soladrome — bankrun (continuous emission stream)", () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
 

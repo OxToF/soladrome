@@ -9,6 +9,7 @@ mod errors;
 mod instructions;
 mod math;
 mod state;
+mod token_ext;
 
 pub use constants::*;
 use errors::SoladromeError;
@@ -250,6 +251,14 @@ pub mod soladrome {
 
     pub fn emit_pool_rewards(ctx: Context<EmitPoolRewards>, epoch: u64) -> Result<()> {
         instructions::emissions::emit_pool_rewards(ctx, epoch)
+    }
+
+    pub fn recycle_lp_emissions(
+        ctx: Context<RecycleLpEmissions>,
+        old_epoch: u64,
+        new_epoch: u64,
+    ) -> Result<()> {
+        instructions::emissions::recycle_lp_emissions(ctx, old_epoch, new_epoch)
     }
 
     pub fn claim_lp_emissions(ctx: Context<ClaimLpEmissions>, _epoch: u64) -> Result<()> {

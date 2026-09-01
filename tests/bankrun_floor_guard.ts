@@ -225,6 +225,8 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
       .accounts({
         user: payer.publicKey,
         pool: poolPda,
+        tokenAMint: mintA,
+        tokenBMint: mintB,
         tokenAVault: vaultA,
         tokenBVault: vaultB,
         userTokenIn: getAssociatedTokenAddressSync(mintIn, payer.publicKey),
@@ -232,6 +234,8 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
         marketVault: marketV,
         protocolState: statePda,
         tokenProgram: TOKEN_PROGRAM_ID,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
   }
@@ -397,6 +401,8 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
 
@@ -406,6 +412,8 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
         user: payer.publicKey,
         pool,
         lpMint,
+        tokenAMint: a,
+        tokenBMint: b,
         tokenAVault: va,
         tokenBVault: vb,
         userTokenA: getAssociatedTokenAddressSync(a, payer.publicKey),
@@ -421,6 +429,8 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
   }
@@ -564,6 +574,8 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
       .accounts({
         user: payer.publicKey,
         pool: ctlPool,
+        tokenAMint: ctlA,
+        tokenBMint: ctlB,
         tokenAVault: ctlVaultA,
         tokenBVault: ctlVaultB,
         userTokenIn: getAssociatedTokenAddressSync(tknIsA ? ctlA : ctlB, payer.publicKey),
@@ -571,6 +583,8 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
         marketVault: marketV,
         protocolState: statePda,
         tokenProgram: TOKEN_PROGRAM_ID,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
 

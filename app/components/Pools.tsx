@@ -14,6 +14,7 @@ import { SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
   getProgram, poolPda, lpMintPda, vaultAPda, vaultBPda,
   sortMints, userAta, commonAccounts, statePda, oSolaM, solaM, PROGRAM_ID,
+  getMintPrograms,
   fromUiDecimals, toUiDecimals, toUi,
   buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
   WSOL_MINT_STR,
@@ -435,6 +436,8 @@ export function Pools() {
       const [mintAPk, mintBPk] = sortMints(new PublicKey(ma), new PublicKey(mb));
       const poolAddr = poolPda(mintAPk, mintBPk);
       const lpMint   = lpMintPda(poolAddr);
+      // Each side is served by whichever program owns its mint — they may differ.
+      const { programA, programB } = await getMintPrograms(connection, mintAPk, mintBPk);
       const ix = await program.methods
         .createPool(+newFee, +newProto)
         .accounts({
@@ -446,6 +449,9 @@ export function Pools() {
           lpMint,
           tokenAVault:   vaultAPda(poolAddr),
           tokenBVault:   vaultBPda(poolAddr),
+          tokenAProgram: programA,
+          tokenBProgram: programB,
+          // The LP mint the program creates is always classic SPL Token.
           tokenProgram:  TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent:          commonAccounts.rent,
@@ -496,6 +502,10 @@ export function Pools() {
 
       const userInfoPda = lpUserInfoPda(poolAddr, wallet.publicKey);
       const userOSola   = userAta(oSolaM, wallet.publicKey);
+      // ☢️ The pair's programs also decide ATA derivation: an associated-token address is
+      // seeded with the token program, so deriving a Token-2022 ATA under Tokenkeg points at
+      // an account that does not exist.
+      const { programA, programB } = await getMintPrograms(connection, mintAPk, mintBPk);
 
       const addIx = await program.methods
         .addLiquidity(fromUiDecimals(+addA, decA), fromUiDecimals(+addB, decB), new BN(0))
@@ -503,10 +513,12 @@ export function Pools() {
           user:                   wallet.publicKey,
           pool:                   poolAddr,
           lpMint,
+          tokenAMint:             mintAPk,
+          tokenBMint:             mintBPk,
           tokenAVault:            vaultAPda(poolAddr),
           tokenBVault:            vaultBPda(poolAddr),
-          userTokenA:             userAta(mintAPk, wallet.publicKey),
-          userTokenB:             userAta(mintBPk, wallet.publicKey),
+          userTokenA:             userAta(mintAPk, wallet.publicKey, programA),
+          userTokenB:             userAta(mintBPk, wallet.publicKey, programB),
           userLp,
           lpDeadAta:              deadLpAta,
           lpDead:                 LP_DEAD,
@@ -515,6 +527,8 @@ export function Pools() {
           oSolaMint:              oSolaM,
           userOSola,
           rent:                   SYSVAR_RENT_PUBKEY,
+          tokenAProgram:          programA,
+          tokenBProgram:          programB,
           tokenProgram:           TOKEN_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram:          SystemProgram.programId,
@@ -554,8 +568,9 @@ export function Pools() {
       // prior unwrap (wallets do this automatically) otherwise hits
       // AccountNotInitialized (Custom 3012). The wSOL ATA is a normal ATA, so we
       // create it here too and close it again via the unwrap post-ix below.
-      const ixA = await ensureAtaIx(connection, wallet.publicKey, mintAPk, wallet.publicKey); if (ixA) preIxs.push(ixA);
-      const ixB = await ensureAtaIx(connection, wallet.publicKey, mintBPk, wallet.publicKey); if (ixB) preIxs.push(ixB);
+      const { programA, programB } = await getMintPrograms(connection, mintAPk, mintBPk);
+      const ixA = await ensureAtaIx(connection, wallet.publicKey, mintAPk, wallet.publicKey, programA); if (ixA) preIxs.push(ixA);
+      const ixB = await ensureAtaIx(connection, wallet.publicKey, mintBPk, wallet.publicKey, programB); if (ixB) preIxs.push(ixB);
       if (isWsolA || isWsolB) postIxs.push(buildUnwrapInstruction(wallet.publicKey));
 
       const userInfoPda = lpUserInfoPda(poolAddr, wallet.publicKey);
@@ -567,16 +582,20 @@ export function Pools() {
           user:                   wallet.publicKey,
           pool:                   poolAddr,
           lpMint,
+          tokenAMint:             mintAPk,
+          tokenBMint:             mintBPk,
           tokenAVault:            vaultAPda(poolAddr),
           tokenBVault:            vaultBPda(poolAddr),
           userLp:                 getAssociatedTokenAddressSync(lpMint, wallet.publicKey),
-          userTokenA:             userAta(mintAPk, wallet.publicKey),
-          userTokenB:             userAta(mintBPk, wallet.publicKey),
+          userTokenA:             userAta(mintAPk, wallet.publicKey, programA),
+          userTokenB:             userAta(mintBPk, wallet.publicKey, programB),
           lpUserInfo:             userInfoPda,
           protocolState:          statePda,
           oSolaMint:              oSolaM,
           userOSola,
           rent:                   SYSVAR_RENT_PUBKEY,
+          tokenAProgram:          programA,
+          tokenBProgram:          programB,
           tokenProgram:           TOKEN_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram:          SystemProgram.programId,

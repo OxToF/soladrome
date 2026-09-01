@@ -6,13 +6,21 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{self, Mint, Token, TokenAccount, Transfer},
+    token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked},
 };
 
 use crate::constants::*;
 use crate::errors::SoladromeError;
 use crate::math::*;
 use crate::state::*;
+use crate::token_ext::require_supported_mint;
+
+// A bribe pot is a third-party mint surface exactly like an AMM pool, and it was missed on the
+// first reading of this migration: `reward_mint` is arbitrary, so a partner bribing in USDG or
+// an xStock lands here and not in `amm.rs`. Every account below therefore speaks the token
+// interface rather than classic SPL Token, and `deposit_bribe` runs the same admission check
+// `create_pool` does — `total_bribed` is a booked figure, and a mint that skims a transfer fee
+// would leave the last claimer of an epoch short of the pot the pro-rata promises them.
 
 /// Permissionless: any protocol deposits bribe tokens to attract hiSOLA votes.
 /// epoch must equal the current epoch — bribes target the live voting window.
@@ -32,6 +40,10 @@ pub fn deposit_bribe(ctx: Context<DepositBribe>, epoch: u64, amount: u64) -> Res
         SoladromeError::WrongEpoch
     );
 
+    // Same admission gate as `create_pool`: the bribe-vault seeds are `init_if_needed`, so a
+    // mint accepted once owns that (pool, mint, epoch) triple for good.
+    require_supported_mint(&ctx.accounts.reward_mint)?;
+
     // First-time vault init (pool_id starts as default when account is blank)
     if ctx.accounts.bribe_vault.pool_id == Pubkey::default() {
         ctx.accounts.bribe_vault.pool_id = ctx.accounts.pool_id.key();
@@ -40,16 +52,18 @@ pub fn deposit_bribe(ctx: Context<DepositBribe>, epoch: u64, amount: u64) -> Res
         ctx.accounts.bribe_vault.bump = ctx.bumps.bribe_vault;
     }
 
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: ctx.accounts.depositor_token.to_account_info(),
+                mint: ctx.accounts.reward_mint.to_account_info(),
                 to: ctx.accounts.bribe_token_vault.to_account_info(),
                 authority: ctx.accounts.depositor.to_account_info(),
             },
         ),
         amount,
+        ctx.accounts.reward_mint.decimals,
     )?;
 
     ctx.accounts.bribe_vault.total_bribed = ctx
@@ -100,17 +114,19 @@ pub fn claim_bribe(ctx: Context<ClaimBribe>, epoch: u64) -> Result<()> {
         vault_bump.as_ref(),
     ];
 
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: ctx.accounts.bribe_token_vault.to_account_info(),
+                mint: ctx.accounts.reward_mint.to_account_info(),
                 to: ctx.accounts.user_reward_ata.to_account_info(),
                 authority: ctx.accounts.bribe_vault.to_account_info(),
             },
             &[seeds],
         ),
         claimable,
+        ctx.accounts.reward_mint.decimals,
     )?;
 
     // Stamp the claim PDA (existence = guard against replay)
@@ -185,17 +201,19 @@ pub fn rollover_bribe(ctx: Context<RolloverBribe>, old_epoch: u64, new_epoch: u6
         vault_bump.as_ref(),
     ];
 
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: ctx.accounts.old_bribe_token_vault.to_account_info(),
+                mint: ctx.accounts.reward_mint.to_account_info(),
                 to: ctx.accounts.new_bribe_token_vault.to_account_info(),
                 authority: ctx.accounts.old_bribe_vault.to_account_info(),
             },
             &[seeds],
         ),
         amount,
+        ctx.accounts.reward_mint.decimals,
     )?;
 
     // Initialise new vault on first rollover/deposit
@@ -229,10 +247,10 @@ pub struct DepositBribe<'info> {
     /// CHECK: External pool address used as bribe label — validation by seeds only.
     pub pool_id: UncheckedAccount<'info>,
 
-    pub reward_mint: Box<Account<'info, Mint>>,
+    pub reward_mint: Box<InterfaceAccount<'info, Mint>>,
 
     #[account(mut, token::mint = reward_mint, token::authority = depositor)]
-    pub depositor_token: Box<Account<'info, TokenAccount>>,
+    pub depositor_token: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Bribe metadata account. init_if_needed = multiple depositors additive.
     #[account(
@@ -253,9 +271,9 @@ pub struct DepositBribe<'info> {
         seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
         bump,
     )]
-    pub bribe_token_vault: Box<Account<'info, TokenAccount>>,
+    pub bribe_token_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
@@ -269,7 +287,7 @@ pub struct ClaimBribe<'info> {
     /// CHECK: Pool label — validated by seeds derivation.
     pub pool_id: UncheckedAccount<'info>,
 
-    pub reward_mint: Box<Account<'info, Mint>>,
+    pub reward_mint: Box<InterfaceAccount<'info, Mint>>,
 
     #[account(
         seeds = [b"bribe_vault", pool_id.key().as_ref(), reward_mint.key().as_ref(), epoch.to_le_bytes().as_ref()],
@@ -284,7 +302,7 @@ pub struct ClaimBribe<'info> {
         token::mint = reward_mint,
         token::authority = bribe_vault,
     )]
-    pub bribe_token_vault: Box<Account<'info, TokenAccount>>,
+    pub bribe_token_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Destination — created if the user doesn't already hold this token.
     #[account(
@@ -293,7 +311,7 @@ pub struct ClaimBribe<'info> {
         associated_token::mint = reward_mint,
         associated_token::authority = user,
     )]
-    pub user_reward_ata: Box<Account<'info, TokenAccount>>,
+    pub user_reward_ata: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         seeds = [b"gauge", pool_id.key().as_ref(), epoch.to_le_bytes().as_ref()],
@@ -317,7 +335,7 @@ pub struct ClaimBribe<'info> {
     )]
     pub user_bribe_claim: Account<'info, UserBribeClaim>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -334,7 +352,7 @@ pub struct RolloverBribe<'info> {
     /// CHECK: Pool label — seeds validated in instruction body.
     pub pool_id: UncheckedAccount<'info>,
 
-    pub reward_mint: Box<Account<'info, Mint>>,
+    pub reward_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// Source: old epoch bribe metadata.
     #[account(
@@ -351,7 +369,7 @@ pub struct RolloverBribe<'info> {
         token::mint = reward_mint,
         token::authority = old_bribe_vault,
     )]
-    pub old_bribe_token_vault: Box<Account<'info, TokenAccount>>,
+    pub old_bribe_token_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// CHECK: GaugeState for (pool, old_epoch) — may be absent if no votes were cast.
     /// PDA seeds [b"gauge", pool_id, old_epoch_le8] verified in instruction body.
@@ -376,9 +394,9 @@ pub struct RolloverBribe<'info> {
         seeds = [b"bribe_tokens", pool_id.key().as_ref(), reward_mint.key().as_ref(), new_epoch.to_le_bytes().as_ref()],
         bump,
     )]
-    pub new_bribe_token_vault: Box<Account<'info, TokenAccount>>,
+    pub new_bribe_token_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }

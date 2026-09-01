@@ -277,6 +277,37 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
     ]);
   }
 
+  async function recycle(oldEpoch: number, newEpoch: number, nonce: number) {
+    const ix = await program.methods
+      .recycleLpEmissions(new BN(oldEpoch), new BN(newEpoch))
+      .accounts({
+        caller: payer.publicKey,
+        protocolState: statePda,
+        pool: poolPda,
+        oldPoolEpochAccum: pda([
+          Buffer.from("lp_pool_epoch"),
+          poolPda.toBuffer(),
+          epochLE(oldEpoch),
+        ]),
+        newPoolEpochAccum: pda([
+          Buffer.from("lp_pool_epoch"),
+          poolPda.toBuffer(),
+          epochLE(newEpoch),
+        ]),
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .instruction();
+    return send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: payer.publicKey,
+        lamports: nonce,
+      }),
+      ix,
+    ]);
+  }
+
   async function voteForPool(epoch: number, weight: bigint) {
     await program.methods
       .voteGauge(new BN(epoch), new BN(weight.toString()))
@@ -399,6 +430,8 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
 
@@ -408,6 +441,8 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
         user: payer.publicKey,
         pool: poolPda,
         lpMint,
+        tokenAMint: mintA,
+        tokenBMint: mintB,
         tokenAVault: vaultA,
         tokenBVault: vaultB,
         userTokenA: mintA.equals(usdcMint) ? userUsdc : userTkn,
@@ -423,6 +458,8 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
 
@@ -595,6 +632,85 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
     assert.isTrue(
       BigInt(second.osolaAllocated.toString()) < BigInt(first.osolaAllocated.toString()),
       `emission did not decay: ${second.osolaAllocated} vs ${first.osolaAllocated}`
+    );
+  });
+
+  // ── Residue recycling ────────────────────────────────────────────────────────
+  //
+  // `nextEpoch` above was finalised and then never claimed by anyone, so its whole pot is
+  // residue — the clearest possible instance of the leak this instruction exists to close.
+  // oSOLA is minted on claim, so that pot is not tokens sitting in a vault: it is emission the
+  // schedule promised this pool's LPs that would otherwise simply never come into existence.
+  it("[recycle] the grace period holds — a residue cannot be swept the epoch after it settles", async () => {
+    const prevEpoch = Math.floor((await nowSeconds()) / EPOCH_DURATION) - 1;
+    const curr = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    assert.equal(curr, prevEpoch + 1, "this case only means anything one epoch after settlement");
+    await expectFailure(() => recycle(prevEpoch, curr, 20), "RolloverTooEarly");
+  });
+
+  it("☢️ [recycle] an unclaimed pot rolls forward once, and only once", async () => {
+    const settled = Math.floor((await nowSeconds()) / EPOCH_DURATION) - 1;
+    const srcKey = pda([Buffer.from("lp_pool_epoch"), poolPda.toBuffer(), epochLE(settled)]);
+
+    const before: any = await program.account.lpPoolEpochAccum.fetch(srcKey);
+    const residue = BigInt(before.osolaAllocated.toString()) - BigInt(before.osolaClaimed.toString());
+    assert.isTrue(before.finalized, "the source epoch must be settled");
+    assert.isAbove(Number(residue), 0, "this case needs a real residue to move");
+
+    // Past the ROLLOVER_DELAY_EPOCHS grace the bribe rollover uses.
+    await forwardSeconds(EPOCH_DURATION);
+    const dest = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    assert.isAtLeast(dest, settled + 2, "the grace period must have elapsed");
+
+    await recycle(settled, dest, 21);
+
+    const src: any = await program.account.lpPoolEpochAccum.fetch(srcKey);
+    const dst: any = await program.account.lpPoolEpochAccum.fetch(
+      pda([Buffer.from("lp_pool_epoch"), poolPda.toBuffer(), epochLE(dest)])
+    );
+    assert.equal(dst.carryIn.toString(), residue.toString(), "the whole residue must carry over");
+    assert.equal(
+      src.osolaClaimed.toString(),
+      src.osolaAllocated.toString(),
+      "the drained source must read allocated == claimed, which is what closes it"
+    );
+
+    // Draining is marked by settling, not by a flag — so the second attempt finds nothing.
+    await expectFailure(() => recycle(settled, dest, 22), "NothingToClaim");
+
+    // ☢️ And the destination must still be blank apart from the carry: writing `epoch` or
+    // `last_update_ts` here would make emit_pool_rewards skip its init block and weight this
+    // pool's supply from 1970, crushing every LP's share.
+    assert.equal(dst.epoch.toString(), "0", "the recycler must not pre-initialise the accum");
+    assert.equal(dst.lastUpdateTs.toString(), "0", "the recycler must not touch the clock fields");
+  });
+
+  it("☢️ [recycle] the carry actually reaches the LPs — it is added to the epoch's pot", async () => {
+    const dest = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    const destKey = pda([Buffer.from("lp_pool_epoch"), poolPda.toBuffer(), epochLE(dest)]);
+    const carried = BigInt(
+      (await program.account.lpPoolEpochAccum.fetch(destKey)).carryIn.toString()
+    );
+    assert.isAbove(Number(carried), 0, "there must be a carry waiting on this epoch");
+
+    const standing: any = await program.account.userPosition.fetch(userPosition);
+    await voteForPool(dest, BigInt(standing.voteLocked.toString()));
+    await checkpoint(dest, 23);
+    await forwardSeconds(EPOCH_DURATION);
+    await emit(dest, 24);
+
+    const state: any = await program.account.protocolState.fetch(statePda);
+    const voteShare = expectedEpochTotal(dest - Number(state.osolaEmissionStartEpoch));
+    const accum: any = await program.account.lpPoolEpochAccum.fetch(destKey);
+
+    assert.equal(
+      accum.osolaAllocated.toString(),
+      (voteShare + carried).toString(),
+      "the finalised pot must be this epoch's schedule PLUS the recycled residue"
+    );
+    assert.isTrue(
+      BigInt(accum.osolaAllocated.toString()) > voteShare,
+      "a pot that merely equals the schedule means the carry was dropped"
     );
   });
 

@@ -6,7 +6,7 @@ import { useAnchorWallet, useWallet, useConnection } from "@solana/wallet-adapte
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import {
-  getProgram, poolPda, vaultAPda, vaultBPda, sortMints, userAta,
+  getProgram, poolPda, vaultAPda, vaultBPda, sortMints, userAta, getMintPrograms,
   statePda, marketVault, commonAccounts,
   fromUiDecimals, toUiDecimals,
   buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
@@ -145,9 +145,14 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       const program   = getProgram(provider);
       const mintInPk  = new PublicKey(tokIn.mint);
       const mintOutPk = new PublicKey(tokOut.mint);
-      const [sortedA] = sortMints(mintInPk, mintOutPk);
+      const [sortedA, sortedB] = sortMints(mintInPk, mintOutPk);
       const aToB      = mintInPk.equals(sortedA);
       const poolAddr  = poolPda(mintInPk, mintOutPk);
+      // The pair's two sides may be served by different token programs, and that also decides
+      // how each user ATA is derived.
+      const { programA, programB } = await getMintPrograms(connection, sortedA, sortedB);
+      const programIn  = aToB ? programA : programB;
+      const programOut = aToB ? programB : programA;
 
       const isWsolIn  = tokIn.mint  === WSOL_MINT;
       const isWsolOut = tokOut.mint === WSOL_MINT;
@@ -167,7 +172,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       }
 
       // Ensure output ATA exists; if wSOL output → unwrap after swap
-      const outAtaIx = await ensureAtaIx(connection, wallet.publicKey, mintOutPk, wallet.publicKey);
+      const outAtaIx = await ensureAtaIx(connection, wallet.publicKey, mintOutPk, wallet.publicKey, programOut);
       if (outAtaIx) preIxs.push(outAtaIx);
       if (isWsolOut) postIxs.push(buildUnwrapInstruction(wallet.publicKey));
 
@@ -176,13 +181,16 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
         .accounts({
           user:          wallet.publicKey,
           pool:          poolAddr,
+          tokenAMint:    sortedA,
+          tokenBMint:    sortedB,
           tokenAVault:   vaultAPda(poolAddr),
           tokenBVault:   vaultBPda(poolAddr),
-          userTokenIn:   userAta(mintInPk, wallet.publicKey),
-          userTokenOut:  userAta(mintOutPk, wallet.publicKey),
+          userTokenIn:   userAta(mintInPk, wallet.publicKey, programIn),
+          userTokenOut:  userAta(mintOutPk, wallet.publicKey, programOut),
           marketVault,
           protocolState: statePda,
-          tokenProgram:  commonAccounts.tokenProgram,
+          tokenAProgram: programA,
+          tokenBProgram: programB,
         } as any)
         .instruction();
 

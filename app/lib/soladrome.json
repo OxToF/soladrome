@@ -61,6 +61,16 @@
           "writable": true
         },
         {
+          "name": "token_a_mint",
+          "docs": [
+            "Pair mints — needed by `transfer_checked`, which prices the move against the mint's own",
+            "decimals rather than trusting the caller's figure."
+          ]
+        },
+        {
+          "name": "token_b_mint"
+        },
+        {
           "name": "token_a_vault",
           "writable": true
         },
@@ -86,41 +96,8 @@
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "token_program"
               },
               {
                 "kind": "account",
@@ -179,41 +156,8 @@
                 "path": "lp_dead"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "token_program"
               },
               {
                 "kind": "account",
@@ -334,41 +278,8 @@
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "token_program"
               },
               {
                 "kind": "account",
@@ -419,7 +330,22 @@
           "address": "SysvarRent111111111111111111111111111111111"
         },
         {
+          "name": "token_a_program",
+          "docs": [
+            "Serves `token_a_mint`."
+          ]
+        },
+        {
+          "name": "token_b_program",
+          "docs": [
+            "Serves `token_b_mint`."
+          ]
+        },
+        {
           "name": "token_program",
+          "docs": [
+            "Serves the protocol's own mints (LP, oSOLA), always classic SPL Token."
+          ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
@@ -496,6 +422,15 @@
           }
         },
         {
+          "name": "token_a_mint",
+          "docs": [
+            "Pair mints — `transfer_checked` reads the decimals from the mint itself."
+          ]
+        },
+        {
+          "name": "token_b_mint"
+        },
+        {
           "name": "token_a_vault",
           "writable": true
         },
@@ -544,8 +479,16 @@
           }
         },
         {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "token_a_program",
+          "docs": [
+            "Serves `token_a_mint`."
+          ]
+        },
+        {
+          "name": "token_b_program",
+          "docs": [
+            "Serves `token_b_mint`. May differ from `token_a_program`."
+          ]
         }
       ],
       "args": [
@@ -1649,8 +1592,7 @@
           }
         },
         {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "token_program"
         },
         {
           "name": "associated_token_program",
@@ -3671,7 +3613,16 @@
           }
         },
         {
+          "name": "bribe_token_program",
+          "docs": [
+            "Serves `reward_mint` — the partner's bribe token, classic SPL Token or Token-2022."
+          ]
+        },
+        {
           "name": "token_program",
+          "docs": [
+            "Serves SOLA and the LP mint, both always classic SPL Token."
+          ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
@@ -3765,6 +3716,11 @@
         },
         {
           "name": "lp_mint",
+          "docs": [
+            "The pool's LP token. Minted by this program, no extensions, and deliberately pinned to",
+            "classic SPL Token: every wallet, ATA and integration that touches an LP balance keeps",
+            "working unchanged, whatever the pair's own mints are."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -3836,7 +3792,22 @@
           }
         },
         {
+          "name": "token_a_program",
+          "docs": [
+            "Serves `token_a_mint` — classic SPL Token or Token-2022, checked against the mint's owner."
+          ]
+        },
+        {
+          "name": "token_b_program",
+          "docs": [
+            "Serves `token_b_mint`. May differ from `token_a_program`; that is the point."
+          ]
+        },
+        {
           "name": "token_program",
+          "docs": [
+            "Serves the protocol's own LP mint, always classic SPL Token."
+          ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
@@ -4312,8 +4283,7 @@
           }
         },
         {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "token_program"
         },
         {
           "name": "system_program",
@@ -5309,7 +5279,9 @@
         },
         {
           "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "docs": [
+            "Serves `bribe_mint` — the only token this instruction moves."
+          ]
         },
         {
           "name": "system_program",
@@ -6098,6 +6070,171 @@
       "args": []
     },
     {
+      "name": "recycle_lp_emissions",
+      "discriminator": [
+        6,
+        240,
+        126,
+        69,
+        43,
+        67,
+        137,
+        169
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Read-only — used only for the pause check."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "old_pool_epoch_accum",
+          "docs": [
+            "Source: the settled epoch whose pot was never fully claimed. The seeds pin it to this",
+            "pool, so the caller cannot present another pool's richer accum."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "arg",
+                "path": "old_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "new_pool_epoch_accum",
+          "docs": [
+            "Destination: the current epoch's accum for the same pool. `init_if_needed` because the",
+            "pool may not have been checkpointed yet this epoch — in which case only `carry_in` is",
+            "written and the account stays blank for `emit_pool_rewards` to initialise properly."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "arg",
+                "path": "new_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "old_epoch",
+          "type": "u64"
+        },
+        {
+          "name": "new_epoch",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "register_contributor",
       "discriminator": [
         14,
@@ -6379,6 +6516,15 @@
           "writable": true
         },
         {
+          "name": "token_a_mint",
+          "docs": [
+            "Pair mints — needed by `transfer_checked` on the way out."
+          ]
+        },
+        {
+          "name": "token_b_mint"
+        },
+        {
           "name": "token_a_vault",
           "writable": true
         },
@@ -6475,41 +6621,8 @@
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "token_program"
               },
               {
                 "kind": "account",
@@ -6560,7 +6673,22 @@
           "address": "SysvarRent111111111111111111111111111111111"
         },
         {
+          "name": "token_a_program",
+          "docs": [
+            "Serves `token_a_mint`."
+          ]
+        },
+        {
+          "name": "token_b_program",
+          "docs": [
+            "Serves `token_b_mint`."
+          ]
+        },
+        {
           "name": "token_program",
+          "docs": [
+            "Serves the protocol's own mints (LP, oSOLA), always classic SPL Token."
+          ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
@@ -7112,8 +7240,7 @@
           }
         },
         {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "token_program"
         },
         {
           "name": "system_program",
@@ -9045,6 +9172,11 @@
       "code": 6056,
       "name": "ContributorSplitMismatch",
       "msg": "Contributor tranches must be split 50/50 — hiSOLA and oSOLA in equal amounts"
+    },
+    {
+      "code": 6057,
+      "name": "UnsupportedMintExtension",
+      "msg": "This mint carries a Token-2022 extension the AMM cannot honour: a transfer fee, an armed transfer hook, or a default-frozen account state"
     }
   ],
   "types": [
@@ -9433,6 +9565,26 @@
               "",
               "Appended last, carved from the 18 spare bytes → existing accums read 0, i.e. the",
               "full allocation still claimable. No realloc."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "carry_in",
+            "docs": [
+              "Residue rolled forward into this (pool, epoch) from earlier epochs of the SAME pool by",
+              "`recycle_lp_emissions`, and folded into `osola_allocated` when `emit_pool_rewards`",
+              "finalizes the epoch.",
+              "",
+              "Why a separate field rather than pre-crediting `osola_allocated` directly: the recycler",
+              "must be able to touch a destination accum that may still be blank, and",
+              "`emit_pool_rewards` decides an accum is blank by reading `epoch == 0`. Writing anything",
+              "that looks initialised — `epoch`, `last_update_ts`, `last_lp_supply` — would skip that",
+              "init block and leave `last_update_ts` at 0, so the epoch-end catch-up would weight the",
+              "pool's supply across 57 years instead of one week and crush every LP's share to dust.",
+              "Confining the recycler to a field the checkpoint arithmetic never reads makes that class",
+              "of mistake structurally impossible rather than merely avoided.",
+              "",
+              "Carved from the 10 remaining spare bytes → existing accums read 0. No realloc."
             ],
             "type": "u64"
           }

@@ -401,6 +401,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,
+        bribeTokenProgram: TOKEN_PROGRAM_ID,
       } as any)
       .signers(caller ? [caller] : [])
       .rpc();
@@ -951,6 +952,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
             rent: SYSVAR_RENT_PUBKEY,
+            bribeTokenProgram: TOKEN_PROGRAM_ID,
           } as any)
           .rpc(),
       "LpMintMismatch"

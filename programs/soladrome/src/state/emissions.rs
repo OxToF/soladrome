@@ -45,9 +45,25 @@ pub struct LpPoolEpochAccum {
     /// Appended last, carved from the 18 spare bytes → existing accums read 0, i.e. the
     /// full allocation still claimable. No realloc.
     pub osola_claimed: u64,
+
+    /// Residue rolled forward into this (pool, epoch) from earlier epochs of the SAME pool by
+    /// `recycle_lp_emissions`, and folded into `osola_allocated` when `emit_pool_rewards`
+    /// finalizes the epoch.
+    ///
+    /// Why a separate field rather than pre-crediting `osola_allocated` directly: the recycler
+    /// must be able to touch a destination accum that may still be blank, and
+    /// `emit_pool_rewards` decides an accum is blank by reading `epoch == 0`. Writing anything
+    /// that looks initialised — `epoch`, `last_update_ts`, `last_lp_supply` — would skip that
+    /// init block and leave `last_update_ts` at 0, so the epoch-end catch-up would weight the
+    /// pool's supply across 57 years instead of one week and crush every LP's share to dust.
+    /// Confining the recycler to a field the checkpoint arithmetic never reads makes that class
+    /// of mistake structurally impossible rather than merely avoided.
+    ///
+    /// Carved from the 10 remaining spare bytes → existing accums read 0. No realloc.
+    pub carry_in: u64,
 }
 impl LpPoolEpochAccum {
-    // 32 + 8 + 16 + 8 + 8 + 8 + 1 + 1 + 8 = 90 used of 100 (10 spare).
+    // 32 + 8 + 16 + 8 + 8 + 8 + 1 + 1 + 8 + 8 = 98 used of 100 (2 spare).
     pub const LEN: usize = 100;
 }
 

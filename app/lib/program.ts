@@ -7,6 +7,7 @@ import {
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountInstruction,
@@ -107,8 +108,57 @@ export async function readPosition(
   };
 }
 
-export function userAta(mint: PublicKey, owner: PublicKey) {
-  return getAssociatedTokenAddressSync(mint, owner);
+export function userAta(
+  mint: PublicKey,
+  owner: PublicKey,
+  tokenProgram: PublicKey = TOKEN_PROGRAM_ID,
+) {
+  return getAssociatedTokenAddressSync(mint, owner, false, tokenProgram);
+}
+
+// ── Which token program owns a mint ───────────────────────────────────────────
+//
+// Since the Token-2022 migration a pool's two sides may be served by DIFFERENT programs — an
+// xStock (Token-2022) quoted in USDC (classic SPL Token) is the flagship case — so the caller
+// can no longer assume `TOKEN_PROGRAM_ID`. It also decides ATA derivation: the associated-token
+// address is seeded with the token program, so deriving a Token-2022 ATA under Tokenkeg yields
+// an address that simply does not exist.
+//
+// The protocol's own mints (SOLA, oSOLA, every LP mint) are deliberately still classic SPL
+// Token, so callers that only touch those keep using the default and need none of this.
+const mintProgramCache = new Map<string, PublicKey>();
+
+/// The program that owns `mint`, read from the chain and memoised.
+///
+/// A mint's owner cannot change, so caching for the life of the tab is safe. Falls back to
+/// classic SPL Token when the account cannot be read, which keeps a transient RPC failure from
+/// silently producing a Token-2022 address for an SPL mint — the transaction then fails loudly
+/// at simulation rather than sending tokens to an address nobody controls.
+export async function getMintProgram(
+  connection: Connection,
+  mint: PublicKey,
+): Promise<PublicKey> {
+  const key = mint.toBase58();
+  const hit = mintProgramCache.get(key);
+  if (hit) return hit;
+  const info = await connection.getAccountInfo(mint);
+  const owner =
+    info && info.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+  mintProgramCache.set(key, owner);
+  return owner;
+}
+
+/// Both sides of a pair in one round trip.
+export async function getMintPrograms(
+  connection: Connection,
+  mintA: PublicKey,
+  mintB: PublicKey,
+): Promise<{ programA: PublicKey; programB: PublicKey }> {
+  const [programA, programB] = await Promise.all([
+    getMintProgram(connection, mintA),
+    getMintProgram(connection, mintB),
+  ]);
+  return { programA, programB };
 }
 
 // ── shared accounts helpers ───────────────────────────────────────────────────
@@ -210,10 +260,13 @@ export async function ensureAtaIx(
   payer: PublicKey,
   mint: PublicKey,
   owner: PublicKey,
+  tokenProgram: PublicKey = TOKEN_PROGRAM_ID,
 ): Promise<TransactionInstruction | null> {
-  const ata  = getAssociatedTokenAddressSync(mint, owner);
+  const ata  = getAssociatedTokenAddressSync(mint, owner, false, tokenProgram);
   const info = await connection.getAccountInfo(ata);
-  return info ? null : createAssociatedTokenAccountInstruction(payer, ata, owner, mint);
+  return info
+    ? null
+    : createAssociatedTokenAccountInstruction(payer, ata, owner, mint, tokenProgram);
 }
 
 /**

@@ -263,6 +263,8 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
     return pool;
@@ -280,6 +282,8 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
         user: user.publicKey,
         pool: pool.key,
         lpMint: pool.lpMint,
+        tokenAMint: pool.mintA,
+        tokenBMint: pool.mintB,
         tokenAVault: pool.vaultA,
         tokenBVault: pool.vaultB,
         userTokenA: getAssociatedTokenAddressSync(pool.mintA, user.publicKey),
@@ -303,6 +307,8 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
         tokenProgram: TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .instruction();
     // `payer = user` on the init_if_needed accounts: the LP funds its own rent.

@@ -153,4 +153,6 @@ pub enum SoladromeError {
     ContributorCapExceeded,
     #[msg("Contributor tranches must be split 50/50 — hiSOLA and oSOLA in equal amounts")]
     ContributorSplitMismatch,
+    #[msg("This mint carries a Token-2022 extension the AMM cannot honour: a transfer fee, an armed transfer hook, or a default-frozen account state")]
+    UnsupportedMintExtension,
 }
