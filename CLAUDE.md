@@ -44,6 +44,13 @@ ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/id.
 ⚠️ **Always `--reset`.** Without a fresh ledger, state left by a previous run makes tests pass that
 fail from cold — seen on `[founder] burn_o_sola_for_votes`, green only on the second run.
 
+⚠️ **On Node 22.18–23.x, prefix the run with `NODE_OPTIONS=--no-experimental-strip-types`.**
+Those versions enable native TypeScript type-stripping by default, and it claims `.ts` before
+ts-node's require hook: the file is served as ESM, `require()` fails, mocha retries with
+`import()`, and the run dies on `SyntaxError: Named export 'BN' not found` — `@coral-xyz/anchor`
+is CommonJS. Node 24 resolves it the other way, so the suite is green there and red on 22 with
+no change to the code. CI sets this on both test jobs.
+
 ### ⚠️ `anchor test` DEPLOYS TO DEVNET — it is not a localnet run
 `Anchor.toml` has `cluster = "devnet"`, so `anchor test` **builds, deploys to the live devnet
 program (`4d2SY…`), then runs the suite against accumulated devnet state** — rate-limited by Helius
