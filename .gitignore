@@ -64,3 +64,7 @@ tests/keys/
 # Lives in the private audit repo instead.
 AUDIT_SCOPE.md
 AUDIT_PACKAGES.md
+# Same two files after the 2026-09-01 archive move — they carry audit pricing
+# and vendor relationships and must never reach the public repo.
+docs/archive/AUDIT_SCOPE.md
+docs/archive/AUDIT_PACKAGES.md
