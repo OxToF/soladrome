@@ -8,7 +8,7 @@
 **Project Name:** Soladrome  
 **Category:** DeFi / Infrastructure  
 **Stage:** Live on Solana devnet — ready for audit and mainnet  
-**Requested Amount:** $35,000 USD  
+**Requested Amount:** stated in the submitted version, held off-repo  
 **GitHub:** https://github.com/OxToF/soladrome  
 **Live Demo:** https://soladrome.finance  
 **Telegram:** https://t.me/+SW4sVvoypbRkZTQ0  
@@ -181,14 +181,17 @@ Soladrome is the **first native Solana implementation** of this model — and ad
 
 ## 6. Grant Usage
 
-| Item | Amount | Justification |
-|------|--------|---------------|
-| **Security audit** (partial) | $18,000 | OtterSec / Neodyme — non-negotiable before mainnet. Focused on bonding curve, flash arb logic, and vault invariants |
-| **Developer compensation** (3 months) | $10,000 | Solo founder — full-stack + Rust/Anchor dev, minimum viable runway to reach mainnet |
-| **Devnet deployment + RPC** | $2,000 | Helius dedicated node for 6 months |
-| **Bug bounty program** | $3,000 | Immunefi listing — targeting bonding curve manipulation, flash arb reentrancy, vault depletion vectors |
-| **Legal review** (DeFi compliance) | $2,000 | Token classification, ToS |
-| **TOTAL** | **$35,000** | |
+> ⚠️ **The costed breakdown is deliberately not in this public repository.** It named specific
+> audit firms, carried their indicative pricing, and set out the founder's own compensation —
+> none of which belongs in a public file. The submitted version is held off-repo.
+
+| Item | Justification |
+|------|---------------|
+| **Security audit** (partial) | Non-negotiable before mainnet. Focused on bonding curve, flash arb logic, and vault invariants |
+| **Developer compensation** | Full-stack + Rust/Anchor development, the minimum runway to reach mainnet |
+| **Devnet deployment + RPC** | Dedicated node |
+| **Bug bounty program** | Immunefi listing — targeting bonding curve manipulation, flash arb reentrancy, vault depletion vectors |
+| **Legal review** (DeFi compliance) | Token classification, ToS |
 
 > The protocol generates its own USDC revenue from day 1 through the bonding curve and AMM fees.  
 > The 2M SOLA ecosystem allocation (on-chain, separate from founder) covers community growth independently of this grant.  
@@ -219,7 +222,7 @@ Soladrome is the **first native Solana implementation** of this model — and ad
 - **Deliverable:** Hardened core, growing community (500+ Telegram members)
 
 ### Milestone 3 — Security Audit (Month 2–3)
-- Full smart contract audit by OtterSec or Neodyme
+- Full smart contract audit by an established Solana audit firm
 - Priority: bonding curve invariants, flash arb atomicity, floor vault depletion scenarios
 - Fix all critical/high findings
 - ~~On-chain vesting for founder allocation~~ **✅ Deployed in Milestone 1** — 7M hiSOLA + 5M oSOLA progressive vesting, cliff + linear enforced on-chain; `total_purchased_sola` floor invariant deployed
