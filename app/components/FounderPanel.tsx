@@ -10,7 +10,7 @@ import {
   solaVaultAddr, marketVault, floorVault,
   positionPda, userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
-import { useSoladrome } from "@/lib/SoladromeContext";
+import { useSoladrome, useFloorHeadroom } from "@/lib/SoladromeContext";
 import { PROGRAM_ID } from "@/lib/program";
 
 
@@ -717,10 +717,16 @@ export function FounderPanel() {
   const borrowCap      = Math.floor(lockedRaw * 0.20);
   const currentDebt    = founderPos?.usdcBorrowed ?? 0;
   const capHeadroom    = Math.max(0, borrowCap - currentDebt);          // raw
-  // Actual borrowable = min(cap headroom, floor vault liquidity)
-  const borrowAvailRaw = Math.min(capHeadroom, floorVaultBal);
+  // Actual borrowable = min(cap headroom, floor buffer headroom).
+  // This bound used to be the whole `floorVaultBal`, which is the wrong guard: that one is
+  // `InsufficientFloorReserve`, and the 75% buffer bites long before the vault runs dry.
+  // The buffer headroom is always the smaller of the two, so it supersedes it outright —
+  // `floorVaultBal` stays only as the fallback while the protocol state is still loading.
+  const floorHeadroomRaw = useFloorHeadroom();
+  const floorBound     = floorHeadroomRaw ?? floorVaultBal;
+  const borrowAvailRaw = Math.min(capHeadroom, floorBound);
   const borrowAvail    = borrowAvailRaw / 1_000_000;
-  const limitedByFloor = floorVaultBal < capHeadroom && capHeadroom > 0;
+  const limitedByFloor = floorBound < capHeadroom && capHeadroom > 0;
 
   async function submitBorrow() {
     if (!wallet || !borrowAmt || !usdcMint) return;
@@ -1008,9 +1014,10 @@ export function FounderPanel() {
               <div className="flex items-start gap-2 text-xs bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2 mb-3">
                 <span className="text-yellow-400 text-base leading-none shrink-0">⚠</span>
                 <span className="text-yellow-300">
-                  Floor vault liquidity ({fmtSola(floorVaultBal)} USDC) is lower than your cap.
-                  Available borrow is limited to floor vault balance.
-                  More SOLA purchases will increase this limit.
+                  The protocol&apos;s 75% floor buffer ({fmtSola(floorBound)} USDC left before the
+                  floor vault reaches 75% of floor-backed supply) is lower than your 20% cap.
+                  That budget is shared by every borrower; repayments and SOLA purchases grow
+                  it back.
                 </span>
               </div>
             )}

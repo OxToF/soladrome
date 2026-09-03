@@ -10,7 +10,7 @@ import {
   solaVaultAddr, marketVault, floorVault,
   positionPda, userAta, commonAccounts, fromUi, PROGRAM_ID, sendTx,
 } from "@/lib/program";
-import { useSoladrome } from "@/lib/SoladromeContext";
+import { useSoladrome, useFloorHeadroom } from "@/lib/SoladromeContext";
 
 // ── PDAs ────────────────────────────────────────────────────────────────────
 const CONTRIBUTOR_SEED = Buffer.from("contributor");
@@ -95,8 +95,16 @@ export function ContributorPanel() {
   const oClaimable  = alloc ? Math.max(0, alloc.oSolaAmount  - alloc.oSolaClaimed)  : 0;
 
   // Borrow cap = 20% of the ve-locked hiSOLA (borrow_against_locked), minus current debt.
-  const borrowCap   = Math.floor(locked * 0.20);
-  const borrowAvail = Math.max(0, borrowCap - debt) / 1_000_000;
+  // Then the protocol-wide 75% floor buffer, which `borrow_against_locked` enforces with the
+  // same block as `borrow_usdc`. The caption under this field has always named that buffer
+  // while the figure above it ignored it, so Max could offer more than the chain would take.
+  const borrowCap        = Math.floor(locked * 0.20);
+  const capHeadroom      = Math.max(0, borrowCap - debt);
+  const floorHeadroomRaw = useFloorHeadroom();
+  const borrowAvailRaw   =
+    floorHeadroomRaw === null ? capHeadroom : Math.min(capHeadroom, floorHeadroomRaw);
+  const borrowAvail      = borrowAvailRaw / 1_000_000;
+  const floorBinds       = floorHeadroomRaw !== null && floorHeadroomRaw < capHeadroom;
 
   // ── Claim hiSOLA (into a lifetime ve lock) ────────────────────────────────────
   async function claimHiSola() {
@@ -344,7 +352,9 @@ export function ContributorPanel() {
 
         <p className="text-xs text-gray-500 mb-4">
           {borrowTab === "borrow"
-            ? "No interest · No liquidation · 2% origination fee to market_vault · bounded by the 75% floor buffer"
+            ? floorBinds
+              ? `Limited by the protocol's 75% floor buffer, not your 20% cap — ${(floorHeadroomRaw ?? 0) / 1_000_000} USDC may still leave the floor vault, shared by every borrower. Repayments and SOLA purchases grow it back.`
+              : "No interest · No liquidation · 2% origination fee to market_vault · bounded by the 75% floor buffer"
             : "Repaying frees up your borrow headroom"}
         </p>
 

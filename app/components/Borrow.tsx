@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Soladrome Labs
 "use client";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
@@ -9,9 +9,8 @@ import {
   getProgram, statePda, floorVault, marketVault, readPosition,
   positionPda, userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
-import { useSoladrome } from "@/lib/SoladromeContext";
+import { useSoladrome, useFloorHeadroom } from "@/lib/SoladromeContext";
 import { BN } from "@coral-xyz/anchor";
-import { unpackAccount } from "@solana/spl-token";
 import { trackQuest } from "@/lib/quests";
 import { StatusBanner } from "./ui/StatusBanner";
 import { EmptyState } from "./ui/EmptyState";
@@ -19,17 +18,10 @@ import { EmptyState } from "./ui/EmptyState";
 type Tab = "borrow" | "repay";
 const PCT = [25, 50, 75, 100] as const;
 
-// borrow.rs — the 75% floor buffer. `borrow_usdc` refuses anything that would leave
-// `floor_vault` below this share of floor-backed supply, so the protocol keeps enough USDC
-// to honour `sell_sola` for three quarters of what was bought. It is a SECOND ceiling,
-// independent of the collateral cap, and the one that binds first at low buy volume: the
-// borrowable total is ~25% of `total_purchased_sola`, shared by every borrower at once.
-const FLOOR_RESERVE_MIN_BPS = 7_500;
-
 export function Borrow({ embedded = false }: { embedded?: boolean }) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
-  const { usdcMint, protocolState, vaultInfos } = useSoladrome();
+  const { usdcMint } = useSoladrome();
   const [tab, setTab] = useState<Tab>("borrow");
   const [amount, setAmount] = useState("");
   const [hiSolaBal, setHiSolaBal] = useState<number | null>(null);
@@ -43,17 +35,8 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
   // the chain would take 133, so every attempt down to 50% failed with
   // BorrowExceedsFloorBuffer and nothing on screen explained why.
   const collateralRoom = hiSolaBal !== null ? Math.max(0, hiSolaBal - borrowed) : null;
-
-  // The protocol-wide ceiling: how much may leave `floor_vault` before it hits 75% of
-  // floor-backed supply. Shared by every borrower, so it moves with other people's borrows,
-  // repayments and SOLA purchases — the context re-reads it every 10 s.
-  const floorHeadroom = useMemo(() => {
-    if (!protocolState || !vaultInfos[0]) return null;
-    const floorUsdc = Number(unpackAccount(floorVault, vaultInfos[0]).amount) / 1e6;
-    const minFloor =
-      (toUi(protocolState.totalPurchasedSola as BN) * FLOOR_RESERVE_MIN_BPS) / 10_000;
-    return Math.max(0, floorUsdc - minFloor);
-  }, [protocolState, vaultInfos]);
+  const floorHeadroomRaw = useFloorHeadroom();
+  const floorHeadroom = floorHeadroomRaw === null ? null : floorHeadroomRaw / 1e6;
 
   // Until the protocol state has loaded there is nothing better than the collateral cap.
   const available =
