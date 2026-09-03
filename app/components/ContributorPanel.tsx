@@ -353,7 +353,7 @@ export function ContributorPanel() {
         <p className="text-xs text-gray-500 mb-4">
           {borrowTab === "borrow"
             ? floorBinds
-              ? `Limited by the protocol's 75% floor buffer, not your 20% cap — ${(floorHeadroomRaw ?? 0) / 1_000_000} USDC may still leave the floor vault, shared by every borrower. Repayments and SOLA purchases grow it back.`
+              ? `Limited by the protocol's 75% floor buffer, not your 20% cap — ${fmt(floorHeadroomRaw ?? 0)} USDC may still leave the floor vault, shared by every borrower. Repayments and SOLA purchases grow it back.`
               : "No interest · No liquidation · 2% origination fee to market_vault · bounded by the 75% floor buffer"
             : "Repaying frees up your borrow headroom"}
         </p>
