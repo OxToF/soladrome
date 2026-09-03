@@ -9,7 +9,7 @@ import {
   getProgram, statePda, floorVault, marketVault, readPosition,
   positionPda, userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
-import { useSoladrome } from "@/lib/SoladromeContext";
+import { useSoladrome, useFloorHeadroom } from "@/lib/SoladromeContext";
 import { BN } from "@coral-xyz/anchor";
 import { trackQuest } from "@/lib/quests";
 import { StatusBanner } from "./ui/StatusBanner";
@@ -30,7 +30,24 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  const available = hiSolaBal !== null ? Math.max(0, hiSolaBal - borrowed) : null;
+  // A borrow passes two independent ceilings, and the smaller one is what the user can
+  // actually take. Showing only the first is what let Max offer 380 USDC on devnet while
+  // the chain would take 133, so every attempt down to 50% failed with
+  // BorrowExceedsFloorBuffer and nothing on screen explained why.
+  const collateralRoom = hiSolaBal !== null ? Math.max(0, hiSolaBal - borrowed) : null;
+  const floorHeadroomRaw = useFloorHeadroom();
+  const floorHeadroom = floorHeadroomRaw === null ? null : floorHeadroomRaw / 1e6;
+
+  // Until the protocol state has loaded there is nothing better than the collateral cap.
+  const available =
+    collateralRoom === null
+      ? null
+      : floorHeadroom === null
+        ? collateralRoom
+        : Math.min(collateralRoom, floorHeadroom);
+  const floorBinds =
+    collateralRoom !== null && floorHeadroom !== null && floorHeadroom < collateralRoom;
+
   // What can actually be repaid: outstanding debt, capped by wallet USDC.
   const repayable = Math.max(0, Math.min(borrowed, usdcBal ?? 0));
 
@@ -242,7 +259,9 @@ export function Borrow({ embedded = false }: { embedded?: boolean }) {
 
       <p className="text-xs text-gray-500 mb-4">
         {tab === "borrow"
-          ? `Max = hiSOLA − already borrowed (${borrowed > 0 ? borrowed.toLocaleString(undefined, { maximumFractionDigits: 2 }) + " USDC outstanding" : "nothing borrowed"}) · No liquidation`
+          ? floorBinds
+            ? `Max = the protocol's floor buffer, not your collateral — ${(floorHeadroom ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC may leave the floor vault before it reaches 75% of floor-backed supply, and that budget is shared by every borrower. Your own collateral would allow ${(collateralRoom ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC. It grows again when borrows are repaid or SOLA is bought.`
+            : `Max = hiSOLA − already borrowed (${borrowed > 0 ? borrowed.toLocaleString(undefined, { maximumFractionDigits: 2 }) + " USDC outstanding" : "nothing borrowed"}) · No liquidation`
           : borrowed > 0
             ? `Max = min(debt, wallet USDC) = ${repayable.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC · Repay to unlock your hiSOLA collateral`
             : "Nothing borrowed — no outstanding debt to repay"}

@@ -10,6 +10,7 @@ import {
   getProgram, statePda, solaM,
   solaVaultAddr, marketVault, positionPda, PROGRAM_ID, sendTx,
 } from "@/lib/program";
+import { useFloorHeadroom } from "@/lib/SoladromeContext";
 import { PartnerStream } from "@/components/PartnerStream";
 
 const PARTNER_SEED  = Buffer.from("partner");
@@ -216,9 +217,16 @@ export function PartnerPanel() {
     day: "2-digit", month: "short", year: "numeric",
   }) : null;
 
-  const borrowable = lock
+  // 20% of the locked position, then the protocol's 75% floor buffer. `borrow_against_locked`
+  // enforces both, and at low buy volume the buffer is the one that binds — publishing the cap
+  // alone promises a partner USDC the chain would refuse.
+  const capBorrowable = lock
     ? (lock.amountLocked * BigInt(PARTNER_BORROW_CAP_BPS)) / BigInt(10_000)
     : BigInt(0);
+  const floorHeadroomRaw = useFloorHeadroom();
+  const floorCap   = floorHeadroomRaw === null ? null : BigInt(Math.floor(floorHeadroomRaw));
+  const floorBinds = floorCap !== null && floorCap < capBorrowable;
+  const borrowable = floorBinds ? (floorCap as bigint) : capBorrowable;
   const releasable = lock && lock.amountLocked > lock.permanentAmount
     ? lock.amountLocked - lock.permanentAmount
     : BigInt(0);
@@ -354,7 +362,9 @@ export function PartnerPanel() {
               <span className="text-gray-300 font-mono">{fmt(releasable)} hiSOLA</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-500">Borrowable now (20%)</span>
+              <span className="text-gray-500">
+                Borrowable now {floorBinds ? "(floor buffer)" : "(20%)"}
+              </span>
               <span className="text-gray-300 font-mono">{fmt(borrowable)} USDC</span>
             </div>
           </div>
