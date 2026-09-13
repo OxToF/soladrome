@@ -49,10 +49,19 @@ function continuousActive(nowSec: number, endEpoch: number): boolean {
 }
 
 // APR derived from the *live* on-chain rate, so it reads 0 when emissions are off.
+//
+// ⚠️ `rewardsEnabled` is not decoration. The continuous stream is paid by `advance_pool_rewards`
+// (amm.rs), which returns early for a pool the authority never approved, so an unapproved pool
+// pays its LPs exactly nothing. This function used to read only the GLOBAL rate and the pool's
+// TVL, so every pool advertised the same emission APR whether or not it earned a single oSOLA —
+// the figure was most wrong precisely where it did most damage, on a pool a depositor had no
+// other way of knowing was unfunded. Approval is per pool, so the APR must be too.
 function poolEmissionApr(
   tvlUsdc: number | null, osolaPrice: number | null, cfg: EmissionCfg, nowSec: number,
+  rewardsEnabled: boolean,
 ): number | null {
   if (!tvlUsdc || tvlUsdc <= 0 || !osolaPrice || osolaPrice <= 0) return null;
+  if (!rewardsEnabled) return 0;
   if (cfg.ratePerSec <= 0 || !continuousActive(nowSec, cfg.endEpoch)) return 0;
   const osolaPerYear = (cfg.ratePerSec / 1e6) * SECS_PER_YEAR;
   return (osolaPerYear * osolaPrice / tvlUsdc) * 100;
@@ -769,7 +778,7 @@ export function Pools() {
             <p className="text-xs text-gray-500 mb-1">oSOLA APR</p>
             <p className="font-bold text-brand-green text-sm">
               {(() => {
-                const apr = poolEmissionApr(selected.tvlUsdc, osolaPrice, emissionCfg, Math.floor(Date.now() / 1000));
+                const apr = poolEmissionApr(selected.tvlUsdc, osolaPrice, emissionCfg, Math.floor(Date.now() / 1000), selected.rewardsEnabled);
                 return apr !== null ? `${apr.toFixed(1)}%` : "—";
               })()}
             </p>
@@ -1266,7 +1275,7 @@ export function Pools() {
 
                     <div className="hidden sm:block text-right">
                       {(() => {
-                        const apr = poolEmissionApr(p.tvlUsdc, osolaPrice, emissionCfg, Math.floor(Date.now() / 1000));
+                        const apr = poolEmissionApr(p.tvlUsdc, osolaPrice, emissionCfg, Math.floor(Date.now() / 1000), p.rewardsEnabled);
                         return apr !== null ? (
                           <>
                             <p className="font-bold text-brand-green text-sm">{apr.toFixed(1)}%</p>

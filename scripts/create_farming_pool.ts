@@ -29,7 +29,7 @@
 
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -105,13 +105,25 @@ async function main() {
   console.log("pool       :", pool.toBase58());
   console.log("lp mint    :", lpMint.toBase58());
 
+  // Each side is served by whichever program owns its mint, and the two may differ — a
+  // Token-2022 stock quoted in classic SPL USDC is the pair shape the AMM was extended for on
+  // 2026-09-01. Read the owner rather than assuming: this script passed `TOKEN_PROGRAM_ID`
+  // alone until then, which silently restricted it to all-classic pairs.
+  const ownerProgram = async (mint: PublicKey): Promise<PublicKey> => {
+    const info = await connection.getAccountInfo(mint);
+    if (!info) throw new Error(`mint ${mint.toBase58()} does not exist on this cluster`);
+    return info.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+  };
+  const [tokenAProgram, tokenBProgram] = await Promise.all([ownerProgram(mintA), ownerProgram(mintB)]);
+  console.log("token progs:", tokenAProgram.toBase58().slice(0, 8), "/", tokenBProgram.toBase58().slice(0, 8));
+
   const existing = await (program.account as any).ammPool.fetchNullable(pool);
   if (existing) {
     console.log("pool already exists — skipping creation");
   } else {
     const sig = await (program.methods as any)
       .createPool(FEE_RATE_BPS, PROTOCOL_FEE_BPS)
-      .accounts({
+      .accountsPartial({
         creator: wallet.publicKey,
         protocolState: statePda,
         tokenAMint: mintA,
@@ -120,6 +132,9 @@ async function main() {
         lpMint,
         tokenAVault,
         tokenBVault,
+        tokenAProgram,
+        tokenBProgram,
+        // The LP mint the program creates is always classic SPL Token.
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,
