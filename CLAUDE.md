@@ -278,7 +278,7 @@ a holder sees their balance.
 - **`k` is never recomputed** — set once at `initialize` (`1e12 × 1e12 = 1e24`, i.e. N = 1M tokens at 6 dec); virtual reserves drift, `k` stays fixed. It is the only irreversible number in the protocol — see the curve-depth section below
 - **`sell_sola` does not move virtual reserves** — only `buy_sola` updates `virtual_usdc` / `virtual_sola`
 - **Accumulator must be advanced before changing `total_hi_sola`** — both `stake_sola` and `mint_founder_allocation` snapshot the accumulator first
-- **Founder allocation is one-time** — guarded by `founder_allocated` flag on `ProtocolState`; hardcoded wallet `46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4` (Ledger Nano S, dedicated Soladrome wallet)
+- **Founder allocation is one-time** — guarded by `founder_allocated` flag on `ProtocolState`. ⚠️ **Not hardcoded since 2026-08-23**: the address lives in `ProtocolState.founder_wallet`, written once at `initialize` with no setter, which is what let the `devnet` feature be deleted. The mainnet address is the Ledger Nano S `46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4`; **devnet currently holds the test wallet `4T1gHVpLRDPJQrsW1QUfHMYuCBLzVLgP7tu1yuoWtYGH`** (`scripts/init_devnet.ts`), so read the field on-chain rather than assuming the Ledger — that is the whole reason the read-back warning below exists
 
 ### Tokenomics — the numbers (all in `lib.rs:60-130`, `state.rs`)
 
