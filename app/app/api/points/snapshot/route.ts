@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // Phase-2 points — snapshot job. Reads on-chain LP state, computes accrual with
 // the PURE logic in app/lib/points.ts, and persists it via the SECURITY DEFINER

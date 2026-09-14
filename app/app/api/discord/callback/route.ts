@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // Step 2 of Discord quest verification. Exchanges the OAuth code for the
 // caller's Discord identity, checks real membership in the Soladrome guild

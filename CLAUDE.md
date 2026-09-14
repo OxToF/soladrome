@@ -53,7 +53,7 @@ no change to the code. CI sets this on both test jobs.
 
 ### ⚠️ `anchor test` DEPLOYS TO DEVNET — it is not a localnet run
 `Anchor.toml` has `cluster = "devnet"`, so `anchor test` **builds, deploys to the live devnet
-program (`4d2SY…`), then runs the suite against accumulated devnet state** — rate-limited by Helius
+program (`DgD37Vjs…`), then runs the suite against accumulated devnet state** — rate-limited by Helius
 (expect dozens of 429s) and dependent on the test wallet holding devnet USDC. For a clean run
 against a fresh `initialize` (the only way to exercise `INIT_VIRTUAL_*`, since `k` and the virtual
 reserves are frozen in `ProtocolState` at init):
@@ -88,7 +88,7 @@ yarn build  # production build
 ```bash
 solana config get                   # verify cluster = devnet
 solana balance                      # check deployer wallet SOL
-solana program show 4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd
+solana program show DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe
 ```
 
 `app/.env.local` must have `NEXT_PUBLIC_RPC_URL=https://api.devnet.solana.com` for devnet testing. The default may be set to `http://127.0.0.1:8899` (localnet).

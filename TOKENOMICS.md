@@ -426,4 +426,4 @@ There is no general governance voting on protocol parameters. Constants are comp
 ---
 
 *Copyright © 2026 Soladrome Labs. Prior art disclosure as of Git commit timestamp.*
-*Program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd`*
+*Program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe`*

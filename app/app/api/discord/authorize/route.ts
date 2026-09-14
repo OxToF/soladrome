@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // Step 1 of Discord quest verification: redirect the wallet's owner into
 // Discord's OAuth consent screen. The wallet address rides along as `state`
