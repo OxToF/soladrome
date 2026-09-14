@@ -9,6 +9,8 @@ mod errors;
 mod instructions;
 mod math;
 mod state;
+#[cfg(test)]
+mod test_util;
 mod token_ext;
 
 pub use constants::*;

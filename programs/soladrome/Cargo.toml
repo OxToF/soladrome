@@ -38,6 +38,12 @@ custom-heap = []
 custom-panic = []
 
 
+# Host-only. Never reaches `cargo build-sbf`: the native `#[cfg(test)]` suites fabricate
+# Token-2022 mints byte for byte, which needs `OptionalNonZeroPubkey` to arm a transfer hook.
+# Already in the lockfile as a transitive dependency of spl-token-2022, so this pins nothing new.
+[dev-dependencies]
+spl-pod = "0.5.1"
+
 [dependencies]
 anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
 anchor-spl = { version = "0.32.1", features = [
