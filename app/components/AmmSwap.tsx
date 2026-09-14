@@ -6,7 +6,7 @@ import { useAnchorWallet, useWallet, useConnection } from "@solana/wallet-adapte
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import {
-  getProgram, poolPda, vaultAPda, vaultBPda, sortMints, userAta, getMintPrograms,
+  getProgram, poolPda, vaultAPda, vaultBPda, sortMints, userAta, userAtaAuto, getMintPrograms,
   statePda, marketVault, commonAccounts,
   fromUiDecimals, toUiDecimals,
   buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
@@ -76,7 +76,10 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
         const lamports = await connection.getBalance(wallet.publicKey);
         setBalanceIn(lamports / 1e9);
       } else {
-        const ata  = userAta(new PublicKey(tokIn.mint), wallet.publicKey);
+        // The picker carries Token-2022 mints (the devnet xStocks), so the token program has
+        // to be resolved before the ATA is derived — `userAta`'s classic-SPL default would
+        // point at an address that does not exist and render the balance as 0.
+        const ata  = await userAtaAuto(connection, new PublicKey(tokIn.mint), wallet.publicKey);
         const info = await connection.getTokenAccountBalance(ata);
         setBalanceIn(Number(info.value.uiAmount ?? 0));
       }
