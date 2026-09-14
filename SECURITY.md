@@ -53,6 +53,14 @@ on-chain on 2026-09-14:
 A Squads v4 vault exists at `BxYTiKyDxWpK4hPDZEiYVW9qBj8YpzhSHEBCWpaZbWQ4`, on **mainnet only**. It
 holds neither of the authorities above, because nothing of Soladrome is deployed to mainnet yet.
 
+**`founder_wallet` is a third role, and it is not an authority.** It names the recipient of the
+12.25M founder allocation and confers no control over the protocol — it cannot upgrade, pause, or
+change a parameter. It is written once at `initialize` and has no setter. On devnet it holds
+`4T1gHVpLRDPJQrsW1QUfHMYuCBLzVLgP7tu1yuoWtYGH`, a test wallet (`scripts/init_devnet.ts`), and
+`founder_allocated` is still `false`, so nothing has been issued against it. The mainnet founder
+wallet is a dedicated Ledger and is not this address. Do not read the single-key finding above as
+applying to it: the roles are separate, and only the two in the table control the deployment.
+
 ☢️ **That vault is configured 1-of-2, which is not a security threshold.** A threshold of 1 means
 a single signature suffices, so either key can act alone. What that buys is redundancy against
 *losing* a device; what it does not buy is any requirement that two people, or two devices, agree.
