@@ -54,16 +54,23 @@ A Squads v4 vault exists at `BxYTiKyDxWpK4hPDZEiYVW9qBj8YpzhSHEBCWpaZbWQ4`, on *
 holds neither of the authorities above, because nothing of Soladrome is deployed to mainnet yet.
 
 ☢️ **That vault is configured 1-of-2, which is not a security threshold.** A threshold of 1 means
-a single signature suffices, so two keys can each act alone: it adds redundancy against *losing* a
-device, and it **widens** the attack surface rather than narrowing it — compromising either Ledger
-is enough. A 1-of-2 is strictly weaker than one well-kept key. It is an availability measure, and
-calling it a security measure would be misleading.
+a single signature suffices, so either key can act alone. What that buys is redundancy against
+*losing* a device; what it does not buy is any requirement that two people, or two devices, agree.
+Calling it a "multisig" under Security Measures implied a consensus requirement that a threshold
+of 1 does not provide.
+
+To be precise about what the exposure is and is not: both keys are Ledger hardware wallets, so
+neither is reachable by the class of attack that takes key files, keychains or browser extensions
+off a host — a private key never leaves the secure element. What a threshold of 1 changes is the
+count of devices whose physical control is individually sufficient: two rather than one. That is a
+real difference from a 2-of-2, and a much smaller one than the word "multisig" suggested. Raising
+the threshold before mainnet is worth doing; it is not an emergency.
 
 > This file listed "Squads v4 multisig (1-of-2 Ledger hardware wallets)" under *Security Measures*
-> until 2026-09-14, next to the vault address. The word "multisig" implies a consensus requirement
-> that a threshold of 1 does not provide, and the vault named did not control the running
-> deployment in any case. Raising the threshold before mainnet is a live decision, not a
-> documentation one.
+> until 2026-09-14, next to the vault address. The correction is to the claim, not to the setup:
+> the hardware wallets are what they say they are, and the 2026-08-05 host compromise never
+> reached them for the reason given above. What was wrong was presenting a threshold of 1 as a
+> consensus control, and listing it as protecting a deployment it holds no authority over.
 
 ## Security Measures
 
