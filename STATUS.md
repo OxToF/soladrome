@@ -74,8 +74,34 @@ anyone choosing it. A rolling conversion (N years after each version's first rel
 alternative worth considering. Out of audit scope — nobody audits a `LICENSE` — so it can change
 without contradicting anything already handed over, but it should be an actual decision.
 
-**Should a pool on a pausable Token-2022 mint be gauge-eligible?** If it is, emissions can be
-voted toward a market its issuer has frozen. Undecided.
+## Decided
+
+**A pool on a pausable Token-2022 mint stays gauge-eligible. Decided 2026-09-14.**
+
+This closes the question that stood open here: if such a pool is eligible, emissions can be voted
+toward a market its issuer has frozen. It is eligible anyway.
+
+The reasoning is that a pause is a transient state, not a property of the asset. Tokenized
+equities are moving toward trading around the clock, so the closed-market window that makes this
+question interesting is shrinking on its own. Building a permanent eligibility rule to handle a
+temporary condition would outlive the condition.
+
+Two things make the exposure bounded rather than open-ended. A frozen pool earns no trading fees,
+so voters have no reason to keep directing emissions at it — the vote market corrects a stale
+allocation faster than any rule could, and it corrects it with the people who are paying for it.
+And the halt authority belongs to the issuer, not to this protocol: `token_ext.rs` admits
+`PausableConfig` deliberately, because freezing its own market is the issuer's prerogative. A rule
+here would be this protocol second-guessing a decision it does not own.
+
+**No code implements this decision, which is the point.** Neither `vote_gauge` nor
+`emit_pool_rewards` reads anything about pausability, so the behaviour above is already what the
+deployed binary does. What changes is that it is now a choice on the record rather than an
+accident of omission — the distinction an auditor will ask about.
+
+⚠️ The cost, stated so nobody rediscovers it as a finding: for the duration of a pause, oSOLA can
+accrue to LPs in a pool whose tokens cannot move, and bribes can be paid for votes on it. Nothing
+is lost or stuck — `remove_liquidity` resumes when the issuer unpauses — but an epoch of emission
+can be spent on a market that did no trading.
 
 ## Subsystems shipped but not enabled
 
