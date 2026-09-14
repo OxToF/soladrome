@@ -100,3 +100,225 @@ pub fn require_supported_mint(mint: &InterfaceAccount<Mint>) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assert_err;
+    use anchor_lang::solana_program::account_info::AccountInfo;
+    use anchor_spl::token::spl_token;
+    use spl_pod::optional_keys::OptionalNonZeroPubkey;
+    use spl_token_2022::extension::{
+        pausable::PausableConfig, permanent_delegate::PermanentDelegate,
+        BaseStateWithExtensionsMut, ExtensionType, StateWithExtensionsMut,
+    };
+    use spl_token_2022::state::Mint as MintState;
+
+    /// Build the raw account data of an initialized Token-2022 mint carrying `extensions`,
+    /// handing each freshly-initialized extension to `configure` so a test can arm it.
+    ///
+    /// The order matters and mirrors `initialize_mint` in spl-token-2022: allocate, init the
+    /// extensions, then write the base and stamp the account type. Doing it any other way
+    /// produces bytes the real program would reject for reasons unrelated to the policy
+    /// under test.
+    fn t22_mint_bytes<F>(extensions: &[ExtensionType], configure: F) -> Vec<u8>
+    where
+        F: FnOnce(&mut StateWithExtensionsMut<'_, MintState>),
+    {
+        let space = ExtensionType::try_calculate_account_len::<MintState>(extensions).unwrap();
+        let mut data = vec![0u8; space];
+        {
+            let mut state =
+                StateWithExtensionsMut::<MintState>::unpack_uninitialized(&mut data).unwrap();
+            configure(&mut state);
+            state.base = MintState {
+                decimals: 6,
+                is_initialized: true,
+                ..Default::default()
+            };
+            state.pack_base();
+            state.init_account_type().unwrap();
+        }
+        data
+    }
+
+    /// A classic SPL Token mint — 82 bytes, no extension machinery at all.
+    fn spl_mint_bytes() -> Vec<u8> {
+        use anchor_lang::solana_program::program_pack::Pack;
+        let mut data = vec![0u8; spl_token::state::Mint::LEN];
+        let mint = spl_token::state::Mint {
+            decimals: 6,
+            is_initialized: true,
+            ..Default::default()
+        };
+        spl_token::state::Mint::pack(mint, &mut data).unwrap();
+        data
+    }
+
+    /// Run the real admission policy over `data` owned by `owner`, exactly as an instruction
+    /// would: deserialize into the `InterfaceAccount<Mint>` the handlers receive, then gate.
+    fn admit(owner: Pubkey, data: &mut [u8]) -> Result<()> {
+        let key = Pubkey::new_unique();
+        let mut lamports = 1_461_600u64;
+        let info = AccountInfo::new(&key, false, false, &mut lamports, data, &owner, false, 0);
+        let mint = InterfaceAccount::<Mint>::try_from(&info)?;
+        require_supported_mint(&mint)
+    }
+
+    fn t22() -> Pubkey {
+        anchor_spl::token_2022::ID
+    }
+
+    // ── Admitted ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_classic_spl_mint_is_admitted_without_inspection() {
+        // The historical path. Classic SPL Token has no extension machinery, so there is
+        // nothing to read — and USDC, wSOL and every protocol mint come through here.
+        let mut data = spl_mint_bytes();
+        assert!(admit(anchor_spl::token::ID, &mut data).is_ok());
+    }
+
+    #[test]
+    fn a_plain_token_2022_mint_is_admitted() {
+        let mut data = t22_mint_bytes(&[], |_| {});
+        assert!(admit(t22(), &mut data).is_ok());
+    }
+
+    #[test]
+    fn an_unarmed_transfer_hook_is_admitted() {
+        // ☢️ This is the state the xStocks ship in today, and the single case the whole
+        // Token-2022 migration exists to serve. A test that only proved refusals would let
+        // an over-strict tightening silently lock the feature out.
+        let mut data = t22_mint_bytes(&[ExtensionType::TransferHook], |state| {
+            state.init_extension::<TransferHook>(true).unwrap();
+        });
+        assert!(
+            admit(t22(), &mut data).is_ok(),
+            "a hook with no program set must be admitted"
+        );
+    }
+
+    #[test]
+    fn a_permanent_delegate_is_admitted_deliberately() {
+        // Allowed with eyes open: the issuer can move tokens out of any account, vaults
+        // included. Refusing it would exclude the xStocks. The mitigation is policy —
+        // never put protocol-owned liquidity in such a pool — not a gate.
+        let mut data = t22_mint_bytes(&[ExtensionType::PermanentDelegate], |state| {
+            let ext = state.init_extension::<PermanentDelegate>(true).unwrap();
+            ext.delegate = OptionalNonZeroPubkey::try_from(Some(Pubkey::new_unique())).unwrap();
+        });
+        assert!(admit(t22(), &mut data).is_ok());
+    }
+
+    #[test]
+    fn a_pausable_mint_is_admitted_deliberately() {
+        // A frozen market is the issuer's prerogative, not a defect in this program.
+        let mut data = t22_mint_bytes(&[ExtensionType::Pausable], |state| {
+            state.init_extension::<PausableConfig>(true).unwrap();
+        });
+        assert!(admit(t22(), &mut data).is_ok());
+    }
+
+    #[test]
+    fn a_default_unfrozen_account_state_is_admitted() {
+        let mut data = t22_mint_bytes(&[ExtensionType::DefaultAccountState], |state| {
+            let ext = state.init_extension::<DefaultAccountState>(true).unwrap();
+            ext.state = u8::from(AccountState::Initialized);
+        });
+        assert!(admit(t22(), &mut data).is_ok());
+    }
+
+    // ── Refused ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_transfer_fee_is_refused() {
+        // ☢️ The vault would receive less than the figure just written into `reserve_a` or
+        // `total_bribed`. The gap is silent, compounds on every transfer, and is
+        // unrecoverable: withdrawals price against a reserve the vault cannot cover.
+        let mut data = t22_mint_bytes(&[ExtensionType::TransferFeeConfig], |state| {
+            state.init_extension::<TransferFeeConfig>(true).unwrap();
+        });
+        assert_err!(
+            admit(t22(), &mut data),
+            SoladromeError::UnsupportedMintExtension
+        );
+    }
+
+    #[test]
+    fn a_transfer_fee_of_zero_bps_is_still_refused() {
+        // The extension is refused for existing, not for its current rate: the fee authority
+        // can raise it after the pool is open, and by then the seeds are unrecoverable.
+        let mut data = t22_mint_bytes(&[ExtensionType::TransferFeeConfig], |state| {
+            let ext = state.init_extension::<TransferFeeConfig>(true).unwrap();
+            ext.older_transfer_fee.transfer_fee_basis_points = 0.into();
+            ext.newer_transfer_fee.transfer_fee_basis_points = 0.into();
+        });
+        assert_err!(
+            admit(t22(), &mut data),
+            SoladromeError::UnsupportedMintExtension
+        );
+    }
+
+    #[test]
+    fn an_armed_transfer_hook_is_refused() {
+        // ☢️ An armed hook demands accounts this program does not pass, so every transfer
+        // fails — including `remove_liquidity`. Admitting one creates a pool whose LP funds
+        // can never be withdrawn.
+        let mut data = t22_mint_bytes(&[ExtensionType::TransferHook], |state| {
+            let ext = state.init_extension::<TransferHook>(true).unwrap();
+            ext.program_id = OptionalNonZeroPubkey::try_from(Some(Pubkey::new_unique())).unwrap();
+        });
+        assert_err!(
+            admit(t22(), &mut data),
+            SoladromeError::UnsupportedMintExtension
+        );
+    }
+
+    #[test]
+    fn a_hook_authority_alone_does_not_refuse_the_mint() {
+        // Only `program_id` arms a hook. An authority with an empty program slot is the
+        // xStocks' shape, and refusing on the authority would exclude every one of them.
+        let mut data = t22_mint_bytes(&[ExtensionType::TransferHook], |state| {
+            let ext = state.init_extension::<TransferHook>(true).unwrap();
+            ext.authority = OptionalNonZeroPubkey::try_from(Some(Pubkey::new_unique())).unwrap();
+        });
+        assert!(admit(t22(), &mut data).is_ok());
+    }
+
+    #[test]
+    fn a_default_frozen_mint_is_refused() {
+        // ☢️ The vault would be born frozen: `create_pool` succeeds and leaves behind a pool
+        // that can never move a token, on `init` seeds that can never be reused.
+        let mut data = t22_mint_bytes(&[ExtensionType::DefaultAccountState], |state| {
+            let ext = state.init_extension::<DefaultAccountState>(true).unwrap();
+            ext.state = u8::from(AccountState::Frozen);
+        });
+        assert_err!(
+            admit(t22(), &mut data),
+            SoladromeError::UnsupportedMintExtension
+        );
+    }
+
+    #[test]
+    fn one_bad_extension_condemns_an_otherwise_acceptable_mint() {
+        // A mint carrying both an allowed and a refused extension must be refused: the gate
+        // is a conjunction, and the order the extensions appear in the TLV must not matter.
+        let mut data = t22_mint_bytes(
+            &[
+                ExtensionType::PermanentDelegate,
+                ExtensionType::TransferHook,
+            ],
+            |state| {
+                state.init_extension::<PermanentDelegate>(true).unwrap();
+                let hook = state.init_extension::<TransferHook>(true).unwrap();
+                hook.program_id =
+                    OptionalNonZeroPubkey::try_from(Some(Pubkey::new_unique())).unwrap();
+            },
+        );
+        assert_err!(
+            admit(t22(), &mut data),
+            SoladromeError::UnsupportedMintExtension
+        );
+    }
+}

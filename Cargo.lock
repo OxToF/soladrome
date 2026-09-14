@@ -1367,6 +1367,7 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "solana-security-txt",
+ "spl-pod",
 ]
 
 [[package]]

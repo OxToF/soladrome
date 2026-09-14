@@ -392,3 +392,15 @@ pub mod soladrome {
         instructions::curve::flash_arbitrage(ctx, amount_osola, min_profit_usdc)
     }
 }
+
+// ── Test-only module ─────────────────────────────────────────────────────────
+// ☢️ DECLARED AT THE END OF THE FILE ON PURPOSE, AND IT MUST STAY HERE.
+//
+// Anchor's `require!` / `error!` macros capture `line!()` and bake the number into the
+// deployed binary (each AnchorError carries its own file and line). Declaring this module
+// among the others at the top shifted every line below it by two and changed the .so —
+// measured, not assumed: a2f… became 3eb… with the file byte count unchanged. Declared
+// here, after the last instruction, the artefact is byte-for-byte identical to the one
+// built without it.
+#[cfg(test)]
+mod test_util;
