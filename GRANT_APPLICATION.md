@@ -319,7 +319,7 @@ The codebase is **fully open source** and publicly available at https://github.c
 - **Live frontend:** https://soladrome.finance
 - **About / Whitepaper:** https://soladrome.finance/about.html
 - **GitHub (public):** https://github.com/OxToF/soladrome
-- **Program ID (devnet):** `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd`
+- **Program ID (devnet):** `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe`
 - **Telegram:** https://t.me/+SW4sVvoypbRkZTQ0
 - **Twitter/X:** https://x.com/soladrome
 - **Discord:** https://discord.com/channels/1506249630218715218/1506249803451994132

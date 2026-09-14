@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 import { Connection, PublicKey } from "@solana/web3.js";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import type { AnchorWallet } from "@solana/wallet-adapter-react";

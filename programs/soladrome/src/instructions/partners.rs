@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 
 //! Protocol-partner deals: the signature bag, the escrowed bribe schedule, and the
 //! per-epoch retainer crank.

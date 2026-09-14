@@ -19,7 +19,7 @@ We will acknowledge receipt within **48 hours** and aim to resolve critical issu
 ## Scope
 
 In scope:
-- Smart contract: `programs/soladrome/src/` (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd`)
+- Smart contract: `programs/soladrome/src/` (program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe`)
 - Frontend: `app/` (soladrome.finance)
 
 Out of scope:

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // Social apps (X above all) open shared links in their own in-app WebView, and
 // no Solana wallet can be reached from there: no extension injects, and the

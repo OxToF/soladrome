@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // Unit tests for the pure phase-2 points logic (app/lib/points.ts).
 // Run:  npx tsx app/scripts/test_points.ts   (from app/)

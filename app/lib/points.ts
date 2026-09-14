@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // Phase-2 points — PURE accrual logic (no I/O, no chain, no DB).
 //

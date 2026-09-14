@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // Mint the devnet Token-2022 stock fixtures, and prove the admission gate on a live chain.
 //

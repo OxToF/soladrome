@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // PWA Web App Manifest (App Router metadata route → served at /manifest.webmanifest).
 // Required for installability and for wrapping the site into an Android APK

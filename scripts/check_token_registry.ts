@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // Checks `app/lib/tokens.ts` against mainnet. Adapted from the Solana
 // Foundation's `scripts/check-well-known-mints.mjs`

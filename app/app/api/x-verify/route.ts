@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // X (Twitter) quest verification — replaces the honor-system click-to-claim
 // for the quote/repost quests. The tester quote-tweets the quest's target post

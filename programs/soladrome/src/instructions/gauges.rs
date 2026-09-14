@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 
 //! Gauge voting: casting, replaying, configuring, and buying votes with oSOLA.
 

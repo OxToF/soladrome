@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 //
 // Removes tainted referral credits from the leaderboard: a "referral:<wallet>"
 // row in quest_completions (worth +25, see supabase/quests.sql record_quest)

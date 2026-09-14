@@ -621,7 +621,7 @@ All on-chain state is held in program-derived accounts. No mutable authority acc
 
 ## 16. Instruction Set
 
-Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd`):
+Complete list of on-chain instructions (program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe`):
 
 **Core bonding curve:** `initialize` · `buy_sola` · `sell_sola`
 
@@ -740,4 +740,7 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 
 *Copyright © 2026 Soladrome Labs. Source code licensed under BUSL-1.1.*
 *This document constitutes prior art disclosure as of its Git commit timestamp.*
-*Program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd` on Solana mainnet-beta.*
+*Program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe` on Solana **devnet**. Soladrome
+has never been deployed to mainnet-beta. This line read "on Solana mainnet-beta" until
+2026-09-14, against a program ID that had itself been dead since the 2026-08-08 key rotation:
+an unaudited devnet protocol was describing itself as live on mainnet.*
