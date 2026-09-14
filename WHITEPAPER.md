@@ -1,5 +1,10 @@
 # Soladrome — White Paper
-**Version 1.2 — 2026-06-03T00:00:00Z**
+**Version 1.3 — 2026-09-14T00:00:00Z**
+
+> **What changed in 1.3.** §2.2 described hiSOLA as a transferable SPL token. It stopped being
+> one on 2026-08-21, and transferability was the defect that change removed. §5's borrow cap
+> and the `ve_lock_vault` PDA were stale for the same reason. Everything corrected here was
+> checked against the program source, not against an earlier draft.
 *Prior art disclosure. All rights reserved. Licensed under BUSL-1.1.*
 
 ---
@@ -22,21 +27,51 @@ The gauge-bribe system extends this foundation: external protocols compete for g
 
 ## 2. Token Architecture
 
-Soladrome uses three native tokens, all with 6 decimals, all as SPL tokens on Solana:
+Soladrome uses three native units, all with 6 decimals. **Two are SPL tokens; the third is
+not a token at all** — see §2.2, which changed on 2026-08-21 and is the single most important
+correction in this version.
 
 ### 2.1 SOLA
 The base protocol token. Minted exclusively via the bonding curve (`buy_sola`) or as collateral backing (`exercise_o_sola`). Every SOLA in existence has exactly 1 USDC of floor backing in the `floor_vault`. Burned irreversibly when redeemed at floor price via `sell_sola`.
 
-### 2.2 hiSOLA (Staked SOLA)
-Minted 1:1 when SOLA is staked, or allocated via the founder/team/contributor/partner systems (ve-locked). Represents:
+### 2.2 hiSOLA (Staked SOLA) — a position, not a token
+
+**hiSOLA is a non-transferable position, not an SPL token.** `UserPosition.hi_sola` *is* the
+balance: `stake_sola` credits a number and `unstake_hi_sola` debits it. There is no hiSOLA
+ATA, no transfer and no mint CPI. It does not appear in a wallet, and the Portfolio page is
+the only place a holder sees it.
+
+Credited 1:1 when SOLA is staked, or allocated via the founder/team/contributor/partner systems (ve-locked). Represents:
 - **Governance rights** — voting power in the gauge system
 - **Fee share** — pro-rata claim on `market_vault` fees from bonding curve activity and AMM swaps
 - **Borrow rights** — collateral for borrowing USDC from `floor_vault` (1:1, no interest, no liquidation)
 - **ve-locking eligibility** — lock hiSOLA to amplify governance power up to 4×
 
-hiSOLA is a standard SPL token. It is economically irrational to transfer (unstaking returns SOLA at 1:1), but technically transferable.
+☢️ **What this paragraph said until 2026-09-14, and why it was wrong.** It read: *"hiSOLA is a
+standard SPL token. It is economically irrational to transfer (unstaking returns SOLA at 1:1),
+but technically transferable."* That described the architecture as it stood until 2026-08-21,
+and "technically transferable" was precisely the defect. hiSOLA was a plain SPL token with no
+freeze authority, so the program was never invoked on a transfer and could not block one. Two
+consequences were live:
 
-**Note on locked hiSOLA:** When hiSOLA is in a `ve_lock_vault` (via `lock_hi_sola` or a partner allocation claim), it is excluded from the fee accumulator denominator (`total_hi_sola` is not incremented). Existing stakers are not diluted during lock periods. The locked hiSOLA re-enters the fee pool only after `unlock_hi_sola` is called.
+- **The vote was rentable.** `vote_gauge` priced voting power on the token balance and never
+  consulted `staked_amount`, so hiSOLA bought on a secondary market voted at full weight while
+  owing nothing to the floor: buy at a discount, vote, collect the bribes, sell. Dormant only
+  for want of a hiSOLA pool — never closed.
+- **An external LP silently lost everything.** Moving hiSOLA out of a wallet zeroed the fee
+  basis, the borrow capacity and the vote at once.
+
+Non-transferability is what closes both, and it is why everything built to *contain* a
+transfer was removed rather than hardened. Note that on Solana, blocking `unstake` is not the
+same as blocking a transfer — only the absence of a token is.
+
+**Note on locked hiSOLA:** locking (via `lock_hi_sola` or a partner allocation claim) moves
+numbers between two ledgers — `UserPosition.hi_sola` and `VeLockPosition.amount_locked` — and
+excludes the locked amount from the fee accumulator denominator, so existing stakers are not
+diluted. There is **no custody vault**: the `ve_lock_vault` PDA this document described, and
+the global vote-escrow account that went with it, were deleted along with the token model.
+Voting no longer moves a balance either: it stamps `vote_locked` / `vote_lock_epoch`, which
+immobilise the position in place until the epoch ends.
 
 ### 2.3 oSOLA (Option SOLA)
 A call-option token distributed to liquidity providers and, progressively, to the founder. Exercising oSOLA requires burning it and paying 1 USDC to `floor_vault`, receiving 1 SOLA in return. Each exercise:
@@ -124,7 +159,7 @@ As users buy, `V_usdc` increases and `V_sola` decreases, raising the spot price.
 
 ### 4.1 Staking (`stake_sola`)
 
-Users lock SOLA into `sola_vault` and receive hiSOLA 1:1. The `market_vault` accumulator is advanced before each staking event, ensuring new stakers only claim fees earned after their stake entry.
+Users lock SOLA into `sola_vault` and are credited hiSOLA 1:1 on their `UserPosition` (§2.2 — nothing is minted). The `market_vault` accumulator is advanced before each staking event, ensuring new stakers only claim fees earned after their stake entry.
 
 ### 4.2 Fee Accumulator
 
@@ -145,7 +180,7 @@ Requires `hi_sola_balance - debt >= unstake_amount` (cannot unstake collateral b
 
 hiSOLA holders can borrow USDC from `floor_vault` using their hiSOLA as collateral:
 
-- **Max borrow** = hiSOLA balance (1:1 collateral ratio)
+- **Max borrow** = `staked_amount.min(hi_sola)` — the **financed** part of the position, not the whole balance. `staked_amount` is written only by `stake_sola`, so it counts exactly the hiSOLA bought through the curve; the balance also carries unfinanced hiSOLA released from an expired ve lock, for which nobody ever paid USDC into the floor. That part borrows on the separate 20% channel (`borrow_against_locked`) and never at 1:1. This line read "= hiSOLA balance (1:1 collateral ratio)" until 2026-09-14, which overstated the cap for every unfinanced allocation.
 - **Interest** = 0%
 - **Liquidation** = none (floor vault is always solvent at 1:1)
 - **Origination fee** = 2% of borrowed amount → `market_vault` (rewards stakers)
@@ -548,7 +583,7 @@ Mainnet launches in two stages, enforced on-chain by six independent feature fla
 | `curve_enabled` | `buy_sola` |
 | `emissions_enabled` | `emit_pool_rewards` (epoch/gauge emission) **and** the continuous oSOLA stream (`continuous_active`) — master switch for all emission |
 
-**Stage 1 — partner-only window.** Founding partners are onboarded via `register_partner`, seed their pools, configure gauges, and begin accumulating locked hiSOLA before public access. The bonding curve stays closed (`curve_enabled = false`): the curve price is monotonically increasing, so an open curve before the public event would let snipers buy the cheapest SOLA ahead of the community airdrop. Partners do not need the curve — their hiSOLA is minted through the partner program and their liquidity sits in non-SOLA pools.
+**Stage 1 — partner-only window.** Founding partners are onboarded via `register_partner`, seed their pools, configure gauges, and begin accumulating locked hiSOLA before public access. The bonding curve stays closed (`curve_enabled = false`): the curve price is monotonically increasing, so an open curve before the public event would let snipers buy the cheapest SOLA ahead of the community airdrop. Partners do not need the curve — their hiSOLA is credited through the partner program and their liquidity sits in non-SOLA pools.
 
 **Stage 2 — public open.** The authority flips `curve_enabled`; curve opening, TGE, and the on-chain airdrop distribution happen as a single event, on a protocol that already has liquidity depth and active incentives.
 
@@ -593,7 +628,7 @@ All on-chain state is held in program-derived accounts. No mutable authority acc
 | market_vault | `[b"market_vault"]` |
 | sola_vault | `[b"sola_vault"]` |
 | sola_mint | `[b"sola_mint"]` |
-| hi_sola_mint | `[b"hi_sola_mint"]` |
+| hi_sola_mint | `[b"hi_sola_mint"]` — legacy. Survives for the devnet `convert_hi_sola` migration only; no instruction mints it any more (§2.2) |
 | o_sola_mint | `[b"o_sola_mint"]` |
 | AmmPool | `[b"amm_pool", mint_a, mint_b]` (sorted lex) |
 | LP mint | `[b"lp_mint", pool]` |
@@ -606,7 +641,6 @@ All on-chain state is held in program-derived accounts. No mutable authority acc
 | GlobalEpochVotes | `[b"epoch_votes", epoch_le8]` |
 | UserBribeClaim | `[b"bribe_claim", user, pool, reward_mint, epoch_le8]` |
 | VeLockPosition | `[b"velock", user]` |
-| ve_lock_vault | `[b"ve_vault", user]` |
 | PolState | `[b"pol"]` |
 | pol_usdc_vault | `[b"pol_usdc_vault"]` |
 | LpUserInfo | `[b"lp_user", pool, user]` |
@@ -621,7 +655,7 @@ All on-chain state is held in program-derived accounts. No mutable authority acc
 
 ## 16. Instruction Set
 
-Complete list of on-chain instructions (program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd`):
+Complete list of on-chain instructions (program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe`):
 
 **Core bonding curve:** `initialize` · `buy_sola` · `sell_sola`
 
@@ -740,4 +774,7 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 
 *Copyright © 2026 Soladrome Labs. Source code licensed under BUSL-1.1.*
 *This document constitutes prior art disclosure as of its Git commit timestamp.*
-*Program ID: `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd` on Solana mainnet-beta.*
+*Program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe` on Solana **devnet**. Soladrome
+has never been deployed to mainnet-beta. This line read "on Solana mainnet-beta" until
+2026-09-14, against a program ID that had itself been dead since the 2026-08-08 key rotation:
+an unaudited devnet protocol was describing itself as live on mainnet.*

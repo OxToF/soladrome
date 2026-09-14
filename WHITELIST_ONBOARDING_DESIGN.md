@@ -10,15 +10,22 @@
 ## 0. Scope decision — read this before building anything
 
 Backyard's whitelist gates **mainnet** access while the protocol is invite-only.
-Soladrome's devnet is the opposite situation right now: it's open, and there
-are ~1700+ active testers mid-funnel toward the TrueMRR leaderboard push
+Soladrome's devnet is the opposite situation right now: it's open, and the
+tester funnel toward the TrueMRR leaderboard push is live
 ([project_soladrome_truemrr]). Two different things could be meant by
 "transition the devnet to a whitelist system":
+
+⚠️ This paragraph and the table below used to state "~1700+ active testers".
+The figure was never sourced and this document was the only place it appeared:
+the app has no hardcoded count, `Leaderboard.tsx` renders a total computed from
+Supabase at display time. A published claim that a live counter can contradict
+is worth nothing and costs everything, so the argument is stated without a
+number. Quote the leaderboard if you need one.
 
 | Option | What it does | Risk |
 |---|---|---|
 | **A — Additive (recommended)** | Keep devnet open as-is. Add a new "Founding Contributor Whitelist" page that layers on top: connect + sign + optional email + task checklist → grants a **contributor NFT badge + guaranteed mainnet early access + boosted initial emissions**. Existing testers convert into it, new visitors see it as the marquee CTA. | None — purely additive, current funnel keeps working. |
-| **B — Full gate** | Devnet itself becomes invite-only like Backyard's mainnet: nobody gets past the landing page without being whitelisted first. | Kills the open funnel that's building the ~1700-tester base and the TrueMRR vote count *right now*. Only makes sense once you're closer to mainnet and want manufactured scarcity instead of volume. |
+| **B — Full gate** | Devnet itself becomes invite-only like Backyard's mainnet: nobody gets past the landing page without being whitelisted first. | Kills the open funnel that's building the tester base and the TrueMRR vote count *right now*. Only makes sense once you're closer to mainnet and want manufactured scarcity instead of volume. |
 
 This doc builds **Option A**. If you actually want B, say so explicitly — it's
 a much bigger change (it turns the whole app into a locked room) and should be

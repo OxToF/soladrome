@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 "use client";
 import { useState, useEffect } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { getProgram, fromUi, toUi, sendTx, getMintProgram } from "@/lib/program";
+import { getProgram, fromUi, toUi, sendTx, getMintProgram, userAtaAuto } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochLabel } from "@/lib/epoch";
 import { StatusBanner } from "./ui/StatusBanner";
@@ -118,8 +118,11 @@ export function Gauge() {
     if (!wallet || !rewardMint) return;
     let mint: PublicKey;
     try { mint = new PublicKey(rewardMint); } catch { return; }
-    const ata = getAssociatedTokenAddressSync(mint, wallet.publicKey);
-    connection.getTokenAccountBalance(ata)
+    // `rewardMint` is whatever the depositor typed, so it can be Token-2022. The deposit path
+    // below already derives its ATA under `rewardProgram`; this read did not, and showed a
+    // zero balance for a bribe token sitting in the wallet.
+    userAtaAuto(connection, mint, wallet.publicKey)
+      .then((ata) => connection.getTokenAccountBalance(ata))
       .then((r) => setMintBalance(toUi(new BN(r.value.amount))))
       .catch(() => setMintBalance(0));
   }, [wallet, rewardMint, connection]);

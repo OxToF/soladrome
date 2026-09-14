@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
 import {
   Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY,
@@ -108,6 +108,10 @@ export async function readPosition(
   };
 }
 
+/// ☢️ The default is classic SPL Token, and it is only correct for mints we control — SOLA,
+/// oSOLA, USDC and every LP mint. For any mint that can come from a picker, a pool or a partner
+/// record, use `userAtaAuto` below: the default silently derives an address that does not exist
+/// and a balance read there returns 0 rather than failing.
 export function userAta(
   mint: PublicKey,
   owner: PublicKey,
@@ -159,6 +163,30 @@ export async function getMintPrograms(
     getMintProgram(connection, mintB),
   ]);
   return { programA, programB };
+}
+
+/// The user's ATA for a mint **whose token program is not known in advance**.
+///
+/// ☢️ USE THIS, NOT `userAta`, WHENEVER THE MINT CAN COME FROM THE CHAIN OR A PICKER.
+///
+/// `userAta` defaults to classic SPL Token, which is right for the protocol's own mints — SOLA,
+/// oSOLA and every LP mint are deliberately classic — and silently wrong for anything else. An
+/// associated-token address is seeded with the token program, so deriving a Token-2022 ATA under
+/// Tokenkeg yields an address that does not exist. On a transaction that fails loudly at
+/// simulation; on a *balance read* it throws, the caller catches, and the UI renders 0.
+///
+/// That is exactly what shipped: swapping USDC for a Token-2022 xStock succeeded (the swap path
+/// resolves both programs properly) while the swap card showed a zero balance for the xStock the
+/// wallet was now holding — so the percentage shortcuts stayed disabled and the token could
+/// neither be swapped back nor added as liquidity. Three read sites had it, and the pattern was
+/// the same in each: the *transaction* had been migrated to Token-2022, the *balance read* next
+/// to it had not.
+export async function userAtaAuto(
+  connection: Connection,
+  mint: PublicKey,
+  owner: PublicKey,
+): Promise<PublicKey> {
+  return userAta(mint, owner, await getMintProgram(connection, mint));
 }
 
 // ── shared accounts helpers ───────────────────────────────────────────────────

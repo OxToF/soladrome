@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
@@ -8,7 +8,7 @@ import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   getProgram, statePda, solaM, solaVaultAddr, marketVault, positionPda,
-  PROGRAM_ID, sendTx, userAta, explainTxError,
+  PROGRAM_ID, sendTx, userAta, userAtaAuto, explainTxError,
   getMintProgram,
 } from "@/lib/program";
 
@@ -130,9 +130,12 @@ export function PartnerStream({
       } else {
         setStream(null);
       }
-      const b = await connection.getTokenAccountBalance(
-        userAta(alloc.bribeMint, wallet.publicKey)
-      ).catch(() => null);
+      // `bribeMint` is arbitrary by design — a partner bribing in USDG or a Token-2022 asset
+      // never touches the AMM — so it gets the same treatment as a pool side. The transaction
+      // below already resolves it via `getMintProgram`; this read did not, and would have shown
+      // a partner a zero balance of a bribe token they actually hold.
+      const bribeAta = await userAtaAuto(connection, alloc.bribeMint, wallet.publicKey);
+      const b = await connection.getTokenAccountBalance(bribeAta).catch(() => null);
       setWalletBal(BigInt(b?.value.amount ?? "0"));
 
       // The liquidity condition, read exactly as the program reads it: one balance, one

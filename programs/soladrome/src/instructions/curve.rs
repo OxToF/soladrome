@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 
 //! The bonding curve and the floor reserve: buy, sell, exercise, and the arbitrage crank.
 

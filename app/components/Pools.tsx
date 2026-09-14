@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Soladrome Labs
+// Copyright (C) 2026 Soladrome Labs
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useWallet, useConnection } from "@solana/wallet-adapter-react";
@@ -13,7 +13,7 @@ import {
 import { SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
   getProgram, poolPda, lpMintPda, vaultAPda, vaultBPda,
-  sortMints, userAta, commonAccounts, statePda, oSolaM, solaM, PROGRAM_ID,
+  sortMints, userAta, userAtaAuto, commonAccounts, statePda, oSolaM, solaM, PROGRAM_ID,
   getMintPrograms,
   fromUiDecimals, toUiDecimals, toUi,
   buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
@@ -379,7 +379,11 @@ export function Pools() {
       try {
         if (mint.toString() === WSOL_MINT)
           return (await connection.getBalance(wallet.publicKey)) / 1e9;
-        return (await connection.getTokenAccountBalance(userAta(mint, wallet.publicKey))).value.uiAmount ?? 0;
+        // A pool side can be Token-2022 (an xStock quoted in USDC is the flagship pair), so the
+        // ATA must be derived under the mint's own program or this reads 0 and the add-liquidity
+        // form believes the wallet is empty.
+        const ata = await userAtaAuto(connection, mint, wallet.publicKey);
+        return (await connection.getTokenAccountBalance(ata)).value.uiAmount ?? 0;
       } catch { return 0; }
     };
 

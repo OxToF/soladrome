@@ -1,5 +1,5 @@
 # Soladrome — Smart Contract Specification
-**Version:** 1.0 · **Program ID:** `4d2SYx8Dzv5A4X5FcHtvNhTFM582DFcioapnaSUQnLQd`  
+**Version:** 1.0 · **Program ID:** `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe`  
 **Chain:** Solana · **Framework:** Anchor 0.32.1 / Rust 1.89 · **License:** BUSL-1.1
 
 ---
