@@ -13,6 +13,11 @@ html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* The app paints its own dark surfaces but never declared a scheme, so every widget the
+     browser draws itself — the number-input spinner, the <select> dropdown panel, the
+     autofill highlight — came back in the default LIGHT palette: a white popup over the
+     Bribe page's pool picker, and a white spinner pill inside the Amount field. */
+  color-scheme: dark;
 }
 
 body {
@@ -115,6 +120,19 @@ body > * { position: relative; z-index: 1; }
 .input:focus {
   border-color: rgba(42, 212, 238, 0.55);
   box-shadow: 0 0 0 3px rgba(77, 143, 245, 0.10);
+}
+
+/* Amount fields are `type="number"` so phones raise the numeric keypad and the value
+   validates — but the step arrows are useless here (nobody nudges a bribe one unit at a
+   time) and they sit on top of the Max / 25-50-75% row that replaces them. */
+.input[type="number"]::-webkit-outer-spin-button,
+.input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
 }
 
 /* ── Tab indicator ───────────────────────────────────────────────────── */

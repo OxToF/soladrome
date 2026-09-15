@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Soladrome Labs
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { getProgram, fromUi, toUi, sendTx, getMintProgram, userAtaAuto } from "@/lib/program";
+import {
+  TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync, getMint,
+} from "@solana/spl-token";
+import {
+  getProgram, fromUiDecimals, toUiDecimals, sendTx, getMintProgram, userAtaAuto,
+  solaM, oSolaM,
+} from "@/lib/program";
+import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochLabel } from "@/lib/epoch";
 import { StatusBanner } from "./ui/StatusBanner";
@@ -56,16 +62,33 @@ export function Gauge() {
   const [status,     setStatus]     = useState("");
   const [pools,      setPools]      = useState<{ address: string; label: string }[]>([]);
   const [copied,     setCopied]     = useState<string | null>(null);
-  const [mintBalance, setMintBalance] = useState<number | null>(null);
+  const [mintBalance, setMintBalance] = useState<{ raw: bigint; decimals: number } | null>(null);
+  // Decimals of the selected bribe mint, read from the mint account itself.
+  const [rewardDecimals, setRewardDecimals] = useState<number | null>(null);
+  // Every SPL / Token-2022 mint the connected wallet actually holds.
+  const [walletTokens, setWalletTokens] =
+    useState<{ mint: string; symbol: string; raw: bigint; decimals: number }[]>([]);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [walletNonce,   setWalletNonce]   = useState(0);
   // Existing bribe vault info for current (pool, mint, epoch)
-  const [existingBribe, setExistingBribe] = useState<number | null>(null);
+  const [existingBribe, setExistingBribe] = useState<bigint | null>(null);
   const [gaugeVotesInfo, setGaugeVotesInfo] = useState<number | null>(null);
 
   // ── Known protocol tokens ──────────────────────────────────────────────────
+  //
+  // ☢️ These three were hardcoded until 2026-09-15, and all three were the *pre-rotation*
+  // mints — `2rAqBLBi…` / `HENFwJCz…` / `nc1errcn…` belong to the program ID burned on
+  // 2026-08-08. Selecting one set a reward mint that does not exist under `DgD37Vjs…`, so its
+  // ATA could not be derived, the balance read threw, and the panel rendered a permanent 0.
+  // The same stale list was the pool selector's label table, which is why a USDC/SOLA pool
+  // showed as `USDC/CaGH…`. Derive them, never retype them.
+  //
+  // hiSOLA is deliberately absent: since 2026-08-21 it is a position (`UserPosition.hi_sola`),
+  // not a mint. There is no ATA to debit, so it can never be a bribe token — offering it was
+  // an invitation to send tokens to an orphaned mint.
   const knownTokens = [
-    { symbol: "oSOLA", mint: "2rAqBLBi2Fjdjqf5za7uzpbYgNiVV74XMDKQ5RdMuEJT", color: "#bbf7d0" },
-    { symbol: "SOLA",  mint: "HENFwJCzmBAo2Qybrszr28tqLtEFYkXwN6h87AD5gS9p", color: "#4ade80" },
-    { symbol: "hiSOLA",mint: "nc1errcnXjKN4aZYL7AP89op26EMn5a2VcDT82wrTwW",  color: "#86efac" },
+    { symbol: "oSOLA", mint: oSolaM.toBase58(), color: "#bbf7d0" },
+    { symbol: "SOLA",  mint: solaM.toBase58(),  color: "#4ade80" },
     ...(usdcMint ? [{ symbol: "USDC", mint: usdcMint.toBase58(), color: "#2775ca" }] : []),
   ];
 
@@ -74,6 +97,25 @@ export function Gauge() {
     setCopied(key);
     setTimeout(() => setCopied(null), 1500);
   }
+
+  // ── Fetch the decimals of the selected bribe mint ───────────────────────────
+  //
+  // Read from the mint, never assumed. `fromUi`/`toUi` are pinned to the protocol's 6, and the
+  // bribe mint is the one place a third-party mint reaches this screen: the xStocks are 8, so a
+  // 6-decimal conversion deposited 1/100th of the amount typed and displayed a balance 100×
+  // too large. Everything below converts through this number.
+  useEffect(() => {
+    setRewardDecimals(null);
+    if (!rewardMint) return;
+    let mint: PublicKey;
+    try { mint = new PublicKey(rewardMint); } catch { return; }
+    let cancelled = false;
+    getMintProgram(connection, mint)
+      .then((prog) => getMint(connection, mint, undefined, prog))
+      .then((info) => { if (!cancelled) setRewardDecimals(info.decimals); })
+      .catch(() => { /* mint not found — deposit stays disabled */ });
+    return () => { cancelled = true; };
+  }, [rewardMint, connection]);
 
   // ── Fetch existing bribe vault + gauge info when pool / mint / epoch changes ──
   useEffect(() => {
@@ -92,10 +134,12 @@ export function Gauge() {
         const [bribeVaultPdaKey] = PublicKey.findProgramAddressSync(
           [Buffer.from("bribe_vault"), pool.toBuffer(), mint.toBuffer(), eb], PROGRAM_ID
         );
+        // Offset 80 = `BribeVault.total_bribed` (8 discriminator + 32 pool_id + 32 reward_mint
+        // + 8 epoch). It is denominated in the reward mint, so it is scaled at render time by
+        // `rewardDecimals` — not here, and never by 1e6.
         const bribeInfo = await connection.getAccountInfo(bribeVaultPdaKey);
         if (!cancelled && bribeInfo) {
-          const raw = bribeInfo.data.readBigUInt64LE(80);
-          setExistingBribe(Number(raw) / 1e6);
+          setExistingBribe(bribeInfo.data.readBigUInt64LE(80));
         }
 
         // Gauge state
@@ -118,31 +162,108 @@ export function Gauge() {
     if (!wallet || !rewardMint) return;
     let mint: PublicKey;
     try { mint = new PublicKey(rewardMint); } catch { return; }
+    let cancelled = false;
     // `rewardMint` is whatever the depositor typed, so it can be Token-2022. The deposit path
     // below already derives its ATA under `rewardProgram`; this read did not, and showed a
     // zero balance for a bribe token sitting in the wallet.
     userAtaAuto(connection, mint, wallet.publicKey)
       .then((ata) => connection.getTokenAccountBalance(ata))
-      .then((r) => setMintBalance(toUi(new BN(r.value.amount))))
-      .catch(() => setMintBalance(0));
-  }, [wallet, rewardMint, connection]);
+      .then((r) => {
+        if (!cancelled) setMintBalance({ raw: BigInt(r.value.amount), decimals: r.value.decimals });
+      })
+      .catch(() => { if (!cancelled) setMintBalance(null); });
+    return () => { cancelled = true; };
+  }, [wallet, rewardMint, connection, walletNonce]);
+
+  // ── Scan the wallet for anything it can actually bribe with ────────────────
+  //
+  // The panel above only knows the protocol's own three mints, so until now the only way to
+  // bribe with an xStock was to paste its mint by hand — and nothing on screen said which
+  // stocks the wallet even held. Both token programs are queried: the xStocks are Token-2022
+  // and `getParsedTokenAccountsByOwner` is scoped to one program per call.
+  useEffect(() => {
+    setWalletTokens([]);
+    if (!wallet) return;
+    let cancelled = false;
+    setWalletLoading(true);
+    Promise.all([
+      connection.getParsedTokenAccountsByOwner(wallet.publicKey, { programId: TOKEN_PROGRAM_ID }),
+      connection.getParsedTokenAccountsByOwner(wallet.publicKey, { programId: TOKEN_2022_PROGRAM_ID }),
+    ])
+      .then(([spl, t22]) => {
+        // Base units, never `uiAmount`: a ScaledUiAmountConfig mint (allowed by
+        // `token_ext::require_supported_mint`) reports a *scaled* uiAmount, while
+        // `deposit_bribe` books the raw amount. Showing the scaled figure would put a number
+        // in the Amount field that is not the number the program receives.
+        const byMint = new Map<string, { raw: bigint; decimals: number }>();
+        for (const { account } of [...spl.value, ...t22.value]) {
+          const info = account.data.parsed?.info;
+          if (!info) continue;
+          const raw = BigInt(info.tokenAmount.amount);
+          if (raw === 0n) continue;
+          const prev = byMint.get(info.mint);
+          byMint.set(info.mint, {
+            raw: (prev?.raw ?? 0n) + raw,
+            decimals: info.tokenAmount.decimals,
+          });
+        }
+        const rows = [...byMint.entries()]
+          .map(([mint, v]) => ({ mint, symbol: symbolByMint(mint, usdcMint), ...v }))
+          // Named tokens first, then alphabetically — an unresolved `4xY…` is noise, not a pick.
+          .sort((a, b) => {
+            const na = a.symbol.endsWith("…") ? 1 : 0;
+            const nb = b.symbol.endsWith("…") ? 1 : 0;
+            return na - nb || a.symbol.localeCompare(b.symbol);
+          });
+        if (!cancelled) setWalletTokens(rows);
+      })
+      .catch(() => { /* RPC hiccup — the manual mint field still works */ })
+      .finally(() => { if (!cancelled) setWalletLoading(false); });
+    return () => { cancelled = true; };
+  }, [wallet, connection, usdcMint, walletNonce]);
 
   // ── Fetch existing AMM pools for pool selector ────────────────────────────
-  useState(() => {
+  //
+  // Keyed on `usdcMint`, which arrives asynchronously from `SoladromeContext`. This ran in a
+  // `useState` initialiser before, i.e. exactly once on first render — so the labels were built
+  // against whatever the registry could resolve at that instant and never rebuilt.
+  useEffect(() => {
     const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
     const program  = getProgram(provider);
+    let cancelled = false;
     (program.account as any).ammPool.all().then((all: any[]) => {
-      const list = all.map((p: any) => {
-        const mA = p.account.tokenAMint.toString().slice(0, 4) + "…";
-        const mB = p.account.tokenBMint.toString().slice(0, 4) + "…";
-        // Match against known tokens for readable label
-        const symA = knownTokens.find(t => t.mint === p.account.tokenAMint.toString())?.symbol ?? mA;
-        const symB = knownTokens.find(t => t.mint === p.account.tokenBMint.toString())?.symbol ?? mB;
-        return { address: p.publicKey.toString(), label: `${symA}/${symB}` };
-      });
-      setPools(list);
+      const list = all
+        .filter((p: any) =>
+          isPoolTrusted(p.account.tokenAMint.toString(), p.account.tokenBMint.toString(), usdcMint))
+        .map((p: any) => {
+          // The shared registry — it carries the devnet xStock fixtures, wSOL and the derived
+          // protocol mints, so `USDC/7Kq6…` reads as `USDC/TSLAx`. Vote.tsx already used it;
+          // this screen kept its own stale copy and so disagreed with the page you vote on.
+          const symA = symbolByMint(p.account.tokenAMint.toString(), usdcMint);
+          const symB = symbolByMint(p.account.tokenBMint.toString(), usdcMint);
+          return { address: p.publicKey.toString(), label: `${symA}/${symB}` };
+        })
+        .sort((a: { label: string }, b: { label: string }) => a.label.localeCompare(b.label));
+      if (!cancelled) setPools(list);
     }).catch(() => {});
-  });
+    return () => { cancelled = true; };
+  }, [connection, wallet, usdcMint]);
+
+  // ── Base-unit formatting ───────────────────────────────────────────────────
+  // Percentages are computed on the raw balance and only then rendered, so "100%" is the
+  // balance to the last base unit rather than a float that rounds a digit off the end.
+  const fmtRaw = useCallback((raw: bigint, decimals: number): string => {
+    if (decimals === 0) return raw.toString();
+    const s = raw.toString().padStart(decimals + 1, "0");
+    const whole = s.slice(0, s.length - decimals);
+    const frac  = s.slice(s.length - decimals).replace(/0+$/, "");
+    return frac ? `${whole}.${frac}` : whole;
+  }, []);
+
+  function setPercent(pct: number) {
+    if (!mintBalance) return;
+    setAmount(fmtRaw((mintBalance.raw * BigInt(pct)) / 100n, mintBalance.decimals));
+  }
 
   function parsePool(): PublicKey | null { try { return new PublicKey(poolId); } catch { return null; } }
   function parseMint(): PublicKey | null { try { return new PublicKey(rewardMint); } catch { return null; } }
@@ -209,11 +330,14 @@ export function Gauge() {
       // The reward mint is whatever the briber chose — it may be Token-2022 (USDG, PYUSD, an
       // xStock), which also decides how their ATA is derived.
       const rewardProgram   = await getMintProgram(connection, mint);
+      // Re-read the decimals here rather than trusting the state above: the picker can change
+      // between the fetch and the click, and a stale 6-vs-8 is a silent 100× on the amount.
+      const decimals        = (await getMint(connection, mint, undefined, rewardProgram)).decimals;
       const depositorToken  = getAssociatedTokenAddressSync(mint, wallet.publicKey, false, rewardProgram);
       const bribeVault      = bribeVaultPda(pool, mint, ep);
       const bribeTokenVault = bribeTokensPda(pool, mint, ep);
       const ix = await program.methods
-        .depositBribe(new BN(ep), fromUi(+amount))
+        .depositBribe(new BN(ep), fromUiDecimals(+amount, decimals))
         .accounts({
           depositor: wallet.publicKey, poolId: pool, rewardMint: mint,
           depositorToken, bribeVault, bribeTokenVault,
@@ -276,19 +400,69 @@ export function Gauge() {
         </div>
       </div>
 
+      {/* ── What the connected wallet can actually bribe with ── */}
+      {wallet && (
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-gray-500 uppercase tracking-widest">In your wallet</p>
+            <button
+              onClick={() => setWalletNonce((n) => n + 1)}
+              title="Refresh wallet balances"
+              disabled={walletLoading}
+              className="text-[10px] px-1.5 py-0.5 rounded border border-brand-border text-gray-500 hover:text-gray-200 hover:border-gray-500 transition-colors disabled:opacity-40">
+              {walletLoading ? "…" : "↻"}
+            </button>
+          </div>
+          {walletTokens.length === 0 ? (
+            <p className="text-[11px] text-gray-600 italic">
+              {walletLoading ? "Reading token accounts…" : "No token balances found in this wallet."}
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              {walletTokens.map((tok) => (
+                <button
+                  key={`w-${tok.mint}`}
+                  onClick={() => setRewardMint(tok.mint)}
+                  title={tok.mint}
+                  className={`flex items-center justify-between rounded border bg-brand-bg px-2 py-1.5 gap-2 text-left transition-colors ${
+                    rewardMint === tok.mint
+                      ? "border-brand-green"
+                      : "border-brand-border hover:border-gray-500"
+                  }`}>
+                  <span className={`text-xs font-semibold flex-shrink-0 ${
+                    rewardMint === tok.mint ? "text-brand-green" : "text-gray-200"
+                  }`}>
+                    {tok.symbol}
+                  </span>
+                  <span className="text-[10px] text-gray-500 font-mono truncate">
+                    {fmtRaw(tok.raw, tok.decimals)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Pool selector ── */}
       <div className="mb-4">
         <label className="text-xs text-gray-400 mb-1 block">Pool / Gauge</label>
         {pools.length > 0 ? (
-          <select
-            className="input"
-            value={poolId}
-            onChange={(e) => setPoolId(e.target.value)}>
-            <option value="">— Select a pool —</option>
-            {pools.map((p) => (
-              <option key={p.address} value={p.address}>{p.label}</option>
-            ))}
-          </select>
+          <>
+            <select
+              className="input"
+              value={pools.some((p) => p.address === poolId) ? poolId : ""}
+              onChange={(e) => setPoolId(e.target.value)}>
+              <option value="">— Select a pool —</option>
+              {pools.map((p) => (
+                <option key={p.address} value={p.address}>{p.label}</option>
+              ))}
+            </select>
+            {/* The list is filtered to trusted mints, same as Vote — so keep the manual field
+                for a pool that is real but not in the registry. */}
+            <input className="input mt-2" placeholder="…or paste a pool address"
+              value={poolId} onChange={(e) => setPoolId(e.target.value)} />
+          </>
         ) : (
           <>
             <input className="input" placeholder="Target pool address"
@@ -334,9 +508,12 @@ export function Gauge() {
             <span className="text-gray-400">
               🎁 Bribe already deposited:{" "}
               <span className="text-brand-green font-mono font-semibold">
-                {existingBribe.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {rewardDecimals !== null
+                  ? toUiDecimals(existingBribe, rewardDecimals)
+                      .toLocaleString(undefined, { maximumFractionDigits: 4 })
+                  : "…"}
               </span>
-              {" "}— your deposit will be added on top
+              {" "}{symbolByMint(rewardMint, usdcMint)} — your deposit will be added on top
             </span>
           ) : (
             <span className="text-gray-600 italic">No bribe yet for this epoch · you would be the first</span>
@@ -354,27 +531,32 @@ export function Gauge() {
             Balance:{" "}
             <button
               className="text-brand-green hover:underline font-mono"
-              onClick={() => mintBalance !== null && setAmount(String(mintBalance))}>
-              {mintBalance !== null
-                ? mintBalance.toLocaleString(undefined, { maximumFractionDigits: 6 })
+              onClick={() => setPercent(100)}>
+              {mintBalance
+                ? `${fmtRaw(mintBalance.raw, mintBalance.decimals)} ${symbolByMint(rewardMint, usdcMint)}`
                 : "…"}
             </button>
           </span>
         )}
       </div>
-      <div className="flex gap-2 mb-4">
-        <input className="input flex-1" type="number" min="0" placeholder="0.00"
-          value={amount} onChange={(e) => setAmount(e.target.value)} />
-        {mintBalance !== null && mintBalance > 0 && (
-          <button
-            className="text-xs px-3 rounded border border-brand-border text-gray-400 hover:text-brand-green hover:border-brand-green transition-colors"
-            onClick={() => setAmount(String(mintBalance))}>
-            Max
-          </button>
-        )}
-      </div>
+      <input
+        className={`input w-full ${mintBalance && mintBalance.raw > 0n ? "mb-2" : "mb-4"}`}
+        type="number" min="0" placeholder="0.00"
+        value={amount} onChange={(e) => setAmount(e.target.value)} />
+      {mintBalance && mintBalance.raw > 0n && (
+        <div className="grid grid-cols-4 gap-2 mb-4">
+          {[25, 50, 75, 100].map((pct) => (
+            <button
+              key={pct}
+              onClick={() => setPercent(pct)}
+              className="text-xs py-1.5 rounded border border-brand-border text-gray-400 hover:text-brand-green hover:border-brand-green transition-colors">
+              {pct === 100 ? "Max" : `${pct}%`}
+            </button>
+          ))}
+        </div>
+      )}
       <button className="btn-primary w-full" onClick={depositBribe}
-        disabled={loading || !wallet || !amount || !poolId || !rewardMint}>
+        disabled={loading || !wallet || !amount || !poolId || !rewardMint || rewardDecimals === null}>
         {loading ? "Depositing…" : "Deposit bribe"}
       </button>
       <ButtonHint
@@ -382,6 +564,7 @@ export function Gauge() {
           !wallet ? "Connect your wallet to continue"
           : !poolId ? "Select or paste a pool address"
           : !rewardMint ? "Select or paste a bribe token"
+          : rewardDecimals === null ? "Reading that mint… (no mint at this address?)"
           : !amount && !loading ? "Enter an amount"
           : null
         }
