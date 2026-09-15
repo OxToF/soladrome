@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Soladrome Labs
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { BN } from "@coral-xyz/anchor";
@@ -9,6 +9,7 @@ import {
   getProgram, statePda, solaM, floorVault, marketVault,
   userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
+import { solaOut, usdcOut, effectivePrice, premiumOverFloorPct } from "@/lib/curve";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { trackQuest } from "@/lib/quests";
 
@@ -19,7 +20,7 @@ const PCT_SHORTCUTS = [25, 50, 75, 100] as const;
 export function BuySell() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
-  const { usdcMint } = useSoladrome();
+  const { usdcMint, protocolState, vaultInfos } = useSoladrome();
   const [tab, setTab] = useState<Tab>("buy");
   const [amount, setAmount] = useState("");
   const [loading, setLoading] = useState(false);
@@ -54,6 +55,52 @@ export function BuySell() {
 
   const insufficient =
     balance !== null && amount !== "" && Number(amount) > balance;
+
+  // ── What you actually receive ──────────────────────────────────────────────
+  //
+  // The card showed only the amount being spent, so a buyer had no way to know what the
+  // curve would mint before signing — and a seller no way to see what the floor would pay.
+  // Both sides are quoted here against on-chain reserves that `SoladromeContext` re-fetches
+  // every 10 s.
+  const quote = useMemo(() => {
+    const ui = Number(amount);
+    if (!amount || !Number.isFinite(ui) || ui <= 0) return null;
+
+    if (tab === "sell") {
+      // Not a curve trade: the floor redeems 1:1 and the virtual reserves never move.
+      const solaIn = BigInt(fromUi(ui).toString());
+      const out    = usdcOut(solaIn);
+      // `sell_sola` requires `floor_vault.amount >= usdc_out`. The vault is an SPL token
+      // account; its `amount` is a little-endian u64 at offset 64.
+      const floorRaw = vaultInfos[0]
+        ? vaultInfos[0]!.data.readBigUInt64LE(64)
+        : null;
+      return {
+        out,
+        symbol: "SOLA",
+        shortfall: floorRaw !== null && out > floorRaw ? floorRaw : null,
+      };
+    }
+
+    if (!protocolState) return null;
+    const usdcIn = BigInt(fromUi(ui).toString());
+    const out = solaOut(
+      {
+        virtualUsdc: BigInt(protocolState.virtualUsdc.toString()),
+        virtualSola: BigInt(protocolState.virtualSola.toString()),
+        k:           BigInt(protocolState.k.toString()),
+      },
+      usdcIn,
+    );
+    if (out === null) return null;
+    return {
+      out,
+      symbol: "USDC",
+      price:   effectivePrice(usdcIn, out),
+      premium: premiumOverFloorPct(usdcIn, out),
+      shortfall: null as bigint | null,
+    };
+  }, [amount, tab, protocolState, vaultInfos]);
 
   function applyPct(pct: number) {
     if (balance === null || balance <= 0) return;
@@ -202,6 +249,50 @@ export function BuySell() {
           </button>
         ))}
       </div>
+
+      {/* ── You receive ── */}
+      {quote && (
+        <div className="rounded-xl border border-brand-border bg-brand-dark px-3 py-2.5 mb-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-xs text-gray-400">You receive</span>
+            <span className="text-base font-semibold text-brand-green font-mono">
+              {toUi(new BN(quote.out.toString())).toLocaleString(undefined, {
+                maximumFractionDigits: 6,
+              })}{" "}
+              <span className="text-xs text-gray-400 font-sans">
+                {tab === "buy" ? "SOLA" : "USDC"}
+              </span>
+            </span>
+          </div>
+          {tab === "buy" && quote.price !== undefined && (
+            <div className="flex items-baseline justify-between gap-2 mt-1.5 pt-1.5 border-t border-brand-border">
+              <span className="text-[11px] text-gray-500">Average price</span>
+              <span className="text-[11px] text-gray-400 font-mono">
+                {quote.price.toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC / SOLA
+                {/* The premium over the floor, not impact against spot: the floor is what
+                    bounds the downside, so it is the number worth showing. */}
+                <span className="text-gray-600">
+                  {" · "}+{(quote.premium ?? 0).toLocaleString(undefined, {
+                    maximumFractionDigits: 2,
+                  })}% over floor
+                </span>
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* `sell_sola` fails InsufficientFloorReserve rather than paying out partially, so say
+          so before the signature instead of after. */}
+      {quote?.shortfall !== null && quote?.shortfall !== undefined && (
+        <p className="text-xs text-yellow-500 mb-2">
+          Floor vault holds only{" "}
+          {toUi(new BN(quote.shortfall.toString())).toLocaleString(undefined, {
+            maximumFractionDigits: 2,
+          })}{" "}
+          USDC — this sell would be rejected on-chain.
+        </p>
+      )}
 
       {tab === "buy" && (
         <p className="text-xs text-gray-500 mb-4">
