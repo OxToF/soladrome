@@ -9,13 +9,25 @@ import {
   getProgram, statePda, solaM, floorVault, marketVault,
   userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
-import { solaOut, usdcOut, effectivePrice, premiumOverFloorPct } from "@/lib/curve";
+import {
+  solaOut, usdcOut, effectivePrice, premiumOverFloorPct, minReceived, frontRunHeadroom,
+} from "@/lib/curve";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { trackQuest } from "@/lib/quests";
 
 type Tab = "buy" | "sell";
 
 const PCT_SHORTCUTS = [25, 50, 75, 100] as const;
+
+// Slippage tolerances offered on the buy side, in basis points.
+//
+// 50 bps is the default because it is the smallest bound that survives ordinary traffic: at
+// the live reserves a 1 000 USDC buy landing ahead of you costs 0.196% of your output, so
+// 0.5% absorbs roughly 2 500 USDC of other buying. 10 bps is there for a quiet book, 100 bps
+// for a launch window. The card states what each one absorbs rather than leaving the user to
+// reason about a bare percentage.
+const SLIPPAGE_OPTIONS = [10, 50, 100] as const;
+const DEFAULT_SLIPPAGE_BPS = 50;
 
 export function BuySell() {
   const { connection } = useConnection();
@@ -27,6 +39,7 @@ export function BuySell() {
   const [status, setStatus] = useState("");
   const [faucetLoading, setFaucetLoading] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
+  const [slippageBps, setSlippageBps] = useState<number>(DEFAULT_SLIPPAGE_BPS);
 
   // The side you spend from: USDC when buying, SOLA when selling.
   const spendMint   = tab === "buy" ? usdcMint : solaM;
@@ -98,9 +111,16 @@ export function BuySell() {
       symbol: "USDC",
       price:   effectivePrice(usdcIn, out),
       premium: premiumOverFloorPct(usdcIn, out),
+      // The bound the transaction will actually carry, derived from this same quote.
+      minOut:  minReceived(out, slippageBps),
       shortfall: null as bigint | null,
     };
-  }, [amount, tab, protocolState, vaultInfos]);
+  }, [amount, tab, protocolState, vaultInfos, slippageBps]);
+
+  // A buy with no quote would have to fall back to an unbounded `min_sola_out`, which is the
+  // thing being removed. Refuse the trade instead — protocolState only stays null when it has
+  // never loaded, since the context keeps stale data through transient RPC errors.
+  const quoteUnavailable = tab === "buy" && amount !== "" && Number(amount) > 0 && !quote;
 
   function applyPct(pct: number) {
     if (balance === null || balance <= 0) return;
@@ -146,8 +166,14 @@ export function BuySell() {
       const userUsdc = userAta(usdcMintPk, wallet.publicKey);
 
       if (tab === "buy") {
+        // ☢️ This was `new BN(1)` — a floor of one base unit, i.e. the buyer accepting any
+        // price the curve happened to offer by the time the transaction landed. The bound now
+        // comes from the quote on screen, so what is signed is what was shown, less the
+        // tolerance the user picked. Refuse rather than fall back to an unbounded buy: a
+        // silent 1 here is exactly the bug being fixed.
+        if (!quote?.minOut) throw new Error("No live quote — refusing an unbounded buy.");
         const ix = await program.methods
-          .buySola(fromUi(+amount), new BN(1))
+          .buySola(fromUi(+amount), new BN(quote.minOut.toString()))
           .accounts({
             user: wallet.publicKey,
             protocolState: statePda,
@@ -181,7 +207,19 @@ export function BuySell() {
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       }
     } catch (e: any) {
-      setStatus(`❌ ${e?.message ?? e}`);
+      const msg = e?.message ?? String(e);
+      // The bound now actually binds, so this is a real outcome rather than an impossible
+      // one: someone bought ahead and moved the curve. Say that, instead of showing a raw
+      // Anchor code — "SlippageExceeded" reads as a broken app to a first-time tester.
+      if (msg.includes("SlippageExceeded") || msg.includes("6000")) {
+        setStatus(
+          `❌ The curve moved while you were signing — the buy was rejected rather than ` +
+          `filled above your ${slippageBps / 100}% tolerance. Nothing was spent. Retry, or ` +
+          `raise the tolerance.`,
+        );
+      } else {
+        setStatus(`❌ ${msg}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -279,6 +317,61 @@ export function BuySell() {
               </span>
             </div>
           )}
+          {/* What the signed transaction actually guarantees. Below this the chain rejects
+              the buy rather than filling it at a worse price. */}
+          {tab === "buy" && quote.minOut !== undefined && (
+            <div className="flex items-baseline justify-between gap-2 mt-1.5">
+              <span className="text-[11px] text-gray-500">Minimum received</span>
+              <span className="text-[11px] text-gray-400 font-mono">
+                {toUi(new BN(quote.minOut.toString())).toLocaleString(undefined, {
+                  maximumFractionDigits: 6,
+                })}{" "}
+                SOLA
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Slippage tolerance ── */}
+      {tab === "buy" && (
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] text-gray-500">Max slippage</span>
+            {/* The tolerance restated as what it protects against. A bare percentage tells
+                the user nothing about the risk; "absorbs ~2 500 USDC of buying ahead of you"
+                is the same number in the units of the actual hazard. */}
+            {protocolState && (
+              <span className="text-[11px] text-gray-600">
+                absorbs ~
+                {frontRunHeadroom(
+                  {
+                    virtualUsdc: BigInt(protocolState.virtualUsdc.toString()),
+                    virtualSola: BigInt(protocolState.virtualSola.toString()),
+                    k:           BigInt(protocolState.k.toString()),
+                  },
+                  slippageBps,
+                ).toLocaleString(undefined, { maximumFractionDigits: 0 })}{" "}
+                USDC of buying ahead of you
+              </span>
+            )}
+          </div>
+          <div className="flex gap-2">
+            {SLIPPAGE_OPTIONS.map((bps) => (
+              <button
+                key={bps}
+                type="button"
+                onClick={() => setSlippageBps(bps)}
+                className={`flex-1 text-xs py-1 rounded-md border transition-colors ${
+                  slippageBps === bps
+                    ? "border-brand-green text-brand-green"
+                    : "border-brand-border text-gray-400 hover:border-gray-500"
+                }`}
+              >
+                {bps / 100}%
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -314,10 +407,17 @@ export function BuySell() {
         </p>
       )}
 
+      {quoteUnavailable && (
+        <p className="text-xs text-yellow-500 mb-2">
+          No live quote from the curve right now — a buy would have to go out unbounded, so
+          it is held back. Retry in a moment.
+        </p>
+      )}
+
       <button
         className="btn-primary w-full"
         onClick={submit}
-        disabled={loading || !wallet || !amount || !usdcMint || insufficient}
+        disabled={loading || !wallet || !amount || !usdcMint || insufficient || quoteUnavailable}
       >
         {loading ? "Processing…" : tab === "buy" ? "Buy SOLA" : "Sell SOLA"}
       </button>

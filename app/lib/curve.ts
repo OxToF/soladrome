@@ -59,6 +59,47 @@ export function usdcOut(solaIn: bigint): bigint {
 }
 
 /**
+ * The slippage floor to send as `buy_sola`'s `min_sola_out`, in base units.
+ *
+ * `buy_sola` requires `sola_amount >= min_sola_out` and fails `SlippageExceeded` otherwise.
+ * Sending 1 — which this client did until now — means accepting any price at all.
+ *
+ * A tolerance is unavoidable: the quote is computed from reserves fetched up to ten seconds
+ * ago, and any buy that lands first moves the curve up. Binding at the exact quote would fail
+ * every time someone else trades in the same window.
+ *
+ * Floors rather than rounds, so the bound is never above what was quoted, and never returns
+ * 0 — at 0 the check is vacuous and we are back to no protection.
+ */
+export function minReceived(quotedOut: bigint, toleranceBps: number): bigint {
+  const bps = BigInt(Math.max(0, Math.min(10_000, Math.round(toleranceBps))));
+  const min = (quotedOut * (10_000n - bps)) / 10_000n;
+  return min > 0n ? min : 1n;
+}
+
+/**
+ * How much *other* buying the given tolerance absorbs, in whole USDC.
+ *
+ * This is the tolerance restated as the thing it actually protects against, because a bare
+ * percentage says nothing about the risk being taken. Measured against the live curve: a
+ * front-run of X USDC costs a buyer the same fraction of their output whatever their own size
+ * is — at the reserves of 2026-09-16, 1k USDC ahead of you costs 0.196%, 10k costs 1.93% —
+ * so the mapping is a property of the curve, not of the trade.
+ *
+ * Derivation: output scales as 1/vU², so a loss `t` corresponds to
+ * `vU / (vU + X) = sqrt(1 - t)`, hence `X = vU · (1/sqrt(1 - t) − 1)`.
+ *
+ * Float arithmetic is deliberate here and safe: this number is displayed, never sent. Nothing
+ * on-chain is derived from it — `minReceived` is the value that binds.
+ */
+export function frontRunHeadroom(r: CurveReserves, toleranceBps: number): number {
+  const t = toleranceBps / 10_000;
+  if (t <= 0 || t >= 1) return 0;
+  const vu = Number(r.virtualUsdc);
+  return (vu * (1 / Math.sqrt(1 - t) - 1)) / 1e6;
+}
+
+/**
  * Marginal spot price in USDC per SOLA, as a float, for display only.
  *
  * This is `vU / vS`, the price of an infinitesimal buy. A real buy pays strictly more,
