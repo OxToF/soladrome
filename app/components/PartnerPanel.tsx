@@ -90,6 +90,13 @@ export function PartnerPanel() {
   const [loading,  setLoading]  = useState(false);
   const [status,   setStatus]   = useState("");
 
+  // ☢️ Must stay ABOVE the early returns below. This panel returns early while `alloc` is
+  // still loading, so calling it further down means the hook runs on the second render and
+  // not the first — React counts more hooks than before and throws #310, taking the whole
+  // app down. It only ever fired for a wallet that HAS an allocation, which is why it
+  // survived until the first partner was registered.
+  const floorHeadroomRaw = useFloorHeadroom();
+
   const fetchData = useCallback(async () => {
     if (!wallet) return;
     try {
@@ -223,7 +230,6 @@ export function PartnerPanel() {
   const capBorrowable = lock
     ? (lock.amountLocked * BigInt(PARTNER_BORROW_CAP_BPS)) / BigInt(10_000)
     : BigInt(0);
-  const floorHeadroomRaw = useFloorHeadroom();
   const floorCap   = floorHeadroomRaw === null ? null : BigInt(Math.floor(floorHeadroomRaw));
   const floorBinds = floorCap !== null && floorCap < capBorrowable;
   const borrowable = floorBinds ? (floorCap as bigint) : capBorrowable;
