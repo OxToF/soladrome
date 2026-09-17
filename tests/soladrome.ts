@@ -12,6 +12,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
+import { withComputeBudget } from "./compute_budget";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -45,7 +46,10 @@ async function waitForNewSlot(connection: anchor.web3.Connection): Promise<void>
 // ── suite ────────────────────────────────────────────────────────────────────
 
 describe("soladrome", () => {
-  const provider = anchor.AnchorProvider.env();
+  // Same compute budget the app asks for on every transaction — see tests/compute_budget.ts.
+  // The validator suite sits on the same cliff the bankrun suites did: `add_liquidity` very
+  // nearly exhausts the 200 000 CU default, and nothing here ever asked for more.
+  const provider = withComputeBudget(anchor.AnchorProvider.env());
   anchor.setProvider(provider);
   const connection = provider.connection;
   const wallet = provider.wallet as anchor.Wallet;
