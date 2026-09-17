@@ -11,6 +11,8 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { getProgram, sendTx, getMintProgram } from "@/lib/program";
+import { symbolByMint } from "@/lib/tokens";
+import { describeBribes, expectedClaim, fmtRaw, type BribeToken } from "@/lib/bribes";
 import { trackQuest } from "@/lib/quests";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { StatusBanner } from "./ui/StatusBanner";
@@ -48,15 +50,9 @@ function claimPda(user: PublicKey, pool: PublicKey, mint: PublicKey, epoch: numb
 interface VoteEntry {
   pool:       PublicKey;
   epoch:      number;
-  votes:      number;
+  /** `UserVoteReceipt.votes`, base units. hiSOLA is always 6 decimals; kept raw for the preview. */
+  votesRaw:   bigint;
   poolLabel:  string;
-}
-
-interface BribeToken {
-  mint:   PublicKey;
-  symbol: string;
-  color:  string;
-  amount: number; // total_bribed in this vault
 }
 
 export function ClaimBribe() {
@@ -75,15 +71,9 @@ export function ClaimBribe() {
   const [loadingTokens,   setLoadingTokens]   = useState(false);
   const [loading,         setLoading]         = useState(false);
   const [status,          setStatus]          = useState("");
-  // Gauge total votes for the currently selected (pool, epoch) — for expected-claim preview
-  const [gaugeTotalVotes, setGaugeTotalVotes] = useState<number | null>(null);
-
-  const knownTokens = [
-    { symbol: "oSOLA",  mint: new PublicKey("2rAqBLBi2Fjdjqf5za7uzpbYgNiVV74XMDKQ5RdMuEJT"), color: "#bbf7d0" },
-    { symbol: "SOLA",   mint: new PublicKey("HENFwJCzmBAo2Qybrszr28tqLtEFYkXwN6h87AD5gS9p"),  color: "#4ade80" },
-    { symbol: "hiSOLA", mint: new PublicKey("nc1errcnXjKN4aZYL7AP89op26EMn5a2VcDT82wrTwW"),   color: "#86efac" },
-    ...(usdcMint ? [{ symbol: "USDC", mint: usdcMint, color: "#2775ca" }] : []),
-  ];
+  // Gauge total votes for the currently selected (pool, epoch) — for expected-claim preview.
+  // Raw base units: it is the denominator of the on-chain muldiv, so it stays a bigint.
+  const [gaugeTotalVotes, setGaugeTotalVotes] = useState<bigint | null>(null);
 
   // ── 1. Load user's past vote receipts ─────────────────────────────────────
   const loadVoteReceipts = useCallback(async () => {
@@ -101,21 +91,26 @@ export function ClaimBribe() {
         memcmp: { offset: 8, bytes: wallet.publicKey.toBase58() },
       }]);
 
-      // Fetch AmmPool accounts for human-readable labels
+      // Fetch AmmPool accounts for human-readable labels.
+      //
+      // Through the shared registry, which carries the derived protocol mints, wSOL and the
+      // devnet xStock fixtures. This screen used to hold its own table of three hardcoded
+      // mints, all of them pre-rotation, so a USDC/SOLA pool read `USDC/CaGH…` and every
+      // xStock pair `USDC/7Kq6…` — the exact symptom Gauge.tsx was fixed for on 2026-09-15.
       const pools: any[] = await (program.account as any).ammPool.all().catch(() => []);
       const poolLabel = (pk: PublicKey): string => {
         const p = pools.find((x: any) => x.publicKey.equals(pk));
         if (!p) return pk.toBase58().slice(0, 8) + "…";
-        const knownSym = (addr: string) =>
-          knownTokens.find(t => t.mint.toBase58() === addr)?.symbol ?? addr.slice(0, 4) + "…";
-        return `${knownSym(p.account.tokenAMint.toString())}/${knownSym(p.account.tokenBMint.toString())}`;
+        const symA = symbolByMint(p.account.tokenAMint.toString(), usdcMint);
+        const symB = symbolByMint(p.account.tokenBMint.toString(), usdcMint);
+        return `${symA}/${symB}`;
       };
 
       const entries: VoteEntry[] = receipts
         .map((r: any) => ({
           pool:      r.account.poolId as PublicKey,
           epoch:     Number(r.account.epoch),
-          votes:     Number(r.account.votes) / 1e6,
+          votesRaw:  BigInt(r.account.votes.toString()),
           poolLabel: poolLabel(r.account.poolId),
         }))
         // Only past epochs (claimable)
@@ -123,30 +118,17 @@ export function ClaimBribe() {
         .sort((a: VoteEntry, b: VoteEntry) => b.epoch - a.epoch);
 
       setVoteEntries(entries);
-
-      // Check which (pool, mint, epoch) are already claimed. Build every PDA up
-      // front and resolve existence with chunked getMultipleAccountsInfo (100/call)
-      // instead of one getAccountInfo per (entry × token) — that N×M burst was a
-      // primary 429 source on rate-limited RPCs.
-      const probes = entries.flatMap(e =>
-        knownTokens.map(tok => ({
-          key: `${e.pool.toBase58()}:${tok.mint.toBase58()}:${e.epoch}`,
-          pda: claimPda(wallet.publicKey, e.pool, tok.mint, e.epoch),
-        }))
-      );
-      const claimedSet = new Set<string>();
-      for (let i = 0; i < probes.length; i += 100) {
-        const chunk = probes.slice(i, i + 100);
-        const infos = await connection.getMultipleAccountsInfo(chunk.map(p => p.pda));
-        chunk.forEach((p, j) => { if (infos[j]) claimedSet.add(p.key); });
-      }
-      setClaimed(claimedSet);
+      // Claim receipts are probed per selection now (see the effect below), against the mints
+      // the chain actually holds a vault for. Probing a fixed token table here was both the
+      // N×M RPC burst and a correctness hole: an xStock bribe was in no table, so its "✓
+      // claimed" never appeared and the button stayed live on a bribe already taken.
+      setClaimed(new Set());
     } catch (e) {
       console.error(e);
     } finally {
       setLoadingEntries(false);
     }
-  }, [wallet, connection, epoch]);
+  }, [wallet, connection, epoch, usdcMint]);
 
   useEffect(() => { loadVoteReceipts(); }, [loadVoteReceipts]);
 
@@ -158,6 +140,7 @@ export function ClaimBribe() {
     setSelectedMint(null);
     setGaugeTotalVotes(null);
 
+    let cancelled = false;
     (async () => {
       try {
         const provider = new AnchorProvider(connection, wallet ?? ({} as any), {});
@@ -171,39 +154,54 @@ export function ClaimBribe() {
         // Filter by the selected epoch and non-zero total
         const matching = vaults.filter(v =>
           Number(v.account.epoch) === selected.epoch &&
-          Number(v.account.totalBribed) > 0
+          BigInt(v.account.totalBribed.toString()) > 0n
         );
 
-        const tokens: BribeToken[] = matching.map(v => {
-          const mint = v.account.rewardMint as PublicKey;
-          const known = knownTokens.find(t => t.mint.toBase58() === mint.toBase58());
-          return {
-            mint,
-            symbol: known?.symbol ?? mint.toBase58().slice(0, 6) + "…",
-            color:  known?.color  ?? "#888",
-            amount: Number(v.account.totalBribed) / 1e6,
-          };
-        });
-
+        // Symbols from the shared registry, decimals from each mint account. `total_bribed` is
+        // denominated in the reward mint, which is arbitrary — the `/ 1e6` that stood here
+        // showed a 301.31 TSLAx pot as 30 131.0981.
+        const tokens = await describeBribes(
+          connection,
+          matching.map(v => ({
+            mint: v.account.rewardMint as PublicKey,
+            raw:  BigInt(v.account.totalBribed.toString()),
+          })),
+          usdcMint,
+        );
+        if (cancelled) return;
         setAvailableTokens(tokens);
+
+        // Which of THESE are already claimed — one batched call over the mints that actually
+        // have a vault, instead of a fixed token table that could never contain an xStock.
+        if (wallet && tokens.length > 0) {
+          const infos = await connection.getMultipleAccountsInfo(
+            tokens.map(t => claimPda(wallet.publicKey, selected.pool, t.mint, selected.epoch))
+          );
+          if (cancelled) return;
+          const done = new Set<string>();
+          tokens.forEach((t, i) => {
+            if (infos[i]) done.add(`${selected.pool.toBase58()}:${t.mint.toBase58()}:${selected.epoch}`);
+          });
+          setClaimed(done);
+        }
 
         // Fetch gauge total_votes for expected-claim preview
         const [gaugeAcc] = PublicKey.findProgramAddressSync(
           [Buffer.from("gauge"), selected.pool.toBuffer(), epochBuf(selected.epoch)], PROGRAM_ID
         );
         const gaugeInfo = await connection.getAccountInfo(gaugeAcc);
-        if (gaugeInfo) {
+        if (gaugeInfo && !cancelled) {
           // offset: 8 discriminator + 32 pool_id + 8 epoch = 48
-          const raw = gaugeInfo.data.readBigUInt64LE(48);
-          setGaugeTotalVotes(Number(raw) / 1e6);
+          setGaugeTotalVotes(gaugeInfo.data.readBigUInt64LE(48));
         }
       } catch (e) {
         console.error(e);
       } finally {
-        setLoadingTokens(false);
+        if (!cancelled) setLoadingTokens(false);
       }
     })();
-  }, [selected, connection]);
+    return () => { cancelled = true; };
+  }, [selected, connection, wallet, usdcMint]);
 
   // ── 3. Claim ───────────────────────────────────────────────────────────────
   async function claimBribe() {
@@ -306,7 +304,7 @@ export function ClaimBribe() {
                   }`}>
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-semibold text-gray-200">{entry.poolLabel}</span>
-                    <span className="text-xs text-gray-500">{entry.votes.toFixed(2)} votes</span>
+                    <span className="text-xs text-gray-500">{(Number(entry.votesRaw) / 1e6).toFixed(2)} votes</span>
                   </div>
                   <span className="text-[11px] text-gray-600">{epochLabel(entry.epoch)}</span>
                 </button>
@@ -338,7 +336,7 @@ export function ClaimBribe() {
                 const done = claimed.has(key);
                 const isSel = selectedMint?.equals(tok.mint) ?? false;
                 return (
-                  <button key={tok.symbol}
+                  <button key={tok.mint.toBase58()}
                     onClick={() => !done && setSelectedMint(isSel ? null : tok.mint)}
                     disabled={done}
                     className={`w-full text-left rounded-lg border px-3 py-2 flex items-center justify-between transition-colors ${
@@ -352,7 +350,7 @@ export function ClaimBribe() {
                     </div>
                     <div className="text-right">
                       <span className="text-xs text-gray-400">
-                        {tok.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} total
+                        {fmtRaw(tok.raw, tok.decimals)} total
                       </span>
                       {done && <span className="ml-2 text-[11px] text-brand-green">✓ claimed</span>}
                     </div>
@@ -367,27 +365,29 @@ export function ClaimBribe() {
       {/* ── Expected claim preview ── */}
       {selected && selectedMint && !alreadyClaimed && (() => {
         const tok = availableTokens.find(t => t.mint.equals(selectedMint!));
-        if (!tok || !gaugeTotalVotes || gaugeTotalVotes === 0) return null;
-        const userShare = selected.votes / gaugeTotalVotes;
-        const expected  = tok.amount * userShare;
+        if (!tok || gaugeTotalVotes === null || gaugeTotalVotes === 0n) return null;
+        // Mirrors `claim_bribe` exactly — a truncating u128 muldiv on base units, not a float
+        // product of two already-scaled numbers.
+        const expected  = expectedClaim(tok.raw, selected.votesRaw, gaugeTotalVotes);
+        const userShare = Number(selected.votesRaw) / Number(gaugeTotalVotes);
         return (
           <div className="rounded-lg bg-brand-dark border border-brand-border px-3 py-2 mb-3 text-xs">
             <div className="flex items-center justify-between mb-1">
               <span className="text-gray-500">Your votes</span>
               <span className="font-mono text-white">
-                {selected.votes.toLocaleString(undefined, { maximumFractionDigits: 2 })} hiSOLA
+                {fmtRaw(selected.votesRaw, 6, 2)} hiSOLA
               </span>
             </div>
             <div className="flex items-center justify-between mb-1">
               <span className="text-gray-500">Total gauge votes</span>
               <span className="font-mono text-white">
-                {gaugeTotalVotes.toLocaleString(undefined, { maximumFractionDigits: 2 })} hiSOLA
+                {fmtRaw(gaugeTotalVotes, 6, 2)} hiSOLA
               </span>
             </div>
             <div className="flex items-center justify-between border-t border-brand-border pt-1 mt-1">
               <span className="text-gray-400 font-semibold">Your share ({(userShare * 100).toFixed(1)}%)</span>
               <span className="font-mono font-bold text-brand-green">
-                ≈ {expected.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tok.symbol}
+                ≈ {fmtRaw(expected, tok.decimals, 2)} {tok.symbol}
               </span>
             </div>
           </div>

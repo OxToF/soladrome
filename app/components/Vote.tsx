@@ -8,6 +8,7 @@ import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { getProgram, statePda, marketVault, readPosition, PROGRAM_ID as PROG_ID, sendTx } from "@/lib/program";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
+import { describeBribes, fmtRaw, uiRaw, type BribeToken } from "@/lib/bribes";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
 import { trackQuest } from "@/lib/quests";
@@ -30,19 +31,11 @@ export function Vote() {
   const epoch = currentEpoch();
   const end   = epochEnd(epoch);
 
-  // Known bribe tokens — add any protocol token here for display purposes.
-  // Any unlisted mint is shown as a truncated address.
-  const knownTokens = [
-    { symbol: "oSOLA",   mint: new PublicKey("2rAqBLBi2Fjdjqf5za7uzpbYgNiVV74XMDKQ5RdMuEJT"), color: "#bbf7d0" },
-    { symbol: "SOLA",    mint: new PublicKey("HENFwJCzmBAo2Qybrszr28tqLtEFYkXwN6h87AD5gS9p"),  color: "#4ade80" },
-    { symbol: "hiSOLA",  mint: new PublicKey("nc1errcnXjKN4aZYL7AP89op26EMn5a2VcDT82wrTwW"),   color: "#86efac" },
-    { symbol: "JitoSOL", mint: new PublicKey("J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"), color: "#e05c5c" },
-    { symbol: "JTO",     mint: new PublicKey("jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL"),  color: "#f97316" },
-    { symbol: "JUP",     mint: new PublicKey("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"),  color: "#a78bfa" },
-    { symbol: "ORCA",    mint: new PublicKey("orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE"), color: "#36d1dc" },
-    { symbol: "MNDE",    mint: new PublicKey("MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTa3CbChoKBRP"), color: "#3b82f6" },
-    ...(usdcMint ? [{ symbol: "USDC", mint: usdcMint, color: "#2775ca" }] : []),
-  ];
+  // Bribe tokens are described by `lib/bribes.ts`: symbols from the shared registry, decimals
+  // from the mint account. The table that stood here was a private copy of both — its three
+  // protocol mints were the pre-rotation ones (so oSOLA rendered as `Cam9BN…`), its MNDE entry
+  // did not even match the one in `tokens.ts`, and no list of any length can name an xStock a
+  // partner mints tomorrow.
 
   const [poolId,       setPoolId]       = useState("");
   const [votes,        setVotes]        = useState("");
@@ -57,7 +50,7 @@ export function Vote() {
   // Live gauge info for selected pool
   const [gaugeVotes,   setGaugeVotes]   = useState<number | null>(null);
   // All bribe tokens for the selected pool this epoch
-  const [bribes, setBribes] = useState<{ symbol: string; amount: number; color: string }[]>([]);
+  const [bribes, setBribes] = useState<BribeToken[]>([]);
   // Voting moves the cast weight into program custody for the epoch. Without a way back the
   // stake is simply gone from the user's point of view, so the release path is part of the
   // voting screen, not an afterthought.
@@ -220,25 +213,27 @@ export function Vote() {
 
         // Filter to current epoch with a non-zero deposit
         const matching = vaults.filter(
-          v => Number(v.account.epoch) === ep && Number(v.account.totalBribed) > 0
+          v => Number(v.account.epoch) === ep && BigInt(v.account.totalBribed.toString()) > 0n
         );
 
-        // Map to display objects, resolving symbol from tokens registry
-        const result = matching.map(v => {
-          const mintStr = (v.account.rewardMint as PublicKey).toBase58();
-          const known   = knownTokens.find(t => t.mint.toBase58() === mintStr);
-          return {
-            symbol: known?.symbol ?? mintStr.slice(0, 6) + "…",
-            color:  known?.color  ?? "#888",
-            amount: Number(v.account.totalBribed) / 1e6,
-          };
-        });
+        // `total_bribed` is denominated in the reward mint, so it is scaled by that mint's
+        // decimals — never by the protocol's 6. An 8-decimal xStock bribe read 100× too big
+        // here, on the very screen where a voter decides whether the bribe is worth a vote.
+        const result = await describeBribes(
+          connection,
+          matching.map(v => ({
+            mint: v.account.rewardMint as PublicKey,
+            raw:  BigInt(v.account.totalBribed.toString()),
+          })),
+          usdcMint,
+        );
 
+        if (cancelled) return;
         setBribes(result);
       } catch { /* pool not initialised yet */ }
     })();
     return () => { cancelled = true; };
-  }, [poolId, connection, wallet]);
+  }, [poolId, connection, wallet, usdcMint]);
 
   function applyPct(pct: number) {
     if (!remaining || remaining <= 0) return;
@@ -532,19 +527,20 @@ export function Vote() {
             {bribes.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {bribes.map((b) => (
-                  <span key={b.symbol} className="flex items-center gap-1 text-gray-400">
+                  <span key={b.mint.toBase58()} className="flex items-center gap-1 text-gray-400">
                     🎁
                     <span className="font-mono" style={{ color: b.color }}>
-                      {b.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {b.symbol}
+                      {fmtRaw(b.raw, b.decimals, 2)} {b.symbol}
                     </span>
-                    {/* Estimated reward for this vote amount */}
+                    {/* Estimated reward for this vote amount. Float, unlike the Claim screen's
+                        preview: the denominator is a gauge that is still moving, so this is a
+                        projection, not the payout formula. */}
                     {gaugeVotes !== null && votes && parseFloat(votes) > 0 && (
                       <span className="text-gray-600">
                         (est.{" "}
                         <span className="text-white font-mono">
-                          {(b.amount * parseFloat(votes) / (gaugeVotes + parseFloat(votes))).toLocaleString(
-                            undefined, { maximumFractionDigits: 4 }
-                          )}{" "}{b.symbol}
+                          {(uiRaw(b.raw, b.decimals) * parseFloat(votes) / (gaugeVotes + parseFloat(votes)))
+                            .toLocaleString(undefined, { maximumFractionDigits: 4 })}{" "}{b.symbol}
                         </span>)
                       </span>
                     )}

@@ -65,22 +65,19 @@ export async function computeClaimableFees(
 }
 
 // ── Bribe-claimable summary ──────────────────────────────────────────────
-// Same well-known reward mints ClaimBribe.tsx / Gauge.tsx already hardcode.
-const KNOWN_BRIBE_MINTS = [
-  new PublicKey("2rAqBLBi2Fjdjqf5za7uzpbYgNiVV74XMDKQ5RdMuEJT"), // oSOLA
-  new PublicKey("HENFwJCzmBAo2Qybrszr28tqLtEFYkXwN6h87AD5gS9p"),  // SOLA
-  new PublicKey("nc1errcnXjKN4aZYL7AP89op26EMn5a2VcDT82wrTwW"),   // hiSOLA
-];
+//
+// ☢️ There is no list of reward mints here any more, and there must never be one again.
+// `deposit_bribe` takes an arbitrary mint, so any fixed list answers a question the chain
+// alone can answer — and the list that stood here named the three mints derived from the
+// program ID burned on 2026-08-08, so it probed vaults that cannot exist under `DgD37Vjs…`
+// and the Portfolio reported "0 claimable" over a wallet holding claimable xStock bribes.
+// The vaults are discovered instead, exactly as ClaimBribe.tsx discovers them.
 
 function epochBuf(epoch: number) {
   const b = Buffer.alloc(8);
   b.writeUInt32LE(epoch >>> 0, 0);
   b.writeUInt32LE(Math.floor(epoch / 2 ** 32), 4);
   return b;
-}
-function bribeVaultPda(pool: PublicKey, mint: PublicKey, epoch: number) {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("bribe_vault"), pool.toBuffer(), mint.toBuffer(), epochBuf(epoch)], PROGRAM_ID)[0];
 }
 function claimPda(user: PublicKey, pool: PublicKey, mint: PublicKey, epoch: number) {
   return PublicKey.findProgramAddressSync(
@@ -95,14 +92,14 @@ export interface ClaimableBribesSummary {
 // Aggregates "how many bribes can I claim right now" across every past-epoch
 // vote the wallet has, without requiring the user to pick a pool first (unlike
 // ClaimBribe.tsx, which only scans bribe vaults once a vote entry is selected).
-// Generalizes ClaimBribe.tsx's own chunked getMultipleAccountsInfo probe
-// (loadVoteReceipts, ClaimBribe.tsx:88-148) to also check vault existence, not
-// just claim-status — this is the one genuinely new RPC surface in the
-// Portfolio redesign, so it must stay wallet-gated and chunked at 100/call.
+// It must stay wallet-gated and off the balance timer: it is the one genuinely
+// new RPC surface in the Portfolio redesign.
+//
+// No `usdcMint` any more — it only existed to extend a guessed mint list, and the
+// vaults are read from the chain now.
 export async function computeClaimableBribesSummary(
   connection: Connection,
   wallet: AnchorWallet,
-  usdcMint: PublicKey | null,
 ): Promise<ClaimableBribesSummary> {
   if (!wallet) return { claimableCount: 0, poolCount: 0 };
   try {
@@ -118,35 +115,49 @@ export async function computeClaimableBribesSummary(
       .filter((e: { pool: PublicKey; epoch: number }) => e.epoch < epoch);
     if (entries.length === 0) return { claimableCount: 0, poolCount: 0 };
 
-    const tokens = usdcMint ? [...KNOWN_BRIBE_MINTS, usdcMint] : KNOWN_BRIBE_MINTS;
-    const probes = entries.flatMap((e) =>
-      tokens.map((mint) => ({
-        pool: e.pool,
-        vaultPda: bribeVaultPda(e.pool, mint, e.epoch),
-        claimPda: claimPda(wallet.publicKey, e.pool, mint, e.epoch),
-      }))
+    // One getProgramAccounts per DISTINCT pool the wallet voted on (memcmp on `pool_id`), not
+    // one per (pool × epoch × guessed mint). A voter has a handful of pools, and this runs only
+    // on connect and on "soladrome:refresh" — never on the 8 s balance timer.
+    const pools = [...new Map(entries.map((e) => [e.pool.toBase58(), e.pool])).values()];
+    const vaultsByPool = await Promise.all(
+      pools.map((pool) =>
+        (program.account as any).bribeVault
+          .all([{ memcmp: { offset: 8, bytes: pool.toBase58() } }])
+          .catch(() => [] as any[])
+      )
     );
 
-    const allKeys = probes.flatMap((p) => [p.vaultPda, p.claimPda]);
+    // (pool, epoch) the wallet actually holds a receipt for — a bribe on a pool it did not vote
+    // on that epoch pays nothing, so it must not be counted.
+    const voted = new Set(entries.map((e) => `${e.pool.toBase58()}:${e.epoch}`));
+    const probes = vaultsByPool.flat()
+      .filter((v: any) =>
+        voted.has(`${v.account.poolId.toBase58()}:${Number(v.account.epoch)}`) &&
+        BigInt(v.account.totalBribed.toString()) > 0n
+      )
+      .map((v: any) => ({
+        pool:     v.account.poolId as PublicKey,
+        claimPda: claimPda(
+          wallet.publicKey,
+          v.account.poolId as PublicKey,
+          v.account.rewardMint as PublicKey,
+          Number(v.account.epoch),
+        ),
+      }));
+    if (probes.length === 0) return { claimableCount: 0, poolCount: 0 };
+
     const infos: (Awaited<ReturnType<Connection["getMultipleAccountsInfo"]>>[number])[] = [];
-    for (let i = 0; i < allKeys.length; i += 100) {
-      const chunk = allKeys.slice(i, i + 100);
-      const res = await connection.getMultipleAccountsInfo(chunk);
-      infos.push(...res);
+    for (let i = 0; i < probes.length; i += 100) {
+      const chunk = probes.slice(i, i + 100);
+      infos.push(...(await connection.getMultipleAccountsInfo(chunk.map((p) => p.claimPda))));
     }
 
     let claimableCount = 0;
     const poolsWithClaimable = new Set<string>();
     probes.forEach((p, i) => {
-      const vaultInfo = infos[i * 2];
-      const claimInfo = infos[i * 2 + 1];
-      if (!vaultInfo || claimInfo) return; // no bribe deposited, or already claimed
-      // total_bribed field — same offset Gauge.tsx already reads (offset 80).
-      const totalBribed = vaultInfo.data.length >= 88 ? vaultInfo.data.readBigUInt64LE(80) : 0n;
-      if (totalBribed > 0n) {
-        claimableCount++;
-        poolsWithClaimable.add(p.pool.toBase58());
-      }
+      if (infos[i]) return; // UserBribeClaim exists → already claimed
+      claimableCount++;
+      poolsWithClaimable.add(p.pool.toBase58());
     });
 
     return { claimableCount, poolCount: poolsWithClaimable.size };

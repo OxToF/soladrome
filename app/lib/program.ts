@@ -152,6 +152,49 @@ export async function getMintProgram(
   return owner;
 }
 
+// Decimals are fixed at mint creation and can never change, so this cache is safe for the life
+// of the tab, exactly like `mintProgramCache` above.
+const mintDecimalsCache = new Map<string, number>();
+
+/// Decimals for many mints in one round trip, read from the chain and memoised.
+///
+/// ☢️ Anywhere a mint comes from the chain or a picker, its decimals must be READ, never assumed.
+/// `DECIMALS = 6` is the protocol's own figure (SOLA / oSOLA / USDC); a bribe reward mint is one
+/// of the three places an arbitrary mint reaches the program, and the devnet xStocks are 8 — so a
+/// `/ 1e6` renders a 301 TSLAx pot as 30 131 and a claim preview 100× too large.
+///
+/// The registry in `tokens.ts` carries decimals too, but only for mints it knows: this is the
+/// authority for the rest. Mints that cannot be read are simply absent from the map, so callers
+/// decide what to do rather than silently inheriting a 6.
+export async function getMintDecimals(
+  connection: Connection,
+  mints: PublicKey[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const missing: PublicKey[] = [];
+  for (const mint of mints) {
+    const key = mint.toBase58();
+    const hit = mintDecimalsCache.get(key);
+    if (hit !== undefined) out.set(key, hit);
+    else if (!missing.some((m) => m.equals(mint))) missing.push(mint);
+  }
+  for (let i = 0; i < missing.length; i += 100) {
+    const chunk = missing.slice(i, i + 100);
+    const infos = await connection.getMultipleAccountsInfo(chunk);
+    chunk.forEach((mint, j) => {
+      const info = infos[j];
+      // The base mint layout is byte-identical for SPL Token and Token-2022 — a T22 mint only
+      // appends its extensions after byte 82 — so `decimals` sits at offset 44 in both:
+      // mint_authority COption (4 + 32) + supply (8).
+      if (!info || info.data.length < 45) return;
+      const decimals = info.data[44];
+      mintDecimalsCache.set(mint.toBase58(), decimals);
+      out.set(mint.toBase58(), decimals);
+    });
+  }
+  return out;
+}
+
 /// Both sides of a pair in one round trip.
 export async function getMintPrograms(
   connection: Connection,
