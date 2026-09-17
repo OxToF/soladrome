@@ -50,7 +50,20 @@ export function SoladromeProvider({ children }: { children: ReactNode }) {
         (program.account as any).ammPool.all(),
       ]);
       setProtocolState(s);
-      setUsdcMint(new PublicKey(s.usdcMint));
+      // ☢️ Keep the SAME PublicKey object while the address is unchanged.
+      //
+      // `usdc_mint` is written once by `initialize` and has no setter, so it cannot change for
+      // the life of a deployment — but this ran every 10 s and handed out a brand-new object
+      // each time. Any consumer with `usdcMint` in a dependency array therefore re-ran on the
+      // poll: `LpEmissions` refetched every pool and every per-pool PDA, `Vote` blanked and
+      // refetched its bribe list, and `ClaimBribe.loadVoteReceipts` — which starts by clearing
+      // its state — wiped the user's selected vote every 10 s, so the card they had just opened
+      // closed under them.
+      //
+      // The other three are deliberately fresh objects: balances and pools genuinely change,
+      // and a consumer that re-reads them on the poll is doing what it should.
+      setUsdcMint((prev) =>
+        prev && prev.toBase58() === s.usdcMint.toString() ? prev : new PublicKey(s.usdcMint));
       setVaultInfos(infos);
       setAmmPools(pools);
     } catch { /* keep stale data on transient errors */ }
