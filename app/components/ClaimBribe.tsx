@@ -78,10 +78,11 @@ export function ClaimBribe() {
   // ── 1. Load user's past vote receipts ─────────────────────────────────────
   const loadVoteReceipts = useCallback(async () => {
     if (!wallet) return;
+    // Nothing is cleared up front. A reload that blanks the list and drops the selection makes
+    // the open card close under the user — which is what the 10 s context poll was doing until
+    // `usdcMint` stopped changing identity, and what the ↻ button still did on demand. The list
+    // stays on screen while the new one loads, and the selection is re-pointed below.
     setLoadingEntries(true);
-    setVoteEntries([]);
-    setSelected(null);
-    setAvailableTokens([]);
     try {
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
@@ -118,6 +119,22 @@ export function ClaimBribe() {
         .sort((a: VoteEntry, b: VoteEntry) => b.epoch - a.epoch);
 
       setVoteEntries(entries);
+      // Keep the open card open: re-point the selection at the same (pool, epoch) in the new
+      // list, and drop it only if that vote is genuinely gone. Read through the updater so the
+      // callback never depends on `selected` — depending on it would rebuild this function on
+      // every click, refire the effect that calls it, and reload on every selection.
+      setSelected((prev) => {
+        if (!prev) return null;
+        const match = entries.find((e) => e.pool.equals(prev.pool) && e.epoch === prev.epoch);
+        if (!match) return null;
+        // Hand back the SAME object when nothing about it changed. `selected` is a dependency
+        // of the bribe-discovery effect below, so an equal-but-new object would clear the
+        // token list and the chosen mint on every reload — the same flicker one level down.
+        // A past epoch's receipt is immutable on chain, so only the label can legitimately
+        // move (when the registry resolves a symbol it could not resolve on first render).
+        return match.poolLabel === prev.poolLabel && match.votesRaw === prev.votesRaw
+          ? prev : match;
+      });
       // Claim receipts are probed per selection now (see the effect below), against the mints
       // the chain actually holds a vault for. Probing a fixed token table here was both the
       // N×M RPC burst and a correctness hole: an xStock bribe was in no table, so its "✓
