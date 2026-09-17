@@ -11,6 +11,7 @@ import {
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { symbolByMint, isPoolTrusted } from "@/lib/tokens";
+import { epochEmissionUi } from "@/lib/emissions";
 import { currentEpoch, epochEnd, timeLeft } from "@/lib/epoch";
 import { StatusBanner } from "./ui/StatusBanner";
 function epochBuf(e: number) {
@@ -36,9 +37,13 @@ interface PoolEmissionRow {
 export function LpEmissions() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
-  const { usdcMint } = useSoladrome();
+  const { usdcMint, protocolState } = useSoladrome();
   const epoch = currentEpoch();
   const end   = epochEnd(epoch);
+  // This epoch's pot, read from the schedule in ProtocolState. The line below used to announce
+  // a flat "10 000 oSOLA/epoch" — the chain has been emitting 2 000, decayed, since the
+  // 2026-08-19 recalibration, so the panel promised an LP roughly five times the truth.
+  const epochPot = epochEmissionUi(protocolState, epoch);
 
   const [pools, setPools]   = useState<PoolEmissionRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -279,8 +284,11 @@ export function LpEmissions() {
         </div>
         <div className="text-right hidden md:block max-w-xs">
           <p className="text-xs text-gray-400 leading-relaxed">
-            10 000 oSOLA/epoch distributed to LPs <br />
-            weighted by time-weighted LP token share. <br />
+            {epochPot !== null
+              ? <>{epochPot.toLocaleString(undefined, { maximumFractionDigits: 0 })} oSOLA this epoch</>
+              : <>oSOLA emissions</>}
+            , split across pools by gauge vote <br />
+            then by time-weighted LP share. <br />
             <strong className="text-white">Checkpoint before the epoch ends.</strong>
           </p>
         </div>

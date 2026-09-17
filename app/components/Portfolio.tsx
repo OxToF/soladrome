@@ -125,8 +125,8 @@ export function Portfolio() {
   // event (fired after transactions elsewhere in the app), never on a timer.
   const loadBribeSummary = useCallback(async () => {
     if (!wallet) { setBribeSummary(null); return; }
-    setBribeSummary(await computeClaimableBribesSummary(connection, wallet, usdcMint ?? null));
-  }, [connection, wallet, usdcMint]);
+    setBribeSummary(await computeClaimableBribesSummary(connection, wallet));
+  }, [connection, wallet]);
 
   useEffect(() => {
     loadBribeSummary();

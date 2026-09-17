@@ -157,9 +157,10 @@ export const TRUSTED_MINTS = new Set([
   // `nc1errcn…`, hardcoded rather than derived — and hardcoding is what let it
   // rot past the 2026-08-08 program-ID rotation, since `hi_sola_mint` under
   // `DgD37Vjs` derives to `3uP7Jo1n…`. Caught by `scripts/check_token_registry.ts`.
-  // ⚠️ The same stale address still stands in `claims.ts`, `Vote.tsx`,
-  // `ClaimBribe.tsx` and `Gauge.tsx`, where it is offered as a *bribe* reward
-  // mint — a bribe deposited there lands in the old program's orphaned mint.
+  // ✅ 2026-09-17: the last four copies of that stale table are gone — `Gauge.tsx`
+  // (2026-09-15), then `ClaimBribe.tsx`, `Vote.tsx` and `claims.ts`. Every screen now
+  // names a bribe token through this registry and `lib/bribes.ts`, so a rotation that
+  // moves a derived mint can no longer leave one screen reading addresses.
   // ── Infrastructure ──
   WSOL_MINT,                                              // wSOL
   // ── Partners / blue-chip ──
