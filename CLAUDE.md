@@ -30,6 +30,22 @@ solana program deploy target/deploy/soladrome.so \
 # Failed deploys leave a buffer (~12 SOL) — reclaim: solana program close --buffers --url https://api.devnet.solana.com
 ```
 
+☢️ **`cargo build-sbf --arch v3` and `anchor build` write the SAME FILE, and bankrun cannot run
+the v3 one.** `target/deploy/soladrome.so` serves two masters: the devnet deploy wants SBPFv3,
+`startAnchor` wants the ordinary `anchor build` output. So **every devnet deploy leaves the local
+test suite broken** — all 83 bankrun cases fail at the `before` hook with *"invalid account data
+for instruction"*, which reads like a program bug and is not one. Nothing on chain is affected;
+the runner is simply loading a binary it cannot execute.
+
+Worse, the repair is not obvious: a plain `anchor build` afterwards **does nothing**, because
+cargo sees unchanged sources and never relinks, so the v3 artefact stays in place and the suite
+stays red. Force it:
+```bash
+rm -f target/deploy/soladrome.so && touch programs/soladrome/src/lib.rs && anchor build
+```
+Rule of thumb: build v3 **last**, immediately before `solana program deploy`, and restore the
+test artefact straight after.
+
 ### ✅ Running the whole suite locally, without touching devnet
 `Anchor.toml` points at devnet, but the suite does **not** need it. `solana-test-validator` is not
 on `PATH` by default; it ships with the Agave install:
