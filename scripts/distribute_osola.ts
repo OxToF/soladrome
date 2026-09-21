@@ -14,7 +14,9 @@ import {
 } from "@solana/spl-token";
 import fs from "fs";
 import path from "path";
-import idl from "../target/idl/soladrome.json";
+// Read, not imported: the root tsconfig has no `resolveJsonModule`, so an `import` of
+// this file fails to compile under ts-node — which is why this script could not run.
+const idl = JSON.parse(require("fs").readFileSync(`${__dirname}/../target/idl/soladrome.json`, "utf8"));
 
 const PROGRAM_ID  = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const STATE_SEED  = Buffer.from("state");
