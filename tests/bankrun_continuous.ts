@@ -35,6 +35,7 @@ import {
   SystemProgram,
   Transaction,
   SYSVAR_RENT_PUBKEY,
+  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   MINT_SIZE,
@@ -43,6 +44,8 @@ import {
   AccountLayout,
   createInitializeMint2Instruction,
   createAssociatedTokenAccountInstruction,
+  createInitializeAccount3Instruction,
+  createTransferInstruction,
   createMintToInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
@@ -122,6 +125,7 @@ describe("soladrome — bankrun (continuous emission stream)", () => {
       .claimLpRewards()
       .accounts({
         user: payer.publicKey,
+        payer: payer.publicKey,
         pool: poolPda,
         lpMint,
         userLp,
@@ -408,6 +412,297 @@ describe("soladrome — bankrun (continuous emission stream)", () => {
       minted,
       BigInt(0),
       "no oSOLA may be minted from the stream once the window has closed"
+    );
+  });
+  // ── ☢️ Permissionless since 2026-09-21 ────────────────────────────────────
+  //
+  // `claim_lp_rewards` dropped its `Signer` on `user` so a standing compound order can feed
+  // itself: the crank exercises what is in the wallet, and the rewards that refill it were
+  // sitting one uncallable instruction away. These two cases are the whole argument for why
+  // handing that out is safe — a stranger can cause you to receive YOUR rewards into YOUR
+  // account, and cannot do anything else with the power.
+
+  it("[stream] ☢️ a stranger can claim FOR someone, and the rewards land in the owner's account", async () => {
+    const stranger = Keypair.generate();
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: stranger.publicKey,
+        lamports: 2 * LAMPORTS_PER_SOL,
+      }),
+    ]);
+
+    // ⚠️ Re-arm the stream rather than inherit it. The cases above deliberately close the
+    // window — the master switch, the per-pool switch, and finally `continuous_end_epoch` —
+    // so a test appended after them starts with nothing accruing and fails on NothingToClaim
+    // for a reason that has nothing to do with what it is checking. Independent beats ordered.
+    await setEmissionsEnabled(true);
+    await setPoolRewards(true);
+    const now = (await context.banksClient.getClock()).unixTimestamp;
+    const epochNow = Number(now / BigInt(604_800));
+    await program.methods
+      .configureContinuousEmissions(new BN(RATE_PER_SEC), new BN(epochNow + 50))
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+    await claimStream(90); // prime `last_reward_ts` from a known point
+
+    context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
+    const clock = await context.banksClient.getClock();
+    context.setClock(new Clock(clock.slot, clock.epochStartTimestamp, clock.epoch,
+      clock.leaderScheduleEpoch, clock.unixTimestamp + BigInt(600)));
+
+    const before = await tokenBalance(userOSola);
+    const strangerBefore = (await context.banksClient.getAccount(stranger.publicKey))!.lamports;
+
+    const ix = await program.methods
+      .claimLpRewards()
+      .accounts({
+        user: payer.publicKey,        // the owner — signs nothing here
+        payer: stranger.publicKey,    // the stranger pays, and gains nothing
+        pool: poolPda,
+        lpMint,
+        userLp,
+        lpUserInfo,
+        protocolState: statePda,
+        oSolaMint: oSolaM,
+        userOSola,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .instruction();
+
+    const tx = new Transaction();
+    tx.recentBlockhash = context.lastBlockhash;
+    tx.feePayer = stranger.publicKey;
+    tx.add(ix);
+    tx.sign(stranger);
+    await context.banksClient.processTransaction(tx);
+
+    const after = await tokenBalance(userOSola);
+    assert.isAbove(
+      Number(after - before), 0,
+      "the owner must have received their own rewards, paid for by somebody else",
+    );
+    const strangerAfter = (await context.banksClient.getAccount(stranger.publicKey))!.lamports;
+    assert.isAtMost(
+      Number(strangerAfter), Number(strangerBefore),
+      "and the stranger must be out of pocket, never ahead",
+    );
+  });
+
+  it("[stream] ☢️ a stranger cannot redirect the rewards to their own account", async () => {
+    const thief = Keypair.generate();
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: thief.publicKey,
+        lamports: 2 * LAMPORTS_PER_SOL,
+      }),
+    ]);
+    const thiefOSola = getAssociatedTokenAddressSync(oSolaM, thief.publicKey);
+
+    // `associated_token::authority = user` is the constraint doing the work: the destination
+    // is derived from the OWNER, so naming any other account simply does not typecheck on chain.
+    const ix = await program.methods
+      .claimLpRewards()
+      .accounts({
+        user: payer.publicKey,
+        payer: thief.publicKey,
+        pool: poolPda,
+        lpMint,
+        userLp,
+        lpUserInfo,
+        protocolState: statePda,
+        oSolaMint: oSolaM,
+        userOSola: thiefOSola,        // ← the substitution
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .instruction();
+
+    const tx = new Transaction();
+    tx.recentBlockhash = context.lastBlockhash;
+    tx.feePayer = thief.publicKey;
+    tx.add(ix);
+    tx.sign(thief);
+
+    let refused = false;
+    try {
+      await context.banksClient.processTransaction(tx);
+    } catch (e: any) {
+      refused = true;
+    }
+    assert.isTrue(refused, "a substituted destination must be refused");
+    assert.equal(
+      (await tokenBalance(thiefOSola)).toString(), "0",
+      "and nothing may ever reach it",
+    );
+  });
+  it("[stream] ☢️ a griefer cannot wipe someone's accrual by claiming on a decoy LP account", async () => {
+    // THE ATTACK THIS CONSTRAINT EXISTS FOR, and it only became possible when the claim lost
+    // its signer. `reward_debt` jumps to the full accumulator whatever basis the payout used,
+    // so paying someone dust forfeits everything they had accrued on that pool.
+    //
+    // The attacker does not need the victim's cooperation for any of it: `initializeAccount`
+    // takes the owner as a PARAMETER, so anyone may create a token account belonging to anyone.
+    const griefer = Keypair.generate();
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: griefer.publicKey,
+        lamports: 2 * LAMPORTS_PER_SOL,
+      }),
+    ]);
+
+    // ⚠️ NOT dust — a FRACTION. A first version of this test moved 10 base units and passed
+    // against the vulnerable constraint too, because `pending > 0` refused it on rounding
+    // before the constraint ever spoke. That proves nothing. The attack that actually bites
+    // uses a balance small enough to forfeit almost everything and large enough to pay out:
+    // one percent here, which pays 1% and destroys the other 99%.
+    const victimLp = await tokenBalance(userLp);
+    const decoyAmount = victimLp / BigInt(100);
+    assert.isAbove(Number(decoyAmount), 0, "the fraction must be payable, or the test proves nothing");
+
+    const decoy = Keypair.generate();
+    const rent = await context.banksClient.getRent();
+    await send(
+      [
+        SystemProgram.createAccount({
+          fromPubkey: payer.publicKey,
+          newAccountPubkey: decoy.publicKey,
+          space: 165,
+          lamports: Number(rent.minimumBalance(BigInt(165))),
+          programId: TOKEN_PROGRAM_ID,
+        }),
+        createInitializeAccount3Instruction(decoy.publicKey, lpMint, payer.publicKey),
+        createTransferInstruction(userLp, decoy.publicKey, payer.publicKey, Number(decoyAmount)),
+      ],
+      [decoy]
+    );
+
+    // Let a real amount accrue, so a claim on the decoy would pay out and wipe the rest.
+    const clock0 = await context.banksClient.getClock();
+    context.setClock(new Clock(clock0.slot, clock0.epochStartTimestamp, clock0.epoch,
+      clock0.leaderScheduleEpoch, clock0.unixTimestamp + BigInt(3600)));
+
+    const ix = await program.methods
+      .claimLpRewards()
+      .accounts({
+        user: payer.publicKey,
+        payer: griefer.publicKey,
+        pool: poolPda,
+        lpMint,
+        userLp: decoy.publicKey,   // ← owned by the victim, and NOT their associated account
+        lpUserInfo,
+        protocolState: statePda,
+        oSolaMint: oSolaM,
+        userOSola,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .instruction();
+
+    const tx = new Transaction();
+    tx.recentBlockhash = context.lastBlockhash;
+    tx.feePayer = griefer.publicKey;
+    tx.add(ix);
+    tx.sign(griefer);
+
+    const debtBefore = (await program.account.lpUserInfo.fetch(lpUserInfo)).rewardDebt.toString();
+    let refused = false;
+    try {
+      await context.banksClient.processTransaction(tx);
+    } catch {
+      refused = true;
+    }
+    assert.isTrue(refused, "a non-associated LP account must be refused");
+    assert.equal(
+      (await program.account.lpUserInfo.fetch(lpUserInfo)).rewardDebt.toString(),
+      debtBefore,
+      "and the victim's accrual must be exactly where it was",
+    );
+  });
+  it("[stream] ☢️ a stranger cannot claim while the owner holds less LP than they deposited", async () => {
+    // The half the ATA binding did NOT close, found in review. `reward_debt` jumps to the whole
+    // accumulator whatever basis was paid, and the basis is min(recorded, held). An LP who has
+    // parked some of their LP elsewhere — a hardware wallet, a multisig — sits at held < recorded
+    // in plain view of anyone polling two public accounts. Claiming for them right then pays the
+    // small figure and burns the rest. The attacker cannot create that state; they can wait for it.
+    const watcher = Keypair.generate();
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: watcher.publicKey,
+        lamports: 2 * LAMPORTS_PER_SOL,
+      }),
+    ]);
+
+    // The owner parks most of their LP somewhere else — an ordinary thing to do.
+    const parked = getAssociatedTokenAddressSync(lpMint, watcher.publicKey);
+    const held = await tokenBalance(userLp);
+    await send([
+      createAssociatedTokenAccountInstruction(payer.publicKey, parked, watcher.publicKey, lpMint),
+      createTransferInstruction(userLp, parked, payer.publicKey, Number((held * BigInt(9)) / BigInt(10))),
+    ]);
+
+    const recorded = (await program.account.lpUserInfo.fetch(lpUserInfo)).lpAmount;
+    assert.isBelow(
+      Number(await tokenBalance(userLp)), Number(recorded.toString()),
+      "the precondition: the wallet now holds less than the recorded deposit",
+    );
+
+    const build = (feePayer: PublicKey) =>
+      program.methods
+        .claimLpRewards()
+        .accounts({
+          user: payer.publicKey,
+          payer: feePayer,
+          pool: poolPda,
+          lpMint,
+          userLp,
+          lpUserInfo,
+          protocolState: statePda,
+          oSolaMint: oSolaM,
+          userOSola,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        } as any)
+        .instruction();
+
+    // A stranger is refused, and the owner's accrual is exactly where it was.
+    const debtBefore = (await program.account.lpUserInfo.fetch(lpUserInfo)).rewardDebt.toString();
+    const tx = new Transaction();
+    tx.recentBlockhash = context.lastBlockhash;
+    tx.feePayer = watcher.publicKey;
+    tx.add(await build(watcher.publicKey));
+    tx.sign(watcher);
+    let refused = false;
+    try {
+      await context.banksClient.processTransaction(tx);
+    } catch {
+      refused = true;
+    }
+    assert.isTrue(refused, "a third party must not choose this moment");
+    assert.equal(
+      (await program.account.lpUserInfo.fetch(lpUserInfo)).rewardDebt.toString(),
+      debtBefore,
+      "and nothing may have moved",
+    );
+
+    // ✅ The OWNER may still do it — it is their call, and their loss to accept.
+    await send([await build(payer.publicKey)]);
+    assert.notEqual(
+      (await program.account.lpUserInfo.fetch(lpUserInfo)).rewardDebt.toString(),
+      debtBefore,
+      "self-service must be untouched by the guard",
     );
   });
 });

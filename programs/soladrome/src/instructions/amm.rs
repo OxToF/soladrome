@@ -617,6 +617,34 @@ pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
     let pending = pending_osola(acc, ctx.accounts.lp_user_info.reward_debt, basis);
     require!(pending > 0, SoladromeError::NothingToClaim);
 
+    // ☢️ A STRANGER MAY ONLY CLAIM WHEN THERE IS NOTHING TO FORFEIT.
+    //
+    // `reward_debt` jumps to the whole accumulator below WHATEVER basis was just paid on, and
+    // the basis is `min(lp_amount, wallet)`. So a claim made while the wallet holds less than
+    // the recorded deposit pays the smaller figure and destroys the accrual attributable to the
+    // difference — permanently, since `pending_osola` only ever reads forward from `reward_debt`.
+    //
+    // That is a decision, not a defect: the accumulator is not time-weighted, so an LP who moves
+    // tokens out and back recovers the full entitlement by claiming AFTER they return. Which
+    // moment to claim is therefore worth something, and it belongs to the owner.
+    //
+    // Binding `user_lp` to the associated account (see the context below) stopped an attacker
+    // MANUFACTURING a small basis with a decoy account. It does not stop them WAITING for one:
+    // an LP with tokens parked on a hardware wallet or in a multisig sits in exactly this state,
+    // visibly, for anyone polling two public accounts. Firing then costs a fee and gains nothing
+    // — pure grief, which is why "it pays the caller nothing" was never the safety argument.
+    //
+    // ⚠️ And our own keeper would have done it by accident: it claims every pool `evaluateCompound`
+    // reports as claimable and never looks at this ratio.
+    //
+    // The owner keeps self-service at any basis. A third party is admitted only when the wallet
+    // still holds the whole recorded deposit, where the two bases are equal and nothing is lost.
+    require!(
+        ctx.accounts.payer.key() == ctx.accounts.user.key()
+            || user_lp >= ctx.accounts.lp_user_info.lp_amount,
+        SoladromeError::PartialBasisClaim
+    );
+
     let state_bump = ctx.accounts.protocol_state.bump;
     let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
     token::mint_to(
@@ -1126,8 +1154,30 @@ pub struct RemoveLiquidity<'info> {
 /// Claim accumulated oSOLA without changing LP position.
 #[derive(Accounts)]
 pub struct ClaimLpRewards<'info> {
+    /// ☢️ NOT A SIGNER SINCE 2026-09-21, and the constraints below are why that is safe.
+    ///
+    /// Everything this instruction touches is already bound to this key by something other
+    /// than a signature: the LP balance by `token::authority`, the reward record by its own
+    /// seeds, and the oSOLA destination by `associated_token::authority`. The signer was the
+    /// only thing making it self-service, and it was buying nothing — a caller who is not this
+    /// user can cause them to receive **their own** rewards into **their own** account, and
+    /// nothing else. Substituting any of those accounts fails the constraint, not the audit.
+    ///
+    /// It exists because a standing compound order cannot feed itself otherwise. The crank
+    /// exercises and stakes what is in the wallet; the rewards that should refill it sat one
+    /// uncallable instruction away, so an order drained the wallet once and then went quiet
+    /// forever. Letting anyone claim on someone's behalf is what closes that loop, and it is
+    /// the mildest possible power to hand out: it costs the caller a transaction fee and pays
+    /// them nothing.
+    ///
+    /// CHECK: identity only. It signs nothing and is never written to.
+    pub user: UncheckedAccount<'info>,
+
+    /// Whoever is paying — the user themselves, or a keeper acting for them. Rent for the two
+    /// accounts this may create comes from here, which is the whole reason it is separate from
+    /// `user`: a stranger may fund someone's records, never spend from them.
     #[account(mut)]
-    pub user: Signer<'info>,
+    pub payer: Signer<'info>,
 
     #[account(
         mut,
@@ -1140,12 +1190,32 @@ pub struct ClaimLpRewards<'info> {
     pub lp_mint: Box<Account<'info, Mint>>,
 
     /// User's LP balance — determines the reward share.
-    #[account(token::mint = lp_mint, token::authority = user)]
+    ///
+    /// ☢️ THE ASSOCIATED ACCOUNT, NOT MERELY ONE THE USER OWNS. This was
+    /// `token::authority = user` until 2026-09-21, which was safe only while the instruction
+    /// required the owner's signature: nobody grieves themselves. Making the claim
+    /// permissionless turned that loose constraint into a cheap attack, because the handler
+    /// advances `reward_debt` to the full accumulator **whatever basis it paid on**:
+    ///
+    ///   · anyone may create a token account and name someone else as its owner
+    ///     (`initializeAccount` takes the owner as a parameter, not as a signer);
+    ///   · fund it with a few base units of the pool's LP, enough that `pending > 0` passes;
+    ///   · call this with that account as `user_lp`.
+    ///
+    /// The victim is paid dust, and `reward_debt = acc` forfeits every oSOLA they had accrued
+    /// on that pool. Cost to the attacker: some dust, one rent, one fee. Binding this to the
+    /// associated account leaves exactly one possible address, so there is nothing to choose
+    /// between — and it costs honest users nothing, since `add_liquidity` credits the
+    /// associated account and `reward_basis` already requires the tokens to still be in it.
+    #[account(
+        associated_token::mint = lp_mint,
+        associated_token::authority = user,
+    )]
     pub user_lp: Box<Account<'info, TokenAccount>>,
 
     #[account(
         init_if_needed,
-        payer = user,
+        payer = payer,
         space = 8 + LpUserInfo::LEN,
         seeds = [b"lp_user", pool.key().as_ref(), user.key().as_ref()],
         bump,
@@ -1160,7 +1230,7 @@ pub struct ClaimLpRewards<'info> {
 
     #[account(
         init_if_needed,
-        payer = user,
+        payer = payer,
         associated_token::mint = o_sola_mint,
         associated_token::authority = user,
     )]

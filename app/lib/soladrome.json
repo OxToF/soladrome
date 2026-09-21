@@ -2645,6 +2645,32 @@
       "accounts": [
         {
           "name": "user",
+          "docs": [
+            "☢️ NOT A SIGNER SINCE 2026-09-21, and the constraints below are why that is safe.",
+            "",
+            "Everything this instruction touches is already bound to this key by something other",
+            "than a signature: the LP balance by `token::authority`, the reward record by its own",
+            "seeds, and the oSOLA destination by `associated_token::authority`. The signer was the",
+            "only thing making it self-service, and it was buying nothing — a caller who is not this",
+            "user can cause them to receive **their own** rewards into **their own** account, and",
+            "nothing else. Substituting any of those accounts fails the constraint, not the audit.",
+            "",
+            "It exists because a standing compound order cannot feed itself otherwise. The crank",
+            "exercises and stakes what is in the wallet; the rewards that should refill it sat one",
+            "uncallable instruction away, so an order drained the wallet once and then went quiet",
+            "forever. Letting anyone claim on someone's behalf is what closes that loop, and it is",
+            "the mildest possible power to hand out: it costs the caller a transaction fee and pays",
+            "them nothing.",
+            ""
+          ]
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "Whoever is paying — the user themselves, or a keeper acting for them. Rent for the two",
+            "accounts this may create comes from here, which is the whole reason it is separate from",
+            "`user`: a stranger may fund someone's records, never spend from them."
+          ],
           "writable": true,
           "signer": true
         },
@@ -2685,8 +2711,111 @@
         {
           "name": "user_lp",
           "docs": [
-            "User's LP balance — determines the reward share."
-          ]
+            "User's LP balance — determines the reward share.",
+            "",
+            "☢️ THE ASSOCIATED ACCOUNT, NOT MERELY ONE THE USER OWNS. This was",
+            "`token::authority = user` until 2026-09-21, which was safe only while the instruction",
+            "required the owner's signature: nobody grieves themselves. Making the claim",
+            "permissionless turned that loose constraint into a cheap attack, because the handler",
+            "advances `reward_debt` to the full accumulator **whatever basis it paid on**:",
+            "",
+            "· anyone may create a token account and name someone else as its owner",
+            "(`initializeAccount` takes the owner as a parameter, not as a signer);",
+            "· fund it with a few base units of the pool's LP, enough that `pending > 0` passes;",
+            "· call this with that account as `user_lp`.",
+            "",
+            "The victim is paid dust, and `reward_debt = acc` forfeits every oSOLA they had accrued",
+            "on that pool. Cost to the attacker: some dust, one rent, one fee. Binding this to the",
+            "associated account leaves exactly one possible address, so there is nothing to choose",
+            "between — and it costs honest users nothing, since `add_liquidity` credits the",
+            "associated account and `reward_basis` already requires the tokens to still be in it."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lp_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         },
         {
           "name": "lp_user_info",
@@ -2997,6 +3126,48 @@
       "args": []
     },
     {
+      "name": "close_auto_compound",
+      "discriminator": [
+        185,
+        246,
+        167,
+        48,
+        184,
+        124,
+        178,
+        192
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "auto",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  111
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_partner_allocation",
       "discriminator": [
         151,
@@ -3220,6 +3391,98 @@
       ]
     },
     {
+      "name": "configure_auto_compound",
+      "discriminator": [
+        157,
+        77,
+        249,
+        137,
+        28,
+        227,
+        213,
+        154
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "auto",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  111
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_position",
+          "docs": [
+            "Created here, paid for by its own owner, so the crank never has to initialise an account",
+            "on someone else's behalf — and never has to take a payer it could be made to drain."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "threshold",
+          "type": "u64"
+        },
+        {
+          "name": "chunk",
+          "type": "u64"
+        },
+        {
+          "name": "max_cost_per_unit",
+          "type": "u64"
+        },
+        {
+          "name": "min_interval",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "configure_continuous_emissions",
       "discriminator": [
         170,
@@ -3318,6 +3581,320 @@
           "type": "u16"
         }
       ]
+    },
+    {
+      "name": "crank_auto_compound",
+      "docs": [
+        "Permissionless: any signer may crank any user's standing order."
+      ],
+      "discriminator": [
+        132,
+        13,
+        134,
+        210,
+        115,
+        29,
+        43,
+        77
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Anyone. Pays the transaction fee and receives nothing."
+          ],
+          "signer": true
+        },
+        {
+          "name": "owner",
+          "docs": [
+            "and `auto.owner` is checked against it in the handler. It signs nothing."
+          ]
+        },
+        {
+          "name": "auto",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  111
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sola_mint",
+          "writable": true
+        },
+        {
+          "name": "o_sola_mint",
+          "writable": true
+        },
+        {
+          "name": "user_o_sola",
+          "docs": [
+            "☢️ THE OWNER'S ASSOCIATED ACCOUNTS, not merely accounts they happen to own.",
+            "",
+            "Binding to the authority alone is what made the permissionless `claim_lp_rewards`",
+            "grievable: anyone may create a token account and name someone else as its owner, so",
+            "\"an account the owner owns\" is a set an attacker can add to. Nothing exploitable was",
+            "found on this instruction — a decoy holds no delegation, so the burn fails — but the",
+            "reasoning that establishes that is long, and the constraint that removes the need for",
+            "it is one line. There is exactly one address here, and the frontend and the keeper",
+            "both already use it."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "o_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_usdc",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "floor_vault",
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "writable": true
+        },
+        {
+          "name": "sola_vault",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
     },
     {
       "name": "crank_partner_epoch",
@@ -7326,6 +7903,58 @@
       ]
     },
     {
+      "name": "set_auto_compound_enabled",
+      "discriminator": [
+        84,
+        97,
+        118,
+        185,
+        126,
+        106,
+        135,
+        209
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "signer": true
+        },
+        {
+          "name": "auto",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  111
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "relations": [
+            "auto"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "set_exercise_fee",
       "discriminator": [
         126,
@@ -8614,6 +9243,19 @@
       ]
     },
     {
+      "name": "AutoCompound",
+      "discriminator": [
+        120,
+        59,
+        72,
+        117,
+        38,
+        248,
+        243,
+        246
+      ]
+    },
+    {
       "name": "BribeVault",
       "discriminator": [
         218,
@@ -9177,6 +9819,26 @@
       "code": 6057,
       "name": "UnsupportedMintExtension",
       "msg": "This mint carries a Token-2022 extension the AMM cannot honour: a transfer fee, an armed transfer hook, or a default-frozen account state"
+    },
+    {
+      "code": 6058,
+      "name": "AutoNotReady",
+      "msg": "This standing order is not ready: it is disabled, the oSOLA balance is below its threshold, or its minimum interval has not elapsed"
+    },
+    {
+      "code": 6059,
+      "name": "AutoCostTooHigh",
+      "msg": "This compound would cost more per oSOLA than the order allows — the curve moved, so the fee on the gain moved with it"
+    },
+    {
+      "code": 6060,
+      "name": "AutoOwnerMismatch",
+      "msg": "This standing order does not belong to the account it was given"
+    },
+    {
+      "code": 6061,
+      "name": "PartialBasisClaim",
+      "msg": "Only the owner may claim while their wallet holds less LP than they deposited — a claim on a partial balance forfeits the rest, and that is not a stranger's decision to make"
     }
   ],
   "types": [
@@ -9247,6 +9909,115 @@
               "so existing accounts read 0 = false until the authority enables them."
             ],
             "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AutoCompound",
+      "docs": [
+        "A user's standing instruction: \"when I hold at least `threshold` oSOLA, exercise `chunk` of",
+        "it and stake the result, as long as it costs no more than `max_cost_per_unit`.\"",
+        "",
+        "☢️ **NO CUSTODY, AND NO ESCROW.** This account holds nothing. The oSOLA and the USDC stay in",
+        "the user's own token accounts, and the crank moves them as an SPL **delegate** — the user",
+        "calls `approve` once, for an amount they choose, and `revoke` from their wallet whenever",
+        "they like. Three consequences worth stating, because they are the whole design:",
+        "",
+        "· the spending cap is enforced by SPL Token itself (`delegated_amount` decrements on every",
+        "use), not by a counter in this account that a bug here could get wrong;",
+        "· the funds never move to an address the protocol controls, so there is no vault to drain",
+        "and no withdrawal path to get wrong;",
+        "· revocation is a wallet-native gesture that needs nothing from us, and works even if this",
+        "program stops being maintained.",
+        "",
+        "⚠️ The cost: an SPL token account has exactly ONE delegate. Approving here overwrites any",
+        "delegation the user had granted elsewhere on the same account, and a later `approve` by",
+        "another application silently disables this order. The crank then simply fails and the order",
+        "goes quiet, which is the safe direction.",
+        "",
+        "PDA: [b\"auto\", user]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "threshold",
+            "docs": [
+              "Minimum oSOLA balance in the user's account before a crank is allowed at all. This is",
+              "the \"when I have 500\" of the standing order."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "chunk",
+            "docs": [
+              "How much to exercise per crank. Kept separate from `threshold` so an order can accumulate",
+              "to a large trigger and still compound in small bites."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "max_cost_per_unit",
+            "docs": [
+              "☢️ THE BOUND `exercise_o_sola` DOES NOT HAVE, and the reason this account exists rather",
+              "than a pile of pre-signed transactions.",
+              "",
+              "The exercise fee is a share of the GAIN, priced off the curve **at landing**, so the",
+              "USDC a compound costs is not known when the order is placed. A pre-signed transaction",
+              "therefore authorises an amount of oSOLA at an unbounded price: the same signed bytes",
+              "cost 2.25 USDC at a curve of 1.045 and 50 USDC at a curve of 2.00, and it is whoever",
+              "broadcasts them who picks. Here the user states the most they will pay per oSOLA, in",
+              "base units, and the crank refuses above it. Nobody can make this order expensive by",
+              "choosing its moment."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usdc_spent",
+            "docs": [
+              "Lifetime USDC spent by this order. Informational: the real cap is the SPL allowance."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "rounds",
+            "docs": [
+              "How many times this order has fired."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "last_crank_ts",
+            "docs": [
+              "Unix seconds of the last successful crank."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "min_interval",
+            "docs": [
+              "Shortest gap between two cranks. A permissionless instruction with no clock can be",
+              "called in a loop by anyone; each call is individually legitimate, so the protection is",
+              "not a permission but a rate. It also bounds how fast an order can consume its allowance."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "enabled",
+            "docs": [
+              "A disabled order is inert without being closed, so a user can pause without paying rent",
+              "again to resume."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }
