@@ -10,12 +10,13 @@ import {
   statePda, marketVault, commonAccounts,
   fromUiDecimals, toUiDecimals,
   buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
-  WSOL_MINT_STR,
+  WSOL_MINT_STR, SOL_FEE_RESERVE, spendableSol,
 } from "@/lib/program";
 import { getTokenList, TokenInfo, WSOL_MINT, decimalsForMint } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { trackQuest } from "@/lib/quests";
 import { StatusBanner } from "./ui/StatusBanner";
+import { ButtonHint } from "./ui/ButtonHint";
 
 const SLIPPAGE_OPTIONS = [0.1, 0.5, 1.0] as const;
 const PCT_SHORTCUTS    = [25, 50, 75, 100] as const;
@@ -129,9 +130,18 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
     setEstimatedOut(xy_k_out(pool.reserveIn, pool.reserveOut, ainNet));
   }, [pool, amountIn]);
 
+  // For wSOL `balanceIn` is the NATIVE balance, and the swap wraps it with a
+  // `SystemProgram.transfer` that still has to leave the fee and the rent of the ATAs this
+  // transaction opens behind it. 100% of the balance can therefore never land: it fails with
+  // System error 1 on the transfer, three instructions before the swap itself.
+  const spendableIn =
+    balanceIn === null ? null
+    : tokIn?.mint === WSOL_MINT ? spendableSol(balanceIn)
+    : balanceIn;
+
   function applyPct(pct: number) {
-    if (!balanceIn || balanceIn <= 0) return;
-    const val = (balanceIn * pct) / 100;
+    if (!spendableIn || spendableIn <= 0) return;
+    const val = (spendableIn * pct) / 100;
     setAmountIn(val.toFixed(tokIn?.decimals ?? 6).replace(/\.?0+$/, ""));
   }
 
@@ -204,12 +214,14 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       if (tokOut.symbol === "SOLA") trackQuest(wallet.publicKey.toBase58(), "swap");
       setAmountIn("");
       fetchPool();
-      fetchBalance();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) {
       setStatus(`❌ ${e?.message ?? e}`);
     } finally {
       setLoading(false);
+      // A failed attempt still burned its fee, so the balance the percentage buttons read
+      // has to be refreshed on both paths, not only after a swap that landed.
+      fetchBalance();
     }
   }
 
@@ -240,7 +252,9 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
   const lowLiquidity = !!pool && (pool.reserveIn < LOW_LIQUIDITY_THRESHOLD || pool.reserveOut < LOW_LIQUIDITY_THRESHOLD);
 
   const noPool  = !pool && tokIn && tokOut && tokIn.mint !== tokOut.mint;
-  const canSwap = !!wallet && !!amountIn && +amountIn > 0 && !!estimatedOut && !!pool && !loading;
+  // 1e-6 absorbs the rounding of the percentage buttons, which format to the token's decimals.
+  const overBalance = spendableIn !== null && !!amountIn && +amountIn - spendableIn > 1e-6;
+  const canSwap = !!wallet && !!amountIn && +amountIn > 0 && !!estimatedOut && !!pool && !loading && !overBalance;
 
   if (tokens.length < 2) {
     return <div className={embedded ? "text-gray-400 text-sm text-center py-8" : "card glow text-gray-400 text-sm text-center py-8"}>Loading…</div>;
@@ -286,7 +300,7 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
 
         <div className="flex gap-2 mt-3">
           {PCT_SHORTCUTS.map((pct) => (
-            <button key={pct} onClick={() => applyPct(pct)} disabled={!balanceIn}
+            <button key={pct} onClick={() => applyPct(pct)} disabled={!spendableIn}
               className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-400
                          hover:border-brand-green hover:text-brand-green transition-colors
                          disabled:opacity-30 disabled:cursor-not-allowed">
@@ -294,6 +308,11 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
             </button>
           ))}
         </div>
+        {tokIn?.mint === WSOL_MINT && (
+          <p className="text-xs text-gray-600 mt-2 text-right">
+            Max leaves {SOL_FEE_RESERVE} SOL for the fee and account rent
+          </p>
+        )}
       </div>
 
       {/* ── Flip ────────────────────────────────────────────── */}
@@ -414,6 +433,9 @@ export function AmmSwap({ embedded = false }: { embedded?: boolean }) {
       <button className="btn-primary w-full" onClick={swap} disabled={!canSwap}>
         {loading ? "Processing…" : "Swap"}
       </button>
+      <ButtonHint text={overBalance
+        ? `Not enough ${tokIn?.symbol}${tokIn?.mint === WSOL_MINT ? ` — ${SOL_FEE_RESERVE} SOL is kept back for the network fee and account rent` : ""}.`
+        : null} />
 
       <StatusBanner message={status} />
 

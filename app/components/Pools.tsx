@@ -17,7 +17,7 @@ import {
   getMintPrograms,
   fromUiDecimals, toUiDecimals, toUi,
   buildWrapInstructions, buildUnwrapInstruction, ensureAtaIx, sendTx,
-  WSOL_MINT_STR,
+  WSOL_MINT_STR, SOL_FEE_RESERVE, spendableSol,
 } from "@/lib/program";
 import { getTokenList, symbolByMint, WSOL_MINT, decimalsForMint, isPoolTrusted } from "@/lib/tokens";
 import { useSoladrome } from "@/lib/SoladromeContext";
@@ -213,6 +213,10 @@ export function Pools() {
   const [addB, setAddB] = useState("");
   const [balA, setBalA] = useState<number | null>(null);
   const [balB, setBalB] = useState<number | null>(null);
+  // Bumped after every transaction, successful or not. Without it the balances below are
+  // read once when the tab opens and never again, so the percentage buttons keep proposing
+  // a balance the wallet no longer has — every failed attempt already burned its fee.
+  const [balTick, setBalTick] = useState(0);
 
   // Remove liquidity
   const [lpAmt, setLpAmt] = useState("");
@@ -394,11 +398,22 @@ export function Pools() {
     if (manageTab === "remove") {
       bal(lpMint).then(setLpBal);
     }
-  }, [manageTab, selected, wallet, connection]);
+  }, [manageTab, selected, wallet, connection, balTick]);
 
   // ── Ratio logic ───────────────────────────────────────────────────────────
 
   const poolHasLiquidity = !!selected && selected.reserveA > 0 && selected.reserveB > 0;
+
+  // `balA` for a wSOL side is the NATIVE balance, not a token account, so it is also what
+  // pays the fee and the rent of every ATA this deposit opens. Spending all of it is a
+  // guaranteed "insufficient lamports" on the wrap transfer.
+  const isWsolA   = selected?.mintA === WSOL_MINT_STR;
+  const isWsolB   = selected?.mintB === WSOL_MINT_STR;
+  const spendA    = balA === null ? null : isWsolA ? spendableSol(balA) : balA;
+  // Side B is the auto-computed one on a pool that already has liquidity, but it is just as
+  // often the wSOL side (wSOL sorts second against a USDC-quoted pair), so it needs the same
+  // reserve before the ratio is checked against it.
+  const spendB    = balB === null ? null : isWsolB ? spendableSol(balB) : balB;
 
   function onChangeA(v: string) {
     numInput(v, setAddA);
@@ -415,8 +430,8 @@ export function Pools() {
   }
 
   function applyPctA(pct: number) {
-    if (!balA) return;
-    onChangeA(((balA * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
+    if (!spendA) return;
+    onChangeA(((spendA * pct) / 100).toFixed(6).replace(/\.?0+$/, ""));
   }
 
   function onChangeLp(v: string) {
@@ -475,7 +490,7 @@ export function Pools() {
       fetchPools(); setView("list");
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) { console.error("tx failed:", e); setStatus(`❌ ${fmtErr(e)}`); }
-    finally { setLoading(false); }
+    finally { setLoading(false); setBalTick(t => t + 1); }
   }
 
   async function addLiquidity() {
@@ -489,8 +504,6 @@ export function Pools() {
       const lpMint    = lpMintPda(poolAddr);
       const userLp    = getAssociatedTokenAddressSync(lpMint, wallet.publicKey);
       const deadLpAta = getAssociatedTokenAddressSync(lpMint, LP_DEAD, true);
-      const isWsolA   = selected.mintA === WSOL_MINT_STR;
-      const isWsolB   = selected.mintB === WSOL_MINT_STR;
       const decA      = decimalsForMint(selected.mintA, usdcMint);
       const decB      = decimalsForMint(selected.mintB, usdcMint);
 
@@ -558,7 +571,7 @@ export function Pools() {
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) { console.error("tx failed:", e); setStatus(`❌ ${fmtErr(e)}`); }
-    finally { setLoading(false); }
+    finally { setLoading(false); setBalTick(t => t + 1); }
   }
 
   async function removeLiquidity() {
@@ -570,8 +583,6 @@ export function Pools() {
       const mintAPk  = new PublicKey(selected.mintA);
       const mintBPk  = new PublicKey(selected.mintB);
       const lpMint   = lpMintPda(poolAddr);
-      const isWsolA  = selected.mintA === WSOL_MINT_STR;
-      const isWsolB  = selected.mintB === WSOL_MINT_STR;
 
       const preIxs:  any[] = [];
       const postIxs: any[] = [];
@@ -621,7 +632,7 @@ export function Pools() {
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) { console.error("tx failed:", e); setStatus(`❌ ${fmtErr(e)}`); }
-    finally { setLoading(false); }
+    finally { setLoading(false); setBalTick(t => t + 1); }
   }
 
   async function claimRewards() {
@@ -662,7 +673,7 @@ export function Pools() {
       fetchPools();
       window.dispatchEvent(new CustomEvent("soladrome:refresh"));
     } catch (e: any) { console.error("tx failed:", e); setStatus(`❌ ${fmtErr(e)}`); }
-    finally { setLoading(false); }
+    finally { setLoading(false); setBalTick(t => t + 1); }
   }
 
   // ── Claim all LP rewards ──────────────────────────────────────────────────
@@ -735,6 +746,21 @@ export function Pools() {
   const symA = selected ? symbolByMint(selected.mintA, usdcMint) : "";
   const symB = selected ? symbolByMint(selected.mintB, usdcMint) : "";
   const myPools = wallet ? pools.filter(p => (userLpBals[p.address] ?? 0) > 0) : [];
+
+  // Stop a deposit the chain is certain to reject, instead of letting it be signed and
+  // come back as a raw error code. Two shapes reach us from devnet testers:
+  //   • the SOL side asks for more than the wallet can wrap → System error 1 on the transfer;
+  //   • the other side is a token the wallet does not hold at all, so its ATA does not exist
+  //     and add_liquidity fails with AccountNotInitialized (3012) — the xStock pools.
+  // EPS absorbs the 6-decimal rounding of the percentage buttons and the ratio field.
+  const EPS = 1e-6;
+  const overA = spendA !== null && !!addA && +addA - spendA > EPS;
+  const overB = spendB !== null && !!addB && +addB - spendB > EPS;
+  const depositHint =
+    overB && balB === 0 ? `Your wallet holds no ${symB}, which this pool needs on the other side.`
+    : overA ? `Not enough ${symA}${isWsolA ? ` — ${SOL_FEE_RESERVE} SOL is kept back for the network fee and account rent` : ""}.`
+    : overB ? `Not enough ${symB} for the matching amount this pool requires${isWsolB ? `, ${SOL_FEE_RESERVE} SOL is kept back for the network fee and account rent` : ""}.`
+    : null;
 
   function openManage(p: PoolInfo, tab: ManageTab) {
     setSelected(p); setView("manage"); setManageTab(tab); setStatus("");
@@ -857,7 +883,7 @@ export function Pools() {
               />
               <div className="flex gap-2 mt-3">
                 {PCT.map(p => (
-                  <button key={p} onClick={() => applyPctA(p)} disabled={!balA}
+                  <button key={p} onClick={() => applyPctA(p)} disabled={!spendA}
                     className="flex-1 text-xs py-1 rounded-md border border-brand-border text-gray-500
                                hover:border-brand-green hover:text-brand-green transition-colors
                                disabled:opacity-30 disabled:cursor-not-allowed">
@@ -865,6 +891,11 @@ export function Pools() {
                   </button>
                 ))}
               </div>
+              {isWsolA && (
+                <p className="text-xs text-gray-600 mt-2 text-right">
+                  Max leaves {SOL_FEE_RESERVE} SOL for the fee and account rent
+                </p>
+              )}
             </div>
 
             <div className="flex justify-center text-gray-600 text-lg select-none">+</div>
@@ -903,9 +934,10 @@ export function Pools() {
             </div>
 
             <button className="btn-primary w-full py-3 text-base font-bold"
-              onClick={addLiquidity} disabled={loading || !addA || !addB || !wallet}>
+              onClick={addLiquidity} disabled={loading || !addA || !addB || !wallet || overA || overB}>
               {loading ? "Processing…" : "Deposit"}
             </button>
+            <ButtonHint text={depositHint} />
             <StatusBanner message={status} />
           </div>
         )}
