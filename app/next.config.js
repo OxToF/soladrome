@@ -1,5 +1,19 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // ☢️ TWO DEV SERVERS MUST NOT SHARE ONE BUILD DIRECTORY.
+  //
+  // `NEXT_PUBLIC_*` is inlined into the client bundle at COMPILE time, and every `next dev`
+  // compiles into `.next`. So running a second dev server with a different
+  // `NEXT_PUBLIC_RPC_URL` — a localnet rehearsal beside the devnet app, say — overwrites the
+  // first one's chunks with its own endpoint. The first server then keeps serving, on its own
+  // port, a bundle that points somewhere else entirely.
+  //
+  // It is silent and it looks like a protocol outage: `protocolState` reads null, the stats sit
+  // as skeletons, the Portfolio shows dashes, and every phase-gated page (Farm, Arb, Vote,
+  // Bribe, Claim) disappears from the nav because a null state gates them closed. Set
+  // `NEXT_DIST_DIR` on any secondary server and it cannot happen.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
+
   // Wormhole Connect v6 (Vite build) hard-codes absolute paths like /main.css.
   // Rewrite to our local copy in /public/wh so the preload succeeds.
   async rewrites() {

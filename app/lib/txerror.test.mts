@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  explainInstructionError, spendableSol, SOL_FEE_RESERVE,
+  explainInstructionError, explainRpcRefusal, spendableSol, SOL_FEE_RESERVE,
   SYSTEM_PROGRAM_ID_STR, TOKEN_PROGRAM_ID_STR,
 } from "./txerror.ts";
 
@@ -73,4 +73,30 @@ test("the reserve covers what the failing transaction still owed after the trans
   );
   assert.ok(max < 0.916511, "and must sit below the amount that actually failed on-chain");
   assert.ok(max > 0.89, "while not withholding an absurd share of the balance");
+});
+
+// ── RPC refusals ─────────────────────────────────────────────────────────────
+
+// The exact string a tester saw under "Sign the recipe" on 2026-09-21, after a Compound plan
+// had just spent a dozen reads: the send path's own pre-flight `getBalance` was refused.
+const HELIUS_401 =
+  '401 : {"jsonrpc":"2.0","error":{"code":-32401,"message":"Bad request, please try again later."}}';
+
+test("a refused RPC says nothing was signed, instead of looking like a failed transaction", () => {
+  const msg = explainRpcRefusal(new Error(HELIUS_401));
+  assert.ok(msg, "the refusal must be recognised");
+  assert.match(msg!, /nothing was sent/i);
+  assert.doesNotMatch(msg!, /jsonrpc/, "the raw envelope must not leak through");
+});
+
+test("a rate limit is named as one, because the provider's own message hides it", () => {
+  const msg = explainRpcRefusal(new Error("429 : Too Many Requests"));
+  assert.match(msg!, /rate-limiting/i);
+});
+
+test("an on-chain revert is NOT an RPC refusal, and must fall through to the decoder", () => {
+  assert.equal(explainRpcRefusal({ InstructionError: [2, { Custom: 6037 }] }), null);
+  assert.equal(explainRpcRefusal(new Error("Transaction simulation failed")), null);
+  // A pubkey that merely contains 401 must not be mistaken for a status code.
+  assert.equal(explainRpcRefusal(new Error("account 401xyz not found")), null);
 });

@@ -12,7 +12,7 @@ import {
   createDefaultWalletNotFoundHandler,
 } from "@solana-mobile/wallet-adapter-mobile";
 import { SoladromeProvider } from "@/lib/SoladromeContext";
-import { resolveRpcUrl, FALLBACK_RPC_URL } from "@/lib/rpc";
+import { resolveRpcUrl, FALLBACK_RPC_URL, fetchWithFallback } from "@/lib/rpc";
 
 // A malformed NEXT_PUBLIC_RPC_URL is inlined at build time, so it would break
 // every wallet session at once rather than one route — validate, don't default.
@@ -68,19 +68,17 @@ function drainQueue() {
   })();
 }
 
+// The fallback itself lives in `lib/rpc.ts`, shared with the send path — which bypasses this
+// throttle on purpose and therefore had no fallback at all. ☢️ It is keyed on the whole family
+// of "the provider declined" statuses, not on 429 alone: Helius throttles with **401**, so the
+// branch that used to test `status !== 429` could never fire. See `declinedByProvider`.
+const withFallback = fetchWithFallback(ENDPOINT, FALLBACK);
+
 function throttledFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   return new Promise<void>(resolve => {
     queue.push(resolve);
     drainQueue();
-  }).then(async () => {
-    const res = await fetch(input, init);
-    if (res.status !== 429 || ENDPOINT === FALLBACK) return res;
-    // Helius quota exhausted — clone the request to the public devnet RPC
-    const url     = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
-    const fbUrl   = url.replace(ENDPOINT, FALLBACK);
-    if (fbUrl === url) return res;
-    return fetch(fbUrl, init);
-  });
+  }).then(() => withFallback(input as any, init));
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {

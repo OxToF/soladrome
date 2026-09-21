@@ -20,6 +20,10 @@ import {
   WSOL_MINT_STR, SOL_FEE_RESERVE, spendableSol,
 } from "@/lib/program";
 import { getTokenList, symbolByMint, WSOL_MINT, decimalsForMint, isPoolTrusted } from "@/lib/tokens";
+import {
+  EMISSIONS_OFF, continuousActive, computePendingOsola, lpUserInfoPda, rewardBasis,
+  type EmissionCfg,
+} from "@/lib/lprewards";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { trackQuest } from "@/lib/quests";
 import { StatusBanner } from "./ui/StatusBanner";
@@ -29,24 +33,11 @@ import { ButtonHint } from "./ui/ButtonHint";
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
 const PCT = [25, 50, 75, 100] as const;
 
-// oSOLA reward precision — must match program constant LP_REWARD_PRECISION = 1e12
-const LP_REWARD_PRECISION = BigInt("1000000000000");
-// Epoch length — must match program EPOCH_DURATION (state.rs)
-const EPOCH_DURATION = 604_800; // 7 days, seconds
-const SECS_PER_YEAR  = 365 * 24 * 3600;
-
-// On-chain continuous-emission config, read from ProtocolState. The rate is
-// dynamic (`continuous_rate_per_sec`, base units/sec) and the window auto-sunsets
-// at `continuous_end_epoch`. Defaults below mean "emissions off".
-interface EmissionCfg {
-  ratePerSec: number; // base units of oSOLA per second, per enabled pool
-  endEpoch:   number; // continuous_active iff current_epoch < endEpoch
-}
-const EMISSIONS_OFF: EmissionCfg = { ratePerSec: 0, endEpoch: 0 };
-
-function continuousActive(nowSec: number, endEpoch: number): boolean {
-  return Math.floor(Math.max(0, nowSec) / EPOCH_DURATION) < endEpoch;
-}
+// ☢️ The reward precision, the epoch length, the emission window and the pending-oSOLA
+// calculation now live in `lib/lprewards.ts`, shared with the recipe engine. A second copy
+// here would let this screen and a one-click recipe disagree about what is claimable, and the
+// recipe would revert with NothingToClaim for the whole batch.
+const SECS_PER_YEAR = 365 * 24 * 3600;
 
 // APR derived from the *live* on-chain rate, so it reads 0 when emissions are off.
 //
@@ -135,53 +126,6 @@ function numInput(v: string, set: (s: string) => void) {
   if (v === "" || /^\d*\.?\d*$/.test(v)) set(v);
 }
 
-// ── Pending oSOLA calculation (mirrors program logic) ──────────────────────
-
-function computePendingOsola(
-  pool: PoolInfo,
-  userRewardDebt: bigint,
-  userLpRaw: bigint,
-  nowSec: number,
-  cfg: EmissionCfg,
-): number {
-  if (userLpRaw === 0n || pool.totalLp <= 0) return 0;
-
-  // Advance accumulator locally — MUST mirror the program's `update_pool_rewards`
-  // gates (amm.rs): accrue only when the pool is authority-approved, the
-  // continuous window is still open, a rate is set, and time has elapsed.
-  // Skipping these gates shows phantom "Earned" that the chain refuses to mint,
-  // making Claim revert with NothingToClaim (6007).
-  let acc = pool.osolaRewardPerLp;
-  if (
-    pool.lastRewardTs > 0 &&
-    pool.rewardsEnabled &&
-    cfg.ratePerSec > 0 &&
-    continuousActive(nowSec, cfg.endEpoch)
-  ) {
-    const elapsed = BigInt(Math.max(0, nowSec - pool.lastRewardTs));
-    const totalLpRaw = BigInt(Math.floor(pool.totalLp * 1e6));
-    if (elapsed > 0n && totalLpRaw > 0n) {
-      const newRewards = BigInt(cfg.ratePerSec) * elapsed;
-      const delta = (newRewards * LP_REWARD_PRECISION) / totalLpRaw;
-      acc = acc + delta;
-    }
-  }
-
-  if (acc <= userRewardDebt) return 0;
-  const delta = acc - userRewardDebt;
-  const pendingRaw = (delta * userLpRaw) / LP_REWARD_PRECISION;
-  return Number(pendingRaw) / 1e6;
-}
-
-// ── LP user info PDA ───────────────────────────────────────────────────────
-
-function lpUserInfoPda(pool: PublicKey, user: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("lp_user"), pool.toBuffer(), user.toBuffer()],
-    PROGRAM_ID,
-  )[0];
-}
-
 // ── Main component ─────────────────────────────────────────────────────────
 
 export function Pools() {
@@ -206,6 +150,10 @@ export function Pools() {
   const [userLpBals,    setUserLpBals]    = useState<Record<string, number>>({});
   const [userLpRaws,    setUserLpRaws]    = useState<Record<string, bigint>>({});
   const [userRewardDbt, setUserRewardDbt] = useState<Record<string, bigint>>({});
+  // ☢️ `LpUserInfo.lp_amount` — what the PROGRAM recorded through add_liquidity. Rewards pay on
+  // min(this, wallet balance), so a screen that projects from the wallet balance alone lies to
+  // anyone holding transferred LP. See `rewardBasis`.
+  const [userLpRecorded, setUserLpRecorded] = useState<Record<string, bigint>>({});
   const [pendingOsola,  setPendingOsola]  = useState<Record<string, number>>({});
 
   // Add liquidity
@@ -317,6 +265,7 @@ export function Pools() {
     const bals: Record<string, number> = {};
     const raws: Record<string, bigint> = {};
     const debts: Record<string, bigint> = {};
+    const recorded: Record<string, bigint> = {};
 
     const provider = new AnchorProvider(connection, wallet, {});
     const program  = getProgram(provider);
@@ -345,11 +294,13 @@ export function Pools() {
           bals[p.address] = 0;
         }
         const info = infos[i];
-        debts[p.address] = info ? BigInt(info.rewardDebt.toString()) : 0n;
+        debts[p.address]    = info ? BigInt(info.rewardDebt.toString()) : 0n;
+        recorded[p.address] = info ? BigInt(info.lpAmount?.toString() ?? "0") : 0n;
       });
       setUserLpBals({ ...bals });
       setUserLpRaws({ ...raws });
       setUserRewardDbt({ ...debts });
+      setUserLpRecorded({ ...recorded });
     });
   }, [pools, wallet, connection]);
 
@@ -360,16 +311,16 @@ export function Pools() {
       const now = Math.floor(Date.now() / 1000);
       const pending: Record<string, number> = {};
       for (const p of pools) {
-        const userLpRaw = userLpRaws[p.address] ?? 0n;
-        const debt      = userRewardDbt[p.address] ?? 0n;
-        pending[p.address] = computePendingOsola(p, debt, userLpRaw, now, emissionCfg);
+        const basis = rewardBasis(userLpRecorded[p.address] ?? 0n, userLpRaws[p.address] ?? 0n);
+        const debt  = userRewardDbt[p.address] ?? 0n;
+        pending[p.address] = computePendingOsola(p, debt, basis, now, emissionCfg);
       }
       setPendingOsola(pending);
     };
     compute();
     const id = setInterval(compute, 5000);
     return () => clearInterval(id);
-  }, [pools, userLpRaws, userRewardDbt, emissionCfg]);
+  }, [pools, userLpRaws, userLpRecorded, userRewardDbt, emissionCfg]);
 
   // ── Balance fetch for manage view ─────────────────────────────────────────
 
@@ -537,6 +488,7 @@ export function Pools() {
         .addLiquidity(fromUiDecimals(+addA, decA), fromUiDecimals(+addB, decB), new BN(0))
         .accounts({
           user:                   wallet.publicKey,
+          payer:                  wallet.publicKey,
           pool:                   poolAddr,
           lpMint,
           tokenAMint:             mintAPk,
@@ -604,6 +556,7 @@ export function Pools() {
         .removeLiquidity(fromUiDecimals(+lpAmt, 6), new BN(1), new BN(1))
         .accounts({
           user:                   wallet.publicKey,
+          payer:                  wallet.publicKey,
           pool:                   poolAddr,
           lpMint,
           tokenAMint:             mintAPk,
@@ -654,6 +607,7 @@ export function Pools() {
         .claimLpRewards()
         .accounts({
           user:                   wallet.publicKey,
+          payer:                  wallet.publicKey,
           pool:                   poolAddr,
           lpMint,
           userLp,
@@ -699,6 +653,7 @@ export function Pools() {
           .claimLpRewards()
           .accounts({
             user:                   wallet.publicKey,
+            payer:                  wallet.publicKey,
             pool:                   poolAddr,
             lpMint,
             userLp,

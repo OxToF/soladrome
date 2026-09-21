@@ -15,6 +15,7 @@ import { ClaimBribe }   from "@/components/ClaimBribe";
 import { Stats }        from "@/components/Stats";
 import { Pools }        from "@/components/Pools";
 import { ActionPanel }  from "@/components/ActionPanel";
+import { Strategies }   from "@/components/Strategies";
 import { Portfolio }    from "@/components/Portfolio";
 import { FlashArb }     from "@/components/FlashArb";
 import { FounderPanel }      from "@/components/FounderPanel";
@@ -25,7 +26,7 @@ import { Airdrop }         from "@/components/Airdrop";
 import { useConnection }   from "@solana/wallet-adapter-react";
 import { useSoladrome }    from "@/lib/SoladromeContext";
 
-type Page = "home" | "pools" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "airdrop" | "founder" | "contributor" | "partner";
+type Page = "home" | "pools" | "farm" | "vote" | "bribe" | "claim" | "arb" | "bridge" | "airdrop" | "founder" | "contributor" | "partner";
 
 type NavItem = { id: Page; label: string; founderOnly?: boolean; contributorOnly?: boolean; partnerOnly?: boolean };
 
@@ -36,6 +37,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   { label: "Trade", items: [
     { id: "home",  label: "Home"  },
     { id: "pools", label: "Pools" },
+    { id: "farm",  label: "Farm"  },
     { id: "arb",   label: "Arb"   },
   ] },
   { label: "Governance", items: [
@@ -140,6 +142,11 @@ export default function Home() {
       case "bribe": return flagOn("bribesEnabled");
       case "claim": return governanceLive;             // governance reward claims
       case "arb":   return flagOn("exerciseEnabled");  // flash arb burns oSOLA
+      // Compound ends in an exercise, so the strategies screen honours the same gate the
+      // exercise pathway does. It stays visible while the flag is on even when a given wallet
+      // has nothing to compound — the plan says so itself, which is more useful than a missing
+      // tab.
+      case "farm":  return flagOn("exerciseEnabled");
       default:      return true;
     }
   };
@@ -508,6 +515,7 @@ export default function Home() {
 
           {/* ── Dedicated pages ───────────────────────────────── */}
           {page === "pools" && <Pools />}
+          {page === "farm"  && pageEnabled("farm") && <div className="max-w-xl mx-auto"><Strategies /></div>}
           {page === "vote"  && pageEnabled("vote")  && <div className="max-w-xl mx-auto"><Vote /></div>}
           {page === "bribe" && pageEnabled("bribe") && <div className="max-w-xl mx-auto"><Gauge /></div>}
           {page === "arb"   && pageEnabled("arb")   && <div className="max-w-xl mx-auto"><FlashArb /></div>}

@@ -68,3 +68,4 @@ AUDIT_PACKAGES.md
 # and vendor relationships and must never reach the public repo.
 docs/archive/AUDIT_SCOPE.md
 docs/archive/AUDIT_PACKAGES.md
+app/.next-localnet/
