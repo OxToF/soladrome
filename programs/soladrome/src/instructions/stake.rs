@@ -14,6 +14,68 @@ use crate::errors::SoladromeError;
 use crate::math;
 use crate::state::*;
 
+/// Credit `amount` of FINANCED stake into a position, and return the fees it had already
+/// accrued and must be paid before its debt moves forward.
+///
+/// Extracted from `stake_sola` so `crank_auto_compound` credits a standing order's compound
+/// through the identical path. Everything about this is easy to get subtly wrong in a second
+/// copy: the harvest on the OLD basis, the order of the two, and the fact that `staked_amount`
+/// must still be the pre-stake figure when the basis is read.
+///
+/// ☢️ The caller owns the two token movements — the SOLA into `sola_vault` and the pending USDC
+/// out of `market_vault` — and the three `ProtocolState` counters. This function touches only
+/// the position, because that is the part whose ordering is delicate.
+///
+/// ── Auto-harvest pending fees BEFORE moving fees_debt forward ─────────
+/// Without this, an existing staker who adds more SOLA would silently forfeit the fees already
+/// accrued on their old balance (they would be redistributed to other stakers when `fees_debt`
+/// jumps to `acc`). This mirrors the Masterchef pattern already used by `unstake_hi_sola` and
+/// `lock_hi_sola`. A freshly-created position has no accrued fees.
+pub fn credit_financed_stake(
+    position: &mut UserPosition,
+    owner: Pubkey,
+    position_bump: u8,
+    acc: u128,
+    amount: u64,
+) -> Result<u64> {
+    // Pre-credit hiSOLA balance — basis for harvesting fees already accrued on the user's
+    // EXISTING stake, read before the credit below moves it.
+    let old_balance = position.hi_sola;
+
+    let is_new = position.owner == Pubkey::default();
+    if is_new {
+        position.owner = owner;
+        position.bump = position_bump;
+    }
+    // `fees_debt` jumps to `acc` below, so anything not credited here is forfeited to the
+    // other stakers — hence the harvest. A voter topping up their stake must not pay for
+    // having voted, and does not: voting immobilises the balance without moving it, so
+    // `old_balance` already includes it.
+    let pending = if is_new {
+        0
+    } else {
+        // `staked_amount` is still the pre-stake figure here: this harvest settles what the
+        // OLD position earned, before the new deposit is recorded below.
+        let basis = math::fee_basis(position.staked_amount, old_balance, position.fee_shares);
+        math::pending_fees(acc, position.fees_debt, basis)
+    };
+    // Entry/exit point: debt = current accumulator (no retroactive claim).
+    position.fees_debt = acc;
+    // Credit the position itself — this IS the hiSOLA. No mint, no ATA.
+    position.hi_sola = position
+        .hi_sola
+        .checked_add(amount)
+        .ok_or(SoladromeError::Overflow)?;
+    // Record the financed deposit separately: `borrow_usdc` caps against it, and it is what
+    // tells stake bought through the curve apart from hiSOLA released by an expired ve lock,
+    // which was never financed.
+    position.staked_amount = position
+        .staked_amount
+        .checked_add(amount)
+        .ok_or(SoladromeError::Overflow)?;
+    Ok(pending)
+}
+
 // Lock SOLA → credit hiSOLA 1:1 (governance + fee share + borrow rights).
 // hiSOLA is a ledger balance on UserPosition, not a token: nothing is minted and there is
 // nothing to transfer away. Sets fees_debt to the current accumulator so the new stake
@@ -37,10 +99,6 @@ pub fn stake_sola(ctx: Context<StakeSola>, sola_amount: u64) -> Result<()> {
     let bump = ctx.accounts.protocol_state.bump;
     let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
 
-    // Pre-credit hiSOLA balance — basis for harvesting fees already accrued on the
-    // user's EXISTING stake, read before the credit below moves it.
-    let old_balance = ctx.accounts.user_position.hi_sola;
-
     token::transfer(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -53,47 +111,13 @@ pub fn stake_sola(ctx: Context<StakeSola>, sola_amount: u64) -> Result<()> {
         sola_amount,
     )?;
 
-    // ── Auto-harvest pending fees BEFORE moving fees_debt forward ─────────
-    // Without this, an existing staker who adds more SOLA would silently
-    // forfeit the fees already accrued on `old_balance` (they would be
-    // redistributed to other stakers when fees_debt jumps to `acc`). This
-    // mirrors the Masterchef pattern already used by unstake_hi_sola and
-    // lock_hi_sola. A freshly-created position has no accrued fees.
-    let pending = {
-        let position = &mut ctx.accounts.user_position;
-        let is_new = position.owner == Pubkey::default();
-        if is_new {
-            position.owner = ctx.accounts.user.key();
-            position.bump = ctx.bumps.user_position;
-        }
-        // `fees_debt` jumps to `acc` on the next line, so anything not credited here is
-        // forfeited to the other stakers — hence the harvest. A voter topping up their
-        // stake must not pay for having voted, and does not: voting immobilises the
-        // balance without moving it, so `old_balance` already includes it.
-        let pending = if is_new {
-            0
-        } else {
-            // `staked_amount` is still the pre-stake figure here: this harvest settles
-            // what the OLD position earned, before the new deposit is recorded below.
-            let basis = math::fee_basis(position.staked_amount, old_balance, position.fee_shares);
-            math::pending_fees(acc, position.fees_debt, basis)
-        };
-        // Entry/exit point: debt = current accumulator (no retroactive claim).
-        position.fees_debt = acc;
-        // Credit the position itself — this IS the hiSOLA. No mint, no ATA.
-        position.hi_sola = position
-            .hi_sola
-            .checked_add(sola_amount)
-            .ok_or(SoladromeError::Overflow)?;
-        // Record the financed deposit separately: `borrow_usdc` caps against it, and it
-        // is what tells stake bought through the curve apart from hiSOLA released by an
-        // expired ve lock, which was never financed.
-        position.staked_amount = position
-            .staked_amount
-            .checked_add(sola_amount)
-            .ok_or(SoladromeError::Overflow)?;
-        pending
-    };
+    let pending = credit_financed_stake(
+        &mut ctx.accounts.user_position,
+        ctx.accounts.user.key(),
+        ctx.bumps.user_position,
+        acc,
+        sola_amount,
+    )?;
 
     if pending > 0 {
         token::transfer(

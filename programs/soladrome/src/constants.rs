@@ -17,6 +17,28 @@ pub const POSITION_SEED: &[u8] = b"position";
 pub const FLOOR_VAULT_SEED: &[u8] = b"floor_vault";
 pub const MARKET_VAULT_SEED: &[u8] = b"market_vault";
 pub const SOLA_VAULT_SEED: &[u8] = b"sola_vault";
+/// Standing compound order, one per user: [b"auto", user]. Holds no tokens — see `AutoCompound`.
+pub const AUTO_SEED: &[u8] = b"auto";
+
+/// One whole token in base units. Every mint the curve, the floor and the stake touch is 6
+/// decimals — a protocol invariant, not a coincidence, and the reason the floor is 1:1 in base
+/// units. Used where a price PER TOKEN has to be compared against an amount in base units.
+pub const UNIT_ONE: u64 = 1_000_000;
+
+/// ☢️ THE SHORTEST GAP A STANDING ORDER MAY SET BETWEEN TWO CRANKS, and the reason it is not
+/// zero.
+///
+/// `AutoCompound::ready` compares `now - last_crank_ts >= min_interval`, and `Clock` does not
+/// advance inside a transaction. At `min_interval == 0` that comparison is `0 >= 0` — true —
+/// so a single transaction can fire the order as many times as the balance, the allowance and
+/// the compute budget allow, instead of once per configured period. The total spend is still
+/// bounded by the SPL allowance the user signed, so this is not a drain; but "once an hour"
+/// would have been a convention of our own frontend rather than a rule of the chain, and an
+/// order whose pacing only holds while you use our UI is not an order.
+///
+/// One minute, because that is the shortest period the interface offers. It is a floor on what
+/// may be *configured*, never a schedule: nothing here makes an order fire.
+pub const MIN_CRANK_INTERVAL: i64 = 60;
 // (VOTE_ESCROW_SEED removed — the global hiSOLA custody vault it addressed belongs to the
 //  token era. Voting marks `UserPosition.vote_locked` instead of moving anything, so there is
 //  no vault to derive. Its last reader was `convert_hi_sola`; see `devnet-legacy`.)

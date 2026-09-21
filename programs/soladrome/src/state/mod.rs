@@ -9,6 +9,7 @@
 //! accounts at once belongs in `instructions/`.
 
 pub mod amm;
+pub mod auto;
 pub mod bribes;
 pub mod emissions;
 pub mod gauges;
@@ -19,6 +20,7 @@ pub mod ve;
 pub mod vesting;
 
 pub use amm::*;
+pub use auto::*;
 pub use bribes::*;
 pub use emissions::*;
 pub use gauges::*;
