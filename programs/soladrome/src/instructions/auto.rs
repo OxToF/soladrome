@@ -43,7 +43,10 @@ pub fn configure_auto_compound(
     require!(threshold >= chunk, SoladromeError::InvalidAmount);
     // A ceiling below the strike itself can never be met, so the order would be born inert.
     // Refuse it rather than let someone configure a strategy that silently never fires.
-    require!(max_cost_per_unit >= UNIT_ONE, SoladromeError::AutoCostTooHigh);
+    require!(
+        max_cost_per_unit >= UNIT_ONE,
+        SoladromeError::AutoCostTooHigh
+    );
     // ☢️ NOT `>= 0`. Zero makes `ready()`'s clock comparison vacuous — `now - now >= 0` — so the
     // order fires as many times as the balance and the allowance allow inside ONE transaction,
     // and the pacing the user chose becomes a property of our frontend rather than of the chain.
@@ -105,7 +108,9 @@ pub fn crank_auto_compound(ctx: Context<CrankAutoCompound>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let amount = ctx.accounts.auto.chunk;
     require!(
-        ctx.accounts.auto.ready(ctx.accounts.user_o_sola.amount, now),
+        ctx.accounts
+            .auto
+            .ready(ctx.accounts.user_o_sola.amount, now),
         SoladromeError::AutoNotReady
     );
 
