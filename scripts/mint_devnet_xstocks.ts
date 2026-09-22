@@ -69,6 +69,7 @@ import { createHash } from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { envValue, redactRpc, serverRpcUrl } from "./lib/rpc";
 
 // Mainnet's genesis hash. The guard below is a DENY-list rather than an allow-list on purpose:
 // if this script is ever pointed somewhere unexpected it should still refuse the one cluster
@@ -133,21 +134,11 @@ const DUMMY_HOOK_PROGRAM = new PublicKey(createHash("sha256").update("soladrome:
 const flagValue = (n: string) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1] : undefined; };
 const hasFlag = (n: string) => process.argv.includes(`--${n}`);
 
-function envValue(key: string): string | undefined {
-  try {
-    const line = fs.readFileSync(path.join(__dirname, "..", "app", ".env.local"), "utf8")
-      .split("\n").find((l) => l.startsWith(`${key}=`));
-    return line?.slice(key.length + 1).trim();
-  } catch { return undefined; }
-}
+// ⚠️ `envValue` and the RPC preference used to be copy-pasted into every script here. They live
+// in `scripts/lib/rpc.ts` now, because a single script still reaching for the BROWSER key
+// defeats restricting that key to the domain — and a half-converted tree fails silently.
 
-function readRpc(): string {
-  const url = envValue("NEXT_PUBLIC_RPC_URL");
-  // Validate the SHAPE, not mere presence — a defined-but-corrupt value disarms the fallback
-  // it was meant to improve (16/08 incident).
-  if (url && (url.startsWith("http://") || url.startsWith("https://"))) return url;
-  return "https://api.devnet.solana.com";
-}
+
 
 function loadKeypair(): Keypair {
   const kpPath = process.env.ANCHOR_WALLET || path.join(os.homedir(), ".config", "solana", "id.json");
@@ -224,7 +215,7 @@ async function main() {
   const selected = only ? FIXTURES.filter((f) => only.includes(f.symbol)) : FIXTURES;
   if (selected.length === 0) throw new Error(`--only matched nothing. Known: ${FIXTURES.map((f) => f.symbol).join(", ")}`);
 
-  const connection = new Connection(readRpc(), "confirmed");
+  const connection = new Connection(serverRpcUrl(), "confirmed");
   const payer = loadKeypair();
 
   // ── The one guard that matters ────────────────────────────────────────────
@@ -243,7 +234,7 @@ async function main() {
   const oSolaMint = state.oSolaMint as PublicKey;
 
   console.log("── plan ──────────────────────────────────────────────────────");
-  console.log("RPC          :", readRpc().replace(/api-key=.*/, "api-key=***"));
+  console.log("RPC          :", redactRpc(serverRpcUrl()));
   console.log("genesis      :", genesis);
   console.log("payer        :", payer.publicKey.toBase58());
   console.log("program      :", programId.toBase58());

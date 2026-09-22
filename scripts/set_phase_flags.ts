@@ -26,20 +26,14 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { redactRpc, serverRpcUrl } from "./lib/rpc";
 
 const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const FLAGS = ["lp", "bribes", "voting", "exercise", "curve", "emissions"] as const;
 type Flag = (typeof FLAGS)[number];
 
-function readRpc(): string {
-  const envPath = path.join(__dirname, "..", "app", ".env.local");
-  try {
-    const line = fs.readFileSync(envPath, "utf8")
-      .split("\n").find((l) => l.startsWith("NEXT_PUBLIC_RPC_URL="));
-    if (line) return line.slice("NEXT_PUBLIC_RPC_URL=".length).trim();
-  } catch { /* fall through */ }
-  return process.env.RPC_URL || "https://api.devnet.solana.com";
-}
+// ⚠️ The local copy is gone: `scripts/lib/rpc.ts` owns the order, because a single script still
+// reaching for the BROWSER key defeats restricting that key to the domain.
 
 function loadKeypair(): Keypair {
   const kpPath = process.env.ANCHOR_WALLET
@@ -72,7 +66,7 @@ async function main() {
   // No args at all = enable everything (the historical devnet form).
   if (wanted.size === 0) FLAGS.forEach((f) => wanted.set(f, true));
 
-  const connection = new Connection(readRpc(), "confirmed");
+  const connection = new Connection(serverRpcUrl(), "confirmed");
   const wallet = new anchor.Wallet(loadKeypair());
   const idl = JSON.parse(fs.readFileSync(
     path.join(__dirname, "..", "app", "lib", "soladrome.json"), "utf8"));
@@ -82,7 +76,7 @@ async function main() {
 
   // Option<bool>: the value if named, `null` to leave the gate untouched.
   const arg = (f: Flag): boolean | null => (wanted.has(f) ? wanted.get(f)! : null);
-  console.log("RPC        :", readRpc());
+  console.log("RPC        :", redactRpc(serverRpcUrl())); // ⚠️ never print the key itself
   console.log("authority  :", wallet.publicKey.toBase58());
   console.log(
     "setting    :",

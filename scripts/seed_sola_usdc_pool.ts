@@ -35,24 +35,15 @@ import {
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { envValue, redactRpc, serverRpcUrl } from "./lib/rpc";
 
 const DEC = 1_000_000; // 6 dp everywhere in this protocol
 
-function envValue(key: string): string | undefined {
-  try {
-    const line = fs.readFileSync(path.join(__dirname, "..", "app", ".env.local"), "utf8")
-      .split("\n").find((l) => l.startsWith(`${key}=`));
-    return line?.slice(key.length + 1).trim();
-  } catch { return undefined; }
-}
+// ⚠️ `envValue` and the RPC preference used to be copy-pasted into every script here. They live
+// in `scripts/lib/rpc.ts` now, because a single script still reaching for the BROWSER key
+// defeats restricting that key to the domain — and a half-converted tree fails silently.
 
-function readRpc(): string {
-  const url = envValue("NEXT_PUBLIC_RPC_URL");
-  // Validate the SHAPE, not mere presence — a defined-but-corrupt value disarms the
-  // fallback it was meant to improve (16/08 incident).
-  if (url && (url.startsWith("http://") || url.startsWith("https://"))) return url;
-  return "https://api.devnet.solana.com";
-}
+
 
 function loadKeypair(): Keypair {
   const kpPath = process.env.ANCHOR_WALLET
@@ -78,7 +69,7 @@ async function main() {
 
   const idl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "app", "lib", "soladrome.json"), "utf8"));
   const programId = new PublicKey(idl.address);
-  const connection = new Connection(readRpc(), "confirmed");
+  const connection = new Connection(serverRpcUrl(), "confirmed");
   const payer = loadKeypair();
   const wallet = new anchor.Wallet(payer);
   const program = new anchor.Program(idl, new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" }));
@@ -109,7 +100,7 @@ async function main() {
   const solaOut = vs - (vu * vs) / (vu + inUi);
 
   console.log("── plan ─────────────────────────────────────────────");
-  console.log("RPC            :", readRpc().replace(/api-key=.*/, "api-key=***"));
+  console.log("RPC            :", redactRpc(serverRpcUrl()));
   console.log("payer          :", payer.publicKey.toBase58());
   console.log("usdc mint      :", usdcMint.toBase58(), "| mint authority:", faucet.publicKey.toBase58());
   console.log("pool           :", pool.toBase58());

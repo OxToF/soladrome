@@ -42,22 +42,15 @@ import {
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { envValue, serverRpcUrl } from "./lib/rpc";
 
 const DEC = 1_000_000;
 const FEE_BPS = 30; // pool fee, 0.30%
 
-function envValue(key: string): string | undefined {
-  try {
-    const line = fs.readFileSync(path.join(__dirname, "..", "app", ".env.local"), "utf8")
-      .split("\n").find((l) => l.startsWith(`${key}=`));
-    return line?.slice(key.length + 1).trim();
-  } catch { return undefined; }
-}
-function readRpc(): string {
-  const url = envValue("NEXT_PUBLIC_RPC_URL");
-  if (!url || !url.startsWith("http")) throw new Error("NEXT_PUBLIC_RPC_URL missing/malformed");
-  return url;
-}
+// ⚠️ `envValue` and the RPC preference used to be copy-pasted into every script here. They live
+// in `scripts/lib/rpc.ts` now, because a single script still reaching for the BROWSER key
+// defeats restricting that key to the domain — and a half-converted tree fails silently.
+
 function loadKeypair(): Keypair {
   const p = process.env.ANCHOR_WALLET ?? path.join(os.homedir(), ".config", "solana", "id.json");
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(p, "utf8"))));
@@ -70,7 +63,7 @@ function loadFaucet(): Keypair {
 
 async function main() {
   const dryRun = process.argv.includes("--dry-run");
-  const connection = new Connection(readRpc(), "confirmed");
+  const connection = new Connection(serverRpcUrl(), "confirmed");
   const payer = loadKeypair();
   const program = new anchor.Program(
     JSON.parse(fs.readFileSync(path.join(__dirname, "..", "app", "lib", "soladrome.json"), "utf8")),

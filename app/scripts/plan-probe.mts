@@ -30,8 +30,14 @@ import { getProgram } from "../lib/program.ts";
 import { evaluateCompound, planCompound } from "../lib/recipes.ts";
 
 const env = readFileSync(new URL("../.env.local", import.meta.url), "utf8");
-const RPC = env.match(/^NEXT_PUBLIC_RPC_URL=(.+)$/m)?.[1]?.trim();
-if (!RPC) throw new Error("NEXT_PUBLIC_RPC_URL missing from app/.env.local");
+// ☢️ Prefer the SERVER key. `NEXT_PUBLIC_RPC_URL` is inlined into the client bundle and served
+// to every visitor, so it is the one that belongs restricted to the domain — and this runs in a
+// terminal, which sends no Origin. The fallback keeps a single-key setup working.
+const RPC =
+  process.env.RPC_URL?.trim() ||
+  env.match(/^RPC_URL=(.+)$/m)?.[1]?.trim() ||
+  env.match(/^NEXT_PUBLIC_RPC_URL=(.+)$/m)?.[1]?.trim();
+if (!RPC) throw new Error("set RPC_URL or NEXT_PUBLIC_RPC_URL in app/.env.local");
 
 const connection = new Connection(RPC, "confirmed");
 

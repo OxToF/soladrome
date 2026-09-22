@@ -24,7 +24,11 @@ const env = Object.fromEntries(
 const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const hiSolaMint = PublicKey.findProgramAddressSync([Buffer.from("hi_sola_mint")], PROGRAM_ID)[0];
 
-const conn = new Connection(env.NEXT_PUBLIC_RPC_URL || "https://api.devnet.solana.com", "confirmed");
+// ☢️ Server key first — NEXT_PUBLIC_* is inlined into the client bundle and served publicly.
+const conn = new Connection(
+  process.env.RPC_URL || env.RPC_URL || env.NEXT_PUBLIC_RPC_URL || "https://api.devnet.solana.com",
+  "confirmed",
+);
 const idl = JSON.parse(readFileSync("lib/soladrome.json", "utf8"));
 const dummy = { publicKey: PublicKey.default, signTransaction: async (t) => t, signAllTransactions: async (t) => t };
 const program = new Program(idl, new AnchorProvider(conn, dummy, { commitment: "confirmed" }));
