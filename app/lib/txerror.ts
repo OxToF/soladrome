@@ -150,3 +150,39 @@ function extractCustomCode(err: unknown): number | null {
   }
   return null;
 }
+
+// ── RPC refusals, which never reach the chain ────────────────────────────────
+
+/// Recognise a transport-level refusal by the RPC provider, as opposed to a program failure.
+///
+/// These two get confused constantly, and the confusion is expensive: a rate-limited read
+/// looks, to a user staring at a button, exactly like a broken transaction. It is not. Nothing
+/// was signed, nothing was sent, nothing on chain changed — the provider declined to answer.
+///
+/// Helius meters by REQUESTS PER SECOND, not by credits, so a burst is what trips it: a recipe
+/// plans with about ten reads and two simulations, and the send path then opens with two more
+/// on a deliberately un-throttled connection. The provider answers `401` with
+/// `{"code":-32401,"message":"Bad request, please try again later."}` — a message that says
+/// nothing about rate limiting and reads like an auth failure, which is why it needs naming.
+///
+/// Returns null when the error is not one of these, so the caller can fall through to the
+/// on-chain decoder rather than mislabelling a real revert.
+export function explainRpcRefusal(err: unknown): string | null {
+  const text =
+    typeof err === "string"
+      ? err
+      : ((err as { message?: string })?.message ?? JSON.stringify(err ?? ""));
+
+  // JSON-RPC codes a provider uses to decline: -32401 (Helius "bad request"), -32005 (node
+  // behind / limit exceeded), -32429 and the plain HTTP statuses web3.js prefixes its message
+  // with. `^\s*4\d\d\s` matches "401 : {...}" without matching a 401 that appears in a pubkey.
+  const declined =
+    /-32401|-32005|-32429/.test(text) ||
+    /^\s*(401|403|429|502|503|504)\s*[:\s]/.test(text);
+  if (!declined) return null;
+
+  const tooMany = /429|-32005|-32429|rate|too many/i.test(text);
+  return tooMany
+    ? "The RPC provider is rate-limiting this wallet (requests per second, not credits). Nothing was signed and nothing was sent — wait a moment and try again."
+    : "The RPC provider declined the request. Nothing was signed and nothing was sent — this is the endpoint, not your transaction. Wait a moment and try again.";
+}

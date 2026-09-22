@@ -155,4 +155,12 @@ pub enum SoladromeError {
     ContributorSplitMismatch,
     #[msg("This mint carries a Token-2022 extension the AMM cannot honour: a transfer fee, an armed transfer hook, or a default-frozen account state")]
     UnsupportedMintExtension,
+    #[msg("This standing order is not ready: it is disabled, the oSOLA balance is below its threshold, or its minimum interval has not elapsed")]
+    AutoNotReady,
+    #[msg("This compound would cost more per oSOLA than the order allows — the curve moved, so the fee on the gain moved with it")]
+    AutoCostTooHigh,
+    #[msg("This standing order does not belong to the account it was given")]
+    AutoOwnerMismatch,
+    #[msg("Only the owner may claim while their wallet holds less LP than they deposited — a claim on a partial balance forfeits the rest, and that is not a stranger's decision to make")]
+    PartialBasisClaim,
 }

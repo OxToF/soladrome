@@ -391,6 +391,44 @@ pub mod soladrome {
     ) -> Result<()> {
         instructions::curve::flash_arbitrage(ctx, amount_osola, min_profit_usdc)
     }
+
+    // ── Standing compound orders ─────────────────────────────────────────────
+    // Appended at the END of the dispatch block on purpose: Anchor bakes `line!()` into every
+    // error the binary carries, so inserting among the others would shift the recorded line of
+    // every instruction below the insertion point for no reason. See the note at the bottom of
+    // this file.
+
+    pub fn configure_auto_compound(
+        ctx: Context<ConfigureAutoCompound>,
+        threshold: u64,
+        chunk: u64,
+        max_cost_per_unit: u64,
+        min_interval: i64,
+    ) -> Result<()> {
+        instructions::auto::configure_auto_compound(
+            ctx,
+            threshold,
+            chunk,
+            max_cost_per_unit,
+            min_interval,
+        )
+    }
+
+    pub fn set_auto_compound_enabled(
+        ctx: Context<SetAutoCompoundEnabled>,
+        enabled: bool,
+    ) -> Result<()> {
+        instructions::auto::set_auto_compound_enabled(ctx, enabled)
+    }
+
+    /// Permissionless: any signer may crank any user's standing order.
+    pub fn crank_auto_compound(ctx: Context<CrankAutoCompound>) -> Result<()> {
+        instructions::auto::crank_auto_compound(ctx)
+    }
+
+    pub fn close_auto_compound(ctx: Context<CloseAutoCompound>) -> Result<()> {
+        instructions::auto::close_auto_compound(ctx)
+    }
 }
 
 // ── Test-only module ─────────────────────────────────────────────────────────

@@ -15,7 +15,8 @@ import {
   createCloseAccountInstruction,
 } from "@solana/spl-token";
 import idl from "./soladrome.json";
-import { explainInstructionError, type IdlErrorEntry } from "./txerror";
+import { explainInstructionError, explainRpcRefusal, type IdlErrorEntry } from "./txerror";
+import { fetchWithFallback } from "./rpc";
 
 export const PROGRAM_ID = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 
@@ -363,6 +364,12 @@ export async function sendTx(
   connection: Connection,
   wallet: { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction> },
   ixs: TransactionInstruction[],
+  /// Compute-unit limit for this transaction. Every single-instruction screen leaves it unset
+  /// and inherits the 400 000 below, which has been sufficient for all of them. A recipe from
+  /// `recipes.ts` passes the figure ITS OWN dry run measured, because a composition of five
+  /// instructions has no reason to fit a budget sized for one — and a transaction that runs out
+  /// of compute fails after doing part of the work.
+  computeUnits?: number,
 ): Promise<string> {
   // Use a DEDICATED connection for the time-critical send/confirm path, bypassing
   // the global request throttle on the shared `connection` (providers.tsx spaces
@@ -370,12 +377,44 @@ export async function sendTx(
   // starved behind that throttle, the blockhash window lapses and the tx reports
   // "block height exceeded" even when it would have landed. Transactions are
   // low-volume and latency-critical, so they should not be throttled.
-  const txConn = new Connection(connection.rpcEndpoint, "confirmed");
+  //
+  // ☢️ It keeps the QUOTA FALLBACK even though it drops the throttle. Those are two different
+  // protections and only one of them is in the way here: without the fallback, a provider that
+  // declines leaves the send path with nowhere to go, at the worst moment there is.
+  const txConn = new Connection(connection.rpcEndpoint, {
+    commitment: "confirmed",
+    fetch: fetchWithFallback(connection.rpcEndpoint),
+  });
+
+  // ☢️ Retry the pre-flight reads when the PROVIDER declines, not the chain.
+  //
+  // The dedicated connection above deliberately bypasses the global throttle in
+  // `providers.tsx`, which is right for the confirmation loop and wrong for the two reads that
+  // open it: they land immediately after whatever the screen just did. A recipe plans with
+  // about a dozen reads and two simulations, so `getBalance` arrives at the worst possible
+  // moment and Helius — which meters requests per second, not credits — answers 401. That
+  // surfaced to a tester as a raw `{"code":-32401}` under the sign button, on a transaction
+  // that had never been built, let alone signed.
+  //
+  // Only a transport refusal is retried. A real failure is raised on the first attempt: a
+  // retry loop that swallows those would turn a broken transaction into a slow broken
+  // transaction.
+  async function rpcRetry<T>(what: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await what();
+      } catch (e) {
+        const refusal = explainRpcRefusal(e);
+        if (!refusal || attempt >= 3) throw refusal ? new Error(refusal) : e;
+        await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
+      }
+    }
+  }
 
   // Guard: catch the "no record of a prior credit" runtime error before it happens.
   // On devnet a fresh wallet has 0 SOL — without at least one tx-fee worth of lamports
   // every transaction is rejected by the runtime before any instruction runs.
-  const lamports = await txConn.getBalance(wallet.publicKey);
+  const lamports = await rpcRetry(() => txConn.getBalance(wallet.publicKey));
   if (lamports < 5_000) {
     throw new Error(
       "Your wallet has no devnet SOL. Click « Get SOL + USDC » to receive test tokens before trading."
@@ -387,11 +426,11 @@ export async function sendTx(
   // (~150 blocks) → "Signature … has expired: block height exceeded". The fee is
   // tiny (price × limit ≈ 0.00002 SOL) but materially improves landing under load.
   const budgetIxs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits ?? 400_000 }),
     ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
   ];
 
-  const { blockhash, lastValidBlockHeight } = await txConn.getLatestBlockhash();
+  const { blockhash, lastValidBlockHeight } = await rpcRetry(() => txConn.getLatestBlockhash());
   const tx = new Transaction().add(...budgetIxs, ...ixs);
   tx.recentBlockhash = blockhash;
   tx.feePayer        = wallet.publicKey;
@@ -401,21 +440,32 @@ export async function sendTx(
   // on devnet under load. skipPreflight: these txs are pre-validated.
   const signed = await wallet.signTransaction(tx);
   const raw = signed.serialize();
-  const sig = await txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 });
+  const sig = await rpcRetry(() =>
+    txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }),
+  );
 
   // Robust confirm: poll signature status and periodically REBROADCAST the same
   // signed tx until it confirms or the blockhash truly expires. Rebroadcasting
   // keeps the tx alive in validators' mempools on a congested cluster instead of
   // relying on a single send + one-shot confirmTransaction.
   while (true) {
-    const status = (await txConn.getSignatureStatus(sig)).value;
+    // A refused status read is not a failed transaction: the signature is already broadcast,
+    // so the loop keeps polling rather than reporting a failure for a transaction that may
+    // well land. Only a real `status.err` below ends it badly.
+    const status = await txConn
+      .getSignatureStatus(sig)
+      .then((r) => r.value)
+      .catch((e) => {
+        if (explainRpcRefusal(e)) return null;
+        throw e;
+      });
     if (status?.err) {
       throw new Error(`${explainTxError(status.err, tx.instructions)} (tx ${sig.slice(0, 12)}…)`);
     }
     if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
       return sig;
     }
-    const height = await txConn.getBlockHeight("confirmed");
+    const height = await txConn.getBlockHeight("confirmed").catch(() => 0);
     if (height > lastValidBlockHeight) {
       throw new Error(
         `Transaction expired before confirmation (${sig}). The network may be congested — please try again.`

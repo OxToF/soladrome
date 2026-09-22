@@ -192,6 +192,42 @@ pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64) -> Result<()> {
 }
 
 // Burn oSOLA + pay floor USDC → receive SOLA. Strengthens floor reserve.
+/// The exercise fee for `o_sola_amount`, in USDC base units.
+///
+/// Extracted from `exercise_o_sola` so that `crank_auto_compound` charges the identical figure.
+/// A standing order that priced the fee with its own copy of this arithmetic would be a second
+/// source of truth for the number the user set a ceiling against, which is the one number in
+/// that feature that must not drift.
+///
+/// Reference price = virtual_usdc / virtual_sola. This needs no oracle and is structurally
+/// manipulation-resistant in the direction that matters: to inflate it an attacker must buy
+/// through the curve with real USDC (expensive, and it moves the price against their own
+/// position), and to DEFLATE it — the direction that would cut their own fee — there is no
+/// lever at all, because `sell_sola` never touches the virtual reserves. Only `buy_sola` and
+/// `deploy_pol` do.
+///
+/// fee = fee_bps × (vu/vs − 1) × amount, evaluated as
+///       (amount × (vu − vs) / vs) × fee_bps / 10_000.
+/// Dividing by `vs` before applying the bps keeps every intermediate small (the first product
+/// is bounded by amount × vu) and rounds the gain DOWN, so the truncation error is sub-base-unit
+/// and always in the user's favour — the protocol can never overcharge through rounding.
+pub fn exercise_fee(state: &ProtocolState, o_sola_amount: u64) -> Result<u64> {
+    let vu = state.virtual_usdc as u128;
+    let vs = state.virtual_sola as u128;
+    let fee_bps = state.exercise_fee_bps as u128;
+    // Out of the money (or exactly at the floor) => no gain => no fee. vs is never 0 while
+    // k > 0, but guard anyway rather than divide blindly.
+    if vu <= vs || vs == 0 || fee_bps == 0 {
+        return Ok(0);
+    }
+    let gain = (o_sola_amount as u128)
+        .checked_mul(vu - vs)
+        .ok_or(SoladromeError::Overflow)?
+        / vs;
+    let f = gain.checked_mul(fee_bps).ok_or(SoladromeError::Overflow)? / 10_000;
+    u64::try_from(f).map_err(|_| error!(SoladromeError::Overflow))
+}
+
 pub fn exercise_o_sola(ctx: Context<ExerciseOSola>, o_sola_amount: u64) -> Result<()> {
     require!(
         !ctx.accounts.protocol_state.paused,
@@ -206,36 +242,9 @@ pub fn exercise_o_sola(ctx: Context<ExerciseOSola>, o_sola_amount: u64) -> Resul
     let usdc_cost = o_sola_amount;
 
     // ── Exercise fee: a share of the GAIN, priced off the curve ───────────────
-    // Reference price = virtual_usdc / virtual_sola. This needs no oracle and is
-    // structurally manipulation-resistant in the direction that matters: to inflate
-    // it an attacker must buy through the curve with real USDC (expensive, and it
-    // moves the price against their own position), and to DEFLATE it — the direction
-    // that would cut their own fee — there is no lever at all, because `sell_sola`
-    // never touches the virtual reserves. Only `buy_sola` and `deploy_pol` do.
-    //
-    // fee = fee_bps × (vu/vs − 1) × amount, evaluated as
-    //       (amount × (vu − vs) / vs) × fee_bps / 10_000.
-    // Dividing by `vs` before applying the bps keeps every intermediate small (the
-    // first product is bounded by amount × vu) and rounds the gain DOWN, so the
-    // truncation error is sub-base-unit and always in the user's favour — the
-    // protocol can never overcharge through rounding.
-    let fee = {
-        let vu = ctx.accounts.protocol_state.virtual_usdc as u128;
-        let vs = ctx.accounts.protocol_state.virtual_sola as u128;
-        let fee_bps = ctx.accounts.protocol_state.exercise_fee_bps as u128;
-        // Out of the money (or exactly at the floor) => no gain => no fee. vs is
-        // never 0 while k > 0, but guard anyway rather than divide blindly.
-        if vu <= vs || vs == 0 || fee_bps == 0 {
-            0u64
-        } else {
-            let gain = (o_sola_amount as u128)
-                .checked_mul(vu - vs)
-                .ok_or(SoladromeError::Overflow)?
-                / vs;
-            let f = gain.checked_mul(fee_bps).ok_or(SoladromeError::Overflow)? / 10_000;
-            u64::try_from(f).map_err(|_| error!(SoladromeError::Overflow))?
-        }
-    };
+    // The arithmetic and the reasoning behind it now live in `exercise_fee` above, shared with
+    // `crank_auto_compound` so a standing order is charged the identical figure.
+    let fee = exercise_fee(&ctx.accounts.protocol_state, o_sola_amount)?;
 
     // ☢️ RULE: the strike goes to floor_vault IN FULL, and the fee is an ADDITIONAL
     // ☢️ payment on top of it. Never carve the fee out of `usdc_cost`.

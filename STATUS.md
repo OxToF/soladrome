@@ -3,8 +3,15 @@
 One living document. If something here disagrees with another file in this repository, this
 file is the one to trust, and the other file is the one to fix.
 
-**Last measured: 2026-09-01.** Every figure below was read from the tree or the chain on that
+**Last measured: 2026-09-21.** Every figure below was read from the tree or the chain on that
 date, not carried forward from a previous note.
+
+☢️ **THE DEVNET BINARY NO LONGER MATCHES THE AUDIT TAG. Since 2026-09-21 it never will again.**
+Until that date the two were the same artefact, and this file said so. Standing compound orders
+added four instructions and one account type, and devnet was upgraded to carry them — a
+deliberate decision, taken with the trade-off named: the tag is what an auditor was handed, and
+what runs on devnet is now that tag plus this feature. Anything quoting "the audited binary is
+what is deployed" is stale from this date onward.
 
 ---
 
@@ -12,15 +19,86 @@ date, not carried forward from a previous note.
 
 | | |
 |---|---|
-| Current tag | **`audit-2026-09-01`** — the tree handed to the auditor |
-| Previous tag | `audit-2026-08-30b`, a verified **ancestor** of the current one |
+| Audit tag | **`audit-2026-09-01`** — the tree handed to the auditor, and **no longer what devnet runs** |
+| Previous tag | `audit-2026-08-30b`, a verified **ancestor** of the audit tag |
 | Branch | `main` — one trunk, and the deployed tree |
 | Program id (devnet) | `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe` |
-| Instructions | 54 |
-| Account parameters | 503 |
-| Error variants | 58 |
-| On-chain account types | 22 |
-| Tests | **112 passing, 0 failing** |
+| Devnet binary | sha256 `f3c7f951…`, 1 728 136 bytes, SBPFv3, deployed 2026-09-21 and verified byte-for-byte against the local build |
+| Instructions | **58** (54 at the audit tag, plus the four below) |
+| Account parameters | 503 at the audit tag; the four new instructions add their own |
+| Error variants | **62** (58 at the audit tag, plus `AutoNotReady`, `AutoCostTooHigh`, `AutoOwnerMismatch`) |
+| On-chain account types | **23** (22 at the audit tag, plus `AutoCompound`) |
+| Tests | **88 bankrun cases passing, 0 failing** — 8 for the standing order, 4 for the permissionless claim |
+
+**⚠️ A standing order's pacing is now a rule of the chain (2026-09-22).** `configure_auto_compound`
+used to accept `min_interval == 0`, and `AutoCompound::ready` compares `now - last_crank_ts >=
+min_interval` against a `Clock` that does not advance inside a transaction — so `0 >= 0` was true
+and a single transaction could fire an order as many times as the balance, the SPL allowance and
+the compute budget allowed. The total spend was never at risk (the allowance is enforced by SPL
+Token itself), but "once an hour" was a convention of our frontend rather than a property of the
+order. `MIN_CRANK_INTERVAL = 60` is now the floor on what may be configured — the shortest period
+the interface offers. Proven by mutation: reverting the bound to `>= 0` fails the new case.
+
+**☢️ `claim_lp_rewards` lost its signer (2026-09-21).** `user` is now an `UncheckedAccount`:
+**anyone may claim on anyone's behalf.** Nothing else changed, and nothing else had to — every
+account was already bound to that key by something other than a signature (the LP balance by
+`token::authority`, the reward record by its seeds, the oSOLA destination by
+`associated_token::authority`), so the signer was the only thing making it self-service and it
+was buying nothing. A caller who is not the owner causes them to receive **their own** rewards
+into **their own** account, pays the fee, and gains nothing. A separate `payer: Signer` funds
+the two accounts the instruction may create, so a stranger may fund someone's records and never
+spend from them.
+
+☢️ **And it opened a grief vector, found in review before deploying, fixed, proven by
+mutation.** `user_lp` was bound by `token::authority = user` — an account the user owns, not
+their associated one — which was safe only while the owner had to sign, because nobody grieves
+themselves. Permissionless, it became cheap: **anyone may create a token account and name
+someone else as its owner** (`initializeAccount` takes the owner as a parameter, not as a
+signer), fund it with a small fraction of the pool's LP, and claim on it. The handler advances
+`reward_debt` to the full accumulator **whatever basis it paid on**, so the victim is paid one
+percent and forfeits the other ninety-nine. `user_lp` is now bound to the associated account,
+which leaves one possible address and nothing to choose between. Covered by
+`[stream] ☢️ a griefer cannot wipe someone's accrual by claiming on a decoy LP account`, and
+that case was **verified by mutation**: it fails against the old constraint and passes against
+the new one. ⚠️ The first version of the test used 10 base units and passed against BOTH,
+because `pending > 0` refused it on rounding before the constraint spoke — a test that proves
+nothing looks exactly like a test that proves something.
+
+☢️ **A second finding, from the automated review, that the first fix did NOT close.** Binding
+`user_lp` to the associated account stopped an attacker MANUFACTURING a small basis. It does not
+stop them WAITING for one. `reward_basis` is `min(recorded deposit, wallet balance)`, and an LP
+who parks some of their tokens elsewhere — a hardware wallet, a multisig — sits at
+`wallet < recorded` in plain view of anyone polling two public accounts. A claim fired then pays
+the smaller figure and still advances `reward_debt` to the whole accumulator, forfeiting the
+rest. ⚠️ **Our own keeper would have done this by accident**, claiming every pool it found
+claimable without ever reading that ratio.
+
+Closed by `PartialBasisClaim`: a third party may claim only while the wallet still holds the
+whole recorded deposit, where the two bases are equal and nothing is lost. The owner keeps
+self-service at any basis — which moment to claim is worth something, and it is theirs. Proven
+by mutation, and the keeper now skips those pools with a reason in its log instead of
+discovering the refusal in simulation.
+
+`crank_auto_compound` was tightened the same way in the same pass. Nothing exploitable was
+found there — a decoy account holds no delegation, so the burn fails — but the argument that
+establishes it is long and the constraint that removes the need for it is one line.
+
+Why: a standing order could not feed itself. The crank exercises what is in the wallet and
+claims nothing, so the rewards meant to refill it sat one uncallable instruction away — an
+order fired until the wallet ran dry, then went quiet for good. Proven both ways in
+`tests/bankrun_continuous.ts`: a stranger claiming for someone lands the rewards in the owner's
+account, and a stranger substituting their own destination is refused.
+
+**Standing compound orders (2026-09-21).** `configure_auto_compound`,
+`set_auto_compound_enabled`, `crank_auto_compound` and `close_auto_compound`. The crank is the
+first instruction here that **any signer may call on behalf of someone else** — that is the
+feature, since a standing order needs a caller and the only honest way to have one without
+holding a key is to let everyone be it. Authority comes from an SPL **delegate** the user grants
+from their own wallet, capped by them and revocable by them; nothing is escrowed and this
+program never takes custody. `AutoCompound.max_cost_per_unit` is the bound `exercise_o_sola`
+does not have, and it is why this shape was chosen over pre-signed transactions: the exercise
+fee is priced off the curve at landing, so a pre-signed transaction authorises an amount at an
+unbounded price and whoever broadcasts it picks which.
 
 There is **one binary**. Devnet and mainnet run the identical artefact; the `devnet` cargo
 feature was removed on 2026-08-23 and must never come back. See CLAUDE.md for the full story of

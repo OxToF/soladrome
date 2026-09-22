@@ -58,3 +58,50 @@ function redact(url: string): string {
   const head = url.slice(0, 24);
   return url.length > head.length ? `${head}…` : head;
 }
+
+// ── Falling back when the provider declines ──────────────────────────────────
+
+/**
+ * ☢️ HELIUS DECLINES WITH 401, NOT 429, AND THAT DISARMED THE FALLBACK FOR MONTHS.
+ *
+ * `providers.tsx` cloned a request to the public RPC when the response was `429`. Helius does
+ * not answer 429 when it throttles: it answers **401** with
+ * `{"code":-32401,"message":"Bad request, please try again later."}` — a body that reads like
+ * an auth failure and says nothing about a limit. So the branch meant to keep the app alive
+ * under load could never be reached, and a throttled read surfaced to the user as a hard
+ * error. It surfaced as exactly that on 2026-09-21, under the Sign button of a recipe that had
+ * never been built, let alone signed.
+ *
+ * `fetchWithFallback` is therefore keyed on the whole family of "the provider declined"
+ * statuses, not on one of them. It never falls back on a 200 carrying an on-chain failure:
+ * that is the chain answering, and retrying it elsewhere would answer the same.
+ */
+export function declinedByProvider(status: number): boolean {
+  return status === 401 || status === 403 || status === 429 || status === 503;
+}
+
+/**
+ * Fetch against `endpoint`, and clone the request to `fallback` when the provider declines.
+ *
+ * Shared by the app's throttled connection and by the send path, which deliberately bypasses
+ * the throttle and so used to have no fallback at all — the one place where losing a read is
+ * most expensive, because it is the read that precedes a signature.
+ */
+export function fetchWithFallback(
+  endpoint: string,
+  fallback: string = FALLBACK_RPC_URL,
+): typeof fetch {
+  return async (input, init) => {
+    const res = await fetch(input as any, init);
+    if (!declinedByProvider(res.status) || endpoint === fallback) return res;
+
+    const url =
+      typeof input === "string" ? input
+      : input instanceof URL ? input.href
+      : (input as Request).url;
+    const fbUrl = url.replace(endpoint, fallback);
+    if (fbUrl === url) return res;
+    console.warn(`[rpc] provider declined with ${res.status} — retrying on the public RPC`);
+    return fetch(fbUrl, init);
+  };
+}
