@@ -3,7 +3,7 @@
 // tsconfig `include` deliberately does not pick it up.)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveRpcUrl, isUsableRpcUrl, FALLBACK_RPC_URL, declinedByProvider, fetchWithFallback } from "./rpc.ts";
+import { resolveRpcUrl, isUsableRpcUrl, FALLBACK_RPC_URL, declinedByProvider, fetchWithFallback, serverRpcUrl } from "./rpc.ts";
 
 // The shape read out of Vercel on 2026-08-16, with a placeholder key: leading
 // `h` lost and the key truncated mid-way by a real U+2026. It killed the faucet
@@ -98,4 +98,38 @@ test("without a distinct fallback it returns the decline rather than looping", a
   } finally {
     globalThis.fetch = real;
   }
+});
+
+// ── serverRpcUrl: the browser key is public, so server code must not share it ────────────────
+//
+// ☢️ Verified on 2026-09-22 by fetching two chunks of www.soladrome.finance and reading the key
+// out of them — no authentication, two `curl` calls. `NEXT_PUBLIC_*` is inlined into the client
+// bundle at compile time, so that is a property of Next, not a mistake to fix.
+
+test("the server key wins over the browser key", () => {
+  process.env.RPC_URL = GOOD;
+  process.env.NEXT_PUBLIC_RPC_URL = "https://public.example.com";
+  assert.equal(serverRpcUrl(), GOOD);
+});
+
+// ⚠️ THE FALLBACK IS THE MIGRATION. Until a second key exists everything runs on the single one
+// it uses today, so the split lands without an outage and becomes a config change afterwards.
+// A test that let this regress would turn "restrict the browser key" into a silent outage of the
+// keeper and every authority script.
+test("without a server key, the browser key still works", () => {
+  delete process.env.RPC_URL;
+  process.env.NEXT_PUBLIC_RPC_URL = GOOD;
+  assert.equal(serverRpcUrl(), GOOD);
+});
+
+test("a malformed server key is skipped, not handed to Connection", () => {
+  process.env.RPC_URL = BROKEN;
+  process.env.NEXT_PUBLIC_RPC_URL = GOOD;
+  assert.equal(serverRpcUrl(), GOOD, "the August shape must not disarm the good value behind it");
+});
+
+test("with neither, it is the public endpoint and never a throw", () => {
+  delete process.env.RPC_URL;
+  delete process.env.NEXT_PUBLIC_RPC_URL;
+  assert.equal(serverRpcUrl(), FALLBACK_RPC_URL);
 });

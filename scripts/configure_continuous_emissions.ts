@@ -26,13 +26,14 @@
  *   --dry-run              compute + print everything, send nothing
  *
  * RPC: set ANCHOR_PROVIDER_URL (e.g. the Helius devnet URL). Falls back to
- * NEXT_PUBLIC_RPC_URL in app/.env.local, then localnet.
+ * RPC_URL, then NEXT_PUBLIC_RPC_URL in app/.env.local, then localnet.
  */
 import * as anchor from "@coral-xyz/anchor";
 import { Program, AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, Keypair, Connection } from "@solana/web3.js";
 import fs from "fs";
 import path from "path";
+import { redactRpc } from "./lib/rpc";
 // Read, not imported: the root tsconfig has no `resolveJsonModule`, so an `import` of
 // this file fails to compile under ts-node — which is why this script could not run.
 const idl = JSON.parse(require("fs").readFileSync(`${__dirname}/../target/idl/soladrome.json`, "utf8"));
@@ -54,6 +55,10 @@ function resolveRpc(): string {
   if (process.env.ANCHOR_PROVIDER_URL) return process.env.ANCHOR_PROVIDER_URL;
   try {
     const env = fs.readFileSync(path.join(__dirname, "../app/.env.local"), "utf-8");
+    // ☢️ Server key first: NEXT_PUBLIC_* is inlined into the client bundle and served to every
+    // visitor, so it is the key that belongs restricted to the domain — and this sends no Origin.
+    const server = env.match(/^RPC_URL=(.*)$/m);
+    if (server && server[1].trim()) return server[1].trim();
     const m = env.match(/^NEXT_PUBLIC_RPC_URL=(.*)$/m);
     if (m && m[1].trim()) return m[1].trim();
   } catch { /* ignore */ }
@@ -124,7 +129,7 @@ async function main() {
 
   // ── pre-flight checks ───────────────────────────────────────────────────────
   console.log("── plan ─────────────────────────────────────────────");
-  console.log("RPC                :", rpc);
+  console.log("RPC                :", redactRpc(rpc)); // ⚠️ never print the key itself
   console.log("signer (authority) :", kp.publicKey.toBase58());
   console.log("state.authority    :", state.authority.toBase58());
   console.log("pool               :", pool.toBase58());

@@ -37,6 +37,7 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { redactRpc, serverRpcUrl } from "./lib/rpc";
 
 const PROGRAM_ID = new PublicKey(
   "DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe"
@@ -47,19 +48,8 @@ const PROGRAM_ID = new PublicKey(
 const DEFAULT_EXERCISE_FEE_BPS = 1_000; // 10 % of the gain
 const MAX_EXERCISE_FEE_BPS = 5_000; // 50 % — economic guard, not a solvency bound
 
-function readRpc(): string {
-  const envPath = path.join(__dirname, "..", "app", ".env.local");
-  try {
-    const line = fs
-      .readFileSync(envPath, "utf8")
-      .split("\n")
-      .find((l) => l.startsWith("NEXT_PUBLIC_RPC_URL="));
-    if (line) return line.slice("NEXT_PUBLIC_RPC_URL=".length).trim();
-  } catch {
-    /* fall through */
-  }
-  return process.env.RPC_URL || "https://api.devnet.solana.com";
-}
+// ⚠️ The local copy is gone: `scripts/lib/rpc.ts` owns the order, because a single script still
+// reaching for the BROWSER key defeats restricting that key to the domain.
 
 function loadKeypair(): Keypair {
   const kpPath =
@@ -93,7 +83,7 @@ async function main() {
     );
   }
 
-  const connection = new Connection(readRpc(), "confirmed");
+  const connection = new Connection(serverRpcUrl(), "confirmed");
   const wallet = new anchor.Wallet(loadKeypair());
   const idl = JSON.parse(
     fs.readFileSync(
@@ -110,7 +100,7 @@ async function main() {
     PROGRAM_ID
   );
 
-  console.log("RPC        :", readRpc());
+  console.log("RPC        :", redactRpc(serverRpcUrl())); // ⚠️ never print the key itself
   console.log("authority  :", wallet.publicKey.toBase58());
 
   const pre: any = await (program.account as any).protocolState.fetch(statePda);

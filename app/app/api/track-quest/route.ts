@@ -7,7 +7,7 @@ import { AnchorProvider, utils } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { getProgram, positionPda, statePda, PROGRAM_ID } from "@/lib/program";
 import { TRUSTED_MINTS } from "@/lib/tokens";
-import { resolveRpcUrl } from "@/lib/rpc";
+import { serverRpcUrl } from "@/lib/rpc";
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -122,7 +122,11 @@ async function missingGates(wallet: string): Promise<string[]> {
   return results.filter((r) => !r.done).map((r) => r.id);
 }
 
-const RPC = resolveRpcUrl(process.env.NEXT_PUBLIC_RPC_URL, process.env.RPC_URL);
+// ⚠️ The order used to be the other way round, which meant this route reached for the
+// BROWSER key first — the one inlined into the client bundle and readable by anyone. Nothing
+// here runs in a browser. `serverRpcUrl` prefers RPC_URL and keeps NEXT_PUBLIC as the fallback
+// that makes the split a config change rather than an outage.
+const RPC = serverRpcUrl();
 const connection = new Connection(RPC, "confirmed");
 // Read-only provider: fetches never sign, so a dummy wallet is fine.
 const readonlyWallet = {

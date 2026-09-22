@@ -39,9 +39,17 @@ const PASS_INTERVAL_MS = 60_000;
 // `KEEPER_RPC_URL` wins, so the same keeper serves a localnet rehearsal and the live cluster
 // without editing the app's own secret config to point somewhere else and forgetting to undo it.
 const env = readFileSync(new URL("../.env.local", import.meta.url), "utf8");
+// ☢️ `NEXT_PUBLIC_RPC_URL` is the BROWSER key: Next inlines it into the client bundle, so it is
+// served to every visitor of the site. A keeper is not a browser, and the day that key is
+// restricted to the domain a keeper still holding it simply stops — without a message saying so.
+// `RPC_URL` is the server key; the NEXT_PUBLIC fallback is what keeps this running on a single
+// key until a second one exists.
 const RPC =
-  process.env.KEEPER_RPC_URL?.trim() || env.match(/^NEXT_PUBLIC_RPC_URL=(.+)$/m)?.[1]?.trim();
-if (!RPC) throw new Error("set KEEPER_RPC_URL, or NEXT_PUBLIC_RPC_URL in app/.env.local");
+  process.env.KEEPER_RPC_URL?.trim() ||
+  process.env.RPC_URL?.trim() ||
+  env.match(/^RPC_URL=(.+)$/m)?.[1]?.trim() ||
+  env.match(/^NEXT_PUBLIC_RPC_URL=(.+)$/m)?.[1]?.trim();
+if (!RPC) throw new Error("set KEEPER_RPC_URL or RPC_URL, or NEXT_PUBLIC_RPC_URL in app/.env.local");
 
 const connection = new Connection(RPC, "confirmed");
 

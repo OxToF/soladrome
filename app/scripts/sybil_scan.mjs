@@ -29,7 +29,9 @@ const env = Object.fromEntries(
     .map((l) => { const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; })
 );
 const sb = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
-const RPC = env.NEXT_PUBLIC_RPC_URL || env.RPC_URL;
+// ☢️ Server key first. NEXT_PUBLIC_* is inlined into the client bundle and therefore public;
+// the order here used to hand this script the key that belongs restricted to the domain.
+const RPC = process.env.RPC_URL || env.RPC_URL || env.NEXT_PUBLIC_RPC_URL;
 
 const CORE = ["connect", "faucet", "swap", "liquidity", "stake", "borrow", "repay", "vote"];
 const ONCHAIN = ["swap", "liquidity", "stake", "borrow", "repay", "vote"];

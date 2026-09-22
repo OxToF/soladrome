@@ -109,6 +109,48 @@ solana program show DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe
 
 `app/.env.local` must have `NEXT_PUBLIC_RPC_URL=https://api.devnet.solana.com` for devnet testing. The default may be set to `http://127.0.0.1:8899` (localnet).
 
+
+### ☢️ Two RPC keys: `NEXT_PUBLIC_RPC_URL` is public, `RPC_URL` is not
+
+Next.js inlines every `NEXT_PUBLIC_*` into the **client bundle** at compile time, so whatever key
+`NEXT_PUBLIC_RPC_URL` carries is served to every visitor of the site. Verified 2026-09-22 by
+fetching `_next/static/chunks/app/layout-*.js` and `…/page-*.js` from www.soladrome.finance and
+reading the key out of them: no authentication, two `curl` calls.
+
+That is a property of a browser dApp, not a leak to patch — a client-side wallet needs a
+client-side endpoint. What follows is only that the browser key belongs **restricted to the
+domain** (Helius → dashboard → RPCs → Access Control Rules), and that nothing server-side may
+share it, because a terminal sends no `Origin` and would be refused the moment you restrict it.
+
+**Resolution order, everywhere server-side** (`scripts/lib/rpc.ts`, `app/lib/rpc.ts`, and the
+scripts under `app/scripts/`):
+
+```
+process.env.RPC_URL  →  RPC_URL in app/.env.local  →  NEXT_PUBLIC_RPC_URL  →  api.devnet.solana.com
+```
+
+⚠️ **The last-but-one step is the migration, and it is why nothing broke when this landed.**
+With no `RPC_URL` anywhere, every script keeps using the single key it used before. Creating a
+second key is then a config change:
+
+1. Helius dashboard → new key → this is the **server** key.
+2. `echo 'RPC_URL=https://devnet.helius-rpc.com/?api-key=…' >> app/.env.local`, and set the same
+   variable in Vercel (**not** prefixed `NEXT_PUBLIC_`, or it ships to the browser).
+3. Restrict the **old** key to `soladrome.finance` — it is now browser-only.
+4. `yarn ts-node scripts/set_exercise_fee.ts --check` prints the endpoint it resolved, redacted.
+
+☢️ **The conversion is all or nothing.** One script still reaching for the browser key FIRST
+turns step 3 into a silent outage of that script — the keeper included, which would simply stop
+cranking without saying why.
+
+The check is about ORDER, not presence: `NEXT_PUBLIC_RPC_URL` is supposed to appear as the last
+resort, and does, in seven places. What must never appear is a chain that reads it before
+`RPC_URL`. `grep -rn NEXT_PUBLIC_RPC_URL scripts/ app/scripts/ app/app/api/` and read each hit —
+every one should sit at the END of its `||` chain or its candidate list.
+
+⚠️ Never `console.log` a resolved endpoint. `redactRpc()` exists for that, and two authority
+scripts were printing the key verbatim into a terminal until 2026-09-22.
+
 ## Architecture
 
 ### Lineage — Soladrome is a Solana adaptation of Beradrome

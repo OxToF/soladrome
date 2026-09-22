@@ -41,24 +41,15 @@ import {
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { envValue, redactRpc, serverRpcUrl } from "./lib/rpc";
 
 const DEC = 1_000_000; // 6 dp everywhere in this protocol
 
-function envValue(key: string): string | undefined {
-  try {
-    const line = fs.readFileSync(path.join(__dirname, "..", "app", ".env.local"), "utf8")
-      .split("\n").find((l) => l.startsWith(`${key}=`));
-    return line?.slice(key.length + 1).trim();
-  } catch { return undefined; }
-}
+// ⚠️ `envValue` and the RPC preference used to be copy-pasted into every script here. They live
+// in `scripts/lib/rpc.ts` now, because a single script still reaching for the BROWSER key
+// defeats restricting that key to the domain — and a half-converted tree fails silently.
 
-function readRpc(): string {
-  const url = envValue("NEXT_PUBLIC_RPC_URL");
-  if (!url || !url.startsWith("http")) {
-    throw new Error("NEXT_PUBLIC_RPC_URL missing or malformed in app/.env.local");
-  }
-  return url;
-}
+
 
 function loadKeypair(): Keypair {
   const p = process.env.ANCHOR_WALLET ?? path.join(os.homedir(), ".config", "solana", "id.json");
@@ -79,7 +70,7 @@ async function main() {
   if (!Number.isFinite(usdcUi) || usdcUi <= 0) throw new Error("--usdc must be a positive number");
   const usdcToSpend = Math.round(usdcUi * DEC);
 
-  const connection = new Connection(readRpc(), "confirmed");
+  const connection = new Connection(serverRpcUrl(), "confirmed");
   const payer = loadKeypair();
   const wallet = new anchor.Wallet(payer);
   const idl = JSON.parse(fs.readFileSync(
@@ -125,7 +116,7 @@ async function main() {
   const ECOSYSTEM_TOTAL = 1_750_000 * DEC;
 
   console.log("── plan ─────────────────────────────────────────────");
-  console.log("RPC            :", readRpc().replace(/api-key=.*/, "api-key=***"));
+  console.log("RPC            :", redactRpc(serverRpcUrl()));
   console.log("payer          :", payer.publicKey.toBase58());
   console.log("pool           :", pool.toBase58());
   console.log("mint A / B     :", mintA.toBase58(), "/", mintB.toBase58());

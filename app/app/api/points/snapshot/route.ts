@@ -26,13 +26,17 @@ import {
   DEFAULT_MAX_POSITION_USD, DEFAULT_MULTIPLIER_BPS,
 } from "@/lib/points";
 import { fetchJupiterUsdPrices, fetchPythMajorsUsd } from "@/lib/prices_external";
-import { resolveRpcUrl } from "@/lib/rpc";
+import { serverRpcUrl } from "@/lib/rpc";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // ── Config (env-tunable, safe defaults) ──────────────────────────────────────
-const RPC = resolveRpcUrl(process.env.NEXT_PUBLIC_RPC_URL, process.env.RPC_URL);
+// ⚠️ The order used to be the other way round, which meant this route reached for the
+// BROWSER key first — the one inlined into the client bundle and readable by anyone. Nothing
+// here runs in a browser. `serverRpcUrl` prefers RPC_URL and keeps NEXT_PUBLIC as the fallback
+// that makes the split a config change rather than an outage.
+const RPC = serverRpcUrl();
 const CRON_SECRET = process.env.CRON_SECRET || "";
 const RATE          = num(process.env.POINTS_RATE,          DEFAULT_RATE_POINTS_PER_USD_HOUR);
 const MIN_TVL_USD   = num(process.env.POINTS_MIN_TVL_USD,   DEFAULT_MIN_POOL_TVL_USD);

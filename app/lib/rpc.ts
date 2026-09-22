@@ -37,6 +37,30 @@ export function resolveRpcUrl(...candidates: (string | undefined)[]): string {
 }
 
 /**
+ * The endpoint SERVER-SIDE code should use: API routes, cron handlers, scripts — anything that
+ * never reaches a browser.
+ *
+ * ☢️ `NEXT_PUBLIC_RPC_URL` IS PUBLIC BY CONSTRUCTION, NOT BY ACCIDENT. Next inlines every
+ * `NEXT_PUBLIC_*` into the client bundle at compile time, so whatever key it carries is served
+ * to every visitor. Verified on 2026-09-22 by fetching two chunks of www.soladrome.finance and
+ * reading the key out of them — no authentication, two `curl` calls. That is not a leak to fix
+ * but a property to design around: a browser dApp needs a client-side endpoint, so the browser
+ * key is public and belongs restricted to the domain.
+ *
+ * What does not follow is that server code should share it. `RPC_URL` is never named
+ * `NEXT_PUBLIC_*`, never inlined, and never shipped.
+ *
+ * ⚠️ THE FALLBACK IS THE MIGRATION. Until `RPC_URL` exists everything keeps working on today's
+ * single key, so this breaks nothing on the day it lands; creating the second key is then a
+ * config change rather than a code change. It also means the browser key can be restricted to
+ * the domain without taking the keeper and the authority scripts down with it — the failure a
+ * half-converted codebase would have produced, and the reason the conversion is all or nothing.
+ */
+export function serverRpcUrl(...extra: (string | undefined)[]): string {
+  return resolveRpcUrl(process.env.RPC_URL, ...extra, process.env.NEXT_PUBLIC_RPC_URL);
+}
+
+/**
  * Catches the two halves of the 2026-08-13 breakage: a protocol `Connection`
  * refuses, and the ellipsis left by a truncated copy. It does NOT catch a key
  * that is merely *wrong* — a well-formed URL with a bad api-key still parses,

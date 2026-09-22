@@ -33,6 +33,7 @@ import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { redactRpc, serverRpcUrl } from "./lib/rpc";
 
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
@@ -40,15 +41,8 @@ const WSOL_MINT = "So11111111111111111111111111111111111111112";
 const FEE_RATE_BPS = 30;
 const PROTOCOL_FEE_BPS = 2_000;
 
-function readRpc(): string {
-  const envPath = path.join(__dirname, "..", "app", ".env.local");
-  try {
-    const line = fs.readFileSync(envPath, "utf8")
-      .split("\n").find((l) => l.startsWith("NEXT_PUBLIC_RPC_URL="));
-    if (line) return line.slice("NEXT_PUBLIC_RPC_URL=".length).trim();
-  } catch { /* fall through */ }
-  return process.env.RPC_URL || "https://api.devnet.solana.com";
-}
+// ⚠️ `RPC_URL` used to sit LAST here, so the browser key won whenever `.env.local` had one —
+// which is always. `serverRpcUrl` puts the server key first; see scripts/lib/rpc.ts.
 
 function loadKeypair(): Keypair {
   const kpPath = process.env.ANCHOR_WALLET
@@ -61,7 +55,7 @@ async function main() {
     path.join(__dirname, "..", "app", "lib", "soladrome.json"), "utf8"));
   const programId = new PublicKey(idl.address);
 
-  const connection = new Connection(readRpc(), "confirmed");
+  const connection = new Connection(serverRpcUrl(), "confirmed");
   const wallet = new anchor.Wallet(loadKeypair());
   const program = new anchor.Program(
     idl, new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" }));
@@ -98,7 +92,7 @@ async function main() {
   const [tokenBVault] = PublicKey.findProgramAddressSync(
     [Buffer.from("vault_b"), pool.toBuffer()], programId);
 
-  console.log("RPC        :", readRpc().replace(/api-key=.*/, "api-key=***"));
+  console.log("RPC        :", redactRpc(serverRpcUrl()));
   console.log("authority  :", wallet.publicKey.toBase58());
   console.log("mint A     :", mintA.toBase58());
   console.log("mint B     :", mintB.toBase58());
