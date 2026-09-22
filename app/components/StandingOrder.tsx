@@ -58,6 +58,10 @@ const INTERVALS = [
 /// written in USDC rather than in basis points is what makes it survive a fee it did not expect.
 const CEILING_TOLERATES_SOLA_AT = 10;
 
+/// Mirrors `MAX_EXERCISE_FEE_BPS` in the program: the highest rate `set_exercise_fee` will take,
+/// and therefore the highest tolerance worth offering. `configure_auto_compound` refuses above it.
+const MAX_EXERCISE_FEE_BPS = 5_000;
+
 /// Translate a ceiling in USDC per oSOLA into the SOLA price at which it starts refusing.
 ///
 /// `cost = 1 + fee_bps/10_000 × (price − 1)`, so the ceiling is met at
@@ -99,7 +103,8 @@ export function StandingOrder() {
   const [chunk, setChunk] = useState("500");
   const [rounds, setRounds] = useState("10");
   const [interval, setIntervalSecs] = useState(3600);
-  const [maxCostText, setMaxCostText] = useState("");
+  const [feeText, setFeeText] = useState("");
+  const [budgetText, setBudgetText] = useState("");
 
   // The fee rate the curve charges on the gain. Everything below is a function of it, and it is
   // a protocol parameter rather than a market one — which is why the ceiling exists at all.
@@ -125,9 +130,41 @@ export function StandingOrder() {
     1.1,
     Math.ceil((1 + (Math.max(0, CEILING_TOLERATES_SOLA_AT - 1) * feeBps) / 10_000) * 100) / 100,
   );
-  const maxCost = maxCostText === "" ? suggestedMaxCost : parseFloat(maxCostText) || suggestedMaxCost;
-  // The same ceiling said back in the unit the reader actually holds in their head.
-  const stopPrice = stopsAboveSolaPrice(maxCost, feeBps);
+  // ⚠️ No longer offered as a field. It survives only to size the budget below, because "what
+  // ten rounds would cost with SOLA at ten dollars" is a good generous default for a budget and
+  // was a bad bound to hand someone as a price they had to commit to.
+
+  // ── The two bounds the order actually runs on ─────────────────────────────
+  //
+  // ☢️ The fee share is the one that does not expire against the market. An absolute ceiling can
+  // only be reached by the price RISING, and a rise is when a round earns the most — so enforcing
+  // it alone stopped the order at exactly the wrong moment, on a forecast nobody can make. The
+  // rate is price-independent and answers a question its owner can: how much of the gain are they
+  // willing to leave behind.
+  //
+  // Defaulted to today's rate plus half again, rounded to a whole percent, so ordinary rounding
+  // never trips it and a real change to `exercise_fee_bps` still does.
+  const suggestedFeeBps = Math.min(
+    MAX_EXERCISE_FEE_BPS,
+    Math.max(100, Math.ceil((feeBps * 1.5) / 100) * 100),
+  );
+  const maxFeeBps = feeText === "" ? suggestedFeeBps : Math.round((parseFloat(feeText) || 0) * 100);
+
+  // The budget is the spending bound, and it becomes the SPL allowance verbatim. Defaulted to
+  // what the rounds would cost with SOLA at `CEILING_TOLERATES_SOLA_AT`, which is generous
+  // enough that a rising market spends it rather than stalling against it.
+  const roundsN = parseInt(rounds, 10) || 0;
+  const chunkN = parseFloat(chunk) || 0;
+  const suggestedBudget = Math.ceil(chunkN * roundsN * suggestedMaxCost);
+  const budget = budgetText === "" ? suggestedBudget : parseFloat(budgetText) || suggestedBudget;
+
+  // ⚠️ `max_cost_per_unit` stays on chain and still has a job, but it is no longer the control:
+  // one round may consume at most the whole budget. That is a real bound — it stops a single
+  // round emptying an allowance meant for ten — and it is not a price forecast, because it moves
+  // with the budget rather than with the curve. The program refuses anything below the 1 USDC
+  // strike, so a budget too small to pay even one strike is clamped here and warned about below.
+  const perUnitCeiling = chunkN > 0 ? Math.max(1, budget / chunkN) : 1;
+  const budgetTooSmall = chunkN > 0 && budget < chunkN;
 
   const load = useCallback(async () => {
     if (!wallet || !usdcMint) return;
@@ -153,9 +190,12 @@ export function StandingOrder() {
         // The threshold IS the round size: "fire when there is a full round's worth".
         threshold: size,
         chunk: size,
-        maxCostPerUnit: maxCost,
+        // No longer a price forecast: one round may consume at most the whole budget.
+        maxCostPerUnit: perUnitCeiling,
         minInterval: interval,
         rounds: parseInt(rounds, 10) || 1,
+        maxFeeBps,
+        budgetUsdc: budget,
       });
       const sig = await sendTx(connection, wallet, ixs);
       setStatus(`✅ Armed — tx: ${sig.slice(0, 16)}…`);
@@ -213,6 +253,12 @@ export function StandingOrder() {
     const usdc = Number(balances.usdc) / UNIT;
     if (usdc < cost) {
       return `a round costs about ${cost.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDC and you hold ${usdc.toLocaleString("en-US", { maximumFractionDigits: 2 })}.`;
+    }
+    // The fee bound first: it is the one an order armed today actually runs on, and the one a
+    // reader can act on — nothing about the curve will clear it, only the protocol lowering the
+    // rate again or the owner accepting the new one.
+    if (order.maxFeeBps > 0 && feeBps > order.maxFeeBps) {
+      return `the protocol now takes ${(feeBps / 100).toFixed(1)}% of the gain, above the ${(order.maxFeeBps / 100).toFixed(0)}% you accepted. It waits until the fee comes back down, or until you re-arm at the new rate.`;
     }
     if (costPerUnit > order.maxCostPerUnit) {
       return `a round costs ${costPerUnit.toFixed(3)} USDC per oSOLA right now, above your ${order.maxCostPerUnit.toFixed(2)} ceiling. It will fire again when the curve comes back.`;
@@ -293,8 +339,21 @@ export function StandingOrder() {
           <p className="mt-4 rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm leading-relaxed text-gray-300">
             {everyLabel(order.minInterval)}, when you hold at least{" "}
             <strong className="text-white">{order.chunk.toLocaleString("en-US")} oSOLA</strong>,
-            compound them into hiSOLA — never paying more than{" "}
-            <strong className="text-white">{order.maxCostPerUnit.toFixed(2)} USDC</strong> each.
+            compound them into hiSOLA —{" "}
+            {order.maxFeeBps > 0 ? (
+              <>
+                never giving up more than{" "}
+                <strong className="text-white">
+                  {(order.maxFeeBps / 100).toFixed(0)}% of the gain
+                </strong>
+                .
+              </>
+            ) : (
+              <>
+                never paying more than{" "}
+                <strong className="text-white">{order.maxCostPerUnit.toFixed(2)} USDC</strong> each.
+              </>
+            )}
             {roundsLeft !== null ? (
               <> <strong className="text-white">{roundsLeft}</strong> round{roundsLeft === 1 ? "" : "s"} left.</>
             ) : spent ? (
@@ -302,21 +361,24 @@ export function StandingOrder() {
             ) : (
               <> No allowance granted yet.</>
             )}
-            {/* The live order's ceiling, translated the same way the arm form translates it.
-                Read against TODAY's fee, not the fee at the time of arming: the threshold moves
-                if the protocol changes the rate, and the number that matters is the current one. */}
-            {(() => {
-              const live = stopsAboveSolaPrice(order.maxCostPerUnit, feeBps);
-              return live === null ? null : (
-                <>
-                  {" "}
-                  <span className="text-gray-500">
-                    It refuses above {live.toFixed(2)} USDC per SOLA; SOLA is {solaPrice.toFixed(2)}{" "}
-                    now.
-                  </span>
-                </>
-              );
-            })()}
+            {/* ⚠️ An order armed before the fee bound existed still runs on an absolute ceiling,
+                which is a price bet it never asked to make. Say so, in the unit its owner thinks
+                in, and against TODAY's fee rather than the fee at arming — a rate change moves
+                that threshold under an order that never changed. Re-arming is what clears it. */}
+            {order.maxFeeBps === 0 &&
+              (() => {
+                const live = stopsAboveSolaPrice(order.maxCostPerUnit, feeBps);
+                return live === null ? null : (
+                  <>
+                    {" "}
+                    <span className="text-yellow-200/80">
+                      ⚠️ It stops if SOLA rises above {live.toFixed(2)} USDC — it is{" "}
+                      {solaPrice.toFixed(2)} now. Re-arm it to swap that price bet for a bound on
+                      the fee instead.
+                    </span>
+                  </>
+                );
+              })()}
           </p>
           {/* ☢️ What it is waiting for. Without this the card reads "on, 10 rounds left" at a
               wallet that cannot satisfy one of them — true about the allowance, and quietly
@@ -418,44 +480,41 @@ export function StandingOrder() {
                   {(parseFloat(chunk) || 0).toLocaleString("en-US")} oSOLA
                 </strong>
                 , compound them into hiSOLA — up to{" "}
-                <strong className="text-white">{parseInt(rounds, 10) || 0} times</strong>, never
-                paying more than <strong className="text-white">{maxCost.toFixed(2)} USDC</strong>{" "}
-                each. That is at most{" "}
+                <strong className="text-white">{roundsN} times</strong>, never giving up more than{" "}
+                <strong className="text-white">{(maxFeeBps / 100).toFixed(0)}% of the gain</strong>.
+                That is at most{" "}
                 <strong className="text-white">
-                  {((parseFloat(chunk) || 0) * (parseInt(rounds, 10) || 0) * maxCost).toLocaleString(
-                    "en-US",
-                    { maximumFractionDigits: 0 },
-                  )}{" "}
-                  USDC
+                  {budget.toLocaleString("en-US", { maximumFractionDigits: 0 })} USDC
                 </strong>{" "}
                 in total, and not one cent more.
               </p>
 
-              {/* ☢️ The ceiling in the unit the reader holds in their head.
-                  Two numbers sit between the sentence above and what actually happens, and
-                  neither used to be on screen: what a round costs TODAY (which is what the
-                  allowance will really be spent at) and the SOLA price at which the ceiling
-                  starts refusing. Without the second one, "never more than 1.90 USDC" gives no
-                  clue that the order runs until SOLA reaches ten dollars — the reader has to
-                  invert the fee formula to find out, and nobody does. */}
+              {/* What the sentence above leaves implicit: how far the budget actually goes at
+                  today's price, and — the part that used to be missing entirely — that a price
+                  move no longer ends the order. */}
               <p className="mt-2 px-1 text-[11px] leading-relaxed text-gray-500">
                 At today&apos;s price a round costs{" "}
                 <span className="text-gray-300">
-                  {((parseFloat(chunk) || 0) * costPerUnit).toLocaleString("en-US", {
-                    maximumFractionDigits: 2,
-                  })}{" "}
-                  USDC
+                  {(chunkN * costPerUnit).toLocaleString("en-US", { maximumFractionDigits: 2 })} USDC
                 </span>
-                {stopPrice === null ? (
-                  <>, and with no exercise fee today the ceiling cannot be reached by a price move.</>
-                ) : (
-                  <>
-                    , so the ceiling only starts refusing once SOLA rises above{" "}
-                    <span className="text-gray-300">{stopPrice.toFixed(2)} USDC</span> — it is{" "}
-                    {solaPrice.toFixed(2)} now.
-                  </>
-                )}
+                , so the budget covers{" "}
+                <span className="text-gray-300">
+                  {chunkN > 0 && costPerUnit > 0
+                    ? Math.min(roundsN, Math.floor(budget / (chunkN * costPerUnit)))
+                    : 0}{" "}
+                  of your {roundsN}
+                </span>
+                . A rising SOLA price spends it faster and does not stop the order — SOLA is{" "}
+                {solaPrice.toFixed(2)} USDC now.
               </p>
+
+              {budgetTooSmall && (
+                <p className="mt-2 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] leading-relaxed text-yellow-200/90">
+                  ⚠️ A budget of {budget.toLocaleString("en-US")} USDC cannot pay even one round&apos;s
+                  strike, which is {chunkN.toLocaleString("en-US")} USDC before any fee. The order
+                  would be armed and never fire.
+                </p>
+              )}
 
               {tooBig && (
                 <p className="mt-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] leading-relaxed text-yellow-200/90">
@@ -471,53 +530,63 @@ export function StandingOrder() {
                 onClick={() => setAdvanced((a) => !a)}
                 className="mt-3 text-[11px] text-gray-500 transition-colors hover:text-gray-300"
               >
-                {advanced ? "▾" : "▸"} Cost ceiling
+                {advanced ? "▾" : "▸"} Limits
               </button>
               {advanced && (
-                <div className="mt-2 rounded-lg border border-brand-border bg-brand-dark p-3">
+                <div className="mt-2 space-y-3 rounded-lg border border-brand-border bg-brand-dark p-3">
+                  {/* ── 1. The rate: the bound that does not expire against the market. ── */}
                   <div className="flex items-center gap-2">
                     <input
-                      value={maxCostText}
-                      onChange={(e) => num(e.target.value, setMaxCostText)}
-                      placeholder={suggestedMaxCost.toFixed(2)}
+                      value={feeText}
+                      onChange={(e) => num(e.target.value, setFeeText)}
+                      placeholder={(suggestedFeeBps / 100).toFixed(0)}
                       inputMode="decimal"
-                      className="w-32 rounded-lg border border-brand-border bg-black/30 px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-brand-green focus:outline-none"
+                      className="w-24 rounded-lg border border-brand-border bg-black/30 px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-brand-green focus:outline-none"
                     />
-                    <span className="text-[11px] text-gray-600">USDC per oSOLA</span>
-                    {stopPrice !== null && (
-                      <span className="text-[11px] text-brand-green/80">
-                        = stops above {stopPrice.toFixed(2)} USDC per SOLA
-                      </span>
-                    )}
+                    <span className="text-[11px] text-gray-600">% of the gain, at most</span>
+                    <span className="text-[11px] text-gray-600">
+                      · it is {(feeBps / 100).toFixed(1)}% today
+                    </span>
                   </div>
-                  <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
-                    A round costs {costPerUnit.toFixed(4)} today: the strike of 1 USDC plus a share
-                    of the gain above the floor. That share moves with the curve, and it is priced
-                    when the round fires, not when you sign — so this ceiling is what stops anyone
-                    from choosing an expensive moment. Set it too tight and the order simply waits.
+                  <p className="text-[11px] leading-relaxed text-gray-600">
+                    A round costs the 1 USDC strike plus this share of the gain above the floor,
+                    priced when the round fires rather than when you sign. Because it is a rate and
+                    not an amount, the order keeps running at any SOLA price — it refuses only if
+                    the protocol raises the fee past what you accepted here, which is the one thing
+                    about this arrangement that was never yours to decide.
                   </p>
-                  {/* Why the default is as loose as it is. Someone opening this panel is about to
-                      tighten the number, and the instinct to tighten is the wrong one here. */}
-                  <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
-                    Raising it is not the risk it looks like: a higher SOLA price makes a round
-                    more profitable, because the strike stays at 1 USDC while the SOLA you receive
-                    is worth more. What this ceiling really guards is the fee rate, which the
-                    protocol can change and you cannot predict — at the maximum of 50% your{" "}
-                    {maxCost.toFixed(2)} would start refusing around{" "}
-                    {(stopsAboveSolaPrice(maxCost, 5_000) ?? 0).toFixed(2)} USDC per SOLA instead.
-                  </p>
-                  {/* ⚠️ The coupling nobody expects, stated where the number is changed.
-                      `buildArmInstructions` sizes the USDC allowance as chunk × rounds × ceiling,
-                      so this field silently moves how much SPL Token is authorised to spend. */}
-                  <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
-                    ⚠️ This figure also sizes the allowance you grant: {parseFloat(chunk) || 0} ×{" "}
-                    {parseInt(rounds, 10) || 0} × {maxCost.toFixed(2)} ={" "}
-                    {((parseFloat(chunk) || 0) * (parseInt(rounds, 10) || 0) * maxCost).toLocaleString(
-                      "en-US",
-                      { maximumFractionDigits: 0 },
-                    )}{" "}
-                    USDC. Lower it and you authorise less; raise it and you authorise more.
-                  </p>
+                  {maxFeeBps > 0 && maxFeeBps < feeBps && (
+                    <p className="text-[11px] leading-relaxed text-yellow-200/90">
+                      ⚠️ Below today&apos;s {(feeBps / 100).toFixed(1)}%, so the order would be armed
+                      and wait rather than fire.
+                    </p>
+                  )}
+
+                  {/* ── 2. The budget: the spending bound, enforced by SPL Token itself. ──
+                      ☢️ It used to be derived as chunk × rounds × ceiling, which fused the price
+                      bound and the spending bound into one number — so loosening the first to stop
+                      the order stalling against a rising market silently authorised more of the
+                      second. They answer different questions and are now two fields. */}
+                  <div className="border-t border-brand-border pt-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={budgetText}
+                        onChange={(e) => num(e.target.value, setBudgetText)}
+                        placeholder={suggestedBudget.toLocaleString("en-US")}
+                        inputMode="decimal"
+                        className="w-32 rounded-lg border border-brand-border bg-black/30 px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-brand-green focus:outline-none"
+                      />
+                      <span className="text-[11px] text-gray-600">USDC in total, at most</span>
+                    </div>
+                    <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
+                      This is the allowance you grant, to the cent, and SPL Token enforces it — not
+                      this protocol. Revoking it from your wallet ends the arrangement whether or
+                      not anything here still works. Rounds cost{" "}
+                      {(chunkN * costPerUnit).toLocaleString("en-US", { maximumFractionDigits: 2 })}{" "}
+                      USDC each today; a higher SOLA price spends the budget faster, which is how a
+                      rising market ends an order now — by exhausting it, not by refusing it.
+                    </p>
+                  </div>
                 </div>
               )}
 

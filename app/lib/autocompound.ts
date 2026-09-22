@@ -43,7 +43,18 @@ export type StandingOrder = {
   /// oSOLA exercised per round, in UI units.
   chunk: number;
   /// The most USDC the order will pay per oSOLA — strike plus fee. In UI units.
+  ///
+  /// ⚠️ No longer the control it looks like. It is an ABSOLUTE amount, so the only thing that
+  /// can reach it is a price rise — which is when a round earns the most. Orders armed since
+  /// the fee bound landed set it to "one round may spend the whole budget", leaving
+  /// `maxFeeBps` to do the real work; orders armed before it still carry a real ceiling here.
   maxCostPerUnit: number;
+  /// The share of the gain the order accepts, in basis points, compared against
+  /// `ProtocolState.exercise_fee_bps` at every crank.
+  ///
+  /// ☢️ Zero means UNSET, not "only at a zero fee" — every order armed before the field existed
+  /// reads zero out of the account's spare bytes, and the chain skips the check for them.
+  maxFeeBps: number;
   /// Shortest gap between two rounds, in seconds.
   minInterval: number;
   enabled: boolean;
@@ -120,6 +131,9 @@ export async function readStandingOrder(
           threshold: Number(raw.threshold) / UNIT,
           chunk: Number(raw.chunk) / UNIT,
           maxCostPerUnit: Number(raw.maxCostPerUnit) / UNIT,
+          // `?? 0` covers an account written before the field existed: Anchor reads the zero
+          // bytes `init` left, which is the same "unset" the program treats as no bound.
+          maxFeeBps: Number(raw.maxFeeBps ?? 0),
           minInterval: Number(raw.minInterval),
           enabled: !!raw.enabled,
           rounds: Number(raw.rounds),
@@ -152,6 +166,22 @@ export async function buildArmInstructions(
     /// How many rounds' worth of allowance to grant. The user is capping their own exposure
     /// here, and it is the only cap that matters — see the header.
     rounds: number;
+    /// The share of the gain the order will accept, in basis points, checked against
+    /// `ProtocolState.exercise_fee_bps` at every crank. Zero means UNSET and skips the check.
+    ///
+    /// ☢️ This is the bound that replaces a price forecast. `maxCostPerUnit` is absolute, so it
+    /// can only ever be reached by the price RISING — which is when a round is most profitable,
+    /// since the strike stays at 1 USDC while the SOLA minted is worth more. Bounding the rate
+    /// instead is price-independent: the order adapts to the market and refuses only a change to
+    /// the fee, which is the protocol's to make and never was the owner's to accept.
+    maxFeeBps: number;
+    /// Total USDC the order may ever spend, which becomes the SPL allowance verbatim.
+    ///
+    /// Sizing the allowance from the ceiling (`chunk × rounds × ceiling`) tied the two together,
+    /// so loosening the price bound silently authorised more spending. Naming the budget breaks
+    /// that: it is a question the owner can answer, and it is enforced by SPL Token rather than
+    /// by us.
+    budgetUsdc: number;
   },
 ): Promise<TransactionInstruction[]> {
   const user = wallet.publicKey;
@@ -164,6 +194,7 @@ export async function buildArmInstructions(
       new BN(Math.floor(opts.chunk * UNIT)),
       new BN(Math.floor(opts.maxCostPerUnit * UNIT)),
       new BN(Math.floor(opts.minInterval)),
+      Math.floor(opts.maxFeeBps),
     )
     .accounts({
       user,
@@ -173,12 +204,15 @@ export async function buildArmInstructions(
     })
     .instruction();
 
-  // The oSOLA allowance covers the rounds themselves; the USDC one covers their cost at the
-  // ceiling the user set, which is the most they can ever be charged for those rounds.
+  // The oSOLA allowance covers the rounds themselves; the USDC one is the budget, verbatim.
+  //
+  // ☢️ It used to be `chunk × rounds × maxCostPerUnit`, which made the price bound and the
+  // spending bound one number: widening the first to stop the order stalling against a rising
+  // market silently authorised more of the second. They answer different questions, so they are
+  // now two fields, and only this one reaches SPL Token — where the cap is enforced by the token
+  // program rather than by anything here.
   const oSolaAllowance = BigInt(Math.floor(opts.chunk * opts.rounds * UNIT));
-  const usdcAllowance = BigInt(
-    Math.ceil(opts.chunk * opts.rounds * opts.maxCostPerUnit * UNIT),
-  );
+  const usdcAllowance = BigInt(Math.ceil(opts.budgetUsdc * UNIT));
 
   return [
     configure,
@@ -339,6 +373,15 @@ export async function listCrankableOrders(
     else if (elapsed < Number(raw.minInterval)) why = `${Number(raw.minInterval) - elapsed}s to go`;
     else if (protocolState && usdcBalance < cost) {
       why = `needs ${(Number(cost) / UNIT).toFixed(2)} USDC, holds ${(Number(usdcBalance) / UNIT).toFixed(2)}`;
+    } else if (
+      protocolState &&
+      Number(raw.maxFeeBps ?? 0) > 0 &&
+      Number(protocolState.exerciseFeeBps ?? 0) > Number(raw.maxFeeBps)
+    ) {
+      // The bound an order armed today runs on. Named separately from the absolute ceiling
+      // because the two clear in opposite ways: this one waits on the protocol lowering the
+      // rate, the other on the curve coming back down.
+      why = `fee is ${(Number(protocolState.exerciseFeeBps) / 100).toFixed(1)}%, order accepts ${(Number(raw.maxFeeBps) / 100).toFixed(0)}%`;
     } else if (protocolState && cost > BigInt(Math.floor(Number(chunk) * Number(raw.maxCostPerUnit) / UNIT))) {
       why = "over the order's cost ceiling";
     } else if (oSolaHijacked || usdcHijacked) {
@@ -359,6 +402,7 @@ export async function listCrankableOrders(
         threshold: Number(raw.threshold) / UNIT,
         chunk: Number(raw.chunk) / UNIT,
         maxCostPerUnit: Number(raw.maxCostPerUnit) / UNIT,
+        maxFeeBps: Number(raw.maxFeeBps ?? 0),
         minInterval: Number(raw.minInterval),
         enabled: !!raw.enabled,
         rounds: Number(raw.rounds),

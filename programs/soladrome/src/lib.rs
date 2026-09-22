@@ -404,6 +404,7 @@ pub mod soladrome {
         chunk: u64,
         max_cost_per_unit: u64,
         min_interval: i64,
+        max_fee_bps: u16,
     ) -> Result<()> {
         instructions::auto::configure_auto_compound(
             ctx,
@@ -411,6 +412,7 @@ pub mod soladrome {
             chunk,
             max_cost_per_unit,
             min_interval,
+            max_fee_bps,
         )
     }
 

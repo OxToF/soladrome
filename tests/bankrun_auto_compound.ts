@@ -163,6 +163,9 @@ describe("soladrome — bankrun (standing compound orders)", () => {
       chunk: number;
       maxCostPerUnit: number;
       minInterval: number;
+      /// Defaults to 0 — UNSET — which is what every order armed before the field existed
+      /// reads, and therefore the shape most of these cases should keep exercising.
+      maxFeeBps?: number;
       allowanceOSola?: number;
       allowanceUsdc?: number;
     }
@@ -175,7 +178,8 @@ describe("soladrome — bankrun (standing compound orders)", () => {
           new BN(opts.threshold),
           new BN(opts.chunk),
           new BN(opts.maxCostPerUnit),
-          new BN(opts.minInterval)
+          new BN(opts.minInterval),
+          opts.maxFeeBps ?? 0
         )
         .accounts({
           user: owner.publicKey,
@@ -592,5 +596,122 @@ describe("soladrome — bankrun (standing compound orders)", () => {
       String(errorCode("AutoCostTooHigh")),
       "AutoCostTooHigh"
     );
+  });
+
+  /// Set the protocol's exercise fee. The authority is `payer` here, so this is the same
+  /// lever the real authority holds — which is the whole point of the bound being tested.
+  async function setExerciseFee(bps: number) {
+    await program.methods
+      .setExerciseFee(bps)
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+  }
+
+  describe("the rate bound — what an order accepts, rather than what it predicts", () => {
+    // The absolute ceiling can only ever be reached by a price RISE, and a rise makes the round
+    // more profitable, not less. These cases pin the bound that moves the other way.
+
+    it("☢️ a price that runs far past the old ceiling no longer stops the order", async () => {
+      const user = await makeUser(2_000 * UNIT, 20_000 * UNIT);
+      await configure(user, {
+        threshold: 100 * UNIT,
+        chunk: 100 * UNIT,
+        // Generous in absolute terms — a single round may cost up to 50 USDC per oSOLA — so the
+        // absolute ceiling is deliberately not the thing under test here.
+        maxCostPerUnit: 50 * UNIT,
+        minInterval: 60,
+        maxFeeBps: 1_000,
+        allowanceOSola: 2_000 * UNIT,
+        allowanceUsdc: 20_000 * UNIT,
+      });
+
+      // Move the curve hard. Under the previous design this is exactly where an order went
+      // quiet: the cost rises with the price, and the ceiling was a bet on the price.
+      await moveCurve(2_000_000 * UNIT);
+      await forwardSeconds(120);
+
+      const before = await tokenBalance(user.oSola);
+      await crank(user, stranger);
+      const after = await tokenBalance(user.oSola);
+      assert.equal(
+        before - after,
+        BigInt(100 * UNIT),
+        "the round should fire at the higher price, not refuse it"
+      );
+    });
+
+    it("☢️ raising the protocol fee past the tolerance stops the order", async () => {
+      const user = await makeUser(2_000 * UNIT, 20_000 * UNIT);
+      await configure(user, {
+        threshold: 100 * UNIT,
+        chunk: 100 * UNIT,
+        maxCostPerUnit: 50 * UNIT,
+        minInterval: 60,
+        maxFeeBps: 1_000, // "at most 10% of the gain"
+        allowanceOSola: 2_000 * UNIT,
+        allowanceUsdc: 20_000 * UNIT,
+      });
+
+      // At the tolerance exactly, it fires: the bound is `<=`, so an order armed at the rate
+      // in force is not born refusing.
+      await setExerciseFee(1_000);
+      await crank(user, stranger);
+
+      // The authority raises the rate. Nothing about the order changed, and nothing about the
+      // price changed — the only moving part is the one the owner never agreed to.
+      await setExerciseFee(1_001);
+      await forwardSeconds(120);
+      await expectFailure(
+        crank(user, stranger),
+        String(errorCode("AutoCostTooHigh")),
+        "AutoCostTooHigh"
+      );
+
+      // And it resumes by itself if the rate comes back. The order was never consumed.
+      await setExerciseFee(1_000);
+      await forwardSeconds(120);
+      await crank(user, stranger);
+    });
+
+    it("⚠️ an order armed before the field existed reads zero and still cranks", async () => {
+      // The compatibility case, and the reason zero cannot mean "only at a zero fee". A live
+      // order written by the previous program yields zero out of the account's spare bytes;
+      // reading that as a bound would refuse every one of them on their next crank.
+      const user = await makeUser(2_000 * UNIT, 20_000 * UNIT);
+      await configure(user, {
+        threshold: 100 * UNIT,
+        chunk: 100 * UNIT,
+        maxCostPerUnit: 50 * UNIT,
+        minInterval: 60,
+        maxFeeBps: 0, // UNSET — exactly what a pre-upgrade account deserializes to
+        allowanceOSola: 2_000 * UNIT,
+        allowanceUsdc: 20_000 * UNIT,
+      });
+
+      await setExerciseFee(5_000); // the protocol maximum, far above any sane tolerance
+      const before = await tokenBalance(user.oSola);
+      await crank(user, stranger);
+      assert.equal(
+        before - (await tokenBalance(user.oSola)),
+        BigInt(100 * UNIT),
+        "an unset tolerance must not behave like a tolerance of zero"
+      );
+      await setExerciseFee(1_000);
+    });
+
+    it("a tolerance above what the protocol may ever charge is refused at configure time", async () => {
+      const user = await makeUser(2_000 * UNIT, 2_000 * UNIT);
+      await expectFailure(
+        configure(user, {
+          threshold: 100 * UNIT,
+          chunk: 100 * UNIT,
+          maxCostPerUnit: 2 * UNIT,
+          minInterval: 60,
+          maxFeeBps: 5_001, // one past MAX_EXERCISE_FEE_BPS
+        }),
+        String(errorCode("InvalidAmount")),
+        "InvalidAmount"
+      );
+    });
   });
 });
