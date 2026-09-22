@@ -25,9 +25,10 @@ import { StatusBanner } from "./ui/StatusBanner";
 // The two that went away did not lose anything:
 //   · "Fires at" is gone because it was always the same number as the round size in practice —
 //     it is now set to it. (The program still takes both; `threshold >= chunk` is its rule.)
-//   · The cost ceiling is defaulted to ten percent above what a round costs today and shown in
-//     the sentence. It is the feature's whole safety story, so it stays visible and editable —
-//     just not as a field everyone must fill in before they can begin.
+//   · The cost ceiling is defaulted and shown in the sentence. It is the feature's whole safety
+//     story, so it stays visible and editable — just not as a field everyone must fill in
+//     before they can begin. See `CEILING_TOLERATES_SOLA_AT` for what the default now means,
+//     and why "ten percent above today's cost" was the wrong anchor.
 
 const UNIT = 1_000_000;
 
@@ -37,6 +38,37 @@ const INTERVALS = [
   { secs: 86400, label: "day", every: "Every day" },
 ] as const;
 
+/// The SOLA price the default cost ceiling is built to tolerate.
+///
+/// ☢️ The ceiling is denominated in USDC per oSOLA, and the person setting it thinks in SOLA
+/// price. The two are an order of magnitude apart: a round costs the 1 USDC strike — fixed for
+/// ever — plus a share of the gain, so at a 10% fee only a tenth of any price move reaches the
+/// ceiling. The previous default, "ten percent over what a round costs today", therefore read as
+/// prudent and actually meant "stop once SOLA has doubled". Nobody could have known that from
+/// the screen, because the screen never showed the price the ceiling implied.
+///
+/// Anchoring the default to a price fixes both halves: the number is derived from something the
+/// reader can picture, and `stopsAboveSolaPrice` shows the same picture back.
+///
+/// It is deliberately generous, and that is the point rather than a compromise. **A rising price
+/// makes a round MORE profitable, not less** — the strike stays at 1 USDC while the SOLA received
+/// is worth more — so a ceiling that bites on a price rise stops the order exactly when it earns
+/// the most. What the ceiling genuinely defends against is a change to `exercise_fee_bps`, which
+/// the protocol authority may raise as far as 50%, and against that it still bounds hard: being
+/// written in USDC rather than in basis points is what makes it survive a fee it did not expect.
+const CEILING_TOLERATES_SOLA_AT = 10;
+
+/// Translate a ceiling in USDC per oSOLA into the SOLA price at which it starts refusing.
+///
+/// `cost = 1 + fee_bps/10_000 × (price − 1)`, so the ceiling is met at
+/// `price = 1 + (ceiling − 1) × 10_000 / fee_bps`.
+///
+/// Null when the fee is zero: the cost is then exactly the strike at any price, so no price ever
+/// reaches the ceiling and there is no threshold to name.
+function stopsAboveSolaPrice(ceiling: number, feeBps: number): number | null {
+  if (feeBps <= 0) return null;
+  return 1 + ((ceiling - 1) * 10_000) / feeBps;
+}
 
 /// Round DOWN to something a human would have typed: 81.67 → 80, 2 480 → 2 000, 7.3 → 7.
 /// Down, never up, because a suggestion that cannot fire is worse than no suggestion.
@@ -69,19 +101,33 @@ export function StandingOrder() {
   const [interval, setIntervalSecs] = useState(3600);
   const [maxCostText, setMaxCostText] = useState("");
 
-  // What a round costs right now, priced exactly as `exercise_fee` prices it. No RPC: the
-  // curve is already in the protocol state the context holds.
-  const costPerUnit = (() => {
+  // The fee rate the curve charges on the gain. Everything below is a function of it, and it is
+  // a protocol parameter rather than a market one — which is why the ceiling exists at all.
+  const feeBps = Number(protocolState?.exerciseFeeBps ?? 0);
+  // Today's SOLA price on the curve, and what a round costs right now, priced exactly as
+  // `exercise_fee` prices it. No RPC: the curve is already in the protocol state the context
+  // holds.
+  const solaPrice = (() => {
     if (!protocolState) return 1;
     const vu = Number(protocolState.virtualUsdc.toString());
     const vs = Number(protocolState.virtualSola.toString());
-    const feeBps = Number(protocolState.exerciseFeeBps ?? 0);
-    return 1 + (Math.max(0, vu / vs - 1) * feeBps) / 10_000;
+    return vs > 0 ? vu / vs : 1;
   })();
-  // Ten percent of headroom over today's cost, rounded up to the cent — enough that ordinary
-  // movement in the curve does not stall the order, tight enough that it still bounds it.
-  const suggestedMaxCost = Math.ceil(costPerUnit * 1.1 * 100) / 100;
+  const costPerUnit = 1 + (Math.max(0, solaPrice - 1) * feeBps) / 10_000;
+
+  // What a round would cost if SOLA reached `CEILING_TOLERATES_SOLA_AT`, rounded up to the cent.
+  //
+  // ⚠️ Floored at 1.10 for the degenerate case the price anchor cannot express: at `fee_bps = 0`
+  // a round costs exactly the strike whatever the price, so the anchor computes 1.00 — which is
+  // the program's own minimum (`max_cost_per_unit >= UNIT_ONE`) and would leave the order with
+  // no headroom at all the instant a fee is switched on.
+  const suggestedMaxCost = Math.max(
+    1.1,
+    Math.ceil((1 + (Math.max(0, CEILING_TOLERATES_SOLA_AT - 1) * feeBps) / 10_000) * 100) / 100,
+  );
   const maxCost = maxCostText === "" ? suggestedMaxCost : parseFloat(maxCostText) || suggestedMaxCost;
+  // The same ceiling said back in the unit the reader actually holds in their head.
+  const stopPrice = stopsAboveSolaPrice(maxCost, feeBps);
 
   const load = useCallback(async () => {
     if (!wallet || !usdcMint) return;
@@ -256,6 +302,21 @@ export function StandingOrder() {
             ) : (
               <> No allowance granted yet.</>
             )}
+            {/* The live order's ceiling, translated the same way the arm form translates it.
+                Read against TODAY's fee, not the fee at the time of arming: the threshold moves
+                if the protocol changes the rate, and the number that matters is the current one. */}
+            {(() => {
+              const live = stopsAboveSolaPrice(order.maxCostPerUnit, feeBps);
+              return live === null ? null : (
+                <>
+                  {" "}
+                  <span className="text-gray-500">
+                    It refuses above {live.toFixed(2)} USDC per SOLA; SOLA is {solaPrice.toFixed(2)}{" "}
+                    now.
+                  </span>
+                </>
+              );
+            })()}
           </p>
           {/* ☢️ What it is waiting for. Without this the card reads "on, 10 rounds left" at a
               wallet that cannot satisfy one of them — true about the allowance, and quietly
@@ -370,6 +431,32 @@ export function StandingOrder() {
                 in total, and not one cent more.
               </p>
 
+              {/* ☢️ The ceiling in the unit the reader holds in their head.
+                  Two numbers sit between the sentence above and what actually happens, and
+                  neither used to be on screen: what a round costs TODAY (which is what the
+                  allowance will really be spent at) and the SOLA price at which the ceiling
+                  starts refusing. Without the second one, "never more than 1.90 USDC" gives no
+                  clue that the order runs until SOLA reaches ten dollars — the reader has to
+                  invert the fee formula to find out, and nobody does. */}
+              <p className="mt-2 px-1 text-[11px] leading-relaxed text-gray-500">
+                At today&apos;s price a round costs{" "}
+                <span className="text-gray-300">
+                  {((parseFloat(chunk) || 0) * costPerUnit).toLocaleString("en-US", {
+                    maximumFractionDigits: 2,
+                  })}{" "}
+                  USDC
+                </span>
+                {stopPrice === null ? (
+                  <>, and with no exercise fee today the ceiling cannot be reached by a price move.</>
+                ) : (
+                  <>
+                    , so the ceiling only starts refusing once SOLA rises above{" "}
+                    <span className="text-gray-300">{stopPrice.toFixed(2)} USDC</span> — it is{" "}
+                    {solaPrice.toFixed(2)} now.
+                  </>
+                )}
+              </p>
+
               {tooBig && (
                 <p className="mt-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] leading-relaxed text-yellow-200/90">
                   You hold {heldOSola.toLocaleString("en-US", { maximumFractionDigits: 2 })} oSOLA,
@@ -397,12 +484,39 @@ export function StandingOrder() {
                       className="w-32 rounded-lg border border-brand-border bg-black/30 px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-brand-green focus:outline-none"
                     />
                     <span className="text-[11px] text-gray-600">USDC per oSOLA</span>
+                    {stopPrice !== null && (
+                      <span className="text-[11px] text-brand-green/80">
+                        = stops above {stopPrice.toFixed(2)} USDC per SOLA
+                      </span>
+                    )}
                   </div>
                   <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
                     A round costs {costPerUnit.toFixed(4)} today: the strike of 1 USDC plus a share
                     of the gain above the floor. That share moves with the curve, and it is priced
                     when the round fires, not when you sign — so this ceiling is what stops anyone
                     from choosing an expensive moment. Set it too tight and the order simply waits.
+                  </p>
+                  {/* Why the default is as loose as it is. Someone opening this panel is about to
+                      tighten the number, and the instinct to tighten is the wrong one here. */}
+                  <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
+                    Raising it is not the risk it looks like: a higher SOLA price makes a round
+                    more profitable, because the strike stays at 1 USDC while the SOLA you receive
+                    is worth more. What this ceiling really guards is the fee rate, which the
+                    protocol can change and you cannot predict — at the maximum of 50% your{" "}
+                    {maxCost.toFixed(2)} would start refusing around{" "}
+                    {(stopsAboveSolaPrice(maxCost, 5_000) ?? 0).toFixed(2)} USDC per SOLA instead.
+                  </p>
+                  {/* ⚠️ The coupling nobody expects, stated where the number is changed.
+                      `buildArmInstructions` sizes the USDC allowance as chunk × rounds × ceiling,
+                      so this field silently moves how much SPL Token is authorised to spend. */}
+                  <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
+                    ⚠️ This figure also sizes the allowance you grant: {parseFloat(chunk) || 0} ×{" "}
+                    {parseInt(rounds, 10) || 0} × {maxCost.toFixed(2)} ={" "}
+                    {((parseFloat(chunk) || 0) * (parseInt(rounds, 10) || 0) * maxCost).toLocaleString(
+                      "en-US",
+                      { maximumFractionDigits: 0 },
+                    )}{" "}
+                    USDC. Lower it and you authorise less; raise it and you authorise more.
                   </p>
                 </div>
               )}
