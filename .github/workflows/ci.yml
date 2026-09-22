@@ -249,4 +249,8 @@ jobs:
         run: yarn install --frozen-lockfile
 
       - name: Unit tests
-        run: node --import ./scripts/json-loader.mjs --test lib/rpc.test.mts lib/txerror.test.mts lib/recipe.test.mts lib/sendtx.test.mts
+        # ☢️ A GLOB, not a list. `node --test` ignores a path that does not exist and still
+        # exits 0, so an explicit list turns a renamed or moved test file into vanished coverage
+        # under a green build. The glob is quoted so the shell hands it to node rather than
+        # expanding it, which keeps that property on a runner with different shell options.
+        run: node --import ./scripts/json-loader.mjs --test 'lib/*.test.mts'
