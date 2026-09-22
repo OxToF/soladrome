@@ -38,6 +38,7 @@ pub fn configure_auto_compound(
     chunk: u64,
     max_cost_per_unit: u64,
     min_interval: i64,
+    max_fee_bps: u16,
 ) -> Result<()> {
     require!(chunk > 0, SoladromeError::InvalidAmount);
     require!(threshold >= chunk, SoladromeError::InvalidAmount);
@@ -55,6 +56,14 @@ pub fn configure_auto_compound(
         min_interval >= MIN_CRANK_INTERVAL,
         SoladromeError::InvalidAmount
     );
+    // A tolerance above what the protocol itself may ever charge is not a bound, it is a number
+    // that reads like one. `MAX_EXERCISE_FEE_BPS` is the ceiling `set_exercise_fee` enforces, so
+    // anything above it can never be reached and would only mislead whoever reads the order back.
+    // Zero stays legal and means UNSET — see `AutoCompound::max_fee_bps`.
+    require!(
+        max_fee_bps <= MAX_EXERCISE_FEE_BPS,
+        SoladromeError::InvalidAmount
+    );
 
     let auto = &mut ctx.accounts.auto;
     auto.owner = ctx.accounts.user.key();
@@ -62,6 +71,7 @@ pub fn configure_auto_compound(
     auto.chunk = chunk;
     auto.max_cost_per_unit = max_cost_per_unit;
     auto.min_interval = min_interval;
+    auto.max_fee_bps = max_fee_bps;
     auto.enabled = true;
     if auto.bump == 0 {
         auto.bump = ctx.bumps.auto;
@@ -122,6 +132,29 @@ pub fn crank_auto_compound(ctx: Context<CrankAutoCompound>) -> Result<()> {
         .ok_or(SoladromeError::Overflow)?
         / UNIT_ONE as u128;
     require!(cost as u128 <= ceiling, SoladromeError::AutoCostTooHigh);
+
+    // ☢️ The bound that does not expire against a rising market.
+    //
+    // The ceiling above is absolute, so the only way to reach it is for the price to rise — and
+    // a rising price makes this round MORE profitable, not less, because the strike stays at
+    // 1 USDC while the SOLA minted is worth more. Enforced alone it stops the order exactly when
+    // its owner would most want it to run, on a forecast they were never able to make.
+    //
+    // What they can answer is the share of the gain they are willing to leave behind, and that
+    // is a rate: price-independent, so the order adapts instead of expiring. The rate lives in
+    // `ProtocolState`, where the authority may move it up to `MAX_EXERCISE_FEE_BPS` — which is
+    // the one change to this arrangement that was never the owner's to accept.
+    //
+    // ⚠️ `0` is UNSET and skips the check. Every order armed before this field existed reads
+    // zero from the account's spare bytes, and treating that as a bound would refuse them all
+    // on their next crank.
+    let max_fee_bps = ctx.accounts.auto.max_fee_bps;
+    if max_fee_bps > 0 {
+        require!(
+            ctx.accounts.protocol_state.exercise_fee_bps <= max_fee_bps,
+            SoladromeError::AutoCostTooHigh
+        );
+    }
 
     let state_bump = ctx.accounts.protocol_state.bump;
     let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];

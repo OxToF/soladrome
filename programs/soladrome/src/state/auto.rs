@@ -60,11 +60,37 @@ pub struct AutoCompound {
     /// again to resume.
     pub enabled: bool,
     pub bump: u8,
+    /// ☢️ THE BOUND THAT ADAPTS, and the reason `max_cost_per_unit` above is no longer the
+    /// headline control.
+    ///
+    /// `max_cost_per_unit` is an ABSOLUTE amount, so it silently doubles as a bet on the SOLA
+    /// price: a round costs the 1 USDC strike plus a share of the gain, so the only way an
+    /// absolute ceiling is ever reached is that the price rose. An order therefore stopped
+    /// itself precisely when compounding had become most profitable — the strike stays at 1 USDC
+    /// while the SOLA received is worth more — and it asked its owner to forecast a price for
+    /// the life of the order, which nobody can do.
+    ///
+    /// The thing actually worth bounding is the RATE: `exercise_fee_bps` is a protocol parameter
+    /// the authority may raise as far as `MAX_EXERCISE_FEE_BPS`, and no holder can predict it.
+    /// Bounding the rate is price-independent, so the order keeps firing at any price and
+    /// refuses only the one change that was never theirs to accept.
+    ///
+    /// ⚠️ **Zero means UNSET, not "only at zero fee".** Every order written before this field
+    /// existed reads 0 out of the account's spare bytes, and reading that as a bound would brick
+    /// them all on the next crank. The degenerate preference it costs us — "compound only while
+    /// there is no fee at all" — is one nobody wants; bricking live orders is not.
+    pub max_fee_bps: u16,
 }
 
 impl AutoCompound {
-    // 32 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 = 90 used of 128 (38 spare, room for the fields a
-    // second recipe will want without a realloc — the lesson of the 3003 devnet brick).
+    // 32 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 2 = 92 used of 128 (36 spare, room for the fields
+    // a second recipe will want without a realloc — the lesson of the 3003 devnet brick).
+    //
+    // ☢️ `max_fee_bps` was appended in 2026-09 and MUST stay last. Borsh is positional, so a new
+    // field is only safe at the END: an account written before it existed then yields the zero
+    // bytes `init` left behind, which is exactly the "unset" the field documents. Inserting it
+    // anywhere else would reinterpret `enabled` and `bump` on every live order — silently, and
+    // with no deserialization error to notice it by, because the length still fits.
     //
     // ⚠️ LEN EXCLUDES the 8-byte discriminator, as every other account here does, so the `init`
     // that creates this asks for `8 + LEN`. Writing `space = LEN` produces an account eight
