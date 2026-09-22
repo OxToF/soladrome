@@ -214,3 +214,43 @@ jobs:
           SUPABASE_SERVICE_KEY: placeholder
           FAUCET_KEYPAIR: "[0]"
           FAUCET_USDC_MINT: "11111111111111111111111111111111"
+
+  # ── 5. Frontend unit tests ────────────────────────────────────────────────
+  # ☢️ These existed and ran NOWHERE. `lib/*.test.mts` covered the RPC fallback, the tx-error
+  # decoder and the recipe engine, and none of it was protecting anything: a test that no job
+  # runs is documentation. Added when `sendtx.test.mts` arrived, because that one pins a
+  # double-execution guard and had no business living outside CI.
+  #
+  # ⚠️ NODE 24, not the 22 the job above uses. `lib/program.ts` imports `BN` from
+  # `@coral-xyz/anchor`, which is CommonJS: Node 22 refuses the named export and the run dies on
+  # a SyntaxError before a single test executes. Same failure, same cause and same fix as the
+  # bankrun suites — see CLAUDE.md. The other three files pass on either version only because
+  # they never reach anchor.
+  #
+  # The loader teaches Node the three conventions of the webpack build it does not share: the
+  # IDL imported as JSON without an import attribute, extensionless relative imports, and `@/`.
+  frontend-unit:
+    name: Frontend Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "yarn"
+          cache-dependency-path: app/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Unit tests
+        # ☢️ A GLOB, not a list. `node --test` ignores a path that does not exist and still
+        # exits 0, so an explicit list turns a renamed or moved test file into vanished coverage
+        # under a green build. The glob is quoted so the shell hands it to node rather than
+        # expanding it, which keeps that property on a runner with different shell options.
+        run: node --import ./scripts/json-loader.mjs --test 'lib/*.test.mts'

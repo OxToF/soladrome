@@ -430,48 +430,100 @@ export async function sendTx(
     ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
   ];
 
-  const { blockhash, lastValidBlockHeight } = await rpcRetry(() => txConn.getLatestBlockhash());
-  const tx = new Transaction().add(...budgetIxs, ...ixs);
-  tx.recentBlockhash = blockhash;
-  tx.feePayer        = wallet.publicKey;
-  // Sign with the wallet, but SEND through the dApp's own (Helius) connection —
-  // NOT wallet.sendTransaction, which routes via the wallet extension's own RPC
-  // and was returning a bare -32603 "Internal error" (WalletSendTransactionError)
-  // on devnet under load. skipPreflight: these txs are pre-validated.
-  const signed = await wallet.signTransaction(tx);
-  const raw = signed.serialize();
-  const sig = await rpcRetry(() =>
-    txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }),
-  );
+  // ☢️ A BLOCKHASH IS VALID FOR 150 BLOCKS, AND THE COUNTDOWN STARTS BEFORE THE HUMAN IS ASKED.
+  //
+  // 150 blocks is 60 s at the 400 ms slot time everyone quotes, and **25 s on devnet as it
+  // actually runs** — measured 2026-09-22: 149 blocks of margin consumed in 25.4 s, because the
+  // cluster was producing about six slots a second. Reading the card, unlocking the wallet and
+  // approving spends that easily.
+  //
+  // The transaction then goes out with a dead blockhash, no validator will include it, and the
+  // loop below used to spend the whole window rebroadcasting it before reporting congestion. The
+  // network was not congested; the signature simply arrived too late. Seen for real on the
+  // standing-order screen, where the wallet popup sits under a paragraph worth reading.
+  //
+  // So the whole build-sign-send-confirm cycle is retried once against a fresh blockhash. The
+  // cost is a second wallet prompt, which is a far better outcome than a failure.
+  let expired: string | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { blockhash, lastValidBlockHeight } = await rpcRetry(() => txConn.getLatestBlockhash());
+    const tx = new Transaction().add(...budgetIxs, ...ixs);
+    tx.recentBlockhash = blockhash;
+    tx.feePayer        = wallet.publicKey;
+    // Sign with the wallet, but SEND through the dApp's own (Helius) connection —
+    // NOT wallet.sendTransaction, which routes via the wallet extension's own RPC
+    // and was returning a bare -32603 "Internal error" (WalletSendTransactionError)
+    // on devnet under load. skipPreflight: these txs are pre-validated.
+    const signed = await wallet.signTransaction(tx);
+    const raw = signed.serialize();
 
-  // Robust confirm: poll signature status and periodically REBROADCAST the same
-  // signed tx until it confirms or the blockhash truly expires. Rebroadcasting
-  // keeps the tx alive in validators' mempools on a congested cluster instead of
-  // relying on a single send + one-shot confirmTransaction.
-  while (true) {
-    // A refused status read is not a failed transaction: the signature is already broadcast,
-    // so the loop keeps polling rather than reporting a failure for a transaction that may
-    // well land. Only a real `status.err` below ends it badly.
-    const status = await txConn
+    // One read, before spending the window on a corpse. `skipPreflight` means the RPC accepts
+    // the bytes and hands back a signature without ever looking at the blockhash, so without
+    // this the only symptom of a late signature is a 25-second wait ending in the wrong reason.
+    const heightNow = await txConn.getBlockHeight("confirmed").catch(() => 0);
+    if (heightNow > lastValidBlockHeight) {
+      expired = "signing";
+      continue;
+    }
+
+    const sig = await rpcRetry(() =>
+      txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }),
+    );
+
+    // Robust confirm: poll signature status and periodically REBROADCAST the same
+    // signed tx until it confirms or the blockhash truly expires. Rebroadcasting
+    // keeps the tx alive in validators' mempools on a congested cluster instead of
+    // relying on a single send + one-shot confirmTransaction.
+    let outcome: "confirmed" | "expired" = "expired";
+    while (true) {
+      // A refused status read is not a failed transaction: the signature is already broadcast,
+      // so the loop keeps polling rather than reporting a failure for a transaction that may
+      // well land. Only a real `status.err` below ends it badly.
+      const status = await txConn
+        .getSignatureStatus(sig)
+        .then((r) => r.value)
+        .catch((e) => {
+          if (explainRpcRefusal(e)) return null;
+          throw e;
+        });
+      if (status?.err) {
+        throw new Error(`${explainTxError(status.err, tx.instructions)} (tx ${sig.slice(0, 12)}…)`);
+      }
+      if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
+        outcome = "confirmed";
+        break;
+      }
+      const height = await txConn.getBlockHeight("confirmed").catch(() => 0);
+      if (height > lastValidBlockHeight) break;
+      await txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    if (outcome === "confirmed") return sig;
+
+    // ☢️ NEVER RETRY WITHOUT ASKING THE CHAIN FIRST. Retrying re-signs the same instructions, so
+    // a first attempt that landed and was merely missed by the polling would be executed twice —
+    // a second compound, a second arm. Past `lastValidBlockHeight` the old blockhash can no
+    // longer be accepted, so this read is conclusive rather than a race: if it is not there now,
+    // it never will be.
+    const settled = await txConn
       .getSignatureStatus(sig)
       .then((r) => r.value)
-      .catch((e) => {
-        if (explainRpcRefusal(e)) return null;
-        throw e;
-      });
-    if (status?.err) {
-      throw new Error(`${explainTxError(status.err, tx.instructions)} (tx ${sig.slice(0, 12)}…)`);
+      .catch(() => null);
+    if (settled && !settled.err) return sig;
+    if (settled?.err) {
+      throw new Error(`${explainTxError(settled.err, tx.instructions)} (tx ${sig.slice(0, 12)}…)`);
     }
-    if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
-      return sig;
-    }
-    const height = await txConn.getBlockHeight("confirmed").catch(() => 0);
-    if (height > lastValidBlockHeight) {
-      throw new Error(
-        `Transaction expired before confirmation (${sig}). The network may be congested — please try again.`
-      );
-    }
-    await txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }).catch(() => {});
-    await new Promise((r) => setTimeout(r, 1500));
+    expired = `tx ${sig.slice(0, 12)}…`;
   }
+
+  // Both attempts ran out of window. Say which half was slow, because the remedies differ: a
+  // signature that arrives late is fixed by approving faster or by unlocking the wallet first,
+  // while a transaction that was broadcast in time and still missed the window is the cluster's
+  // doing. Neither is "the network may be congested", which is what this used to claim on a
+  // devnet running perfectly well.
+  throw new Error(
+    expired === "signing"
+      ? "The transaction expired while it was waiting to be signed — a blockhash is only valid for about 25 seconds on devnet. Unlock your wallet first, then approve, and it will go through."
+      : `Transaction expired before confirmation (${expired}), twice. It was broadcast in time, so the cluster is dropping it — try again in a moment.`
+  );
 }
