@@ -450,6 +450,41 @@ pub mod soladrome {
     pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
         instructions::auto_lp::crank_auto_compound_lp(ctx)
     }
+
+    // ── Per-position reward strategies ──────────────────────────────────────
+    // Appended last, for the same `line!()` reason as the blocks above.
+
+    pub fn set_pool_strategy(
+        ctx: Context<SetPoolStrategy>,
+        mode: u8,
+        min_harvest: u64,
+        min_interval: i64,
+        min_intrinsic_bps: u16,
+        max_fee_bps: u16,
+    ) -> Result<()> {
+        instructions::strategy::set_pool_strategy(
+            ctx,
+            mode,
+            min_harvest,
+            min_interval,
+            min_intrinsic_bps,
+            max_fee_bps,
+        )
+    }
+
+    pub fn close_pool_strategy(ctx: Context<ClosePoolStrategy>) -> Result<()> {
+        instructions::strategy::close_pool_strategy(ctx)
+    }
+
+    /// Permissionless: any signer may fire any position's liquidity strategy.
+    pub fn crank_pool_strategy_lp(ctx: Context<CrankPoolStrategyLp>) -> Result<()> {
+        instructions::strategy::crank_pool_strategy_lp(ctx)
+    }
+
+    /// Permissionless: any signer may fire any position's voting strategy.
+    pub fn crank_pool_strategy_vote(ctx: Context<CrankPoolStrategyVote>) -> Result<()> {
+        instructions::strategy::crank_pool_strategy_vote(ctx)
+    }
 }
 
 // ── Test-only module ─────────────────────────────────────────────────────────

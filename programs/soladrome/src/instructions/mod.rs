@@ -26,6 +26,7 @@ pub mod gauges;
 pub mod partners;
 pub mod pol;
 pub mod stake;
+pub mod strategy;
 pub mod ve;
 pub mod vesting;
 
@@ -43,6 +44,7 @@ pub use partners::*;
 #[allow(ambiguous_glob_reexports)]
 pub use pol::*;
 pub use stake::*;
+pub use strategy::*;
 #[allow(ambiguous_glob_reexports)]
 pub use ve::*;
 pub use vesting::*;

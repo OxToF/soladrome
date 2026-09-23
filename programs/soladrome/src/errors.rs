@@ -173,4 +173,8 @@ pub enum SoladromeError {
     AutoImpactTooHigh,
     #[msg("This pool cannot be an LP destination, or is not the pool the route requires: a destination must pair USDC or SOL, and must not hold oSOLA")]
     AutoInvalidRoute,
+    #[msg("This strategy does something else — a cranker may fire a strategy, never choose what it does")]
+    StrategyWrongMode,
+    #[msg("This position's pool is on the route its rewards would take, so it cannot compound into it — the same pool cannot be both harvested and traded through in one round")]
+    StrategyRouteConflict,
 }
