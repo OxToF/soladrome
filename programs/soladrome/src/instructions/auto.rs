@@ -115,6 +115,14 @@ pub fn crank_auto_compound(ctx: Context<CrankAutoCompound>) -> Result<()> {
         SoladromeError::AutoOwnerMismatch
     );
 
+    // ☢️ The owner chose where this order goes, and it is not here. Without this, anyone could
+    // fire the staking recipe on an order its owner pointed at liquidity — the destination
+    // would belong to whoever calls.
+    require!(
+        ctx.accounts.auto.lp_target == Pubkey::default(),
+        SoladromeError::AutoWrongDestination
+    );
+
     let now = Clock::get()?.unix_timestamp;
     let amount = ctx.accounts.auto.chunk;
     require!(

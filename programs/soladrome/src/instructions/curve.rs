@@ -212,20 +212,31 @@ pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64) -> Result<()> {
 /// is bounded by amount × vu) and rounds the gain DOWN, so the truncation error is sub-base-unit
 /// and always in the user's favour — the protocol can never overcharge through rounding.
 pub fn exercise_fee(state: &ProtocolState, o_sola_amount: u64) -> Result<u64> {
+    let fee_bps = state.exercise_fee_bps as u128;
+    let gain = exercise_gain(state, o_sola_amount)? as u128;
+    let f = gain.checked_mul(fee_bps).ok_or(SoladromeError::Overflow)? / 10_000;
+    u64::try_from(f).map_err(|_| error!(SoladromeError::Overflow))
+}
+
+/// What exercising `o_sola_amount` gains before the fee, in USDC base units: the curve price
+/// above the 1 USDC strike, `amount × (vu − vs) / vs`, floored. Zero at or under the strike.
+///
+/// Extracted so the standing LP order values oSOLA with the same figure the fee is charged on.
+/// Its bound is "sell for at least a share of what exercising would net", and a second copy of
+/// this arithmetic is how that bound and the fee would drift apart.
+pub fn exercise_gain(state: &ProtocolState, o_sola_amount: u64) -> Result<u64> {
     let vu = state.virtual_usdc as u128;
     let vs = state.virtual_sola as u128;
-    let fee_bps = state.exercise_fee_bps as u128;
     // Out of the money (or exactly at the floor) => no gain => no fee. vs is never 0 while
     // k > 0, but guard anyway rather than divide blindly.
-    if vu <= vs || vs == 0 || fee_bps == 0 {
+    if vu <= vs || vs == 0 {
         return Ok(0);
     }
     let gain = (o_sola_amount as u128)
         .checked_mul(vu - vs)
         .ok_or(SoladromeError::Overflow)?
         / vs;
-    let f = gain.checked_mul(fee_bps).ok_or(SoladromeError::Overflow)? / 10_000;
-    u64::try_from(f).map_err(|_| error!(SoladromeError::Overflow))
+    u64::try_from(gain).map_err(|_| error!(SoladromeError::Overflow))
 }
 
 pub fn exercise_o_sola(ctx: Context<ExerciseOSola>, o_sola_amount: u64) -> Result<()> {

@@ -163,4 +163,14 @@ pub enum SoladromeError {
     AutoOwnerMismatch,
     #[msg("Only the owner may claim while their wallet holds less LP than they deposited — a claim on a partial balance forfeits the rest, and that is not a stranger's decision to make")]
     PartialBasisClaim,
+    #[msg("This standing order compounds to a different destination — a cranker may fire an order, never choose where it goes")]
+    AutoWrongDestination,
+    #[msg(
+        "The pool pays less for this oSOLA than the share of its exercise value the order accepts"
+    )]
+    AutoBelowIntrinsic,
+    #[msg("This leg would move more than the per-hop share of the pool's reserve a standing order may trade")]
+    AutoImpactTooHigh,
+    #[msg("This pool cannot be an LP destination, or is not the pool the route requires: a destination must pair USDC or SOL, and must not hold oSOLA")]
+    AutoInvalidRoute,
 }

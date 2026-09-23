@@ -80,13 +80,39 @@ pub struct AutoCompound {
     /// them all on the next crank. The degenerate preference it costs us — "compound only while
     /// there is no fee at all" — is one nobody wants; bricking live orders is not.
     pub max_fee_bps: u16,
+    /// ☢️ THE DESTINATION: the AMM pool this order compounds into, or the default key for the
+    /// original destination, staking. "Liquidity OR vote" is literally this field.
+    ///
+    /// One order rather than two because the oSOLA account has exactly ONE delegate: two orders
+    /// would share one allowance and race each other for it. And because the crank is
+    /// permissionless, the destination cannot be a choice of whoever calls — `crank_auto_compound`
+    /// refuses an order that names a pool here, and `crank_auto_compound_lp` refuses one that
+    /// names a different pool, so a cranker can neither redirect nor downgrade it.
+    ///
+    /// Only the target is stored. The rest of the route is derived, never chosen: the oSOLA is
+    /// sold on THE oSOLA/USDC pool (a unique PDA), and reaches a pool without USDC through THE
+    /// SOL/USDC pool. A route with a free hop would let a cranker steer it through a shallow
+    /// pool they had just moved.
+    pub lp_target: Pubkey,
+    /// ☢️ THE BOUND ON THE SALE: the order sells oSOLA only for at least this share of its
+    /// intrinsic value, `(P_curve − 1) × (1 − exercise fee)` per oSOLA.
+    ///
+    /// The reference is the curve because nobody can push it down: `sell_sola` never touches the
+    /// virtual reserves, and only buys move them. So a cranker who sandwiches the sale can
+    /// depress the pool price, never the bound. It is a RATE, like `max_fee_bps`, so it follows
+    /// the market instead of expiring against it; an absolute minimum price would ask the owner
+    /// to forecast. Meaningless (zero) while the destination is staking.
+    pub min_intrinsic_bps: u16,
 }
 
 impl AutoCompound {
-    // 32 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 2 = 92 used of 128 (36 spare, room for the fields
-    // a second recipe will want without a realloc — the lesson of the 3003 devnet brick).
+    // 32 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 2 + 32 + 2 = 126 used of 128. The last two fields
+    // are the second recipe the spare bytes were kept for, and they fit WITHOUT a realloc — the
+    // lesson of the 3003 devnet brick: an order armed before them reads zeros, which is exactly
+    // "destination: staking, no LP bound". Two bytes remain.
     //
-    // ☢️ `max_fee_bps` was appended in 2026-09 and MUST stay last. Borsh is positional, so a new
+    // ☢️ `max_fee_bps`, then `lp_target` and `min_intrinsic_bps`, were appended in 2026-09 and
+    // MUST stay last, in that order. Borsh is positional, so a new
     // field is only safe at the END: an account written before it existed then yields the zero
     // bytes `init` left behind, which is exactly the "unset" the field documents. Inserting it
     // anywhere else would reinterpret `enabled` and `bump` on every live order — silently, and

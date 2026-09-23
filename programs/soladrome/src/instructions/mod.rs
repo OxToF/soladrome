@@ -17,6 +17,7 @@
 pub mod admin;
 pub mod amm;
 pub mod auto;
+pub mod auto_lp;
 pub mod borrow;
 pub mod bribes;
 pub mod curve;
@@ -32,6 +33,7 @@ pub use admin::*;
 #[allow(ambiguous_glob_reexports)]
 pub use amm::*;
 pub use auto::*;
+pub use auto_lp::*;
 pub use borrow::*;
 pub use bribes::*;
 pub use curve::*;
