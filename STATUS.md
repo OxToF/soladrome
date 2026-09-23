@@ -23,12 +23,25 @@ what is deployed" is stale from this date onward.
 | Previous tag | `audit-2026-08-30b`, a verified **ancestor** of the audit tag |
 | Branch | `main` — one trunk, and the deployed tree |
 | Program id (devnet) | `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe` |
-| Devnet binary | sha256 `c86e3060…`, 1 919 584 bytes, SBPFv3, deployed 2026-09-24 at slot `503029399` from commit `d9ae6c8` (branch `feat/pool-strategies`), verified byte-for-byte by dump |
+| Devnet binary | sha256 `fa483503…`, 1 921 288 bytes, SBPFv3, deployed 2026-09-24 at slot `503048080` from commit `832a775` (branch `feat/pool-strategies`), verified byte-for-byte by dump |
 | Instructions | **65** (54 at the audit tag, plus four standing-order, three LP-order and four per-position strategy instructions) |
 | Account parameters | 503 at the audit tag; the four new instructions add their own |
 | Error variants | **68** (58 at the audit tag, plus the ten `Auto*` / `PartialBasisClaim` / `Strategy*` variants) |
 | On-chain account types | **24** (22 at the audit tag, plus `AutoCompound` and `PoolStrategy`) |
-| Tests | **113 bankrun cases passing, 0 failing** — 12 per-position strategy, 9 LP order, 8 standing order, 4 permissionless claim; mutations on every guard · 80 cargo unit tests · 48 frontend unit tests |
+| Tests | **114 bankrun cases passing, 0 failing** — 13 per-position strategy (incl. the duplicate-pool regression), 9 LP order, 8 standing order, 4 permissionless claim; mutations on every guard · 80 cargo unit tests · 48 frontend unit tests |
+
+**☢️ FOUND AND FIXED IN REVIEW (2026-09-24): a pool passed twice reverted a route's reserves.**
+`AmmPool` is owned by this program, so Anchor writes every mutable copy back at exit, in field
+order — **and does not refuse a duplicate**. With a USDC destination `route_into_lp` never read the
+hop, so a cranker could pass the sale pool as `hop_pool`: its stale copy, written after the real
+one, reverted the sale's reserve update (bankrun: USDC reserve 38 000.000000 against a vault of
+37 999.876010). Permissionless and repeatable with cheap orders of one's own — enough to drain the
+sale pool's USDC. It affected `crank_auto_compound_lp` (on devnet since 2026-09-23) and
+`crank_pool_strategy_lp`. Fixed in `832a775`: the hop accounts must be absent unless the route
+needs them, and every pool on the route is a distinct account. Every devnet pool was checked —
+reserves equal vaults, never exploited — and the fix was deployed within the hour (slot
+`503048080`). ⚠️ The general rule for this program: any instruction taking two program-owned
+accounts of the same type must prove they are distinct; Anchor will not.
 
 **☢️ Each LP position has its own reward strategy since 2026-09-24.** A wallet-based order can
 only have one destination — every pool pays oSOLA into the same account, where it no longer says
