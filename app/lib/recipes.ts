@@ -94,7 +94,7 @@ export type ClaimablePool = {
 /// What the chain says about a wallet's compound right now — the conditions, and nothing else.
 ///
 /// This is deliberately separate from `planCompound`, and it is the piece with two futures.
-/// Today the Farm screen polls it to tell a user when their threshold is met. Tomorrow the same
+/// Today the Rewards card (top of Pools) polls it to tell a user when their threshold is met. Tomorrow the same
 /// function is what a keeper asks before cranking a standing order: "is it worth firing yet".
 /// Building the watcher any other way would have meant writing that judgement twice and
 /// watching the two copies drift, which is the mistake `lprewards.ts` exists to remember.
@@ -291,7 +291,7 @@ export async function planCompound(
   const user = ctx.wallet.publicKey;
   const state = ctx.protocolState;
 
-  // Every read and every condition lives in the signal, so the watcher on the Farm screen and
+  // Every read and every condition lives in the signal, so the watcher on the Rewards card and
   // the plan the user signs can never disagree about what is claimable.
   const signal = await evaluateCompound(ctx, opts);
   if (signal.blocked) return blocked(title, signal.blocked);

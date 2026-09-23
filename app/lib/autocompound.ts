@@ -25,7 +25,7 @@ import {
 } from "@solana/spl-token";
 import {
   getProgram, statePda, solaM, oSolaM, floorVault, marketVault, solaVaultAddr,
-  positionPda, userAta, lpMintPda, commonAccounts, PROGRAM_ID,
+  positionPda, userAta, lpMintPda, commonAccounts, PROGRAM_ID, poolPda, WSOL_MINT_STR,
 } from "./program";
 import { decodeTokenAmount } from "./recipe";
 import { lpUserInfoPda } from "./lprewards";
@@ -61,7 +61,54 @@ export type StandingOrder = {
   rounds: number;
   usdcSpent: number;
   lastCrankTs: number;
+  /// ☢️ WHERE IT GOES: the AMM pool the order compounds into, or null for voting power (hiSOLA).
+  /// One order, one destination — the oSOLA account has a single delegate, so "liquidity OR
+  /// vote" is this field and nothing else. Orders armed before it existed read null.
+  lpTarget: PublicKey | null;
+  /// For a liquidity order: the least share of an oSOLA's exercise value it will sell for, in
+  /// basis points. Zero for a voting order.
+  minIntrinsicBps: number;
 };
+
+/// Where a standing order sends what it compounds.
+export type Destination =
+  | { kind: "vote" }
+  | { kind: "lp"; pool: PublicKey; minIntrinsicBps: number };
+
+/// Whether `pool` can be a liquidity destination, mirroring `lp_deposit_side` in the program:
+/// it must pair USDC (no hop) or wSOL (one hop through SOL/USDC), and must not hold oSOLA.
+export function lpDestinationSide(
+  mintA: PublicKey,
+  mintB: PublicKey,
+  usdcMint: PublicKey,
+): { deposit: PublicKey; needsHop: boolean } | null {
+  const holds = (m: PublicKey) => mintA.equals(m) || mintB.equals(m);
+  const wsol = new PublicKey(WSOL_MINT_STR);
+  if (holds(oSolaM)) return null;
+  if (holds(usdcMint)) return { deposit: usdcMint, needsHop: false };
+  if (holds(wsol)) return { deposit: wsol, needsHop: true };
+  return null;
+}
+
+function decodeOrder(raw: any): StandingOrder {
+  const target = raw.lpTarget as PublicKey | undefined;
+  return {
+    owner: raw.owner as PublicKey,
+    threshold: Number(raw.threshold) / UNIT,
+    chunk: Number(raw.chunk) / UNIT,
+    maxCostPerUnit: Number(raw.maxCostPerUnit) / UNIT,
+    // `?? 0` covers an account written before the field existed: Anchor reads the zero
+    // bytes `init` left, which is the same "unset" the program treats as no bound.
+    maxFeeBps: Number(raw.maxFeeBps ?? 0),
+    minInterval: Number(raw.minInterval),
+    enabled: !!raw.enabled,
+    rounds: Number(raw.rounds),
+    usdcSpent: Number(raw.usdcSpent) / UNIT,
+    lastCrankTs: Number(raw.lastCrankTs),
+    lpTarget: target && !target.equals(PublicKey.default) ? target : null,
+    minIntrinsicBps: Number(raw.minIntrinsicBps ?? 0),
+  };
+}
 
 /// What the order can still spend, as SPL Token records it. `null` when no delegation is in
 /// place — which is the honest reading of "armed but unable to act".
@@ -125,22 +172,7 @@ export async function readStandingOrder(
   const [usdcAllowance, usdcHijacked] = decodeAllowance(infos[1], auto);
 
   return {
-    order: raw
-      ? {
-          owner: raw.owner as PublicKey,
-          threshold: Number(raw.threshold) / UNIT,
-          chunk: Number(raw.chunk) / UNIT,
-          maxCostPerUnit: Number(raw.maxCostPerUnit) / UNIT,
-          // `?? 0` covers an account written before the field existed: Anchor reads the zero
-          // bytes `init` left, which is the same "unset" the program treats as no bound.
-          maxFeeBps: Number(raw.maxFeeBps ?? 0),
-          minInterval: Number(raw.minInterval),
-          enabled: !!raw.enabled,
-          rounds: Number(raw.rounds),
-          usdcSpent: Number(raw.usdcSpent) / UNIT,
-          lastCrankTs: Number(raw.lastCrankTs),
-        }
-      : null,
+    order: raw ? decodeOrder(raw) : null,
     allowances: {
       oSola: oSolaAllowance,
       usdc: usdcAllowance,
@@ -182,11 +214,15 @@ export async function buildArmInstructions(
     /// that: it is a question the owner can answer, and it is enforced by SPL Token rather than
     /// by us.
     budgetUsdc: number;
+    /// Voting power (the default) or a pool. A liquidity order sells its oSOLA instead of
+    /// exercising it, so it needs no USDC: no USDC allowance is granted for it.
+    destination?: Destination;
   },
 ): Promise<TransactionInstruction[]> {
   const user = wallet.publicKey;
   const program = getProgram(new AnchorProvider(connection, wallet, {}));
   const auto = autoPda(user);
+  const destination: Destination = opts.destination ?? { kind: "vote" };
 
   const configure = await (program.methods as any)
     .configureAutoCompound(
@@ -214,12 +250,64 @@ export async function buildArmInstructions(
   const oSolaAllowance = BigInt(Math.floor(opts.chunk * opts.rounds * UNIT));
   const usdcAllowance = BigInt(Math.ceil(opts.budgetUsdc * UNIT));
 
-  return [
+  const ixs: TransactionInstruction[] = [
     configure,
     createApproveInstruction(userAta(oSolaM, user), auto, user, oSolaAllowance),
-    createApproveInstruction(userAta(usdcMint, user), auto, user, usdcAllowance),
   ];
+  if (destination.kind === "lp") {
+    // The pool and the price floor, in the same signature as the order they belong to.
+    ixs.push(await buildSetLpInstruction(connection, wallet, destination.pool, destination.minIntrinsicBps));
+    // ☢️ An order authorises what it uses and nothing more. A liquidity order spends no USDC, so
+    // a USDC allowance left from its voting days is withdrawn here rather than left standing —
+    // harmless today (the staking crank refuses this order), and exactly the kind of leftover
+    // grant nobody remembers the day it stops being harmless. Only when this order holds it:
+    // revoking clears the slot whoever it belongs to, and another application's is not ours.
+    const usdcAta = userAta(usdcMint, user);
+    const [held] = decodeAllowance(await connection.getAccountInfo(usdcAta), auto);
+    if (held !== null) ixs.push(createRevokeInstruction(usdcAta, user));
+  } else {
+    ixs.push(createApproveInstruction(userAta(usdcMint, user), auto, user, usdcAllowance));
+    // Pointing an order back at voting power is a field reset. `configure` above creates the
+    // account when it does not exist yet, so this is valid on a first arming too — and it means
+    // the caller never has to know which destination the order had before.
+    ixs.push(
+      await (program.methods as any)
+        .clearAutoCompoundLp()
+        .accounts({ user, auto })
+        .instruction(),
+    );
+  }
+  return ixs;
 }
+
+/// Point an existing order at `pool`. Also creates, at the owner's expense, the LP account and
+/// the reward record the crank will write — the crank never initialises anything for anyone.
+export async function buildSetLpInstruction(
+  connection: Connection,
+  wallet: AnchorWallet,
+  pool: PublicKey,
+  minIntrinsicBps: number,
+): Promise<TransactionInstruction> {
+  const user = wallet.publicKey;
+  const program = getProgram(new AnchorProvider(connection, wallet, {}));
+  const lpMint = lpMintPda(pool);
+  return (program.methods as any)
+    .setAutoCompoundLp(Math.round(minIntrinsicBps))
+    .accounts({
+      user,
+      auto: autoPda(user),
+      protocolState: statePda,
+      targetPool: pool,
+      lpMint,
+      userLp: userAta(lpMint, user),
+      lpUserInfo: lpUserInfoPda(pool, user),
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: commonAccounts.associatedTokenProgram,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+}
+
 
 /// Stop the order the way the design promises: by revoking, in the token program.
 ///
@@ -275,6 +363,56 @@ export async function buildCrankInstruction(
       floorVault,
       marketVault,
       solaVault: solaVaultAddr,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+}
+
+/// The liquidity crank, built for any owner by any caller. The route is DERIVED here exactly as
+/// the program derives it — the oSOLA/USDC pool, then the SOL/USDC pool when the destination
+/// pairs SOL — because the program refuses any other: a cranker never chooses a hop.
+export async function buildLpCrankInstruction(
+  connection: Connection,
+  wallet: AnchorWallet,
+  usdcMint: PublicKey,
+  owner: PublicKey,
+  target: PublicKey,
+): Promise<TransactionInstruction> {
+  const program = getProgram(new AnchorProvider(connection, wallet, {}));
+  const wsol = new PublicKey(WSOL_MINT_STR);
+  const sellKey = poolPda(oSolaM, usdcMint);
+  const hopKey = poolPda(wsol, usdcMint);
+  const [sell, tgt]: any[] = await Promise.all([
+    (program.account as any).ammPool.fetch(sellKey),
+    (program.account as any).ammPool.fetch(target),
+  ]);
+  const vaultOf = (pool: any, mint: PublicKey): PublicKey =>
+    (pool.tokenAMint as PublicKey).equals(mint) ? pool.tokenAVault : pool.tokenBVault;
+  const side = lpDestinationSide(tgt.tokenAMint, tgt.tokenBMint, usdcMint);
+  if (!side) throw new Error("this pool cannot be a liquidity destination");
+  const hop: any = side.needsHop ? await (program.account as any).ammPool.fetch(hopKey) : null;
+
+  return (program.methods as any)
+    .crankAutoCompoundLp()
+    .accounts({
+      cranker: wallet.publicKey,
+      owner,
+      auto: autoPda(owner),
+      protocolState: statePda,
+      oSolaMint: oSolaM,
+      userOSola: userAta(oSolaM, owner),
+      sellPool: sellKey,
+      sellOSolaVault: vaultOf(sell, oSolaM),
+      sellUsdcVault: vaultOf(sell, usdcMint),
+      hopPool: hop ? hopKey : null,
+      hopUsdcVault: hop ? vaultOf(hop, usdcMint) : null,
+      hopSolVault: hop ? vaultOf(hop, wsol) : null,
+      targetPool: target,
+      targetDepositVault: vaultOf(tgt, side.deposit),
+      lpMint: tgt.lpMint,
+      userLp: userAta(tgt.lpMint, owner),
+      lpUserInfo: lpUserInfoPda(target, owner),
+      marketVault,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
     .instruction();
@@ -366,12 +504,23 @@ export async function listCrankableOrders(
     // simulates before it sends, so being wrong here costs nothing on chain. What it costs is
     // an operator staring at "READY" for an order that will never fire, which is exactly what
     // happened the first time: a 500-oSOLA round against a 177 USDC balance.
+    const isLp = !!raw.lpTarget && !(raw.lpTarget as PublicKey).equals(PublicKey.default);
     let why = "";
     if (!raw.enabled) why = "disabled";
     else if (oSolaBalance < threshold) why = "below threshold";
     else if (oSolaBalance < chunk) why = "not a full chunk";
     else if (elapsed < Number(raw.minInterval)) why = `${Number(raw.minInterval) - elapsed}s to go`;
-    else if (protocolState && usdcBalance < cost) {
+    // A liquidity order sells its oSOLA and pays nothing, so the USDC conditions below are not
+    // its conditions. What can still stop it — the price floor, the leg caps — the keeper learns
+    // from its simulation.
+    else if (isLp) {
+      if (oSolaHijacked) why = "delegate slot taken by another application";
+      else if (oSolaAllowance === null) {
+        why = Number(raw.rounds) > 0 ? "allowance spent — re-arm to continue" : "no allowance granted";
+      } else if (oSolaAllowance < chunk) {
+        why = `allowance nearly spent (${(Number(oSolaAllowance) / UNIT).toFixed(2)} oSOLA left)`;
+      }
+    } else if (protocolState && usdcBalance < cost) {
       why = `needs ${(Number(cost) / UNIT).toFixed(2)} USDC, holds ${(Number(usdcBalance) / UNIT).toFixed(2)}`;
     } else if (
       protocolState &&
@@ -397,18 +546,7 @@ export async function listCrankableOrders(
 
     return {
       owner: raw.owner as PublicKey,
-      order: {
-        owner: raw.owner as PublicKey,
-        threshold: Number(raw.threshold) / UNIT,
-        chunk: Number(raw.chunk) / UNIT,
-        maxCostPerUnit: Number(raw.maxCostPerUnit) / UNIT,
-        maxFeeBps: Number(raw.maxFeeBps ?? 0),
-        minInterval: Number(raw.minInterval),
-        enabled: !!raw.enabled,
-        rounds: Number(raw.rounds),
-        usdcSpent: Number(raw.usdcSpent) / UNIT,
-        lastCrankTs: Number(raw.lastCrankTs),
-      },
+      order: decodeOrder(raw),
       oSolaBalance,
       ready: why === "",
       why,

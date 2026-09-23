@@ -29,6 +29,18 @@ import { trackQuest } from "@/lib/quests";
 import { StatusBanner } from "./ui/StatusBanner";
 import { Skeleton } from "./ui/Skeleton";
 import { ButtonHint } from "./ui/ButtonHint";
+import { Rewards } from "./Rewards";
+import type { LpChoice } from "./StandingOrder";
+import {
+  buildArmInstructions, buildSetLpInstruction, lpDestinationSide, readStandingOrder,
+  type StandingOrder as Order,
+} from "@/lib/autocompound";
+import { measureIxs, WIRE_LIMIT } from "@/lib/recipe";
+
+/// What ticking "compound my rewards into this pool" arms when the wallet has no standing order
+/// yet. Deliberately modest and shown in full next to the box — the Rewards card is where the
+/// owner changes any of it.
+const DEFAULT_LP_ORDER = { chunk: 50, rounds: 20, minInterval: 3_600, minIntrinsicBps: 7_000 };
 
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
 const PCT = [25, 50, 75, 100] as const;
@@ -155,6 +167,12 @@ export function Pools() {
   // anyone holding transferred LP. See `rewardBasis`.
   const [userLpRecorded, setUserLpRecorded] = useState<Record<string, bigint>>({});
   const [pendingOsola,  setPendingOsola]  = useState<Record<string, number>>({});
+  // ── "Compound my rewards into this pool", on the Add tab ──────────────────
+  // The wallet's standing order, read when a pool is opened: one order for every pool, so the
+  // box has to say where the rewards go TODAY before it offers to send them here instead.
+  const [order,          setOrder]          = useState<Order | null>(null);
+  const [orderLive,      setOrderLive]      = useState(false);
+  const [compoundHere,   setCompoundHere]   = useState(false);
 
   // Add liquidity
   const [addA, setAddA] = useState("");
@@ -513,8 +531,37 @@ export function Pools() {
         } as any)
         .instruction();
 
-      const sig = await sendTx(connection, wallet, [...preIxs, addIx, ...postIxs]);
-      setStatus(`✅ Liquidity added — ${sig.slice(0, 16)}…`);
+      // ── Point the standing order here, in the same signature when it fits ──
+      // An order that is live keeps its size and pacing and only changes destination. One that
+      // does not exist — or has spent its allowance — is armed with the defaults shown next to
+      // the box, because pointing an order that cannot act would compound nothing.
+      const orderIxs: any[] = [];
+      if (compoundHere && selectedIsDestination && usdcMint) {
+        if (order && orderLive) {
+          orderIxs.push(await buildSetLpInstruction(
+            connection, wallet, poolAddr, order.minIntrinsicBps || DEFAULT_LP_ORDER.minIntrinsicBps,
+          ));
+        } else {
+          orderIxs.push(...await buildArmInstructions(connection, wallet, usdcMint, {
+            threshold: DEFAULT_LP_ORDER.chunk,
+            chunk: DEFAULT_LP_ORDER.chunk,
+            maxCostPerUnit: 1.1,
+            minInterval: DEFAULT_LP_ORDER.minInterval,
+            rounds: DEFAULT_LP_ORDER.rounds,
+            maxFeeBps: 0,
+            budgetUsdc: 0,
+            destination: { kind: "lp", pool: poolAddr, minIntrinsicBps: DEFAULT_LP_ORDER.minIntrinsicBps },
+          }));
+        }
+      }
+      const together = [...preIxs, addIx, ...postIxs, ...orderIxs];
+      const fits = measureIxs(together, wallet.publicKey) <= WIRE_LIMIT;
+      const sig = await sendTx(connection, wallet, fits ? together : [...preIxs, addIx, ...postIxs]);
+      // Too big for one transaction (a wSOL deposit wraps and unwraps around it): a second
+      // signature, right after, rather than a deposit that silently forgot what was asked.
+      if (orderIxs.length && !fits) await sendTx(connection, wallet, orderIxs);
+      if (orderIxs.length) { setOrderLive(true); setCompoundHere(false); }
+      setStatus(`✅ Liquidity added${orderIxs.length ? " — your rewards now compound into this pool" : ""} — ${sig.slice(0, 16)}…`);
       // meta.pool = which pool we deposited into, so the server can verify the
       // un-dustable LpUserInfo PDA directly (no all-pools scan). Same pattern as
       // claim_bribe's meta.
@@ -701,6 +748,16 @@ export function Pools() {
   const symA = selected ? symbolByMint(selected.mintA, usdcMint) : "";
   const symB = selected ? symbolByMint(selected.mintB, usdcMint) : "";
   const myPools = wallet ? pools.filter(p => (userLpBals[p.address] ?? 0) > 0) : [];
+  const totalPendingOsola = myPools.reduce((s, p) => s + (pendingOsola[p.address] ?? 0), 0);
+  // The pools a standing order may compound into — exactly what `lp_deposit_side` accepts, and
+  // with liquidity already in them, since a single-sided deposit cannot set a pool's price.
+  const lpChoices: LpChoice[] = usdcMint
+    ? pools
+        .filter(p => p.totalLp > 0 && lpDestinationSide(new PublicKey(p.mintA), new PublicKey(p.mintB), usdcMint))
+        .map(p => ({ address: p.address, label: `${symbolByMint(p.mintA, usdcMint)}/${symbolByMint(p.mintB, usdcMint)}` }))
+    : [];
+  const selectedIsDestination = !!selected && lpChoices.some(c => c.address === selected.address);
+  const alreadyHere = !!order?.lpTarget && !!selected && order.lpTarget.toBase58() === selected.address && orderLive;
 
   // Stop a deposit the chain is certain to reject, instead of letting it be signed and
   // come back as a raw error code. Two shapes reach us from devnet testers:
@@ -719,6 +776,15 @@ export function Pools() {
 
   function openManage(p: PoolInfo, tab: ManageTab) {
     setSelected(p); setView("manage"); setManageTab(tab); setStatus("");
+    setCompoundHere(false);
+    if (wallet && usdcMint) {
+      readStandingOrder(connection, wallet, usdcMint)
+        .then(({ order, allowances }) => {
+          setOrder(order);
+          setOrderLive(!!order && order.enabled && allowances.oSola !== null);
+        })
+        .catch(() => { setOrder(null); setOrderLive(false); });
+    }
     setAddA(""); setAddB(""); setLpAmt(""); setRetA(null); setRetB(null);
   }
 
@@ -887,6 +953,33 @@ export function Pools() {
                 }
               </p>
             </div>
+
+            {/* ── Where this pool's rewards go. One order for every pool, so the box says what
+                it replaces before it replaces it. ── */}
+            {wallet && selectedIsDestination && (
+              alreadyHere ? (
+                <p className="rounded-lg border border-brand-green/30 bg-brand-green/5 px-3 py-2.5 text-xs text-brand-green">
+                  ✓ Your oSOLA rewards already compound into this pool.
+                </p>
+              ) : (
+                <button onClick={() => setCompoundHere(c => !c)}
+                  className="flex w-full items-start gap-2.5 rounded-lg border border-brand-border bg-brand-dark px-3 py-2.5 text-left">
+                  <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-black ${
+                    compoundHere ? "border-brand-green bg-brand-green text-black" : "border-brand-border text-transparent"
+                  }`}>✓</span>
+                  <span>
+                    <span className="block text-xs font-semibold text-gray-200">Compound my oSOLA rewards into this pool</span>
+                    <span className="mt-0.5 block text-[11px] leading-relaxed text-gray-500">
+                      {order && orderLive
+                        ? order.lpTarget
+                          ? `They go to ${lpChoices.find(c => c.address === order.lpTarget!.toBase58())?.label ?? "another pool"} today — this moves them here. Your rewards from every pool follow.`
+                          : "They compound into voting power today — this sends them here instead. Your rewards from every pool follow."
+                        : `Arms a standing order: ${DEFAULT_LP_ORDER.chunk} oSOLA per round, at most hourly, ${DEFAULT_LP_ORDER.rounds} rounds, never sold below ${DEFAULT_LP_ORDER.minIntrinsicBps / 100}% of their exercise value. Needs no USDC. Change it under Rewards.`}
+                    </span>
+                  </span>
+                </button>
+              )
+            )}
 
             <button className="btn-primary w-full py-3 text-base font-bold"
               onClick={addLiquidity} disabled={loading || !addA || !addB || !wallet || overA || overB}>
@@ -1098,6 +1191,8 @@ export function Pools() {
           + Create pool
         </button>
       </div>
+
+      <Rewards lpChoices={lpChoices} pendingOSola={totalPendingOsola} />
 
       {/* My Positions */}
       {wallet && myPools.length > 0 && (

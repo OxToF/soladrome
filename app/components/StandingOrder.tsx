@@ -3,12 +3,13 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
+import { PublicKey } from "@solana/web3.js";
 import { sendTx } from "@/lib/program";
 import { explainRpcRefusal } from "@/lib/txerror";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import {
   buildArmInstructions, buildDisarmInstructions, readStandingOrder,
-  type Allowances, type StandingOrder as Order,
+  type Allowances, type StandingOrder as Order, type Destination,
 } from "@/lib/autocompound";
 import { StatusBanner } from "./ui/StatusBanner";
 
@@ -87,7 +88,16 @@ function num(v: string, set: (s: string) => void) {
   if (v === "" || /^\d*\.?\d*$/.test(v)) set(v);
 }
 
-export function StandingOrder() {
+/// A pool the order may compound into — already filtered by the caller to what the program
+/// accepts as a destination (pairs USDC or SOL, holds no oSOLA).
+export type LpChoice = { address: string; label: string };
+
+/// The floor on the sale, as a share of an oSOLA's exercise value. 70 % was agreed on
+/// 2026-09-23: loose enough that an ordinary market clears it, tight enough that a sandwich
+/// which crushes the pool price cannot make the order sell.
+const DEFAULT_MIN_INTRINSIC_BPS = 7_000;
+
+export function StandingOrder({ lpChoices = [] }: { lpChoices?: LpChoice[] }) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
   const { usdcMint, protocolState, refresh } = useSoladrome();
@@ -105,6 +115,20 @@ export function StandingOrder() {
   const [interval, setIntervalSecs] = useState(3600);
   const [feeText, setFeeText] = useState("");
   const [budgetText, setBudgetText] = useState("");
+  // ── Where it goes: voting power, or a pool ────────────────────────────────
+  const [dest, setDest] = useState<"vote" | "lp">("vote");
+  const [target, setTarget] = useState("");
+  const [minPctText, setMinPctText] = useState("");
+  const minIntrinsicBps = (() => {
+    if (minPctText === "") return DEFAULT_MIN_INTRINSIC_BPS;
+    const bps = Math.round((parseFloat(minPctText) || 0) * 100);
+    return Math.min(10_000, Math.max(1, bps));
+  })();
+  const poolLabel = (address: string | null | undefined) =>
+    !address
+      ? ""
+      : lpChoices.find((c) => c.address === address)?.label ?? `${address.slice(0, 4)}…${address.slice(-4)}`;
+  const chosenTarget = target || lpChoices[0]?.address || "";
 
   // The fee rate the curve charges on the gain. Everything below is a function of it, and it is
   // a protocol parameter rather than a market one — which is why the ceiling exists at all.
@@ -171,6 +195,14 @@ export function StandingOrder() {
     try {
       const next = await readStandingOrder(connection, wallet, usdcMint);
       setOrder(next.order);
+      // The form opens on what the order does today, so "Change it" starts from the truth.
+      if (next.order?.lpTarget) {
+        setDest("lp");
+        setTarget(next.order.lpTarget.toBase58());
+        setMinPctText(String(next.order.minIntrinsicBps / 100));
+      } else if (next.order) {
+        setDest("vote");
+      }
       setAllowances(next.allowances);
       setBalances(next.balances);
     } catch (e: any) {
@@ -186,7 +218,13 @@ export function StandingOrder() {
     setStatus("");
     try {
       const size = parseFloat(chunk) || 0;
+      if (dest === "lp" && !chosenTarget) throw new Error("Choose the pool to compound into.");
+      const destination: Destination =
+        dest === "lp"
+          ? { kind: "lp", pool: new PublicKey(chosenTarget), minIntrinsicBps }
+          : { kind: "vote" };
       const ixs = await buildArmInstructions(connection, wallet, usdcMint, {
+        destination,
         // The threshold IS the round size: "fire when there is a full round's worth".
         threshold: size,
         chunk: size,
@@ -249,8 +287,20 @@ export function StandingOrder() {
     if (held < order.chunk) {
       return `you hold ${held.toLocaleString("en-US", { maximumFractionDigits: 2 })} of the ${order.chunk.toLocaleString("en-US")} oSOLA it needs.`;
     }
+    // A liquidity order pays nothing: it sells its oSOLA. What can still hold it back — a pool
+    // paying under the price floor, a leg too big for its pool — the keeper finds in simulation.
     const cost = order.chunk * costPerUnit;
     const usdc = Number(balances.usdc) / UNIT;
+    if (order.lpTarget) {
+      const dueIn = order.lastCrankTs + order.minInterval - Math.floor(Date.now() / 1000);
+      if (dueIn > 0) {
+        const mins = Math.ceil(dueIn / 60);
+        return mins >= 120
+          ? `the next round is due in about ${Math.round(mins / 60)} hours.`
+          : `the next round is due in about ${mins} minute${mins === 1 ? "" : "s"}.`;
+      }
+      return null;
+    }
     if (usdc < cost) {
       return `a round costs about ${cost.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDC and you hold ${usdc.toLocaleString("en-US", { maximumFractionDigits: 2 })}.`;
     }
@@ -339,8 +389,19 @@ export function StandingOrder() {
           <p className="mt-4 rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm leading-relaxed text-gray-300">
             {everyLabel(order.minInterval)}, when you hold at least{" "}
             <strong className="text-white">{order.chunk.toLocaleString("en-US")} oSOLA</strong>,
-            compound them into hiSOLA —{" "}
-            {order.maxFeeBps > 0 ? (
+            {order.lpTarget ? (
+              <>
+                {" "}sell them — never below{" "}
+                <strong className="text-white">
+                  {(order.minIntrinsicBps / 100).toFixed(0)}% of their exercise value
+                </strong>{" "}
+                — and add the proceeds to{" "}
+                <strong className="text-white">{poolLabel(order.lpTarget.toBase58())}</strong>.
+              </>
+            ) : (
+              <> compound them into hiSOLA — </>
+            )}
+            {order.lpTarget ? null : order.maxFeeBps > 0 ? (
               <>
                 never giving up more than{" "}
                 <strong className="text-white">
@@ -365,7 +426,7 @@ export function StandingOrder() {
                 which is a price bet it never asked to make. Say so, in the unit its owner thinks
                 in, and against TODAY's fee rather than the fee at arming — a rate change moves
                 that threshold under an order that never changed. Re-arming is what clears it. */}
-            {order.maxFeeBps === 0 &&
+            {!order.lpTarget && order.maxFeeBps === 0 &&
               (() => {
                 const live = stopsAboveSolaPrice(order.maxCostPerUnit, feeBps);
                 return live === null ? null : (
@@ -391,8 +452,14 @@ export function StandingOrder() {
 
           <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
             {order.rounds} round{order.rounds === 1 ? "" : "s"} fired so far
-            {order.rounds > 0 && `, ${order.usdcSpent.toFixed(2)} USDC spent`}. A round costs about{" "}
-            {costPerUnit.toFixed(3)} USDC per oSOLA today.
+            {order.lpTarget ? (
+              <>. It needs no USDC — the oSOLA is sold, not exercised.</>
+            ) : (
+              <>
+                {order.rounds > 0 && `, ${order.usdcSpent.toFixed(2)} USDC spent`}. A round costs about{" "}
+                {costPerUnit.toFixed(3)} USDC per oSOLA today.
+              </>
+            )}
           </p>
 
           <div className="mt-4 flex gap-2">
@@ -427,6 +494,47 @@ export function StandingOrder() {
             </button>
           ) : (
             <>
+              {/* ── Where it goes. One order, one destination: the oSOLA account has a single
+                  delegate, so this choice replaces the other rather than adding to it. ── */}
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {([
+                  ["vote", "Voting power", "hiSOLA — votes, fees, bribes"],
+                  ["lp", "Liquidity", "LP in a pool you choose"],
+                ] as const).map(([key, title, hint]) => (
+                  <button
+                    key={key}
+                    onClick={() => setDest(key)}
+                    disabled={key === "lp" && lpChoices.length === 0}
+                    className={`rounded-lg border px-3 py-2.5 text-left transition-colors disabled:opacity-40 ${
+                      dest === key
+                        ? "border-brand-green/60 bg-brand-green/10"
+                        : "border-brand-border hover:border-brand-green/30"
+                    }`}
+                  >
+                    <span className={`block text-sm font-bold ${dest === key ? "text-brand-green" : "text-gray-200"}`}>
+                      {title}
+                    </span>
+                    <span className="block text-[11px] text-gray-500">{hint}</span>
+                  </button>
+                ))}
+              </div>
+              {dest === "lp" && (
+                <label className="mt-3 block">
+                  <span className="text-[11px] text-gray-500">Into</span>
+                  <select
+                    value={chosenTarget}
+                    onChange={(e) => setTarget(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-brand-border bg-brand-dark px-3 py-2 text-sm text-white focus:border-brand-green focus:outline-none"
+                  >
+                    {lpChoices.map((c) => (
+                      <option key={c.address} value={c.address}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <label className="block">
                   <span className="text-[11px] text-gray-500">Compound</span>
@@ -474,6 +582,22 @@ export function StandingOrder() {
               </div>
 
               {/* ── The sentence. This is the thing being agreed to. ──── */}
+              {dest === "lp" ? (
+                <p className="mt-4 rounded-xl border border-brand-green/30 bg-brand-green/5 px-4 py-3 text-sm leading-relaxed text-gray-200">
+                  {everyLabel(interval)}, when you hold at least{" "}
+                  <strong className="text-white">
+                    {(parseFloat(chunk) || 0).toLocaleString("en-US")} oSOLA
+                  </strong>
+                  , sell them — never below{" "}
+                  <strong className="text-white">
+                    {(minIntrinsicBps / 100).toFixed(0)}% of their exercise value
+                  </strong>{" "}
+                  — and add the proceeds to{" "}
+                  <strong className="text-white">{poolLabel(chosenTarget)}</strong>, up to{" "}
+                  <strong className="text-white">{roundsN} times</strong>. It spends no USDC.
+                </p>
+              ) : (
+              <>
               <p className="mt-4 rounded-xl border border-brand-green/30 bg-brand-green/5 px-4 py-3 text-sm leading-relaxed text-gray-200">
                 {everyLabel(interval)}, when you hold at least{" "}
                 <strong className="text-white">
@@ -508,7 +632,10 @@ export function StandingOrder() {
                 {solaPrice.toFixed(2)} USDC now.
               </p>
 
-              {budgetTooSmall && (
+              </>
+              )}
+
+              {dest === "vote" && budgetTooSmall && (
                 <p className="mt-2 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] leading-relaxed text-yellow-200/90">
                   ⚠️ A budget of {budget.toLocaleString("en-US")} USDC cannot pay even one round&apos;s
                   strike, which is {chunkN.toLocaleString("en-US")} USDC before any fee. The order
@@ -532,7 +659,27 @@ export function StandingOrder() {
               >
                 {advanced ? "▾" : "▸"} Limits
               </button>
-              {advanced && (
+              {advanced && dest === "lp" && (
+                <div className="mt-2 space-y-3 rounded-lg border border-brand-border bg-brand-dark p-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={minPctText}
+                      onChange={(e) => num(e.target.value, setMinPctText)}
+                      placeholder={(DEFAULT_MIN_INTRINSIC_BPS / 100).toFixed(0)}
+                      inputMode="decimal"
+                      className="w-24 rounded-lg border border-brand-border bg-black/30 px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-brand-green focus:outline-none"
+                    />
+                    <span className="text-[11px] text-gray-600">% of the exercise value, at least</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-gray-600">
+                    An oSOLA is worth what exercising it would net: the curve price above the 1 USDC
+                    strike, less the fee. That figure is read from the curve, which no trade can push
+                    down — so someone who crushes the pool price just before a round cannot make the
+                    order sell cheap. When the pool pays less than this share, the order waits.
+                  </p>
+                </div>
+              )}
+              {advanced && dest === "vote" && (
                 <div className="mt-2 space-y-3 rounded-lg border border-brand-border bg-brand-dark p-3">
                   {/* ── 1. The rate: the bound that does not expire against the market. ── */}
                   <div className="flex items-center gap-2">
@@ -604,9 +751,9 @@ export function StandingOrder() {
                 )}
               </div>
               <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
-                One transaction records the order and grants two capped allowances, oSOLA to burn
-                and USDC to pay with. Nothing is escrowed: your tokens stay in your own accounts
-                until a round fires.
+                {dest === "lp"
+                  ? "One transaction records the order, points it at the pool and grants one capped allowance: the oSOLA to sell. The LP lands in your own account. Nothing is escrowed."
+                  : "One transaction records the order and grants two capped allowances, oSOLA to burn and USDC to pay with. Nothing is escrowed: your tokens stay in your own accounts until a round fires."}
               </p>
             </>
           )}

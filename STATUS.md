@@ -3,7 +3,7 @@
 One living document. If something here disagrees with another file in this repository, this
 file is the one to trust, and the other file is the one to fix.
 
-**Last measured: 2026-09-21.** Every figure below was read from the tree or the chain on that
+**Last measured: 2026-09-23.** Every figure below was read from the tree or the chain on that
 date, not carried forward from a previous note.
 
 ☢️ **THE DEVNET BINARY NO LONGER MATCHES THE AUDIT TAG. Since 2026-09-21 it never will again.**
@@ -23,12 +23,29 @@ what is deployed" is stale from this date onward.
 | Previous tag | `audit-2026-08-30b`, a verified **ancestor** of the audit tag |
 | Branch | `main` — one trunk, and the deployed tree |
 | Program id (devnet) | `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe` |
-| Devnet binary | sha256 `f3c7f951…`, 1 728 136 bytes, SBPFv3, deployed 2026-09-21 and verified byte-for-byte against the local build |
-| Instructions | **58** (54 at the audit tag, plus the four below) |
+| Devnet binary | sha256 `34be4794…`, 1 804 432 bytes, SBPFv3, deployed 2026-09-23 at slot `502944096` from commit `16d5b36` (branch `feat/lp-compound`), verified byte-for-byte by dump |
+| Instructions | **61** (54 at the audit tag, plus the four standing-order instructions and the three LP-order ones below) |
 | Account parameters | 503 at the audit tag; the four new instructions add their own |
-| Error variants | **62** (58 at the audit tag, plus `AutoNotReady`, `AutoCostTooHigh`, `AutoOwnerMismatch`) |
+| Error variants | **66** (58 at the audit tag, plus `AutoNotReady`, `AutoCostTooHigh`, `AutoOwnerMismatch`, `PartialBasisClaim`, and `AutoWrongDestination`, `AutoBelowIntrinsic`, `AutoImpactTooHigh`, `AutoInvalidRoute`) |
 | On-chain account types | **23** (22 at the audit tag, plus `AutoCompound`) |
-| Tests | **88 bankrun cases passing, 0 failing** — 8 for the standing order, 4 for the permissionless claim |
+| Tests | **101 bankrun cases passing, 0 failing** — 9 for the LP order (each guard proven by mutation, 8/8), 8 for the standing order, 4 for the permissionless claim · 78 cargo unit tests · 43 frontend unit tests |
+
+**☢️ A standing order can compound into LIQUIDITY since 2026-09-23.** Three instructions:
+`set_auto_compound_lp`, `clear_auto_compound_lp` and the permissionless `crank_auto_compound_lp`,
+which sells the owner's oSOLA on the oSOLA/USDC pool, buys SOL on the SOL/USDC pool when the
+destination pairs SOL, and deposits that single side (`amm_math::zap_in`, priced exactly as
+swap-then-add). No exercise, so no USDC is asked of the owner. The destination lives in two fields
+carved from `AutoCompound`'s spare bytes (126/128, no realloc), so every order armed before reads
+"staking". What the cranker cannot choose: the destination (`AutoWrongDestination`, both cranks),
+the route (derived, `AutoInvalidRoute`), the price (≥ `min_intrinsic_bps` of the exercise value, a
+curve reference no trade can push down, `AutoBelowIntrinsic`), the size (1 % of each reserve,
+`AutoImpactTooHigh`) and the harvest (`credit_lp_deposit` with `owner_present = false`, so
+`PartialBasisClaim` applies). **Proven on devnet**: `AutoBelowIntrinsic` refused a round at 70 %
+against the devnet oSOLA pool (which pays ~22 % of exercise value), then a round at 20 % fired from
+a stranger's key — tx `4TmvPY7s…`, 10 oSOLA → 0.090690 USDC → +0.424661 LP to the owner, protocol
+fee 0.000027 USDC routed, 57.8k CU. ⚠️ Residual, disclosed: the SOL hop and the deposit have no
+oracle, so a sandwich remains possible within the 1 % leg cap. The launch pool set this assumes
+(oSOLA/USDC + SOL/USDC + LST/SOL, no SOLA pool) is justified in `scripts/launch_pools/`.
 
 **⚠️ A standing order's pacing is now a rule of the chain (2026-09-22).** `configure_auto_compound`
 used to accept `min_interval == 0`, and `AutoCompound::ready` compares `now - last_crank_ts >=

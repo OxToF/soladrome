@@ -431,6 +431,25 @@ pub mod soladrome {
     pub fn close_auto_compound(ctx: Context<CloseAutoCompound>) -> Result<()> {
         instructions::auto::close_auto_compound(ctx)
     }
+
+    // ── Standing LP orders — the order's second destination ─────────────────
+    // Appended last, for the same `line!()` reason as the block above.
+
+    pub fn set_auto_compound_lp(
+        ctx: Context<SetAutoCompoundLp>,
+        min_intrinsic_bps: u16,
+    ) -> Result<()> {
+        instructions::auto_lp::set_auto_compound_lp(ctx, min_intrinsic_bps)
+    }
+
+    pub fn clear_auto_compound_lp(ctx: Context<ClearAutoCompoundLp>) -> Result<()> {
+        instructions::auto_lp::clear_auto_compound_lp(ctx)
+    }
+
+    /// Permissionless: any signer may crank any user's standing LP order.
+    pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
+        instructions::auto_lp::crank_auto_compound_lp(ctx)
+    }
 }
 
 // ── Test-only module ─────────────────────────────────────────────────────────

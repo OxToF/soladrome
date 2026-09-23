@@ -39,6 +39,18 @@ pub const UNIT_ONE: u64 = 1_000_000;
 /// One minute, because that is the shortest period the interface offers. It is a floor on what
 /// may be *configured*, never a schedule: nothing here makes an order fire.
 pub const MIN_CRANK_INTERVAL: i64 = 60;
+
+/// The largest share of a pool's input reserve one leg of a standing LP order may trade, in bps.
+///
+/// ☢️ THE BOUND ON THE LEGS THE INTRINSIC FLOOR DOES NOT COVER. The sale of oSOLA is bounded
+/// against the curve (`AutoCompound::min_intrinsic_bps`), which no one can push down. The SOL hop
+/// and the single-sided deposit have no such reference without an oracle, and the crank is
+/// permissionless, so whoever fires it chooses the moment and may sandwich it. What a sandwich
+/// extracts grows with the victim's size relative to the pool, while moving the price costs the
+/// attacker the pool fee twice; keeping every leg to 1 % of the reserve keeps the victim small
+/// against that cost. A residual, stated rather than hidden: it narrows the attack, it does not
+/// close it. Small chunks close it further, and they are the owner's to choose.
+pub const MAX_LP_LEG_IMPACT_BPS: u128 = 100;
 // (VOTE_ESCROW_SEED removed — the global hiSOLA custody vault it addressed belongs to the
 //  token era. Voting marks `UserPosition.vote_locked` instead of moving anything, so there is
 //  no vault to derive. Its last reader was `convert_hi_sola`; see `devnet-legacy`.)

@@ -3126,6 +3126,47 @@
       "args": []
     },
     {
+      "name": "clear_auto_compound_lp",
+      "discriminator": [
+        21,
+        246,
+        18,
+        154,
+        40,
+        141,
+        118,
+        163
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "signer": true
+        },
+        {
+          "name": "auto",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  111
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_auto_compound",
       "discriminator": [
         185,
@@ -3891,6 +3932,450 @@
         },
         {
           "name": "sola_vault",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "crank_auto_compound_lp",
+      "docs": [
+        "Permissionless: any signer may crank any user's standing LP order."
+      ],
+      "discriminator": [
+        48,
+        215,
+        236,
+        157,
+        73,
+        129,
+        72,
+        20
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Anyone. Pays the transaction fee and receives nothing."
+          ],
+          "signer": true
+        },
+        {
+          "name": "owner",
+          "docs": [
+            "derivation, and `auto.owner` is checked against it in the handler. It signs nothing."
+          ]
+        },
+        {
+          "name": "auto",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  111
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "o_sola_mint",
+          "docs": [
+            "Mut: harvested rewards on the destination are minted here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_o_sola",
+          "docs": [
+            "The owner's oSOLA — the ASSOCIATED account and no other, for the same reason",
+            "`claim_lp_rewards` binds its LP account: an account \"the owner owns\" is a set anyone can",
+            "add to, and only the associated one carries the delegation this order runs on."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "o_sola_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "sell_pool",
+          "docs": [
+            "Checked in the handler to be the oSOLA/USDC pair; its seeds make it a genuine pool."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sell_pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "sell_pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sell_o_sola_vault",
+          "docs": [
+            "Checked in the handler against the pool's own record."
+          ],
+          "writable": true
+        },
+        {
+          "name": "sell_usdc_vault",
+          "docs": [
+            "Checked in the handler against the pool's own record."
+          ],
+          "writable": true
+        },
+        {
+          "name": "hop_pool",
+          "docs": [
+            "The SOL/USDC pool, required when the destination pairs SOL and ignored otherwise."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "hop_pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "hop_pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hop_usdc_vault",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "hop_sol_vault",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "target_pool",
+          "docs": [
+            "Checked in the handler to be the pool the order names."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "target_pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "target_pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target_deposit_vault",
+          "docs": [
+            "The destination's USDC or SOL vault — the only side of it that ever moves. The other side,",
+            "which may be a Token-2022 mint, is read through the reserves and never touched."
+          ],
+          "writable": true
+        },
+        {
+          "name": "lp_mint",
+          "writable": true
+        },
+        {
+          "name": "user_lp",
+          "docs": [
+            "Created by `set_auto_compound_lp`, at the owner's expense."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lp_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "lp_user_info",
+          "docs": [
+            "Created by `set_auto_compound_lp`, at the owner's expense."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "target_pool"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
           "writable": true
         },
         {
@@ -7959,6 +8444,200 @@
       ]
     },
     {
+      "name": "set_auto_compound_lp",
+      "discriminator": [
+        27,
+        232,
+        39,
+        68,
+        246,
+        71,
+        60,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "auto",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  111
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "target_pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "target_pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "target_pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint"
+        },
+        {
+          "name": "user_lp",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "lp_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "lp_user_info",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "target_pool"
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "min_intrinsic_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "set_exercise_fee",
       "discriminator": [
         126,
@@ -9843,6 +10522,26 @@
       "code": 6061,
       "name": "PartialBasisClaim",
       "msg": "Only the owner may claim while their wallet holds less LP than they deposited — a claim on a partial balance forfeits the rest, and that is not a stranger's decision to make"
+    },
+    {
+      "code": 6062,
+      "name": "AutoWrongDestination",
+      "msg": "This standing order compounds to a different destination — a cranker may fire an order, never choose where it goes"
+    },
+    {
+      "code": 6063,
+      "name": "AutoBelowIntrinsic",
+      "msg": "The pool pays less for this oSOLA than the share of its exercise value the order accepts"
+    },
+    {
+      "code": 6064,
+      "name": "AutoImpactTooHigh",
+      "msg": "This leg would move more than the per-hop share of the pool's reserve a standing order may trade"
+    },
+    {
+      "code": 6065,
+      "name": "AutoInvalidRoute",
+      "msg": "This pool cannot be an LP destination, or is not the pool the route requires: a destination must pair USDC or SOL, and must not hold oSOLA"
     }
   ],
   "types": [
@@ -10045,6 +10744,39 @@
               "existed reads 0 out of the account's spare bytes, and reading that as a bound would brick",
               "them all on the next crank. The degenerate preference it costs us — \"compound only while",
               "there is no fee at all\" — is one nobody wants; bricking live orders is not."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "lp_target",
+            "docs": [
+              "☢️ THE DESTINATION: the AMM pool this order compounds into, or the default key for the",
+              "original destination, staking. \"Liquidity OR vote\" is literally this field.",
+              "",
+              "One order rather than two because the oSOLA account has exactly ONE delegate: two orders",
+              "would share one allowance and race each other for it. And because the crank is",
+              "permissionless, the destination cannot be a choice of whoever calls — `crank_auto_compound`",
+              "refuses an order that names a pool here, and `crank_auto_compound_lp` refuses one that",
+              "names a different pool, so a cranker can neither redirect nor downgrade it.",
+              "",
+              "Only the target is stored. The rest of the route is derived, never chosen: the oSOLA is",
+              "sold on THE oSOLA/USDC pool (a unique PDA), and reaches a pool without USDC through THE",
+              "SOL/USDC pool. A route with a free hop would let a cranker steer it through a shallow",
+              "pool they had just moved."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "min_intrinsic_bps",
+            "docs": [
+              "☢️ THE BOUND ON THE SALE: the order sells oSOLA only for at least this share of its",
+              "intrinsic value, `(P_curve − 1) × (1 − exercise fee)` per oSOLA.",
+              "",
+              "The reference is the curve because nobody can push it down: `sell_sola` never touches the",
+              "virtual reserves, and only buys move them. So a cranker who sandwiches the sale can",
+              "depress the pool price, never the bound. It is a RATE, like `max_fee_bps`, so it follows",
+              "the market instead of expiring against it; an absolute minimum price would ask the owner",
+              "to forecast. Meaningless (zero) while the destination is staking."
             ],
             "type": "u16"
           }
