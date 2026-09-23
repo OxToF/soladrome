@@ -373,15 +373,22 @@ export default function Home() {
             height={128}
             className="h-28 w-28 md:h-36 md:w-36 mb-8 select-none drop-shadow-[0_0_40px_rgba(139,108,246,0.35)]"
           />
-          <p className="text-lg md:text-2xl font-semibold mb-5 tracking-tight">
-            <span className="text-white/90">Fast chains deserve </span>
-            <span className="text-gradient-brand">better DeFi.</span>
-          </p>
-          <h1 className="text-5xl md:text-7xl font-black mb-4 leading-tight">
+          {/* The wordmark IS the heading now, so it carries the h1 rather than sitting above
+              one: a page whose dominant text is not its heading reads wrong to a screen reader
+              and to a crawler, and the two disagreed the moment the name got bigger than the
+              line under it. Same SOLA/DROME treatment as the header, one size up from what it
+              replaced in the hierarchy. */}
+          {/* ⚠️ Not `text-6xl` on the small end: nine characters in font-black at 60px measure
+              the full 375px viewport, so the S and the final E bled into both edges with no
+              gutter at all. 48px leaves the margin the rest of the page keeps. */}
+          <h1 className="text-5xl md:text-8xl font-black mb-3 leading-none tracking-tight">
+            <span className="text-white">SOLA</span><span className="text-gradient-brand">DROME</span>
+          </h1>
+          <p className="text-3xl md:text-5xl font-black mb-4 leading-tight">
             <span className="text-white">The Eternal</span>
             <br />
             <span className="text-gradient-brand">Liquidity Engine</span>
-          </h1>
+          </p>
           <p className="text-gray-400 max-w-xl mb-10 text-lg">
             Bonding curve · Floor price · No liquidation<br />
             Powered by ve(3,3) tokenomics on Solana.
