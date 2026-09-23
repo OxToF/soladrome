@@ -9,13 +9,15 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import { createClient } from "@supabase/supabase-js";
-import { resolveRpcUrl } from "@/lib/rpc";
+import { serverRpcUrl } from "@/lib/rpc";
 
-// Server-side faucet: falls back to public devnet RPC to avoid burning Helius
-// free-tier quota (the frontend throttle doesn't apply here — Connection is
-// created raw with no gate). Validated, not just defaulted: see lib/rpc.ts for
-// the three-day production outage that motivated it.
-const RPC      = resolveRpcUrl(process.env.FAUCET_RPC_URL);
+// Server-side faucet: runs on the SERVER key (`RPC_URL`), like every other server
+// route. It used to read its own `FAUCET_RPC_URL`, which the 2026-09-22 key split
+// missed: that variable still carried the old key, and once that key was
+// restricted to the domain Helius answered 401 to every faucet call — a server
+// sends no `Origin`. A per-route override is exactly how a route gets left
+// behind by a rotation, so there isn't one any more.
+const RPC      = serverRpcUrl();
 const KP_JSON  = process.env.FAUCET_KEYPAIR!;      // JSON array of secret key bytes
 const USDC_STR = process.env.FAUCET_USDC_MINT!;    // devnet USDC mint
 const AMOUNT   = 500_000_000;                       // 500 USDC (6 decimals)

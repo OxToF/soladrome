@@ -278,7 +278,7 @@ program — but they must land before or at mainnet go-live.
    frontend/API audit scope.** It is devnet-only (mints devnet USDC from a
    server keypair) and has no meaning on mainnet. Touch points to strip:
    - `app/app/api/faucet/route.ts` (the server route + `FAUCET_KEYPAIR` /
-     `FAUCET_USDC_MINT` / `FAUCET_RPC_URL` env)
+     `FAUCET_USDC_MINT` env; it reads the shared server `RPC_URL`)
    - the "Get 500 Test USDC" button in `app/components/BuySell.tsx` (`claimFaucet`,
      ~L27, L157-168) and in `app/components/AmmSwap.tsx` (~L58, L394-405)
    - the `faucet` quest in `app/lib/quests.ts` + its handling in
