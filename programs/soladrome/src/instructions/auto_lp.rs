@@ -150,43 +150,142 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
         SoladromeError::AutoNotReady
     );
 
-    let usdc = ctx.accounts.protocol_state.usdc_mint;
-    let o_sola = ctx.accounts.protocol_state.o_sola_mint;
-    let (deposit_mint, needs_hop) =
-        lp_deposit_side(&ctx.accounts.target_pool, &ctx.accounts.protocol_state)?;
-    let cont_rate = ctx.accounts.protocol_state.continuous_rate_per_sec;
-    let cont_active = continuous_active(&ctx.accounts.protocol_state, now);
-
     let owner_key = ctx.accounts.owner.key();
     let auto_bump = ctx.accounts.auto.bump;
     let auto_seeds: &[&[u8]] = &[AUTO_SEED, owner_key.as_ref(), &[auto_bump]];
+    let min_intrinsic_bps = ctx.accounts.auto.min_intrinsic_bps;
+
+    let lp_user_info_bump = ctx.bumps.lp_user_info;
+    let a = ctx.accounts;
+    let delegate = a.auto.to_account_info();
+    route_into_lp(
+        LpRoute {
+            protocol_state: &mut a.protocol_state,
+            o_sola_mint: &a.o_sola_mint,
+            user_o_sola: &a.user_o_sola,
+            sell_pool: &mut a.sell_pool,
+            sell_o_sola_vault: &a.sell_o_sola_vault,
+            sell_usdc_vault: &a.sell_usdc_vault,
+            hop_pool: a.hop_pool.as_deref_mut(),
+            hop_usdc_vault: a.hop_usdc_vault.as_deref(),
+            hop_sol_vault: a.hop_sol_vault.as_deref(),
+            target_pool: &mut a.target_pool,
+            target_deposit_vault: &a.target_deposit_vault,
+            lp_mint: &a.lp_mint,
+            user_lp: &a.user_lp,
+            lp_user_info: &mut a.lp_user_info,
+            lp_user_info_bump,
+            market_vault: &a.market_vault,
+            token_program: &a.token_program,
+        },
+        amount,
+        min_intrinsic_bps,
+        now,
+        SaleInput::FromOwner {
+            from: a.user_o_sola.to_account_info(),
+            delegate,
+            seeds: auto_seeds,
+        },
+    )?;
+
+    let auto = &mut a.auto;
+    auto.rounds = auto.rounds.saturating_add(1);
+    auto.last_crank_ts = now;
+    Ok(())
+}
+
+// ── The route, shared by every crank that turns oSOLA into liquidity ─────────
+
+/// Where the oSOLA a route sells comes from.
+pub enum SaleInput<'a, 'info> {
+    /// Out of the owner's own account, moved by the delegate they approved (a standing order).
+    FromOwner {
+        from: AccountInfo<'info>,
+        delegate: AccountInfo<'info>,
+        seeds: &'a [&'a [u8]],
+    },
+    /// Minted straight into the sale vault: rewards harvested at their source by a per-position
+    /// strategy, which never reach the owner's wallet at all.
+    Minted,
+}
+
+/// The accounts a route touches. Borrowed out of whichever context the crank has, so the two
+/// cranks share one body instead of two copies that could drift.
+pub struct LpRoute<'a, 'info> {
+    pub protocol_state: &'a mut Account<'info, ProtocolState>,
+    pub o_sola_mint: &'a Account<'info, Mint>,
+    pub user_o_sola: &'a Account<'info, TokenAccount>,
+    pub sell_pool: &'a mut Account<'info, AmmPool>,
+    pub sell_o_sola_vault: &'a Account<'info, TokenAccount>,
+    pub sell_usdc_vault: &'a Account<'info, TokenAccount>,
+    pub hop_pool: Option<&'a mut Account<'info, AmmPool>>,
+    pub hop_usdc_vault: Option<&'a Account<'info, TokenAccount>>,
+    pub hop_sol_vault: Option<&'a Account<'info, TokenAccount>>,
+    pub target_pool: &'a mut Account<'info, AmmPool>,
+    pub target_deposit_vault: &'a Account<'info, TokenAccount>,
+    pub lp_mint: &'a Account<'info, Mint>,
+    pub user_lp: &'a Account<'info, TokenAccount>,
+    pub lp_user_info: &'a mut Account<'info, LpUserInfo>,
+    pub lp_user_info_bump: u8,
+    pub market_vault: &'a Account<'info, TokenAccount>,
+    pub token_program: &'a Program<'info, Token>,
+}
+
+/// Sell `amount` oSOLA on THE oSOLA/USDC pool, reach the destination's USDC or SOL side — through
+/// THE SOL/USDC pool when it pairs SOL — and deposit that single side for the owner.
+///
+/// Every check a permissionless caller could otherwise exploit lives here, once:
+///   · the route is derived — the pair and vault of every leg are checked against the pools' own
+///     records, so no hop or vault can be substituted;
+///   · ☢️ the sale must pay `min_intrinsic_bps` of the oSOLA's exercise value, priced off the
+///     curve, which no trade can push down;
+///   · every leg is capped at `MAX_LP_LEG_IMPACT_BPS` of the reserve it trades into;
+///   · ☢️ the deposit books through `credit_lp_deposit` with `owner_present = false`, so a
+///     position whose owner parked part of their LP elsewhere is refused, not forfeited.
+pub fn route_into_lp<'a, 'info>(
+    r: LpRoute<'a, 'info>,
+    amount: u64,
+    min_intrinsic_bps: u16,
+    now: i64,
+    input: SaleInput<'a, 'info>,
+) -> Result<RouteOutcome> {
+    let usdc = r.protocol_state.usdc_mint;
+    let o_sola = r.protocol_state.o_sola_mint;
+    let (deposit_mint, needs_hop) = lp_deposit_side(r.target_pool, r.protocol_state)?;
+    let cont_rate = r.protocol_state.continuous_rate_per_sec;
+    let cont_active = continuous_active(r.protocol_state, now);
+    let state_bump = r.protocol_state.bump;
+    let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
 
     // ── 1. Sell the oSOLA on THE oSOLA/USDC pool ─────────────────────────────
-    let sell = &ctx.accounts.sell_pool;
     require!(
-        is_pair(sell, o_sola, usdc),
+        is_pair(r.sell_pool, o_sola, usdc),
         SoladromeError::AutoInvalidRoute
     );
     require!(
-        ctx.accounts.sell_o_sola_vault.key() == vault_of(sell, o_sola)
-            && ctx.accounts.sell_usdc_vault.key() == vault_of(sell, usdc),
+        r.sell_o_sola_vault.key() == vault_of(r.sell_pool, o_sola)
+            && r.sell_usdc_vault.key() == vault_of(r.sell_pool, usdc),
         SoladromeError::AutoInvalidRoute
     );
-    let o_sola_is_a = sell.token_a_mint == o_sola;
-    let q1 = quote_swap(sell, amount, o_sola_is_a)?;
-    require_small_leg(amount, reserve_of(sell, o_sola))?;
+    let o_sola_is_a = r.sell_pool.token_a_mint == o_sola;
+    let q1 = quote_swap(r.sell_pool, amount, o_sola_is_a)?;
+    require_small_leg(amount, reserve_of(r.sell_pool, o_sola))?;
 
     // ☢️ The bound a sandwich cannot move. Exercising `amount` would net its gain on the curve
     // less the fee on that gain; the pool must pay at least the owner's share of that.
-    let state = &ctx.accounts.protocol_state;
-    let intrinsic = exercise_gain(state, amount)?.saturating_sub(exercise_fee(state, amount)?);
-    let floor_out = intrinsic as u128 * ctx.accounts.auto.min_intrinsic_bps as u128 / 10_000;
+    let intrinsic = exercise_gain(r.protocol_state, amount)?
+        .saturating_sub(exercise_fee(r.protocol_state, amount)?);
+    let floor_out = intrinsic as u128 * min_intrinsic_bps as u128 / 10_000;
     require!(
         q1.amount_out as u128 >= floor_out,
         SoladromeError::AutoBelowIntrinsic
     );
 
-    let (sell_a, sell_b, sell_bump) = (sell.token_a_mint, sell.token_b_mint, sell.bump);
+    let (sell_a, sell_b, sell_bump) = (
+        r.sell_pool.token_a_mint,
+        r.sell_pool.token_b_mint,
+        r.sell_pool.bump,
+    );
     let sell_seeds: &[&[u8]] = &[
         AMM_POOL_SEED,
         sell_a.as_ref(),
@@ -194,45 +293,56 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
         &[sell_bump],
     ];
 
-    // oSOLA: owner → pool, moved by the delegate the owner approved. The whole input enters the
-    // reserve: the fee is on oSOLA, not USDC, so like `swap` it stays with the LPs.
-    token::transfer(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.user_o_sola.to_account_info(),
-                to: ctx.accounts.sell_o_sola_vault.to_account_info(),
-                authority: ctx.accounts.auto.to_account_info(),
-            },
-            &[auto_seeds],
-        ),
-        amount,
-    )?;
-    advance_pool_rewards(&mut ctx.accounts.sell_pool, now, cont_rate, cont_active);
-    apply_swap_reserves(
-        &mut ctx.accounts.sell_pool,
-        o_sola_is_a,
-        amount,
-        q1.amount_out,
-    )?;
+    // The oSOLA enters the pool. The whole input enters the reserve: the fee is on oSOLA, not
+    // USDC, so like `swap` it stays with the LPs.
+    match input {
+        SaleInput::FromOwner {
+            from,
+            delegate,
+            seeds,
+        } => token::transfer(
+            CpiContext::new_with_signer(
+                r.token_program.to_account_info(),
+                Transfer {
+                    from,
+                    to: r.sell_o_sola_vault.to_account_info(),
+                    authority: delegate,
+                },
+                &[seeds],
+            ),
+            amount,
+        )?,
+        SaleInput::Minted => token::mint_to(
+            CpiContext::new_with_signer(
+                r.token_program.to_account_info(),
+                MintTo {
+                    mint: r.o_sola_mint.to_account_info(),
+                    to: r.sell_o_sola_vault.to_account_info(),
+                    authority: r.protocol_state.to_account_info(),
+                },
+                &[state_seeds],
+            ),
+            amount,
+        )?,
+    }
+    advance_pool_rewards(r.sell_pool, now, cont_rate, cont_active);
+    apply_swap_reserves(r.sell_pool, o_sola_is_a, amount, q1.amount_out)?;
 
     // USDC: straight to the next vault on the route. It never passes through a wallet.
     let usdc_dest = if needs_hop {
-        ctx.accounts
-            .hop_usdc_vault
-            .as_ref()
+        r.hop_usdc_vault
             .ok_or(SoladromeError::AutoInvalidRoute)?
             .to_account_info()
     } else {
-        ctx.accounts.target_deposit_vault.to_account_info()
+        r.target_deposit_vault.to_account_info()
     };
     token::transfer(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            r.token_program.to_account_info(),
             Transfer {
-                from: ctx.accounts.sell_usdc_vault.to_account_info(),
+                from: r.sell_usdc_vault.to_account_info(),
                 to: usdc_dest,
-                authority: ctx.accounts.sell_pool.to_account_info(),
+                authority: r.sell_pool.to_account_info(),
             },
             &[sell_seeds],
         ),
@@ -241,11 +351,9 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
 
     // ── 2. The SOL hop, when the destination pairs SOL ───────────────────────
     let deposit = if needs_hop {
-        let (Some(hop), Some(hop_usdc), Some(hop_sol)) = (
-            ctx.accounts.hop_pool.as_mut(),
-            ctx.accounts.hop_usdc_vault.as_ref(),
-            ctx.accounts.hop_sol_vault.as_ref(),
-        ) else {
+        let (Some(hop), Some(hop_usdc), Some(hop_sol)) =
+            (r.hop_pool, r.hop_usdc_vault, r.hop_sol_vault)
+        else {
             return err!(SoladromeError::AutoInvalidRoute);
         };
         require!(
@@ -266,10 +374,10 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
         if q2.fee_protocol > 0 {
             token::transfer(
                 CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
+                    r.token_program.to_account_info(),
                     Transfer {
                         from: hop_usdc.to_account_info(),
-                        to: ctx.accounts.market_vault.to_account_info(),
+                        to: r.market_vault.to_account_info(),
                         authority: hop.to_account_info(),
                     },
                     &[hop_seeds],
@@ -279,10 +387,10 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
         }
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                r.token_program.to_account_info(),
                 Transfer {
                     from: hop_sol.to_account_info(),
-                    to: ctx.accounts.target_deposit_vault.to_account_info(),
+                    to: r.target_deposit_vault.to_account_info(),
                     authority: hop.to_account_info(),
                 },
                 &[hop_seeds],
@@ -296,8 +404,7 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
             q1.amount_out - q2.fee_protocol,
             q2.amount_out,
         )?;
-        ctx.accounts.protocol_state.accumulated_fees = ctx
-            .accounts
+        r.protocol_state.accumulated_fees = r
             .protocol_state
             .accumulated_fees
             .saturating_add(q2.fee_protocol);
@@ -307,91 +414,93 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
     };
 
     // ── 3. Deposit that one side into the destination ────────────────────────
-    let target = &ctx.accounts.target_pool;
     require!(
-        ctx.accounts.target_deposit_vault.key() == vault_of(target, deposit_mint),
+        r.target_deposit_vault.key() == vault_of(r.target_pool, deposit_mint),
         SoladromeError::AutoInvalidRoute
     );
-    let deposit_is_a = target.token_a_mint == deposit_mint;
+    let deposit_is_a = r.target_pool.token_a_mint == deposit_mint;
     let (r_in, r_out) = if deposit_is_a {
-        (target.reserve_a, target.reserve_b)
+        (r.target_pool.reserve_a, r.target_pool.reserve_b)
     } else {
-        (target.reserve_b, target.reserve_a)
+        (r.target_pool.reserve_b, r.target_pool.reserve_a)
     };
     require_small_leg(deposit, r_in)?;
     let zap = amm_math::zap_in(
         r_in,
         r_out,
-        target.total_lp,
+        r.target_pool.total_lp,
         deposit,
-        target.fee_rate,
-        target.protocol_fee_bps,
+        r.target_pool.fee_rate,
+        r.target_pool.protocol_fee_bps,
         deposit_mint == usdc,
     )?;
 
-    let (t_a, t_b, t_bump) = (target.token_a_mint, target.token_b_mint, target.bump);
+    let (t_a, t_b, t_bump) = (
+        r.target_pool.token_a_mint,
+        r.target_pool.token_b_mint,
+        r.target_pool.bump,
+    );
     let target_seeds: &[&[u8]] = &[AMM_POOL_SEED, t_a.as_ref(), t_b.as_ref(), &[t_bump]];
 
     if zap.fee_routed > 0 {
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                r.token_program.to_account_info(),
                 Transfer {
-                    from: ctx.accounts.target_deposit_vault.to_account_info(),
-                    to: ctx.accounts.market_vault.to_account_info(),
-                    authority: ctx.accounts.target_pool.to_account_info(),
+                    from: r.target_deposit_vault.to_account_info(),
+                    to: r.market_vault.to_account_info(),
+                    authority: r.target_pool.to_account_info(),
                 },
                 &[target_seeds],
             ),
             zap.fee_routed,
         )?;
-        ctx.accounts.protocol_state.accumulated_fees = ctx
-            .accounts
+        r.protocol_state.accumulated_fees = r
             .protocol_state
             .accumulated_fees
             .saturating_add(zap.fee_routed);
     }
 
     // Rewards first, on the supply BEFORE this deposit — see `credit_lp_deposit`.
-    advance_pool_rewards(&mut ctx.accounts.target_pool, now, cont_rate, cont_active);
-    let acc = ctx.accounts.target_pool.osola_reward_per_lp;
+    advance_pool_rewards(r.target_pool, now, cont_rate, cont_active);
+    let acc = r.target_pool.osola_reward_per_lp;
     // ☢️ `owner_present = false`: this deposit harvests, and the one making it is a stranger.
     let pending = credit_lp_deposit(
-        &mut ctx.accounts.lp_user_info,
+        r.lp_user_info,
         acc,
-        ctx.accounts.user_lp.amount,
+        r.user_lp.amount,
         zap.lp_out,
         now,
-        ctx.bumps.lp_user_info,
+        r.lp_user_info_bump,
         false,
     )?;
 
-    {
-        let pool = &mut ctx.accounts.target_pool;
-        if deposit_is_a {
-            pool.reserve_a = pool
-                .reserve_a
-                .checked_add(zap.reserve_in_delta)
-                .ok_or(SoladromeError::Overflow)?;
-        } else {
-            pool.reserve_b = pool
-                .reserve_b
-                .checked_add(zap.reserve_in_delta)
-                .ok_or(SoladromeError::Overflow)?;
-        }
-        pool.total_lp = pool
-            .total_lp
-            .checked_add(zap.lp_out)
+    if deposit_is_a {
+        r.target_pool.reserve_a = r
+            .target_pool
+            .reserve_a
+            .checked_add(zap.reserve_in_delta)
+            .ok_or(SoladromeError::Overflow)?;
+    } else {
+        r.target_pool.reserve_b = r
+            .target_pool
+            .reserve_b
+            .checked_add(zap.reserve_in_delta)
             .ok_or(SoladromeError::Overflow)?;
     }
+    r.target_pool.total_lp = r
+        .target_pool
+        .total_lp
+        .checked_add(zap.lp_out)
+        .ok_or(SoladromeError::Overflow)?;
 
     token::mint_to(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            r.token_program.to_account_info(),
             MintTo {
-                mint: ctx.accounts.lp_mint.to_account_info(),
-                to: ctx.accounts.user_lp.to_account_info(),
-                authority: ctx.accounts.target_pool.to_account_info(),
+                mint: r.lp_mint.to_account_info(),
+                to: r.user_lp.to_account_info(),
+                authority: r.target_pool.to_account_info(),
             },
             &[target_seeds],
         ),
@@ -399,15 +508,13 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
     )?;
 
     if pending > 0 {
-        let state_bump = ctx.accounts.protocol_state.bump;
-        let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
         token::mint_to(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                r.token_program.to_account_info(),
                 MintTo {
-                    mint: ctx.accounts.o_sola_mint.to_account_info(),
-                    to: ctx.accounts.user_o_sola.to_account_info(),
-                    authority: ctx.accounts.protocol_state.to_account_info(),
+                    mint: r.o_sola_mint.to_account_info(),
+                    to: r.user_o_sola.to_account_info(),
+                    authority: r.protocol_state.to_account_info(),
                 },
                 &[state_seeds],
             ),
@@ -417,7 +524,7 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
 
     // A deposit only ever raises a SOLA/USDC price, so this cannot fire today; it is here so that
     // no path which moves a pool's reserves is the one that forgot.
-    require_floor_respected(&ctx.accounts.target_pool, &ctx.accounts.protocol_state)?;
+    require_floor_respected(r.target_pool, r.protocol_state)?;
 
     // One line per round, for the keeper and for anyone reading the transaction: what was sold,
     // what reached the destination, and how much of it the virtual swap priced.
@@ -431,10 +538,12 @@ pub fn crank_auto_compound_lp(ctx: Context<CrankAutoCompoundLp>) -> Result<()> {
         zap.lp_out
     );
 
-    let auto = &mut ctx.accounts.auto;
-    auto.rounds = auto.rounds.saturating_add(1);
-    auto.last_crank_ts = now;
-    Ok(())
+    Ok(RouteOutcome { lp_out: zap.lp_out })
+}
+
+/// What a route produced, for the caller's own bookkeeping.
+pub struct RouteOutcome {
+    pub lp_out: u64,
 }
 
 // ── Contexts ─────────────────────────────────────────────────────────────────

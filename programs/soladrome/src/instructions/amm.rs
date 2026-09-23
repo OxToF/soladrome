@@ -161,6 +161,31 @@ pub fn credit_lp_deposit(
     Ok(pending)
 }
 
+/// Harvest what a position has earned, without changing its LP: re-stamps the debt at `acc` and
+/// returns the oSOLA the caller must deliver — to the owner's wallet, or straight into a route.
+///
+/// ☢️ The same rule as `claim_lp_rewards` and `credit_lp_deposit`, for the same reason: the harvest
+/// pays on `min(lp_amount, wallet)` and moves the debt to the whole accumulator, so a stranger
+/// harvesting while the wallet holds less than the recorded position would forfeit the rest.
+/// Without the owner, it is admitted only when there is nothing to forfeit.
+///
+/// Written for per-position strategies (`crank_pool_strategy_*`), which harvest a pool's rewards
+/// at the source instead of claiming them into a wallet where they stop being attributable.
+pub fn harvest_lp_rewards(
+    info: &mut LpUserInfo,
+    acc: u128,
+    wallet_lp: u64,
+    owner_present: bool,
+) -> Result<u64> {
+    require!(
+        owner_present || wallet_lp >= info.lp_amount,
+        SoladromeError::PartialBasisClaim
+    );
+    let pending = pending_osola(acc, info.reward_debt, reward_basis(info, wallet_lp));
+    info.reward_debt = acc;
+    Ok(pending)
+}
+
 // ── Floor guard ───────────────────────────────────────────────────────────────
 
 /// ☢️ The SOLA/USDC pool may never be left printing below the 1 USDC floor.
@@ -1426,6 +1451,38 @@ mod tests {
         assert_err!(
             credit_lp_deposit(&mut info, P, u64::MAX, 1, 1, 7, true),
             SoladromeError::Overflow
+        );
+    }
+
+    #[test]
+    fn harvest_pays_the_accrual_and_leaves_the_position_as_it_was() {
+        let mut info = position();
+        let paid = harvest_lp_rewards(&mut info, 5 * P, 1_000, false).unwrap();
+        assert_eq!(paid, 3_000);
+        assert_eq!(info.reward_debt, 5 * P, "nothing may be harvested twice");
+        assert_eq!(info.lp_amount, 1_000, "a harvest moves no LP");
+        assert_eq!(
+            harvest_lp_rewards(&mut info, 5 * P, 1_000, false).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn a_stranger_may_not_harvest_a_partial_basis() {
+        let mut info = position();
+        assert_err!(
+            harvest_lp_rewards(&mut info, 5 * P, 999, false),
+            SoladromeError::PartialBasisClaim
+        );
+        assert_eq!(
+            info.reward_debt,
+            2 * P,
+            "a refused harvest leaves the accrual intact"
+        );
+        // The owner may, and forfeits by choice.
+        assert_eq!(
+            harvest_lp_rewards(&mut info, 5 * P, 400, true).unwrap(),
+            1_200
         );
     }
 }
