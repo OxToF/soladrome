@@ -3,6 +3,7 @@
 import { PublicKey } from "@solana/web3.js";
 import { PROGRAM_ID, solaM, oSolaM } from "./program";
 import devnetXStocks from "./devnet-xstocks.json";
+import devnetLsts from "./devnet-lsts.json";
 
 export interface TokenInfo {
   symbol:   string;
@@ -38,7 +39,13 @@ const DEVNET_XSTOCK_SOURCE = devnetXStocks as unknown as { tokens: DevnetMockTok
 // public endpoint `api.devnet.solana.com`, so the substring separates them in both cases.
 const IS_DEVNET = (process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com").includes("devnet");
 
-export const DEVNET_MOCK_TOKENS: DevnetMockToken[] = IS_DEVNET ? DEVNET_XSTOCK_SOURCE.tokens : [];
+// LST mocks live in their own, hand-maintained file: `devnet-xstocks.json` is rewritten whole by
+// its generator, so an entry added there by hand would vanish on the next run.
+const DEVNET_LST_SOURCE = devnetLsts as unknown as { tokens: DevnetMockToken[] };
+
+export const DEVNET_MOCK_TOKENS: DevnetMockToken[] = IS_DEVNET
+  ? [...DEVNET_XSTOCK_SOURCE.tokens, ...DEVNET_LST_SOURCE.tokens]
+  : [];
 
 /**
  * Build the token list at runtime.
