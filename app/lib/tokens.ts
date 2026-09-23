@@ -86,7 +86,13 @@ export function getTokenList(usdcMint: PublicKey | null): TokenInfo[] {
     });
   }
 
-  list.push(...LAUNCH_TOKENS);
+  // ☢️ On devnet, a mock SHADOWS the launch token that carries its symbol. Both used to be listed,
+  // so the pickers offered two "jitoSOL" — the mainnet mint first, which has no pool on devnet —
+  // and choosing the one that looked right produced "No pool found for SOL/jitoSOL" against a
+  // pool that exists. Two entries with the same name and different mints is a trap in any list a
+  // human picks from; on devnet the mock is the one that has pools, so it is the one to keep.
+  const mocked = new Set(DEVNET_MOCK_TOKENS.map((t) => t.symbol.toLowerCase()));
+  list.push(...LAUNCH_TOKENS.filter((t) => !mocked.has(t.symbol.toLowerCase())));
   list.push(...DEVNET_MOCK_TOKENS.map(({ symbol, name, mint, decimals }) => ({ symbol, name, mint, decimals })));
   return list;
 }
