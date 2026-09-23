@@ -230,11 +230,24 @@ export function Pools() {
         } as PoolInfo;
       });
 
-      // Second pass: build price map from USDC pools, then fill tvlUsdc for non-USDC pools
+      // Second pass: price every token reachable from USDC through the pools, then fill tvlUsdc
+      // for the pools that do not hold USDC.
+      //
+      // ☢️ Not one hop: several. Pricing only tokens with a USDC pool left an LST/SOL pool — the
+      // pair a standing LP order exists for — with no price on its LST side, so its TVL showed
+      // "—" and a seeded pool read as an empty one. USDC → SOL (via SOL/USDC) → jitoSOL (via
+      // jitoSOL/SOL) is two hops; the loop runs until a pass prices nothing new. The first price
+      // found wins, so a token is priced from the pool closest to USDC.
       const priceMap: Record<string, number> = { [usdcStr]: 1.0 };
-      for (const p of infos) {
-        if (p.mintA === usdcStr && p.reserveB > 0) priceMap[p.mintB] = p.reserveA / p.reserveB;
-        else if (p.mintB === usdcStr && p.reserveA > 0) priceMap[p.mintA] = p.reserveB / p.reserveA;
+      for (let pass = 0; pass < 4; pass++) {
+        let learned = false;
+        for (const p of infos) {
+          if (p.reserveA <= 0 || p.reserveB <= 0) continue;
+          const pA = priceMap[p.mintA], pB = priceMap[p.mintB];
+          if (pA !== undefined && pB === undefined) { priceMap[p.mintB] = pA * p.reserveA / p.reserveB; learned = true; }
+          else if (pB !== undefined && pA === undefined) { priceMap[p.mintA] = pB * p.reserveB / p.reserveA; learned = true; }
+        }
+        if (!learned) break;
       }
       for (const p of infos) {
         if (p.tvlUsdc === null) {
