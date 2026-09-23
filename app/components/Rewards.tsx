@@ -12,10 +12,22 @@ import {
 } from "@/lib/recipes";
 import type { Plan } from "@/lib/recipe";
 import { StatusBanner } from "./ui/StatusBanner";
-import { StandingOrder } from "./StandingOrder";
+import { StandingOrder, type LpChoice } from "./StandingOrder";
+import { readStandingOrder } from "@/lib/autocompound";
 import { EmptyState } from "./ui/EmptyState";
 import { trackQuest } from "@/lib/quests";
 
+// ☢️ THIS WAS A PAGE OF ITS OWN ("Farm") UNTIL 2026-09-23, and it lives at the top of Pools now.
+//
+// Two reasons. The rewards it compounds come from LP positions, so the pools are where someone
+// looks for them — and the page count was already high. And the page was hidden whenever
+// exercise was switched off, which would have hidden the liquidity destination too, although
+// that one exercises nothing and is precisely what a closed launch can still offer.
+//
+// It is ONE card and not a setting per pool, on purpose: every pool pays its oSOLA into the same
+// wallet account, and that account has one delegate, so there is one standing order and one
+// destination for all of it. A per-pool switch would suggest a choice the chain does not have.
+//
 // ☢️ THIS SCREEN USED TO OFFER THREE WAYS TO DO ONE THING, and it read like it.
 //
 // A manual recipe, a watcher that told you when to run the manual recipe, and a standing order
@@ -106,10 +118,22 @@ function PlanView({ plan }: { plan: Plan }) {
   );
 }
 
-export function Strategies() {
+export function Rewards({
+  lpChoices = [],
+  pendingOSola = 0,
+}: {
+  /// Pools an order may compound into, already filtered to what the program accepts.
+  lpChoices?: LpChoice[];
+  /// oSOLA pending across the wallet's positions, as the pool list already computes it.
+  pendingOSola?: number;
+}) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
   const { usdcMint, protocolState, ammPools, vaultInfos, refresh } = useSoladrome();
+  // Folded by default: the pool list is what this page is for, and one line says enough.
+  const [open, setOpen] = useState(false);
+  const [destinationLine, setDestinationLine] = useState<string | null>(null);
+  const exerciseOpen = !!protocolState?.exerciseEnabled;
 
   const [opts, setOpts] = useState<CompoundOptions>({
     budgetUsdc: null,
@@ -128,7 +152,7 @@ export function Strategies() {
 
   // ── The header line ────────────────────────────────────────────────────────
   const readSignal = useCallback(async () => {
-    if (!wallet || !usdcMint) return;
+    if (!wallet || !usdcMint || !open) return;
     if (document.visibilityState !== "visible") return;
     try {
       setSignal(await evaluateCompound(ctx, opts));
@@ -137,7 +161,23 @@ export function Strategies() {
       // a status, and a stale status beats no status.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection, wallet, usdcMint, protocolState, ammPools, vaultInfos, opts]);
+  }, [connection, wallet, usdcMint, protocolState, ammPools, vaultInfos, opts, open]);
+
+  // The folded line: where the rewards go today. One read, not a poll — it only changes when the
+  // owner changes it, and they do that from the card below.
+  useEffect(() => {
+    if (!wallet || !usdcMint) return;
+    readStandingOrder(connection, wallet, usdcMint)
+      .then(({ order, allowances }) => {
+        if (!order || !order.enabled || allowances.oSola === null) return setDestinationLine("compounding off");
+        if (order.lpTarget) {
+          const label = lpChoices.find((c) => c.address === order.lpTarget!.toBase58())?.label;
+          return setDestinationLine(`compounding into ${label ?? "a pool"}`);
+        }
+        setDestinationLine("compounding into voting power");
+      })
+      .catch(() => setDestinationLine(null));
+  }, [connection, wallet, usdcMint, lpChoices, open]);
 
   useEffect(() => {
     readSignal();
@@ -211,23 +251,46 @@ export function Strategies() {
     };
   })();
 
+  if (!wallet) return null;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="card">
-        <h2 className="text-lg font-bold text-white">Strategies</h2>
-        <p className="mt-2 text-sm leading-relaxed text-gray-400">
-          Turn oSOLA into a staked hiSOLA position — once, or on its own. Every plan is simulated
-          before your wallet opens, and nothing here ever holds a key.
-        </p>
+        <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-4 text-left">
+          <div>
+            <h2 className="text-base font-bold text-white">Rewards</h2>
+            <p className="mt-0.5 text-xs text-gray-500">
+              <span className="font-mono text-brand-green/90">
+                {pendingOSola.toLocaleString("en-US", { maximumFractionDigits: 2 })} oSOLA
+              </span>{" "}
+              pending across your pools{destinationLine ? ` · ${destinationLine}` : ""}
+            </p>
+          </div>
+          <span className="shrink-0 text-xs font-semibold text-gray-400">{open ? "Close ▾" : "Manage ▸"}</span>
+        </button>
+        {open && (
+          <p className="mt-3 text-xs leading-relaxed text-gray-500">
+            Turn oSOLA into voting power (hiSOLA) or into more liquidity — once, or on its own. One
+            destination for all your pools: they all pay into the same oSOLA account. Nothing here
+            ever holds a key.
+          </p>
+        )}
       </div>
 
+      {open && (
+      <>
       <div className="card glow">
-        <h3 className="text-base font-bold text-white">Compound once</h3>
+        <h3 className="text-base font-bold text-white">Compound once, into voting power</h3>
         <p className="mt-1 text-xs leading-relaxed text-gray-500">
           Claim what is pending, exercise it at the floor, stake the SOLA. One signature.
         </p>
 
-        {!wallet ? (
+        {!exerciseOpen ? (
+          <p className="mt-4 rounded-lg border border-brand-border bg-brand-dark px-3 py-2.5 text-xs leading-relaxed text-gray-400">
+            Exercise is not open yet, so oSOLA cannot become hiSOLA today. Compounding into
+            liquidity below does not need it.
+          </p>
+        ) : !wallet ? (
           <div className="mt-5">
             <EmptyState icon="🔌" title="Connect a wallet" hint="Plans are built against your own positions." />
           </div>
@@ -316,7 +379,9 @@ export function Strategies() {
         )}
       </div>
 
-      <StandingOrder />
+      <StandingOrder lpChoices={lpChoices} />
+      </>
+      )}
     </div>
   );
 }

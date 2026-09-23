@@ -17,6 +17,7 @@
 //       scripts/keeper.mts            # one pass, then exit
 //   ... scripts/keeper.mts --watch    # keep going, one pass a minute
 //   ... scripts/keeper.mts --dry-run  # look, decide, send nothing
+//   KEEPER_ONLY=<owner> ...            # serve one owner's order only (a rehearsal on devnet)
 //
 // The keypair pays fees and signs nothing that moves a user's tokens. A funded throwaway is the
 // right thing to give it; the deployer key is not.
@@ -27,7 +28,7 @@ import {
 } from "@solana/web3.js";
 import { statePda, getProgram } from "../lib/program.ts";
 import {
-  buildClaimInstruction, buildCrankInstruction, listCrankableOrders,
+  buildClaimInstruction, buildCrankInstruction, buildLpCrankInstruction, listCrankableOrders,
 } from "../lib/autocompound.ts";
 import { evaluateCompound } from "../lib/recipes.ts";
 import { measureIxs, WIRE_LIMIT } from "../lib/recipe.ts";
@@ -84,13 +85,22 @@ const stamp = () => new Date().toISOString().slice(11, 19);
 async function pass(): Promise<void> {
   const program = getProgram(new AnchorProvider(connection, wallet as any, {}));
   const state: any = await (program.account as any).protocolState.fetch(statePda);
-  if (state.paused || !state.exerciseEnabled) {
-    console.log(`${stamp()}  protocol closed (paused=${state.paused} exercise=${state.exerciseEnabled}) — nothing to do`);
+  if (state.paused) {
+    console.log(`${stamp()}  protocol paused — nothing to do`);
     return;
   }
 
   const pools: any[] = await (program.account as any).ammPool.all();
-  const orders = await listCrankableOrders(connection, wallet as any, state.usdcMint, state);
+  // ☢️ Exercise gates the VOTING recipe only. A liquidity order sells its oSOLA and exercises
+  // nothing, so a closed-launch "exercise off" must not silence it — which is exactly what
+  // gating the whole pass on the flag used to do.
+  const only = process.env.KEEPER_ONLY?.trim();
+  const orders = (await listCrankableOrders(connection, wallet as any, state.usdcMint, state)).filter(
+    (o) =>
+      (state.exerciseEnabled || o.order.lpTarget !== null) &&
+      // A rehearsal on a shared cluster should fire the order under test and nobody else's.
+      (!only || o.owner.toBase58() === only),
+  );
 
   // ☢️ AN ORDER SHORT OF oSOLA IS NOT NECESSARILY AN ORDER THAT CANNOT FIRE. Since
   // `claim_lp_rewards` became permissionless, the rewards that refill a wallet are one
@@ -150,7 +160,10 @@ async function pass(): Promise<void> {
   for (const o of ready) {
     const who = o.owner.toBase58().slice(0, 8);
     try {
-      const crank = await buildCrankInstruction(connection, wallet as any, state.usdcMint, o.owner);
+      // The destination is the owner's and it is on chain: the keeper only reads it.
+      const crank = o.order.lpTarget
+        ? await buildLpCrankInstruction(connection, wallet as any, state.usdcMint, o.owner, o.order.lpTarget)
+        : await buildCrankInstruction(connection, wallet as any, state.usdcMint, o.owner);
       // Claims first, in the same transaction: the crank reads the wallet balance, so a claim
       // that lands in a LATER transaction is a round that does not fire this pass. Admitted
       // while they fit — the wire is 1232 bytes and the engine measures rather than guesses.
@@ -189,7 +202,7 @@ async function pass(): Promise<void> {
       // The WHOLE signature: a truncated one cannot be looked up, which is exactly what you
       // want to do the first time an order fires somewhere that matters.
       console.log(
-        `${stamp()}  ${who}…  fired ${o.order.chunk} oSOLA` +
+        `${stamp()}  ${who}…  fired ${o.order.chunk} oSOLA${o.order.lpTarget ? ` into ${o.order.lpTarget.toBase58().slice(0, 6)}…` : ""}` +
           `${claims.length ? ` (${claims.length} claim(s) first)` : ""} — ${sig}`,
       );
     } catch (e: any) {
