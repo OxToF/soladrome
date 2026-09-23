@@ -112,6 +112,55 @@ fn pending_osola(acc: u128, debt: u128, user_lp: u64) -> u64 {
     (delta.saturating_mul(user_lp as u128) / LP_REWARD_PRECISION) as u64
 }
 
+/// Credit a deposit of `lp_out` to a position: harvest what it has earned so far, re-stamp its
+/// debt at `acc`, and record the deposit. Returns the oSOLA the caller must mint to the owner.
+///
+/// ☢️ `acc` must be the pool accumulator ALREADY advanced to `now` by `advance_pool_rewards`, and
+/// read BEFORE the pool's `total_lp` grows by `lp_out` — otherwise the new LP is credited with
+/// rewards that accrued before it existed. Both callers do it in that order.
+///
+/// Extracted from `add_liquidity` for the standing LP order, which deposits on the owner's
+/// behalf and must book the deposit exactly as a self-service deposit would. Two copies of this
+/// accounting would be one edit away from two ways of earning.
+///
+/// ☢️ **A DEPOSIT HARVESTS, SO A DEPOSIT BY SOMEONE ELSE IS A CLAIM BY SOMEONE ELSE.** The
+/// harvest pays on `min(lp_amount, wallet)` and then moves `reward_debt` to the whole
+/// accumulator, so a deposit made while the wallet holds less than the recorded position
+/// forfeits the accrual on the difference — the grief `claim_lp_rewards` closed with
+/// `PartialBasisClaim` on 2026-09-21. A permissionless crank that deposits is exactly the
+/// stranger that rule is about, and the same rule applies: `owner_present` is false for it, and
+/// it is then admitted only when the wallet holds the whole recorded deposit.
+pub fn credit_lp_deposit(
+    info: &mut LpUserInfo,
+    acc: u128,
+    wallet_lp_pre: u64,
+    lp_out: u64,
+    now: i64,
+    bump: u8,
+    owner_present: bool,
+) -> Result<u64> {
+    require!(
+        owner_present || wallet_lp_pre >= info.lp_amount,
+        SoladromeError::PartialBasisClaim
+    );
+    let basis = reward_basis(info, wallet_lp_pre);
+    let pending = pending_osola(acc, info.reward_debt, basis);
+
+    info.reward_debt = acc;
+    if info.bump == 0 {
+        info.bump = bump;
+    }
+    // Record the deposit: this is the only way lp_amount ever grows, so reward-earning
+    // LP can only be created by actually paying tokens into the vaults.
+    info.lp_amount = info
+        .lp_amount
+        .checked_add(lp_out)
+        .ok_or(SoladromeError::Overflow)?;
+    // Restart the epoch-weight accrual window (see LpUserInfo::last_change_ts).
+    info.last_change_ts = now.max(0) as u32;
+    Ok(pending)
+}
+
 // ── Floor guard ───────────────────────────────────────────────────────────────
 
 /// ☢️ The SOLA/USDC pool may never be left printing below the 1 USDC floor.
@@ -403,10 +452,18 @@ pub fn add_liquidity(
     let cont_active = continuous_active(&ctx.accounts.protocol_state, now);
     advance_pool_rewards(&mut ctx.accounts.pool, now, cont_rate, cont_active);
 
-    // ── Auto-harvest pending oSOLA for user's existing LP position ────────────
+    // ── Auto-harvest pending oSOLA and book the deposit ───────────────────────
+    // The user signs this instruction, so choosing to harvest on a partial basis is theirs.
     let acc = ctx.accounts.pool.osola_reward_per_lp;
-    let basis = reward_basis(&ctx.accounts.lp_user_info, user_lp_pre);
-    let pending = pending_osola(acc, ctx.accounts.lp_user_info.reward_debt, basis);
+    let pending = credit_lp_deposit(
+        &mut ctx.accounts.lp_user_info,
+        acc,
+        user_lp_pre,
+        lp_out,
+        now,
+        ctx.bumps.lp_user_info,
+        true,
+    )?;
     if pending > 0 {
         let state_bump = ctx.accounts.protocol_state.bump;
         let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
@@ -423,21 +480,6 @@ pub fn add_liquidity(
             pending,
         )?;
     }
-
-    // Snapshot user's debt at current accumulator (new LP earns from here)
-    let lp_user_info = &mut ctx.accounts.lp_user_info;
-    lp_user_info.reward_debt = acc;
-    if lp_user_info.bump == 0 {
-        lp_user_info.bump = ctx.bumps.lp_user_info;
-    }
-    // Record the deposit: this is the only way lp_amount ever grows, so reward-earning
-    // LP can only be created by actually paying tokens into the vaults.
-    lp_user_info.lp_amount = lp_user_info
-        .lp_amount
-        .checked_add(lp_out)
-        .ok_or(SoladromeError::Overflow)?;
-    // Restart the epoch-weight accrual window (see LpUserInfo::last_change_ts).
-    lp_user_info.last_change_ts = now.max(0) as u32;
 
     // Mint lp_out to user
     token::mint_to(
@@ -1287,4 +1329,103 @@ pub struct Swap<'info> {
     pub token_a_program: Interface<'info, TokenInterface>,
     /// Serves `token_b_mint`. May differ from `token_a_program`.
     pub token_b_program: Interface<'info, TokenInterface>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assert_err;
+
+    const P: u128 = LP_REWARD_PRECISION;
+
+    /// A position that deposited 1 000 LP when the accumulator stood at 2, which now stands at 5.
+    fn position() -> LpUserInfo {
+        LpUserInfo {
+            reward_debt: 2 * P,
+            lp_amount: 1_000,
+            bump: 254,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn credit_lp_deposit_books_a_deposit_as_add_liquidity_always_did() {
+        let mut info = position();
+        let pending =
+            credit_lp_deposit(&mut info, 5 * P, 1_000, 500, 1_700_000_000, 7, true).unwrap();
+        assert_eq!(
+            pending, 3_000,
+            "(5 − 2) per LP on the 1 000 already deposited"
+        );
+        assert_eq!(
+            info.reward_debt,
+            5 * P,
+            "the new LP earns from here, not before"
+        );
+        assert_eq!(info.lp_amount, 1_500);
+        assert_eq!(info.last_change_ts, 1_700_000_000);
+        assert_eq!(info.bump, 254, "an existing bump is never overwritten");
+    }
+
+    #[test]
+    fn credit_lp_deposit_stamps_the_bump_of_a_fresh_position() {
+        let mut info = LpUserInfo::default();
+        let pending = credit_lp_deposit(&mut info, 5 * P, 0, 500, 1, 7, false).unwrap();
+        assert_eq!(pending, 0, "nothing deposited, nothing earned");
+        assert_eq!(
+            (info.bump, info.lp_amount, info.reward_debt),
+            (7, 500, 5 * P)
+        );
+    }
+
+    #[test]
+    fn a_stranger_may_not_deposit_while_the_wallet_holds_less_than_the_position() {
+        // ☢️ The grief this guard exists for. 600 of the 1 000 LP are parked elsewhere; a
+        // harvest now would pay on 600 and re-stamp the debt for all 1 000, destroying the
+        // accrual on the other 400 for good.
+        let mut info = position();
+        assert_err!(
+            credit_lp_deposit(&mut info, 5 * P, 400, 500, 1, 7, false),
+            SoladromeError::PartialBasisClaim
+        );
+        assert_eq!(
+            info.reward_debt,
+            2 * P,
+            "a refused credit must leave the position untouched"
+        );
+    }
+
+    #[test]
+    fn the_owner_may_deposit_on_a_partial_basis_and_forfeits_by_choice() {
+        let mut info = position();
+        let pending = credit_lp_deposit(&mut info, 5 * P, 400, 500, 1, 7, true).unwrap();
+        assert_eq!(
+            pending, 1_200,
+            "paid on the 400 in hand; the other 1 200 is the owner's call"
+        );
+        assert_eq!(info.reward_debt, 5 * P);
+    }
+
+    #[test]
+    fn a_stranger_may_deposit_when_nothing_can_be_forfeited() {
+        let mut info = position();
+        let pending = credit_lp_deposit(&mut info, 5 * P, 1_000, 500, 1, 7, false).unwrap();
+        assert_eq!(pending, 3_000, "the whole accrual, paid to the owner");
+        // More in the wallet than recorded (LP received by transfer) earns nothing extra.
+        let mut info = position();
+        let pending = credit_lp_deposit(&mut info, 5 * P, 9_000, 500, 1, 7, false).unwrap();
+        assert_eq!(pending, 3_000);
+    }
+
+    #[test]
+    fn credit_lp_deposit_refuses_to_wrap_the_position() {
+        let mut info = LpUserInfo {
+            lp_amount: u64::MAX,
+            ..Default::default()
+        };
+        assert_err!(
+            credit_lp_deposit(&mut info, P, u64::MAX, 1, 1, 7, true),
+            SoladromeError::Overflow
+        );
+    }
 }
