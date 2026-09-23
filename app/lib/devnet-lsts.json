@@ -1,0 +1,16 @@
+{
+  "note": "HAND-MAINTAINED, unlike devnet-xstocks.json (which a script regenerates). Devnet mocks of liquid-staking tokens, so the SOL-paired route of a standing LP order (oSOLA → USDC → SOL → LST/SOL) can be shown on devnet. Mint authority: the devnet deployer. Never add these to LAUNCH_TOKENS.",
+  "cluster": "devnet",
+  "programId": "DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe",
+  "tokens": [
+    {
+      "symbol": "jitoSOL",
+      "name": "Jito Staked SOL (devnet mock)",
+      "mint": "3gV9a8fyMBPnHWMNFbtj5KDNLxWLwa2dcnHMZgNDgzBi",
+      "decimals": 9,
+      "admitted": true,
+      "profile": "lst",
+      "why": "classic SPL, 9 decimals like the real jitoSOL; pool 8FAtoAFo… seeded at 1 jitoSOL = 1.2 SOL on 2026-09-23"
+    }
+  ]
+}
