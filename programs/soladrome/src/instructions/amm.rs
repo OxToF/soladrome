@@ -204,22 +204,20 @@ pub struct SwapQuote {
 ///
 /// Reads the pool and returns; writes nothing. `apply_swap_reserves` is the counterpart.
 pub fn quote_swap(pool: &AmmPool, amount_in: u64, in_is_a: bool) -> Result<SwapQuote> {
-    let amount_in_u128 = amount_in as u128;
-    let fee_total = amount_in_u128 * pool.fee_rate as u128 / 10_000;
-    let fee_protocol = fee_total * pool.protocol_fee_bps as u128 / 10_000;
-    let amount_net = amount_in_u128 - fee_total;
+    let (fee_total, fee_protocol, amount_net) =
+        amm_math::split_fee(amount_in, pool.fee_rate, pool.protocol_fee_bps);
 
     let (reserve_in, reserve_out) = if in_is_a {
         (pool.reserve_a, pool.reserve_b)
     } else {
         (pool.reserve_b, pool.reserve_a)
     };
-    let amount_out = amm_math::swap_out(reserve_in, reserve_out, amount_net as u64)?;
+    let amount_out = amm_math::swap_out(reserve_in, reserve_out, amount_net)?;
 
     Ok(SwapQuote {
-        fee_total: fee_total as u64,
-        fee_protocol: fee_protocol as u64,
-        amount_net: amount_net as u64,
+        fee_total,
+        fee_protocol,
+        amount_net,
         amount_out,
     })
 }
