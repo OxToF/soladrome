@@ -1198,6 +1198,74 @@ describe("soladrome — bankrun (per-position strategies)", () => {
     );
   });
 
+  it("☢️ no pool may be passed twice: the sale pool as an unused hop is refused, and its reserves stay true", async () => {
+    // Found in the 2026-09-24 review. Anchor writes every mutable copy of a program-owned account
+    // back at exit, in field order, and does not refuse duplicates — so the sale pool passed again
+    // as `hop_pool` (never read for a USDC destination) wrote its stale copy over the real one,
+    // reverting the sale's reserve update. Repeatable by anyone; it would have drained the vault.
+    const kp = await lpUser([tknPool]);
+    await setStrategy(kp, tknPool, tknPool, LIQUIDITY);
+    await forwardSeconds(3_600);
+    await expectError(
+      crankStrategyLp(kp.publicKey, tknPool, tknPool, {
+        hopPool: sellPool.key,
+        hopUsdcVault: vaultOf(sellPool, usdcMint),
+        hopSolVault: vaultOf(sellPool, oSolaM),
+      }),
+      "AutoInvalidRoute"
+    );
+    // The same route serves the standing LP order: its crank refuses the duplicate too.
+    const owner = Keypair.generate();
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: owner.publicKey,
+        lamports: 5 * LAMPORTS_PER_SOL,
+      }),
+    ]);
+    await distributeOSola(owner.publicKey, 100 * UNIT);
+    await send(
+      [
+        await program.methods
+          .configureAutoCompound(
+            new BN(10 * UNIT),
+            new BN(10 * UNIT),
+            new BN(1.1 * UNIT),
+            new BN(60),
+            0
+          )
+          .accounts({
+            user: owner.publicKey,
+            auto: autoOf(owner.publicKey),
+            userPosition: positionOf(owner.publicKey),
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .instruction(),
+        createApproveInstruction(
+          ata(oSolaM, owner.publicKey),
+          autoOf(owner.publicKey),
+          owner.publicKey,
+          100 * UNIT
+        ),
+        await setLpIx(
+          { kp: owner, oSola: ata(oSolaM, owner.publicKey) },
+          tknPool,
+          7_000
+        ),
+      ],
+      [owner]
+    );
+    await expectError(
+      crankLp({ kp: owner, oSola: ata(oSolaM, owner.publicKey) }, tknPool, {
+        hopPool: sellPool.key,
+        hopUsdcVault: vaultOf(sellPool, usdcMint),
+        hopSolVault: vaultOf(sellPool, oSolaM),
+      }),
+      "AutoInvalidRoute"
+    );
+    await assertReservesMatchVaults(sellPool, "after both refusals");
+  });
+
   // ── 7. A backlog larger than one leg ───────────────────────────────────────
 
   it("a backlog larger than one leg compounds what it can and hands the rest to the owner", async () => {

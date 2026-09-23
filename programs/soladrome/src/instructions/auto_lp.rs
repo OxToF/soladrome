@@ -257,6 +257,28 @@ pub fn route_into_lp<'a, 'info>(
     let state_bump = r.protocol_state.bump;
     let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
 
+    // ☢️ NO POOL MAY BE PASSED TWICE. `AmmPool` is owned by this program, so Anchor writes every
+    // mutable copy back at exit, in field order — and it does NOT refuse a duplicate. Found in the
+    // 2026-09-24 review: with a USDC destination the hop was never read, so a cranker could pass
+    // THE SALE POOL as `hop_pool`; its stale copy, written after the real one, reverted the sale's
+    // reserve update and left the pool pricing USDC its vault no longer held — repeatable by anyone,
+    // with their own cheap orders, until the vault was drained. So: the hop is absent unless the
+    // route needs it, and every pool on the route is a distinct account.
+    if !needs_hop {
+        require!(
+            r.hop_pool.is_none() && r.hop_usdc_vault.is_none() && r.hop_sol_vault.is_none(),
+            SoladromeError::AutoInvalidRoute
+        );
+    }
+    let (sell_key, target_key) = (r.sell_pool.key(), r.target_pool.key());
+    require!(sell_key != target_key, SoladromeError::AutoInvalidRoute);
+    if let Some(hop) = r.hop_pool.as_ref() {
+        require!(
+            hop.key() != sell_key && hop.key() != target_key,
+            SoladromeError::AutoInvalidRoute
+        );
+    }
+
     // ── 1. Sell the oSOLA on THE oSOLA/USDC pool ─────────────────────────────
     require!(
         is_pair(r.sell_pool, o_sola, usdc),
