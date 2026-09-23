@@ -3,7 +3,7 @@
 One living document. If something here disagrees with another file in this repository, this
 file is the one to trust, and the other file is the one to fix.
 
-**Last measured: 2026-09-23.** Every figure below was read from the tree or the chain on that
+**Last measured: 2026-09-24.** Every figure below was read from the tree or the chain on that
 date, not carried forward from a previous note.
 
 ☢️ **THE DEVNET BINARY NO LONGER MATCHES THE AUDIT TAG. Since 2026-09-21 it never will again.**
@@ -23,12 +23,45 @@ what is deployed" is stale from this date onward.
 | Previous tag | `audit-2026-08-30b`, a verified **ancestor** of the audit tag |
 | Branch | `main` — one trunk, and the deployed tree |
 | Program id (devnet) | `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe` |
-| Devnet binary | sha256 `34be4794…`, 1 804 432 bytes, SBPFv3, deployed 2026-09-23 at slot `502944096` from commit `16d5b36` (branch `feat/lp-compound`), verified byte-for-byte by dump |
-| Instructions | **61** (54 at the audit tag, plus the four standing-order instructions and the three LP-order ones below) |
+| Devnet binary | sha256 `fa483503…`, 1 921 288 bytes, SBPFv3, deployed 2026-09-24 at slot `503048080` from commit `832a775` (branch `feat/pool-strategies`), verified byte-for-byte by dump |
+| Instructions | **65** (54 at the audit tag, plus four standing-order, three LP-order and four per-position strategy instructions) |
 | Account parameters | 503 at the audit tag; the four new instructions add their own |
-| Error variants | **66** (58 at the audit tag, plus `AutoNotReady`, `AutoCostTooHigh`, `AutoOwnerMismatch`, `PartialBasisClaim`, and `AutoWrongDestination`, `AutoBelowIntrinsic`, `AutoImpactTooHigh`, `AutoInvalidRoute`) |
-| On-chain account types | **23** (22 at the audit tag, plus `AutoCompound`) |
-| Tests | **101 bankrun cases passing, 0 failing** — 9 for the LP order (each guard proven by mutation, 8/8), 8 for the standing order, 4 for the permissionless claim · 78 cargo unit tests · 43 frontend unit tests |
+| Error variants | **68** (58 at the audit tag, plus the ten `Auto*` / `PartialBasisClaim` / `Strategy*` variants) |
+| On-chain account types | **24** (22 at the audit tag, plus `AutoCompound` and `PoolStrategy`) |
+| Tests | **114 bankrun cases passing, 0 failing** — 13 per-position strategy (incl. the duplicate-pool regression), 9 LP order, 8 standing order, 4 permissionless claim; mutations on every guard · 80 cargo unit tests · 48 frontend unit tests |
+
+**☢️ FOUND AND FIXED IN REVIEW (2026-09-24): a pool passed twice reverted a route's reserves.**
+`AmmPool` is owned by this program, so Anchor writes every mutable copy back at exit, in field
+order — **and does not refuse a duplicate**. With a USDC destination `route_into_lp` never read the
+hop, so a cranker could pass the sale pool as `hop_pool`: its stale copy, written after the real
+one, reverted the sale's reserve update (bankrun: USDC reserve 38 000.000000 against a vault of
+37 999.876010). Permissionless and repeatable with cheap orders of one's own — enough to drain the
+sale pool's USDC. It affected `crank_auto_compound_lp` (on devnet since 2026-09-23) and
+`crank_pool_strategy_lp`. Fixed in `832a775`: the hop accounts must be absent unless the route
+needs them, and every pool on the route is a distinct account. Every devnet pool was checked —
+reserves equal vaults, never exploited — and the fix was deployed within the hour (slot
+`503048080`). ⚠️ The general rule for this program: any instruction taking two program-owned
+accounts of the same type must prove they are distinct; Anchor will not.
+
+**☢️ Each LP position has its own reward strategy since 2026-09-24.** A wallet-based order can
+only have one destination — every pool pays oSOLA into the same account, where it no longer says
+which pool it came from — so a user compounding jitoSOL/SOL saw their USDC/SOLA rewards follow.
+`PoolStrategy` (`[b"strategy", owner, source_pool]`) harvests ONE position's accrual at the source,
+so two strategies never touch each other's rewards. `set_pool_strategy` / `close_pool_strategy`
+(owner), `crank_pool_strategy_lp` / `crank_pool_strategy_vote` (permissionless). The liquidity
+strategy mints the harvest straight into the sale vault — no allowance, nothing reaches the wallet
+— and deposits into the owner's chosen pool (its own by default); a backlog over one leg is capped
+and the excess minted to the owner. The voting strategy exercises the harvest directly into financed
+hiSOLA, never minting oSOLA. ☢️ The same pool is never two accounts in one instruction (same-pool
+strategies pass it once; a position in the sale or hop pool cannot compound through it:
+`StrategyRouteConflict`). Every harvest is a stranger's (`harvest_lp_rewards`, `owner_present =
+false`). Refactors: `route_into_lp`, `exercise_into_stake`, `harvest_lp_rewards` — one body each.
+**Proven on devnet** from a stranger's key: cross-pool xStock → jitoSOL/SOL harvested 3 477.12 oSOLA,
+sold 692.12 (the 1 % leg), +77.85 LP, 2 785.00 oSOLA backlog to the owner (tx `3UXFqDoB…`); voting
+harvested 2 742.28 oSOLA → +2 742.28 financed hiSOLA, strike in full to the floor, 10.91 USDC fee,
+no oSOLA minted (tx `4J7GjZT2…`). ⚠️ Disclosed interaction: any deposit into a pool — including the
+wallet order's — collects that position's pending into the wallet first, bypassing its strategy.
+Nothing is lost; the Rewards card warns when the wallet order points at a pool with a strategy.
 
 **☢️ A standing order can compound into LIQUIDITY since 2026-09-23.** Three instructions:
 `set_auto_compound_lp`, `clear_auto_compound_lp` and the permissionless `crank_auto_compound_lp`,

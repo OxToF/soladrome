@@ -14,6 +14,11 @@ import type { Plan } from "@/lib/recipe";
 import { StatusBanner } from "./ui/StatusBanner";
 import { StandingOrder, type LpChoice } from "./StandingOrder";
 import { readStandingOrder } from "@/lib/autocompound";
+import { PositionStrategy, strategyChangeIxs, type StrategyPool } from "./PositionStrategy";
+import type { PoolStrategy } from "@/lib/strategies";
+import { canCompound } from "@/lib/strategies";
+import { measureIxs, WIRE_LIMIT } from "@/lib/recipe";
+import { PublicKey } from "@solana/web3.js";
 import { EmptyState } from "./ui/EmptyState";
 import { trackQuest } from "@/lib/quests";
 
@@ -24,9 +29,12 @@ import { trackQuest } from "@/lib/quests";
 // exercise was switched off, which would have hidden the liquidity destination too, although
 // that one exercises nothing and is precisely what a closed launch can still offer.
 //
-// It is ONE card and not a setting per pool, on purpose: every pool pays its oSOLA into the same
-// wallet account, and that account has one delegate, so there is one standing order and one
-// destination for all of it. A per-pool switch would suggest a choice the chain does not have.
+// ☢️ PER POSITION since 2026-09-24. Every pool pays its oSOLA into the same wallet account, where
+// it stops saying which pool it came from — so the first version offered ONE destination for all
+// of it, and a user compounding jitoSOL/SOL saw their USDC/SOLA rewards follow. Each position now
+// has its own strategy, harvested at the source by the program, and they never touch each other.
+// The wallet order survives below it, for oSOLA that did not come from a position (airdrop,
+// partners, a backlog a strategy handed back).
 //
 // ☢️ THIS SCREEN USED TO OFFER THREE WAYS TO DO ONE THING, and it read like it.
 //
@@ -121,11 +129,22 @@ function PlanView({ plan }: { plan: Plan }) {
 export function Rewards({
   lpChoices = [],
   pendingOSola = 0,
+  positions = [],
+  destinations = [],
+  strategies = new Map(),
+  onStrategiesChanged = () => {},
 }: {
   /// Pools an order may compound into, already filtered to what the program accepts.
   lpChoices?: LpChoice[];
   /// oSOLA pending across the wallet's positions, as the pool list already computes it.
   pendingOSola?: number;
+  /// The wallet's LP positions, with what each has pending.
+  positions?: { pool: StrategyPool; pending: number }[];
+  /// Every pool a strategy may compound into.
+  destinations?: StrategyPool[];
+  /// The wallet's strategies, keyed by source pool.
+  strategies?: Map<string, PoolStrategy>;
+  onStrategiesChanged?: () => void;
 }) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
@@ -134,6 +153,52 @@ export function Rewards({
   const [open, setOpen] = useState(false);
   const [destinationLine, setDestinationLine] = useState<string | null>(null);
   const exerciseOpen = !!protocolState?.exerciseEnabled;
+  const [allInto, setAllInto] = useState("");
+  const [allBusy, setAllBusy] = useState(false);
+  const [allStatus, setAllStatus] = useState("");
+  const [walletTarget, setWalletTarget] = useState<string | null>(null);
+  const activeCount = positions.filter((p) => strategies.has(p.pool.address)).length;
+  // The shortcut's destination, defaulting to the first pool every position could reach.
+  const allTarget = allInto || destinations[0]?.address || "";
+
+  /// "Compound everything into one pool": the same strategy on every position that can reach it,
+  /// in as few signatures as the wire allows.
+  async function applyToAll() {
+    if (!wallet || !usdcMint || !allTarget) return;
+    setAllBusy(true);
+    setAllStatus("");
+    try {
+      const target = destinations.find((d) => d.address === allTarget)!;
+      const key = (p: StrategyPool) => ({ key: new PublicKey(p.address), mintA: new PublicKey(p.mintA), mintB: new PublicKey(p.mintB) });
+      const eligible = positions.filter((p) => canCompound(key(p.pool), key(target), usdcMint));
+      const skipped = positions.length - eligible.length;
+      const all: any[] = [];
+      for (const p of eligible) {
+        const s = strategies.get(p.pool.address);
+        if (s?.mode === "liquidity" && s.targetPool?.toBase58() === allTarget) continue;
+        all.push(...(await strategyChangeIxs(connection, wallet, usdcMint, p.pool.address, s, { kind: "liquidity", target: allTarget })).ixs);
+      }
+      // Pack greedily: a transaction is 1232 bytes, and each strategy carries a dozen accounts.
+      let batch: any[] = [];
+      for (const ix of all) {
+        if (batch.length && measureIxs([...batch, ix], wallet.publicKey) > WIRE_LIMIT) {
+          await sendTx(connection, wallet, batch);
+          batch = [];
+        }
+        batch.push(ix);
+      }
+      if (batch.length) await sendTx(connection, wallet, batch);
+      setAllStatus(
+        `✅ ${eligible.length} position${eligible.length === 1 ? "" : "s"} now compound into ${target.label}` +
+          (skipped ? ` — ${skipped} skipped: their pool is on the route and cannot compound through it.` : "."),
+      );
+      onStrategiesChanged();
+    } catch (e: any) {
+      setAllStatus(`❌ ${explainRpcRefusal(e) ?? e?.message ?? e}`);
+    } finally {
+      setAllBusy(false);
+    }
+  }
 
   const [opts, setOpts] = useState<CompoundOptions>({
     budgetUsdc: null,
@@ -169,12 +234,17 @@ export function Rewards({
     if (!wallet || !usdcMint) return;
     readStandingOrder(connection, wallet, usdcMint)
       .then(({ order, allowances }) => {
-        if (!order || !order.enabled || allowances.oSola === null) return setDestinationLine("compounding off");
+        if (!order || !order.enabled || allowances.oSola === null) {
+          setWalletTarget(null);
+          return setDestinationLine(null);
+        }
         if (order.lpTarget) {
           const label = lpChoices.find((c) => c.address === order.lpTarget!.toBase58())?.label;
-          return setDestinationLine(`compounding into ${label ?? "a pool"}`);
+          setWalletTarget(order.lpTarget.toBase58());
+          return setDestinationLine(`wallet oSOLA into ${label ?? "a pool"}`);
         }
-        setDestinationLine("compounding into voting power");
+        setWalletTarget(null);
+        setDestinationLine("wallet oSOLA into voting power");
       })
       .catch(() => setDestinationLine(null));
   }, [connection, wallet, usdcMint, lpChoices, open]);
@@ -263,22 +333,90 @@ export function Rewards({
               <span className="font-mono text-brand-green/90">
                 {pendingOSola.toLocaleString("en-US", { maximumFractionDigits: 2 })} oSOLA
               </span>{" "}
-              pending across your pools{destinationLine ? ` · ${destinationLine}` : ""}
+              pending across your pools
+              {` · ${activeCount} of ${positions.length} position${positions.length === 1 ? "" : "s"} on a strategy`}
+              {destinationLine ? ` · ${destinationLine}` : ""}
             </p>
           </div>
           <span className="shrink-0 text-xs font-semibold text-gray-400">{open ? "Close ▾" : "Manage ▸"}</span>
         </button>
         {open && (
           <p className="mt-3 text-xs leading-relaxed text-gray-500">
-            Turn oSOLA into voting power (hiSOLA) or into more liquidity — once, or on its own. One
-            destination for all your pools: they all pay into the same oSOLA account. Nothing here
-            ever holds a key.
+            Each position has its own strategy: compound its oSOLA into liquidity (its own pool or
+            another), turn it into voting power, or keep it for a manual claim. They never touch
+            each other&apos;s rewards. Nothing here ever holds a key.
           </p>
         )}
       </div>
 
       {open && (
       <>
+      {/* ── One strategy per position ─────────────────────────────────── */}
+      <div className="card space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-base font-bold text-white">Your positions</h3>
+          {positions.length > 1 && destinations.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
+              <span>Compound everything into</span>
+              <select
+                value={allTarget}
+                onChange={(e) => setAllInto(e.target.value)}
+                className="rounded-lg border border-brand-border bg-brand-dark px-2 py-1.5 text-[11px] text-white focus:border-brand-green focus:outline-none"
+              >
+                {destinations.map((d) => (
+                  <option key={d.address} value={d.address}>{d.label}</option>
+                ))}
+              </select>
+              <button onClick={applyToAll} disabled={allBusy} className="btn-secondary px-3 py-1.5 text-[11px] disabled:opacity-40">
+                {allBusy ? "Sending…" : "Apply"}
+              </button>
+            </div>
+          )}
+        </div>
+        {allStatus && <p className="text-[11px] text-gray-400">{allStatus}</p>}
+        {positions.length === 0 ? (
+          <p className="text-xs text-gray-500">No LP position yet. Deposit in a pool to earn oSOLA.</p>
+        ) : (
+          <div className="divide-y divide-brand-border">
+            {positions.map((p) => (
+              <div key={p.pool.address} className="space-y-2 py-3">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-sm font-semibold text-white">{p.pool.label}</span>
+                  <span className="font-mono text-xs text-brand-green/90">
+                    {p.pending.toLocaleString("en-US", { maximumFractionDigits: 4 })} oSOLA pending
+                  </span>
+                </div>
+                <PositionStrategy
+                  source={p.pool}
+                  strategy={strategies.get(p.pool.address)}
+                  destinations={destinations}
+                  usdcMint={usdcMint ?? null}
+                  exerciseOpen={exerciseOpen}
+                  onChanged={onStrategiesChanged}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── oSOLA already in the wallet ───────────────────────────────── */}
+      <div className="px-1 pt-2">
+        <h3 className="text-sm font-bold text-white">oSOLA in your wallet</h3>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+          For oSOLA that did not come from a position&apos;s strategy — an airdrop, a partner
+          allocation, rewards you claimed by hand.
+        </p>
+        {walletTarget && strategies.has(walletTarget) && (
+          <p className="mt-2 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] leading-relaxed text-yellow-200/90">
+            ⚠️ Your wallet order deposits into {lpChoices.find((c) => c.address === walletTarget)?.label ?? "a pool"}, where
+            your position also has a strategy. Every deposit collects that position&apos;s pending
+            rewards into your wallet first, so they skip its strategy. Nothing is lost — point the
+            wallet order at another pool, or at voting power, to keep the two apart.
+          </p>
+        )}
+      </div>
+
       <div className="card glow">
         <h3 className="text-base font-bold text-white">Compound once, into voting power</h3>
         <p className="mt-1 text-xs leading-relaxed text-gray-500">

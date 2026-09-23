@@ -31,16 +31,14 @@ import { Skeleton } from "./ui/Skeleton";
 import { ButtonHint } from "./ui/ButtonHint";
 import { Rewards } from "./Rewards";
 import type { LpChoice } from "./StandingOrder";
+import { lpDestinationSide } from "@/lib/autocompound";
 import {
-  buildArmInstructions, buildSetLpInstruction, lpDestinationSide, readStandingOrder,
-  type StandingOrder as Order,
-} from "@/lib/autocompound";
+  STRATEGY_DEFAULTS, buildSetStrategyInstruction, canCompound, readStrategies, type PoolStrategy,
+} from "@/lib/strategies";
+import { PositionStrategy, type StrategyPool } from "./PositionStrategy";
 import { measureIxs, WIRE_LIMIT } from "@/lib/recipe";
 
-/// What ticking "compound my rewards into this pool" arms when the wallet has no standing order
-/// yet. Deliberately modest and shown in full next to the box — the Rewards card is where the
-/// owner changes any of it.
-const DEFAULT_LP_ORDER = { chunk: 50, rounds: 20, minInterval: 3_600, minIntrinsicBps: 7_000 };
+
 
 const LP_DEAD = new PublicKey("11111111111111111111111111111111");
 const PCT = [25, 50, 75, 100] as const;
@@ -144,7 +142,7 @@ export function Pools() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
   const { sendTransaction } = useWallet();
-  const { usdcMint } = useSoladrome();
+  const { usdcMint, protocolState } = useSoladrome();
   const tokens = getTokenList(usdcMint);
 
   const [view,      setView]      = useState<View>("list");
@@ -167,12 +165,16 @@ export function Pools() {
   // anyone holding transferred LP. See `rewardBasis`.
   const [userLpRecorded, setUserLpRecorded] = useState<Record<string, bigint>>({});
   const [pendingOsola,  setPendingOsola]  = useState<Record<string, number>>({});
-  // ── "Compound my rewards into this pool", on the Add tab ──────────────────
-  // The wallet's standing order, read when a pool is opened: one order for every pool, so the
-  // box has to say where the rewards go TODAY before it offers to send them here instead.
-  const [order,          setOrder]          = useState<Order | null>(null);
-  const [orderLive,      setOrderLive]      = useState(false);
+  // ── Per-position strategies ────────────────────────────────────────────────
+  // One per position, keyed by source pool. Read with the pools and after every change, so the
+  // Rewards card, the Manage view and the deposit box always show the same state.
+  const [strategies,     setStrategies]     = useState<Map<string, PoolStrategy>>(new Map());
   const [compoundHere,   setCompoundHere]   = useState(false);
+  const loadStrategies = useCallback(async () => {
+    if (!wallet) { setStrategies(new Map()); return; }
+    try { setStrategies(await readStrategies(connection, wallet)); } catch { /* keep the last view */ }
+  }, [connection, wallet]);
+  useEffect(() => { loadStrategies(); }, [loadStrategies]);
 
   // Add liquidity
   const [addA, setAddA] = useState("");
@@ -544,28 +546,11 @@ export function Pools() {
         } as any)
         .instruction();
 
-      // ── Point the standing order here, in the same signature when it fits ──
-      // An order that is live keeps its size and pacing and only changes destination. One that
-      // does not exist — or has spent its allowance — is armed with the defaults shown next to
-      // the box, because pointing an order that cannot act would compound nothing.
+      // ── This position's strategy, in the same signature when it fits ──────
+      // Per position: it sets where THIS pool's rewards go and touches no other position's.
       const orderIxs: any[] = [];
-      if (compoundHere && selectedIsDestination && usdcMint) {
-        if (order && orderLive) {
-          orderIxs.push(await buildSetLpInstruction(
-            connection, wallet, poolAddr, order.minIntrinsicBps || DEFAULT_LP_ORDER.minIntrinsicBps,
-          ));
-        } else {
-          orderIxs.push(...await buildArmInstructions(connection, wallet, usdcMint, {
-            threshold: DEFAULT_LP_ORDER.chunk,
-            chunk: DEFAULT_LP_ORDER.chunk,
-            maxCostPerUnit: 1.1,
-            minInterval: DEFAULT_LP_ORDER.minInterval,
-            rounds: DEFAULT_LP_ORDER.rounds,
-            maxFeeBps: 0,
-            budgetUsdc: 0,
-            destination: { kind: "lp", pool: poolAddr, minIntrinsicBps: DEFAULT_LP_ORDER.minIntrinsicBps },
-          }));
-        }
+      if (compoundHere && selfCompoundable) {
+        orderIxs.push(await buildSetStrategyInstruction(connection, wallet, poolAddr, { mode: "liquidity", target: poolAddr }));
       }
       const together = [...preIxs, addIx, ...postIxs, ...orderIxs];
       const fits = measureIxs(together, wallet.publicKey) <= WIRE_LIMIT;
@@ -573,8 +558,8 @@ export function Pools() {
       // Too big for one transaction (a wSOL deposit wraps and unwraps around it): a second
       // signature, right after, rather than a deposit that silently forgot what was asked.
       if (orderIxs.length && !fits) await sendTx(connection, wallet, orderIxs);
-      if (orderIxs.length) { setOrderLive(true); setCompoundHere(false); }
-      setStatus(`✅ Liquidity added${orderIxs.length ? " — your rewards now compound into this pool" : ""} — ${sig.slice(0, 16)}…`);
+      if (orderIxs.length) { setCompoundHere(false); loadStrategies(); }
+      setStatus(`✅ Liquidity added${orderIxs.length ? " — this position's rewards now compound into this pool" : ""} — ${sig.slice(0, 16)}…`);
       // meta.pool = which pool we deposited into, so the server can verify the
       // un-dustable LpUserInfo PDA directly (no all-pools scan). Same pattern as
       // claim_bribe's meta.
@@ -769,8 +754,23 @@ export function Pools() {
         .filter(p => p.totalLp > 0 && lpDestinationSide(new PublicKey(p.mintA), new PublicKey(p.mintB), usdcMint))
         .map(p => ({ address: p.address, label: `${symbolByMint(p.mintA, usdcMint)}/${symbolByMint(p.mintB, usdcMint)}` }))
     : [];
-  const selectedIsDestination = !!selected && lpChoices.some(c => c.address === selected.address);
-  const alreadyHere = !!order?.lpTarget && !!selected && order.lpTarget.toBase58() === selected.address && orderLive;
+  // The same pools, in the shape the strategy controls take.
+  const asStrategyPool = (p: PoolInfo): StrategyPool => ({
+    address: p.address, mintA: p.mintA, mintB: p.mintB,
+    label: `${symbolByMint(p.mintA, usdcMint)}/${symbolByMint(p.mintB, usdcMint)}`,
+  });
+  const destinations: StrategyPool[] = pools
+    .filter(p => lpChoices.some(c => c.address === p.address))
+    .map(asStrategyPool);
+  const positions = myPools.map(p => ({ pool: asStrategyPool(p), pending: pendingOsola[p.address] ?? 0 }));
+  // Whether this pool's position can compound into this pool — false for the sale pool itself.
+  const selfCompoundable = !!selected && !!usdcMint && canCompound(
+    { key: new PublicKey(selected.address) },
+    { key: new PublicKey(selected.address), mintA: new PublicKey(selected.mintA), mintB: new PublicKey(selected.mintB) },
+    usdcMint,
+  );
+  const selectedStrategy = selected ? strategies.get(selected.address) : undefined;
+  const alreadyHere = selectedStrategy?.mode === "liquidity" && selectedStrategy.targetPool?.toBase58() === selected?.address;
 
   // Stop a deposit the chain is certain to reject, instead of letting it be signed and
   // come back as a raw error code. Two shapes reach us from devnet testers:
@@ -790,14 +790,7 @@ export function Pools() {
   function openManage(p: PoolInfo, tab: ManageTab) {
     setSelected(p); setView("manage"); setManageTab(tab); setStatus("");
     setCompoundHere(false);
-    if (wallet && usdcMint) {
-      readStandingOrder(connection, wallet, usdcMint)
-        .then(({ order, allowances }) => {
-          setOrder(order);
-          setOrderLive(!!order && order.enabled && allowances.oSola !== null);
-        })
-        .catch(() => { setOrder(null); setOrderLive(false); });
-    }
+    loadStrategies();
     setAddA(""); setAddB(""); setLpAmt(""); setRetA(null); setRetB(null);
   }
 
@@ -877,6 +870,20 @@ export function Pools() {
               {userLp.toLocaleString(undefined, { maximumFractionDigits: 4 })} LP
               <span className="text-xs text-brand-green/60 ml-2">({share.toFixed(3)}%)</span>
             </span>
+          </div>
+        )}
+        {/* ── Where this position's rewards go — changeable without depositing anything. ── */}
+        {wallet && userLp > 0 && (
+          <div className="rounded-xl border border-brand-border bg-brand-dark px-4 py-3">
+            <p className="mb-2 text-xs font-semibold text-gray-400">This position&apos;s oSOLA rewards</p>
+            <PositionStrategy
+              source={asStrategyPool(selected)}
+              strategy={selectedStrategy}
+              destinations={destinations}
+              usdcMint={usdcMint ?? null}
+              exerciseOpen={!!protocolState?.exerciseEnabled}
+              onChanged={loadStrategies}
+            />
           </div>
         )}
 
@@ -967,12 +974,18 @@ export function Pools() {
               </p>
             </div>
 
-            {/* ── Where this pool's rewards go. One order for every pool, so the box says what
-                it replaces before it replaces it. ── */}
-            {wallet && selectedIsDestination && (
+            {/* ── This position's rewards. Per position: it changes nothing for any other pool. ── */}
+            {wallet && selfCompoundable && (
               alreadyHere ? (
                 <p className="rounded-lg border border-brand-green/30 bg-brand-green/5 px-3 py-2.5 text-xs text-brand-green">
-                  ✓ Your oSOLA rewards already compound into this pool.
+                  ✓ This position&apos;s oSOLA rewards compound into this pool.
+                </p>
+              ) : selectedStrategy ? (
+                <p className="rounded-lg border border-brand-border bg-brand-dark px-3 py-2.5 text-[11px] text-gray-400">
+                  This position&apos;s rewards {selectedStrategy.mode === "vote"
+                    ? "become voting power"
+                    : `compound into ${destinations.find(d => d.address === selectedStrategy.targetPool?.toBase58())?.label ?? "another pool"}`}
+                  {" "}— change it under My position above.
                 </p>
               ) : (
                 <button onClick={() => setCompoundHere(c => !c)}
@@ -981,13 +994,10 @@ export function Pools() {
                     compoundHere ? "border-brand-green bg-brand-green text-black" : "border-brand-border text-transparent"
                   }`}>✓</span>
                   <span>
-                    <span className="block text-xs font-semibold text-gray-200">Compound my oSOLA rewards into this pool</span>
+                    <span className="block text-xs font-semibold text-gray-200">Compound this position&apos;s oSOLA back into this pool</span>
                     <span className="mt-0.5 block text-[11px] leading-relaxed text-gray-500">
-                      {order && orderLive
-                        ? order.lpTarget
-                          ? `They go to ${lpChoices.find(c => c.address === order.lpTarget!.toBase58())?.label ?? "another pool"} today — this moves them here. Your rewards from every pool follow.`
-                          : "They compound into voting power today — this sends them here instead. Your rewards from every pool follow."
-                        : `Arms a standing order: ${DEFAULT_LP_ORDER.chunk} oSOLA per round, at most hourly, ${DEFAULT_LP_ORDER.rounds} rounds, never sold below ${DEFAULT_LP_ORDER.minIntrinsicBps / 100}% of their exercise value. Needs no USDC. Change it under Rewards.`}
+                      At most hourly, from {STRATEGY_DEFAULTS.minHarvest} oSOLA, never sold below {STRATEGY_DEFAULTS.minIntrinsicBps / 100}% of
+                      their exercise value. No allowance needed, and your other positions are not affected.
                     </span>
                   </span>
                 </button>
@@ -1205,7 +1215,14 @@ export function Pools() {
         </button>
       </div>
 
-      <Rewards lpChoices={lpChoices} pendingOSola={totalPendingOsola} />
+      <Rewards
+        lpChoices={lpChoices}
+        pendingOSola={totalPendingOsola}
+        positions={positions}
+        destinations={destinations}
+        strategies={strategies}
+        onStrategiesChanged={loadStrategies}
+      />
 
       {/* My Positions */}
       {wallet && myPools.length > 0 && (

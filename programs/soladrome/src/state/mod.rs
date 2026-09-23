@@ -16,6 +16,7 @@ pub mod gauges;
 pub mod pol;
 pub mod position;
 pub mod protocol;
+pub mod strategy;
 pub mod ve;
 pub mod vesting;
 
@@ -27,5 +28,6 @@ pub use gauges::*;
 pub use pol::*;
 pub use position::*;
 pub use protocol::*;
+pub use strategy::*;
 pub use ve::*;
 pub use vesting::*;

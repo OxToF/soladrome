@@ -164,47 +164,11 @@ pub fn crank_auto_compound(ctx: Context<CrankAutoCompound>) -> Result<()> {
         );
     }
 
-    let state_bump = ctx.accounts.protocol_state.bump;
-    let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
     let owner_key = ctx.accounts.owner.key();
     let auto_bump = ctx.accounts.auto.bump;
     let auto_seeds: &[&[u8]] = &[AUTO_SEED, owner_key.as_ref(), &[auto_bump]];
 
-    // ── 1. Pay the strike IN FULL into the floor, and the fee ON TOP ──────────
-    //
-    // ☢️ Same rule as `exercise_o_sola`, and it is load-bearing: carving the fee out of the
-    // strike would credit `total_purchased_sola` by more than the floor actually received. That
-    // is the unfinanced-supply defect closed on 2026-07-17, and a second instruction minting
-    // floor-backed SOLA is exactly where it would come back.
-    token::transfer(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.user_usdc.to_account_info(),
-                to: ctx.accounts.floor_vault.to_account_info(),
-                authority: ctx.accounts.auto.to_account_info(),
-            },
-            &[auto_seeds],
-        ),
-        amount,
-    )?;
-
-    if fee > 0 {
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.user_usdc.to_account_info(),
-                    to: ctx.accounts.market_vault.to_account_info(),
-                    authority: ctx.accounts.auto.to_account_info(),
-                },
-                &[auto_seeds],
-            ),
-            fee,
-        )?;
-    }
-
-    // ── 2. Burn the oSOLA, as the delegate the user approved ─────────────────
+    // ── The oSOLA, burnt as the delegate the owner approved ──────────────────
     token::burn(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
@@ -218,22 +182,121 @@ pub fn crank_auto_compound(ctx: Context<CrankAutoCompound>) -> Result<()> {
         amount,
     )?;
 
-    // ── 3. Mint the SOLA straight into the stake vault ───────────────────────
+    let position_bump = ctx.bumps.user_position;
+    let a = ctx.accounts;
+    let delegate = a.auto.to_account_info();
+    exercise_into_stake(
+        StakeLeg {
+            protocol_state: &mut a.protocol_state,
+            user_position: &mut a.user_position,
+            position_bump,
+            user_usdc: &a.user_usdc,
+            floor_vault: &a.floor_vault,
+            market_vault: &mut a.market_vault,
+            sola_mint: &a.sola_mint,
+            sola_vault: &a.sola_vault,
+            token_program: &a.token_program,
+        },
+        owner_key,
+        amount,
+        fee,
+        delegate,
+        auto_seeds,
+    )?;
+
+    let auto = &mut a.auto;
+    auto.usdc_spent = auto.usdc_spent.saturating_add(cost);
+    auto.rounds = auto.rounds.saturating_add(1);
+    auto.last_crank_ts = now;
+    Ok(())
+}
+
+/// Close an order and return its rent. The user signs.
+pub fn close_auto_compound(_ctx: Context<CloseAutoCompound>) -> Result<()> {
+    Ok(())
+}
+
+// ── Exercise into a financed stake, shared by every crank that turns oSOLA into votes ─────
+
+/// The accounts an exercise-and-stake touches, borrowed from whichever context the crank has.
+pub struct StakeLeg<'a, 'info> {
+    pub protocol_state: &'a mut Account<'info, ProtocolState>,
+    pub user_position: &'a mut Account<'info, UserPosition>,
+    pub position_bump: u8,
+    pub user_usdc: &'a Account<'info, TokenAccount>,
+    pub floor_vault: &'a Account<'info, TokenAccount>,
+    pub market_vault: &'a mut Account<'info, TokenAccount>,
+    pub sola_mint: &'a Account<'info, Mint>,
+    pub sola_vault: &'a Account<'info, TokenAccount>,
+    pub token_program: &'a Program<'info, Token>,
+}
+
+/// Pay the strike and the fee out of the owner's USDC (as the delegate they approved), mint
+/// `amount` SOLA straight into the stake vault and credit it as FINANCED stake — `exercise_o_sola`
+/// followed by `stake_sola`, with every counter touched the same way. Where the oSOLA went
+/// (burnt from a wallet, or never minted because it was harvested at its source) is the caller's.
+///
+/// Extracted so the standing order and the per-position strategy book an exercise identically:
+/// the strike-in-full rule below is the one a second copy would be most likely to lose.
+pub fn exercise_into_stake<'a, 'info>(
+    l: StakeLeg<'a, 'info>,
+    owner_key: Pubkey,
+    amount: u64,
+    fee: u64,
+    delegate: AccountInfo<'info>,
+    delegate_seeds: &[&[u8]],
+) -> Result<()> {
+    let state_bump = l.protocol_state.bump;
+    let state_seeds: &[&[u8]] = &[STATE_SEED, &[state_bump]];
+
+    // ── 1. Pay the strike IN FULL into the floor, and the fee ON TOP ──────────
+    //
+    // ☢️ Same rule as `exercise_o_sola`, and it is load-bearing: carving the fee out of the
+    // strike would credit `total_purchased_sola` by more than the floor actually received. That
+    // is the unfinanced-supply defect closed on 2026-07-17, and a second instruction minting
+    // floor-backed SOLA is exactly where it would come back.
+    token::transfer(
+        CpiContext::new_with_signer(
+            l.token_program.to_account_info(),
+            Transfer {
+                from: l.user_usdc.to_account_info(),
+                to: l.floor_vault.to_account_info(),
+                authority: delegate.clone(),
+            },
+            &[delegate_seeds],
+        ),
+        amount,
+    )?;
+    if fee > 0 {
+        token::transfer(
+            CpiContext::new_with_signer(
+                l.token_program.to_account_info(),
+                Transfer {
+                    from: l.user_usdc.to_account_info(),
+                    to: l.market_vault.to_account_info(),
+                    authority: delegate,
+                },
+                &[delegate_seeds],
+            ),
+            fee,
+        )?;
+    }
+
+    // ── 2. Mint the SOLA straight into the stake vault ───────────────────────
     token::mint_to(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            l.token_program.to_account_info(),
             MintTo {
-                mint: ctx.accounts.sola_mint.to_account_info(),
-                to: ctx.accounts.sola_vault.to_account_info(),
-                authority: ctx.accounts.protocol_state.to_account_info(),
+                mint: l.sola_mint.to_account_info(),
+                to: l.sola_vault.to_account_info(),
+                authority: l.protocol_state.to_account_info(),
             },
             &[state_seeds],
         ),
         amount,
     )?;
-
     {
-        let s = &mut ctx.accounts.protocol_state;
+        let s = &mut *l.protocol_state;
         s.total_sola = s
             .total_sola
             .checked_add(amount)
@@ -249,41 +312,31 @@ pub fn crank_auto_compound(ctx: Context<CrankAutoCompound>) -> Result<()> {
             .ok_or(SoladromeError::Overflow)?;
     }
 
-    // ── 4. Stake it, exactly as `stake_sola` would ───────────────────────────
+    // ── 3. Stake it, exactly as `stake_sola` would ───────────────────────────
     //
     // ☢️ `reload()` is not optional. `market_vault.amount` was deserialized when the instruction
     // opened, and step 1 just paid the fee into it through a CPI — so the cached figure is stale
     // by exactly the fee. Advancing the accumulator on a stale balance would leave that fee
-    // uncredited until some later interaction happened to notice it, which is the class of bug
-    // that hides for months because the totals stay self-consistent while they drift.
-    ctx.accounts.market_vault.reload()?;
-    let market_balance = ctx.accounts.market_vault.amount;
+    // uncredited until some later interaction happened to notice it.
+    l.market_vault.reload()?;
+    let market_balance = l.market_vault.amount;
     let acc = math::advance_accumulator(
-        ctx.accounts.protocol_state.fees_per_hi_sola,
+        l.protocol_state.fees_per_hi_sola,
         market_balance,
-        ctx.accounts.protocol_state.last_market_vault_balance,
-        ctx.accounts.protocol_state.total_hi_sola,
+        l.protocol_state.last_market_vault_balance,
+        l.protocol_state.total_hi_sola,
     );
+    let pending = credit_financed_stake(l.user_position, owner_key, l.position_bump, acc, amount)?;
 
-    let pending = credit_financed_stake(
-        &mut ctx.accounts.user_position,
-        owner_key,
-        ctx.bumps.user_position,
-        acc,
-        amount,
-    )?;
-
-    // The harvested fees are the OWNER's, and they go to the owner's own account. A cranker who
-    // hoped to be paid here is reading the wrong instruction: this one pays nobody but the user
-    // it serves.
+    // The harvested fees are the OWNER's, and they go to the owner's own account.
     if pending > 0 {
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                l.token_program.to_account_info(),
                 Transfer {
-                    from: ctx.accounts.market_vault.to_account_info(),
-                    to: ctx.accounts.user_usdc.to_account_info(),
-                    authority: ctx.accounts.protocol_state.to_account_info(),
+                    from: l.market_vault.to_account_info(),
+                    to: l.user_usdc.to_account_info(),
+                    authority: l.protocol_state.to_account_info(),
                 },
                 &[state_seeds],
             ),
@@ -291,27 +344,15 @@ pub fn crank_auto_compound(ctx: Context<CrankAutoCompound>) -> Result<()> {
         )?;
     }
 
-    {
-        let s = &mut ctx.accounts.protocol_state;
-        s.fees_per_hi_sola = acc;
-        // Subtract the auto-paid fees so they are not double-credited to the remaining stakers
-        // on the next advance — same as `stake_sola` and `unstake_hi_sola`.
-        s.last_market_vault_balance = market_balance.saturating_sub(pending);
-        s.total_hi_sola = s
-            .total_hi_sola
-            .checked_add(amount)
-            .ok_or(SoladromeError::Overflow)?;
-    }
-
-    let auto = &mut ctx.accounts.auto;
-    auto.usdc_spent = auto.usdc_spent.saturating_add(cost);
-    auto.rounds = auto.rounds.saturating_add(1);
-    auto.last_crank_ts = now;
-    Ok(())
-}
-
-/// Close an order and return its rent. The user signs.
-pub fn close_auto_compound(_ctx: Context<CloseAutoCompound>) -> Result<()> {
+    let s = &mut *l.protocol_state;
+    s.fees_per_hi_sola = acc;
+    // Subtract the auto-paid fees so they are not double-credited to the remaining stakers
+    // on the next advance — same as `stake_sola` and `unstake_hi_sola`.
+    s.last_market_vault_balance = market_balance.saturating_sub(pending);
+    s.total_hi_sola = s
+        .total_hi_sola
+        .checked_add(amount)
+        .ok_or(SoladromeError::Overflow)?;
     Ok(())
 }
 

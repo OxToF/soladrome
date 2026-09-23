@@ -19,6 +19,8 @@ pub const MARKET_VAULT_SEED: &[u8] = b"market_vault";
 pub const SOLA_VAULT_SEED: &[u8] = b"sola_vault";
 /// Standing compound order, one per user: [b"auto", user]. Holds no tokens — see `AutoCompound`.
 pub const AUTO_SEED: &[u8] = b"auto";
+/// Per-position reward strategy: [b"strategy", owner, source_pool]. Holds no tokens.
+pub const STRATEGY_SEED: &[u8] = b"strategy";
 
 /// One whole token in base units. Every mint the curve, the floor and the stake touch is 6
 /// decimals — a protocol invariant, not a coincidence, and the reason the floor is 1:1 in base
