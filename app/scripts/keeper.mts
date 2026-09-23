@@ -31,6 +31,9 @@ import {
   buildClaimInstruction, buildCrankInstruction, buildLpCrankInstruction, listCrankableOrders,
 } from "../lib/autocompound.ts";
 import { evaluateCompound } from "../lib/recipes.ts";
+import {
+  buildStrategyLpCrankInstruction, buildStrategyVoteCrankInstruction, listCrankableStrategies,
+} from "../lib/strategies.ts";
 import { measureIxs, WIRE_LIMIT } from "../lib/recipe.ts";
 
 const WATCH = process.argv.includes("--watch");
@@ -213,12 +216,66 @@ async function pass(): Promise<void> {
   }
 }
 
+// ── Per-position strategies ─────────────────────────────────────────────────
+//
+// Each fires on its own: a strategy harvests ONE position at the source, so there is nothing to
+// claim first and nothing shared between two of them. Same discipline as the orders above —
+// simulate, then send; one failure is that strategy's, never the pass's.
+async function strategyPass(): Promise<void> {
+  const program = getProgram(new AnchorProvider(connection, wallet as any, {}));
+  const state: any = await (program.account as any).protocolState.fetch(statePda);
+  if (state.paused) return;
+  const only = process.env.KEEPER_ONLY?.trim();
+  const list = (await listCrankableStrategies(connection, wallet as any, state)).filter(
+    (x) => !only || x.strategy.owner.toBase58() === only,
+  );
+  if (list.length) {
+    console.log(
+      `${stamp()}  ${list.length} strateg${list.length === 1 ? "y" : "ies"}, ${list.filter((x) => x.ready).length} ready — ` +
+        list.map((x) => `${x.strategy.owner.toBase58().slice(0, 4)}…/${x.strategy.sourcePool.toBase58().slice(0, 4)}…:${x.why || "ready"}`).join(", "),
+    );
+  }
+  for (const x of list.filter((y) => y.ready)) {
+    const s = x.strategy;
+    const who = `${s.owner.toBase58().slice(0, 8)}…/${s.sourcePool.toBase58().slice(0, 4)}…`;
+    try {
+      const ix = s.mode === "liquidity"
+        ? await buildStrategyLpCrankInstruction(connection, wallet as any, state.usdcMint, s)
+        : await buildStrategyVoteCrankInstruction(connection, wallet as any, state.usdcMint, s);
+      const tx = new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+        ix,
+      );
+      tx.feePayer = keeper.publicKey;
+      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      const sim = await connection.simulateTransaction(tx);
+      if (sim.value.err) {
+        console.log(`${stamp()}  ${who}  refused in simulation: ${JSON.stringify(sim.value.err)}`);
+        continue;
+      }
+      if (DRY_RUN) {
+        console.log(`${stamp()}  ${who}  would harvest ~${x.pending.toFixed(4)} oSOLA → ${s.mode}, ${sim.value.unitsConsumed} CU`);
+        continue;
+      }
+      tx.sign(keeper);
+      const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+      await connection.confirmTransaction(sig, "confirmed");
+      console.log(`${stamp()}  ${who}  harvested ~${x.pending.toFixed(4)} oSOLA → ${s.mode} — ${sig}`);
+    } catch (e: any) {
+      console.log(`${stamp()}  ${who}  ${String(e?.message ?? e).split("\n")[0].slice(0, 140)}`);
+    }
+  }
+}
+
 if (DRY_RUN) console.log(`dry run: nothing will be sent (fee payer ${keeper.publicKey.toBase58().slice(0, 8)}…, used only to simulate)`);
 else console.log(`keeper ${keeper.publicKey.toBase58()} — pays fees, holds no authority`);
 
 await pass();
+await strategyPass().catch((e) => console.log(`${stamp()}  strategy pass failed: ${String(e?.message ?? e).slice(0, 140)}`));
 if (WATCH) {
   setInterval(() => {
     pass().catch((e) => console.log(`${stamp()}  pass failed: ${String(e?.message ?? e).slice(0, 140)}`));
+    strategyPass().catch((e) => console.log(`${stamp()}  strategy pass failed: ${String(e?.message ?? e).slice(0, 140)}`));
   }, PASS_INTERVAL_MS);
 }
