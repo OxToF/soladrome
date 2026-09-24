@@ -319,13 +319,15 @@ export async function buildDisarmInstructions(
   wallet: AnchorWallet,
   usdcMint: PublicKey,
   alsoDisable: boolean,
+  /// Leave the USDC allowance in place. ☢️ The `auto` PDA is the single USDC delegate for BOTH the
+  /// wallet order and every voting `PoolStrategy`: revoking it to stop the order would silently
+  /// stop every position that turns its rewards into voting power.
+  keepUsdc = false,
 ): Promise<TransactionInstruction[]> {
   const user = wallet.publicKey;
   const program = getProgram(new AnchorProvider(connection, wallet, {}));
-  const ixs: TransactionInstruction[] = [
-    createRevokeInstruction(userAta(oSolaM, user), user),
-    createRevokeInstruction(userAta(usdcMint, user), user),
-  ];
+  const ixs: TransactionInstruction[] = [createRevokeInstruction(userAta(oSolaM, user), user)];
+  if (!keepUsdc) ixs.push(createRevokeInstruction(userAta(usdcMint, user), user));
   if (alsoDisable) {
     ixs.push(
       await (program.methods as any)
@@ -335,6 +337,20 @@ export async function buildDisarmInstructions(
     );
   }
   return ixs;
+}
+
+/// Delete the order account and return its rent. Only the account: the `auto` PDA stays the
+/// delegate voting strategies pay their strike through, since that is an address, not an account.
+export async function buildCloseOrderInstruction(
+  connection: Connection,
+  wallet: AnchorWallet,
+): Promise<TransactionInstruction> {
+  const user = wallet.publicKey;
+  const program = getProgram(new AnchorProvider(connection, wallet, {}));
+  return (program.methods as any)
+    .closeAutoCompound()
+    .accounts({ user, auto: autoPda(user) })
+    .instruction();
 }
 
 /// The crank itself, built for any owner by any caller — the keeper uses this, and so could a
