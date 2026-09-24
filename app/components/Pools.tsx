@@ -285,6 +285,20 @@ export function Pools() {
 
   useEffect(() => { fetchPools(); }, [fetchPools]);
 
+  // ☢️ A position can change while this page is open WITHOUT the viewer signing anything: a
+  // permissionless keeper harvests it under a per-position strategy and grows its LP. Read once,
+  // the live ticker below kept projecting from the pre-crank `reward_debt` and showed rewards that
+  // had already left (32.18 oSOLA on screen, 0.038 on chain). Re-reading the pools re-reads the
+  // positions too, since that effect depends on `pools`. Paused while the tab is hidden, caught up
+  // the moment it is visible again: ~5 reads a minute, not a 429 source.
+  useEffect(() => {
+    const refresh = () => { fetchPools(); loadStrategies(); };
+    const id = setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 60_000);
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, [fetchPools, loadStrategies]);
+
   // Keep selected pool in sync when pools refresh
   useEffect(() => {
     if (!selected) return;
