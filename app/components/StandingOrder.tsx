@@ -97,7 +97,15 @@ export type LpChoice = { address: string; label: string };
 /// which crushes the pool price cannot make the order sell.
 const DEFAULT_MIN_INTRINSIC_BPS = 7_000;
 
-export function StandingOrder({ lpChoices = [] }: { lpChoices?: LpChoice[] }) {
+export function StandingOrder({
+  lpChoices = [],
+  voters = 0,
+}: {
+  lpChoices?: LpChoice[];
+  /// How many positions have a voting strategy. They spend from the same USDC allowance as this
+  /// order, so arming or revoking here must not take it away from them.
+  voters?: number;
+}) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
   const { usdcMint, protocolState, refresh } = useSoladrome();
@@ -234,6 +242,7 @@ export function StandingOrder({ lpChoices = [] }: { lpChoices?: LpChoice[] }) {
         rounds: parseInt(rounds, 10) || 1,
         maxFeeBps,
         budgetUsdc: budget,
+        usdcSharedWithStrategies: voters > 0,
       });
       const sig = await sendTx(connection, wallet, ixs);
       setStatus(`✅ Armed — tx: ${sig.slice(0, 16)}…`);
@@ -252,9 +261,13 @@ export function StandingOrder({ lpChoices = [] }: { lpChoices?: LpChoice[] }) {
     setBusy(true);
     setStatus("");
     try {
-      const ixs = await buildDisarmInstructions(connection, wallet, usdcMint, true);
+      const ixs = await buildDisarmInstructions(connection, wallet, usdcMint, true, voters > 0);
       const sig = await sendTx(connection, wallet, ixs);
-      setStatus(`✅ Revoked — it can no longer touch anything. tx: ${sig.slice(0, 16)}…`);
+      setStatus(
+        voters > 0
+          ? `✅ Stopped: it can no longer touch your wallet oSOLA. Your voting positions keep their USDC budget. tx: ${sig.slice(0, 16)}…`
+          : `✅ Revoked — it can no longer touch anything. tx: ${sig.slice(0, 16)}…`,
+      );
       setTimeout(load, 2000);
     } catch (e: any) {
       setStatus(`❌ ${explainRpcRefusal(e) ?? e?.message ?? e}`);
@@ -356,8 +369,9 @@ export function StandingOrder({ lpChoices = [] }: { lpChoices?: LpChoice[] }) {
     <div className="card">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-base font-bold text-white">Compound automatically</h3>
+          <h3 className="text-base font-bold text-white">Automate the oSOLA in your wallet</h3>
           <p className="mt-1 text-xs leading-relaxed text-gray-500">
+            Only for oSOLA already in your wallet; your positions have their own setting above.
             Keeps doing it while you are away. Anyone can trigger it, nobody can redirect it, and
             you can stop it from your wallet.
           </p>
@@ -725,6 +739,13 @@ export function StandingOrder({ lpChoices = [] }: { lpChoices?: LpChoice[] }) {
                       />
                       <span className="text-[11px] text-gray-600">USDC in total, at most</span>
                     </div>
+                    {voters > 0 && (
+                      <p className="mt-2 text-[11px] leading-relaxed text-yellow-200/90">
+                        ⚠️ Your {voters} voting position{voters === 1 ? "" : "s"} pay their strikes
+                        from this same allowance. The amount here replaces the budget they share,
+                        it does not add to it.
+                      </p>
+                    )}
                     <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
                       This is the allowance you grant, to the cent, and SPL Token enforces it — not
                       this protocol. Revoking it from your wallet ends the arrangement whether or

@@ -14,7 +14,7 @@ import type { Plan } from "@/lib/recipe";
 import { StatusBanner } from "./ui/StatusBanner";
 import { StandingOrder, type LpChoice } from "./StandingOrder";
 import { readStandingOrder } from "@/lib/autocompound";
-import { PositionStrategy, strategyChangeIxs, type StrategyPool } from "./PositionStrategy";
+import { PositionStrategy, VoteBudget, strategyChangeIxs, type StrategyPool } from "./PositionStrategy";
 import type { PoolStrategy } from "@/lib/strategies";
 import { canCompound } from "@/lib/strategies";
 import { measureIxs, WIRE_LIMIT } from "@/lib/recipe";
@@ -158,6 +158,7 @@ export function Rewards({
   const [allStatus, setAllStatus] = useState("");
   const [walletTarget, setWalletTarget] = useState<string | null>(null);
   const activeCount = positions.filter((p) => strategies.has(p.pool.address)).length;
+  const voters = [...strategies.values()].filter((s) => s.mode === "vote").length;
   // The shortcut's destination, defaulting to the first pool every position could reach.
   const allTarget = allInto || destinations[0]?.address || "";
 
@@ -342,9 +343,10 @@ export function Rewards({
         </button>
         {open && (
           <p className="mt-3 text-xs leading-relaxed text-gray-500">
-            Each position has its own strategy: compound its oSOLA into liquidity (its own pool or
-            another), turn it into voting power, or keep it for a manual claim. They never touch
-            each other&apos;s rewards. Nothing here ever holds a key.
+            Each position decides where its oSOLA goes: into liquidity (its own pool or another),
+            into voting power, or nowhere until you claim it. Anyone may trigger a round, nobody can
+            redirect it, and positions never touch each other&apos;s rewards. Nothing here ever
+            holds a key.
           </p>
         )}
       </div>
@@ -354,7 +356,10 @@ export function Rewards({
       {/* ── One strategy per position ─────────────────────────────────── */}
       <div className="card space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-base font-bold text-white">Your positions</h3>
+          <div>
+            <h3 className="text-base font-bold text-white">Your positions, automatically</h3>
+            <p className="mt-0.5 text-[11px] text-gray-500">Set once, runs while you are away.</p>
+          </div>
           {positions.length > 1 && destinations.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
               <span>Compound everything into</span>
@@ -398,35 +403,20 @@ export function Rewards({
             ))}
           </div>
         )}
-      </div>
-
-      {/* ── oSOLA already in the wallet ───────────────────────────────── */}
-      <div className="px-1 pt-2">
-        <h3 className="text-sm font-bold text-white">oSOLA in your wallet</h3>
-        <p className="mt-0.5 text-[11px] leading-relaxed text-gray-500">
-          For oSOLA that did not come from a position&apos;s strategy — an airdrop, a partner
-          allocation, rewards you claimed by hand.
-        </p>
-        {walletTarget && strategies.has(walletTarget) && (
-          <p className="mt-2 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] leading-relaxed text-yellow-200/90">
-            ⚠️ Your wallet order deposits into {lpChoices.find((c) => c.address === walletTarget)?.label ?? "a pool"}, where
-            your position also has a strategy. Every deposit collects that position&apos;s pending
-            rewards into your wallet first, so they skip its strategy. Nothing is lost — point the
-            wallet order at another pool, or at voting power, to keep the two apart.
-          </p>
-        )}
+        <VoteBudget usdcMint={usdcMint ?? null} voters={voters} refreshKey={strategies.size + voters} />
       </div>
 
       <div className="card glow">
-        <h3 className="text-base font-bold text-white">Compound once, into voting power</h3>
+        <h3 className="text-base font-bold text-white">Right now, by hand, into voting power</h3>
         <p className="mt-1 text-xs leading-relaxed text-gray-500">
-          Claim what is pending, exercise it at the floor, stake the SOLA. One signature.
+          Claim what your positions have pending, exercise it at the floor, stake the SOLA. One
+          signature, once. Nothing keeps running afterwards.
         </p>
 
         {!exerciseOpen ? (
           <p className="mt-4 rounded-lg border border-brand-border bg-brand-dark px-3 py-2.5 text-xs leading-relaxed text-gray-400">
-            Exercise is not open yet, so oSOLA cannot become hiSOLA today. Compounding into
-            liquidity below does not need it.
+            Exercise is not open yet, so oSOLA cannot become hiSOLA today. Sending a position&apos;s
+            rewards into liquidity, above, does not need it.
           </p>
         ) : !wallet ? (
           <div className="mt-5">
@@ -517,7 +507,24 @@ export function Rewards({
         )}
       </div>
 
-      <StandingOrder lpChoices={lpChoices} />
+      {/* ── oSOLA already in the wallet ───────────────────────────────── */}
+      <div className="px-1 pt-2">
+        <h3 className="text-sm font-bold text-white">oSOLA in your wallet</h3>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+          For oSOLA that did not come from a position&apos;s strategy — an airdrop, a partner
+          allocation, rewards you claimed by hand.
+        </p>
+        {walletTarget && strategies.has(walletTarget) && (
+          <p className="mt-2 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] leading-relaxed text-yellow-200/90">
+            ⚠️ Your wallet order deposits into {lpChoices.find((c) => c.address === walletTarget)?.label ?? "a pool"}, where
+            your position also has a strategy. Every deposit collects that position&apos;s pending
+            rewards into your wallet first, so they skip its strategy. Nothing is lost — point the
+            wallet order at another pool, or at voting power, to keep the two apart.
+          </p>
+        )}
+      </div>
+
+      <StandingOrder lpChoices={lpChoices} voters={voters} />
       </>
       )}
     </div>
