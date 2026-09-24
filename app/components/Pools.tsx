@@ -30,12 +30,11 @@ import { StatusBanner } from "./ui/StatusBanner";
 import { Skeleton } from "./ui/Skeleton";
 import { ButtonHint } from "./ui/ButtonHint";
 import { Rewards } from "./Rewards";
-import type { LpChoice } from "./StandingOrder";
 import { lpDestinationSide } from "@/lib/autocompound";
 import {
   STRATEGY_DEFAULTS, buildSetStrategyInstruction, canCompound, readStrategies, type PoolStrategy,
 } from "@/lib/strategies";
-import { PositionStrategy, type StrategyPool } from "./PositionStrategy";
+import { PositionStrategy, type LpChoice, type StrategyPool } from "./PositionStrategy";
 import { measureIxs, WIRE_LIMIT } from "@/lib/recipe";
 
 
@@ -1230,7 +1229,6 @@ export function Pools() {
       </div>
 
       <Rewards
-        lpChoices={lpChoices}
         pendingOSola={totalPendingOsola}
         positions={positions}
         destinations={destinations}

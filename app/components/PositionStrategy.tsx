@@ -22,8 +22,11 @@ import {
 /// A pool as the strategy controls need it.
 export type StrategyPool = { address: string; label: string; mintA: string; mintB: string };
 
+/// A pool rewards may compound into, as the pool list names it.
+export type LpChoice = { address: string; label: string };
+
 /// The USDC budget granted the first time a position switches to voting power, if none is in place.
-/// Shared by every voting strategy (and the wallet order): one delegate, one allowance.
+/// Shared by every voting strategy: one delegate, one allowance.
 export const VOTE_BUDGET_DEFAULT = 100;
 
 type Choice = { kind: "liquidity"; target: string } | { kind: "vote" } | { kind: "keep" };
@@ -37,17 +40,10 @@ function currentChoice(s: PoolStrategy | undefined): Choice {
 const same = (a: Choice, b: Choice) =>
   a.kind === b.kind && (a.kind !== "liquidity" || (b.kind === "liquidity" && a.target === b.target));
 
-/// How often a strategy may run, at most. The program's own floor is `MIN_CRANK_INTERVAL` (60 s);
-/// these are the choices worth offering. A ceiling, not a clock: a round fires when a crank calls
-/// it and at least `minHarvest` oSOLA has accrued.
-export const STRATEGY_INTERVALS = [
-  { secs: 3_600, label: "hour", adverb: "hourly" },
-  { secs: 86_400, label: "day", adverb: "daily" },
-  { secs: 604_800, label: "week", adverb: "weekly" },
-] as const;
-
+/// How a strategy's interval reads on screen. Every strategy the app creates runs hourly at most
+/// (`STRATEGY_DEFAULTS.minInterval`); older or hand-made ones may differ, and say so.
 export const intervalWord = (secs: number) =>
-  STRATEGY_INTERVALS.find((i) => i.secs === secs)?.adverb ?? `every ${Math.round(secs / 60)} min`;
+  secs === 3_600 ? "hourly" : secs === 86_400 ? "daily" : `every ${Math.round(secs / 60)} min`;
 
 /// The instructions that take a position from its current strategy to `choice`.
 ///
@@ -56,7 +52,7 @@ export const intervalWord = (secs: number) =>
 /// resets it to defaults behind the owner's back.
 ///
 /// `budgetUsdc`, when given, REPLACES the USDC allowance of the `auto` PDA. ☢️ That allowance is
-/// one number shared by every voting strategy and by the wallet order: an SPL token account has a
+/// one number shared by every voting strategy (and any wallet order left from before): an SPL token account has a
 /// single delegate. Without it, the first switch to voting power grants `VOTE_BUDGET_DEFAULT` if
 /// less than 1 USDC is in place, so a strategy is never armed with nothing to pay the strike.
 export async function strategyChangeIxs(
@@ -135,7 +131,6 @@ export function PositionStrategy({
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
   const [draft, setDraft] = useState<Choice | null>(null);
-  const [draftInterval, setDraftInterval] = useState<number | null>(null);
   const [budgetText, setBudgetText] = useState(String(VOTE_BUDGET_DEFAULT));
   const [allowance, setAllowance] = useState<bigint | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -155,10 +150,8 @@ export function PositionStrategy({
 
   const saved = currentChoice(strategy);
   const choice = draft ?? saved;
-  const savedInterval = strategy?.minInterval ?? STRATEGY_DEFAULTS.minInterval;
-  const interval = draftInterval ?? savedInterval;
-  const dirty =
-    (!!draft && !same(draft, saved)) || (choice.kind !== "keep" && interval !== savedInterval);
+  const interval = strategy?.minInterval ?? STRATEGY_DEFAULTS.minInterval;
+  const dirty = !!draft && !same(draft, saved);
   const labelOf = (addr: string) => destinations.find((d) => d.address === addr)?.label ?? `${addr.slice(0, 4)}…`;
 
   // Switching TO voting power asks for a budget only when none is in place: the allowance is shared,
@@ -178,12 +171,11 @@ export function PositionStrategy({
     try {
       const { ixs, grantsBudget } = await strategyChangeIxs(
         connection, wallet, usdcMint, source.address, strategy, choice,
-        { minInterval: interval, budgetUsdc: needsBudget ? budget : undefined },
+        { budgetUsdc: needsBudget ? budget : undefined },
       );
       if (ixs.length) await sendTx(connection, wallet, ixs);
       setStatus(grantsBudget !== null ? `✅ Saved, with a ${grantsBudget} USDC budget for strikes.` : "✅ Saved.");
       setDraft(null);
-      setDraftInterval(null);
       onChanged();
     } catch (e: any) {
       setStatus(`❌ ${explainRpcRefusal(e) ?? e?.message ?? e}`);
@@ -241,29 +233,16 @@ export function PositionStrategy({
         </button>
       </div>
 
-      {choice.kind !== "keep" && (
+      {needsBudget && (
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
-          <span>Automatically, at most once a</span>
-          <select value={interval} onChange={(e) => setDraftInterval(Number(e.target.value))} className={select}>
-            {!STRATEGY_INTERVALS.some((i) => i.secs === interval) && (
-              <option value={interval}>{intervalWord(interval)}</option>
-            )}
-            {STRATEGY_INTERVALS.map((i) => (
-              <option key={i.secs} value={i.secs}>{i.label}</option>
-            ))}
-          </select>
-          {needsBudget && (
-            <>
-              <span>· budget for strikes</span>
-              <input
-                value={budgetText}
-                onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && setBudgetText(e.target.value)}
-                inputMode="decimal"
-                className="w-20 rounded-lg border border-brand-border bg-black/30 px-2 py-1.5 text-[11px] text-white focus:border-brand-green focus:outline-none"
-              />
-              <span>USDC</span>
-            </>
-          )}
+          <span>Budget for strikes, shared by your voting positions</span>
+          <input
+            value={budgetText}
+            onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && setBudgetText(e.target.value)}
+            inputMode="decimal"
+            className="w-20 rounded-lg border border-brand-border bg-black/30 px-2 py-1.5 text-[11px] text-white focus:border-brand-green focus:outline-none"
+          />
+          <span>USDC</span>
         </div>
       )}
 
@@ -300,7 +279,7 @@ export function PositionStrategy({
 /// The USDC budget every voting strategy draws its strikes from, shown and set in one place.
 ///
 /// ☢️ It is the SPL allowance of the `auto` PDA on the owner's USDC account: one number, spent by
-/// every voting position AND by a wallet order pointed at voting power. Setting it replaces the
+/// every voting position (and by a pre-retirement wallet order, if one is left). Setting it replaces the
 /// remainder, it does not add to it, and the screen says so.
 export function VoteBudget({
   usdcMint,
@@ -393,8 +372,7 @@ export function VoteBudget({
           : ""}
         The new amount replaces what is left, it does not add to it. It is an SPL allowance: your
         USDC stays in your wallet, the token program enforces the cap, and revoking it from your
-        wallet stops every voting round. A wallet order set to voting power spends from the same
-        budget.
+        wallet stops every voting round.
       </p>
       {status && <p className="text-[11px] text-gray-400">{status}</p>}
     </div>

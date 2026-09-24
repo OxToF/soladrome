@@ -217,10 +217,6 @@ export async function buildArmInstructions(
     /// Voting power (the default) or a pool. A liquidity order sells its oSOLA instead of
     /// exercising it, so it needs no USDC: no USDC allowance is granted for it.
     destination?: Destination;
-    /// True when a position's voting strategy draws on the same USDC allowance. ☢️ The `auto` PDA
-    /// is the single delegate for BOTH the wallet order and every voting `PoolStrategy`, so the
-    /// liquidity branch's tidy-up revoke below would silently stop those positions' rounds.
-    usdcSharedWithStrategies?: boolean;
   },
 ): Promise<TransactionInstruction[]> {
   const user = wallet.publicKey;
@@ -268,7 +264,7 @@ export async function buildArmInstructions(
     // revoking clears the slot whoever it belongs to, and another application's is not ours.
     const usdcAta = userAta(usdcMint, user);
     const [held] = decodeAllowance(await connection.getAccountInfo(usdcAta), auto);
-    if (held !== null && !opts.usdcSharedWithStrategies) ixs.push(createRevokeInstruction(usdcAta, user));
+    if (held !== null) ixs.push(createRevokeInstruction(usdcAta, user));
   } else {
     ixs.push(createApproveInstruction(userAta(usdcMint, user), auto, user, usdcAllowance));
     // Pointing an order back at voting power is a field reset. `configure` above creates the
@@ -323,9 +319,9 @@ export async function buildDisarmInstructions(
   wallet: AnchorWallet,
   usdcMint: PublicKey,
   alsoDisable: boolean,
-  /// Leave the USDC allowance in place: voting strategies spend from it too (see
-  /// `usdcSharedWithStrategies` in `buildArmInstructions`). Stopping the wallet order must not
-  /// stop them.
+  /// Leave the USDC allowance in place. ☢️ The `auto` PDA is the single USDC delegate for BOTH the
+  /// wallet order and every voting `PoolStrategy`: revoking it to stop the order would silently
+  /// stop every position that turns its rewards into voting power.
   keepUsdc = false,
 ): Promise<TransactionInstruction[]> {
   const user = wallet.publicKey;
@@ -341,6 +337,20 @@ export async function buildDisarmInstructions(
     );
   }
   return ixs;
+}
+
+/// Delete the order account and return its rent. Only the account: the `auto` PDA stays the
+/// delegate voting strategies pay their strike through, since that is an address, not an account.
+export async function buildCloseOrderInstruction(
+  connection: Connection,
+  wallet: AnchorWallet,
+): Promise<TransactionInstruction> {
+  const user = wallet.publicKey;
+  const program = getProgram(new AnchorProvider(connection, wallet, {}));
+  return (program.methods as any)
+    .closeAutoCompound()
+    .accounts({ user, auto: autoPda(user) })
+    .instruction();
 }
 
 /// The crank itself, built for any owner by any caller — the keeper uses this, and so could a
