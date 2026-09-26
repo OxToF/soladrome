@@ -297,6 +297,30 @@ program — but they must land before or at mainnet go-live.
    pool and repoint it at the curve; a mainnet build must not assume a SOLA pool
    exists. This is consistent with (and required by) the no-SOLA-pool decision.
 
+## 7. Keeper — off-chain, must be RUNNING at launch (added 2026-09-26)
+
+`app/scripts/keeper.mts` fires the standing orders and the per-position strategies
+(`crank_auto_compound*`, `crank_pool_strategy_lp`, `crank_pool_strategy_vote`). Every one of
+those instructions is permissionless and bounded on chain (`max_fee_bps`,
+`min_intrinsic_bps`, `min_interval`, the owner's allowance), so the keeper holds **no
+authority**: a compromised keeper key loses the SOL it pays fees with, nothing else, and
+anyone can run a copy. That part is mainnet-ready and outside the program audit.
+
+What is NOT ready is the process itself. **Evidence, 2026-09-26 on devnet:** the keeper had
+been stopped since 2026-09-24 and nobody noticed. Seven of the eight voting strategies had
+never produced a round, and five of them could never have produced one (the since-fixed
+uncapped harvest, PR #48). A strategy that silently stops is, to its owner, a feature that
+does not work.
+
+| # | Item | Status | Notes |
+|---|---|---|---|
+| 1 | **Compute budget sized from simulation** | ✅ PR #49 | The priority fee is charged on CU *requested*. It was a fixed 600 000 for rounds that use 45–95 k. Now `max(1.2 × used, used + 20 000)`. Measured: 35 000 → **9 741 lamports** per round (−72 %). |
+| 2 | **Always-on hosting** | ⏳ Open | Today it is `node keeper.mts --watch` on a laptop: it dies with the session or the lid. It needs a supervised worker that restarts itself (small VPS, Fly.io, Railway). **Not Vercel**: no cron here, and a serverless function is not a loop. Fee payer = a **dedicated funded throwaway**, never the deployer or the upgrade authority. RPC = the **server** key (`RPC_URL`), never the browser one (see CLAUDE.md, "Two RPC keys"). |
+| 3 | **Alerting** | ⏳ Open | The keeper logs refusals and moves on, which is exactly how the 2026-09-26 backlog went unseen. Minimum: (a) no pass in N minutes; (b) keeper SOL balance under a floor; (c) the same strategy refused K passes in a row, with the reason. `StrategyNoBudget` (6068) is the owner's to fix, but they only learn it if the UI or a notification says so. |
+| 4 | **Who pays, and how much** | ⏳ Decide | The cranker earns nothing, so the protocol pays. At ~10 000 lamports per round with hourly strategies: **~0.24 SOL/day per 1 000 strategies** (~88 SOL/year), vs ~0.84 SOL/day before item 1. **Recommended at launch: the protocol pays, funded from `market_vault` fees**, no program change. A cranker tip taken from the harvest would let third-party keepers compete, but it changes the program and therefore the audit. Keep it for v2 if volume justifies it. |
+| 5 | **RPC load at scale** | ⏳ Open | Every pass re-reads every `PoolStrategy`, `AutoCompound` and `AmmPool` with `.all()`, then a few reads per strategy. At 14 strategies it already draws Helius 429s. Before thousands: read only what is due (`last_ts + min_interval`), or subscribe to account changes, and size the RPC plan to it. |
+| 6 | **Priority price** | ⏳ Open | Fixed at 50 000 microlamports/CU. On mainnet that is a guess in both directions: too low under congestion (rounds slip), too high when quiet. Read `getRecentPrioritizationFees` and bid a percentile, with a ceiling. |
+
 ---
 
 **How to use this file:** update checkboxes as items land; do not let mainnet-readiness state live only in chat/session memory going forward. Cross-reference designs docs (`*_DESIGN.md`) for anything non-trivial rather than inlining the design here.
