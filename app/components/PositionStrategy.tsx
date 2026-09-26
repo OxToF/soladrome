@@ -370,7 +370,9 @@ export function VoteBudget({
         {left !== undefined && leftUsdc < 1
           ? "⚠️ Nothing left to pay the strike with: your voting positions are armed but skip every round. "
           : ""}
-        The new amount replaces what is left, it does not add to it. It is an SPL allowance: your
+        A round never spends more than what is left: past it, the rest of your rewards stays accrued
+        on the position until the budget covers it. The new amount replaces what is left, it does not
+        add to it. It is an SPL allowance: your
         USDC stays in your wallet, the token program enforces the cap, and revoking it from your
         wallet stops every voting round.
       </p>

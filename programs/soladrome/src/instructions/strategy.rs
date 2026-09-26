@@ -13,16 +13,19 @@
 //! LP elsewhere is refused, never forfeited.
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program_option::COption;
 use anchor_spl::associated_token::{get_associated_token_address, AssociatedToken};
 use anchor_spl::token::spl_token::native_mint;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 
 use crate::constants::*;
 use crate::errors::SoladromeError;
-use crate::instructions::amm::{advance_pool_rewards, continuous_active, harvest_lp_rewards};
+use crate::instructions::amm::{
+    advance_pool_rewards, continuous_active, harvest_lp_rewards, harvest_lp_rewards_up_to,
+};
 use crate::instructions::auto::{exercise_into_stake, StakeLeg};
 use crate::instructions::auto_lp::{lp_deposit_side, route_into_lp, LpRoute, SaleInput};
-use crate::instructions::curve::exercise_fee;
+use crate::instructions::curve::{exercise_fee, max_exercisable};
 use crate::state::*;
 
 /// The address of the pool pairing `x` and `y`, as `create_pool` derives it.
@@ -302,12 +305,27 @@ pub fn crank_pool_strategy_vote(ctx: Context<CrankPoolStrategyVote>) -> Result<(
     let cont_active = continuous_active(&a.protocol_state, now);
     advance_pool_rewards(&mut a.source_pool, now, cont_rate, cont_active);
     let acc = a.source_pool.osola_reward_per_lp;
-    let pending = harvest_lp_rewards(
+
+    // ☢️ The round takes what the owner's USDC pays for, never more. It used to exercise the
+    // whole accrual, and the day that exceeded the allowance or the balance the strike transfer
+    // failed — on that round and every round after, because accrual only grows while the budget
+    // stands still (5 of 8 devnet strategies, 2026-09-26). The rest stays accrued on the position.
+    let budget = match a.user_usdc.delegate {
+        COption::Some(d) if d == a.auto_delegate.key() => {
+            a.user_usdc.amount.min(a.user_usdc.delegated_amount)
+        }
+        _ => 0,
+    };
+    require!(budget > 0, SoladromeError::StrategyNoBudget);
+    let affordable = max_exercisable(&a.protocol_state, budget)?;
+    let pending = harvest_lp_rewards_up_to(
         &mut a.source_lp_user_info,
         acc,
         a.source_user_lp.amount,
         false,
+        affordable,
     )?;
+    // `min_harvest` bounds the round, not the accrual: a round is what the cranker pays a fee for.
     require!(
         pending > 0 && pending >= a.strategy.min_harvest,
         SoladromeError::AutoNotReady

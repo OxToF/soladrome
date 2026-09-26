@@ -42,6 +42,7 @@ import {
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
   createApproveInstruction,
+  createRevokeInstruction,
   createSyncNativeInstruction,
   createTransferInstruction,
   getAssociatedTokenAddressSync,
@@ -1298,5 +1299,122 @@ describe("soladrome — bankrun (per-position strategies)", () => {
       "exactly the excess went to the owner as oSOLA"
     );
     await assertReservesMatchVaults(sellPool, "after a capped round");
+  });
+  it("☢️ a voting round larger than the owner's budget exercises what it pays for, and the rest stays accrued", async () => {
+    // Before 2026-09-26 the round exercised the WHOLE accrual: past the allowance the strike
+    // transfer failed, and since accrual only grows, it failed on every round after. 5 of the 8
+    // devnet voting strategies were stuck that way.
+    const kp = await lpUser([tknPool]);
+    const budget = 5 * UNIT;
+    await send(
+      [
+        await setStrategyIx(kp, tknPool, tknPool, VOTE),
+        createApproveInstruction(
+          ata(usdcMint, kp.publicKey),
+          autoOf(kp.publicKey),
+          kp.publicKey,
+          budget
+        ),
+      ],
+      [kp]
+    );
+    const infoPda = lpInfoOf(tknPool, kp.publicKey);
+    const before: any = await program.account.lpUserInfo.fetch(infoPda);
+    const lpAmount = BigInt(before.lpAmount.toString());
+    const debt0 = BigInt(before.rewardDebt.toString());
+    await forwardSeconds(3_600);
+    const usdcBefore = await tokenBalance(ata(usdcMint, kp.publicKey));
+
+    await crankStrategyVote(kp.publicKey, tknPool);
+
+    const P = BigInt(1_000_000_000_000);
+    const acc = BigInt(
+      (
+        (await program.account.ammPool.fetch(tknPool.key)) as any
+      ).osolaRewardPerLp.toString()
+    );
+    const debt1 = BigInt(
+      ((await program.account.lpUserInfo.fetch(infoPda)) as any).rewardDebt.toString()
+    );
+    const total = ((acc - debt0) * lpAmount) / P;
+    const left = ((acc - debt1) * lpAmount) / P;
+    const s: any = await program.account.poolStrategy.fetch(
+      strategyOf(kp.publicKey, tknPool)
+    );
+    const taken = BigInt(s.harvested.toString());
+    const spent = usdcBefore - (await tokenBalance(ata(usdcMint, kp.publicKey)));
+
+    assert.isTrue(total > BigInt(budget), "the accrual exceeded the budget");
+    assert.isTrue(taken > BigInt(0), "the round still ran");
+    assert.isTrue(spent <= BigInt(budget), "and never spent past the allowance");
+    assert.isTrue(
+      spent >= BigInt(budget) - BigInt(UNIT / 100),
+      "while using nearly all of it"
+    );
+    assert.isTrue(left > BigInt(0), "the rest is still accrued on the position");
+    assert.isTrue(
+      taken + left <= total && taken + left >= total - BigInt(1),
+      `☢️ nothing created, at most one unit of dust lost: ${taken} + ${left} vs ${total}`
+    );
+    const pos: any = await program.account.userPosition.fetch(
+      positionOf(kp.publicKey)
+    );
+    assert.equal(pos.hiSola.toString(), taken.toString(), "exercised into hiSOLA");
+
+    // A larger budget picks the remainder up on the next round.
+    await send(
+      [
+        createApproveInstruction(
+          ata(usdcMint, kp.publicKey),
+          autoOf(kp.publicKey),
+          kp.publicKey,
+          10_000 * UNIT
+        ),
+      ],
+      [kp]
+    );
+    await forwardSeconds(60);
+    await crankStrategyVote(kp.publicKey, tknPool);
+    const s2: any = await program.account.poolStrategy.fetch(
+      strategyOf(kp.publicKey, tknPool)
+    );
+    assert.equal(s2.rounds.toString(), "2");
+    assert.isTrue(
+      BigInt(s2.harvested.toString()) - taken >= left,
+      "the carried remainder was paid on the next round"
+    );
+
+    // No allowance, or no USDC behind it: refused by name, not by a token-program error.
+    await send(
+      [createRevokeInstruction(ata(usdcMint, kp.publicKey), kp.publicKey)],
+      [kp]
+    );
+    await forwardSeconds(60);
+    await expectError(
+      crankStrategyVote(kp.publicKey, tknPool),
+      "StrategyNoBudget"
+    );
+    const bal = await tokenBalance(ata(usdcMint, kp.publicKey));
+    await send(
+      [
+        createApproveInstruction(
+          ata(usdcMint, kp.publicKey),
+          autoOf(kp.publicKey),
+          kp.publicKey,
+          10_000 * UNIT
+        ),
+        createTransferInstruction(
+          ata(usdcMint, kp.publicKey),
+          ata(usdcMint, payer.publicKey),
+          kp.publicKey,
+          bal
+        ),
+      ],
+      [kp]
+    );
+    await expectError(
+      crankStrategyVote(kp.publicKey, tknPool),
+      "StrategyNoBudget"
+    );
   });
 });

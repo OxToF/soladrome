@@ -11822,6 +11822,11 @@
       "code": 6067,
       "name": "StrategyRouteConflict",
       "msg": "This position's pool is on the route its rewards would take, so it cannot compound into it — the same pool cannot be both harvested and traded through in one round"
+    },
+    {
+      "code": 6068,
+      "name": "StrategyNoBudget",
+      "msg": "This voting strategy has no USDC to pay a strike with: the owner's USDC account holds nothing, or has no allowance left to the strategy delegate"
     }
   ],
   "types": [

@@ -177,13 +177,50 @@ pub fn harvest_lp_rewards(
     wallet_lp: u64,
     owner_present: bool,
 ) -> Result<u64> {
+    harvest_lp_rewards_up_to(info, acc, wallet_lp, owner_present, u64::MAX)
+}
+
+/// `harvest_lp_rewards`, taking at most `max` and leaving the rest ACCRUED on the position.
+///
+/// Written for the voting strategy, whose round costs USDC: a harvest larger than the owner's
+/// budget used to fail outright, and since accrual only grows, it then failed on every round
+/// after. Now the round takes what the budget pays and the rest stays where it was earned —
+/// claimable by the owner, or by the next round.
+///
+/// The remainder `left` is kept by stamping the debt `⌊left·P/lp_amount⌋` short of `acc`.
+/// ☢️ WHY THIS CANNOT PAY `left` TWICE, OR MORE THAN `left`: any later harvest pays
+/// `⌊(acc' − debt)·basis'/P⌋` with `basis' = min(lp_amount', wallet) ≤ lp_amount`, because the
+/// one path that grows `lp_amount` (`credit_lp_deposit`) harvests and re-stamps the debt at the
+/// OLD amount first. So the carried share is worth at most `⌊left·P/lp_amount⌋·lp_amount/P ≤
+/// left`: a unit of dust may be lost to the floor, never minted. Encoding against `lp_amount`
+/// rather than the basis matters when the owner harvests with a partial wallet: a smaller
+/// denominator would let a later full-basis harvest pay the remainder out inflated.
+pub fn harvest_lp_rewards_up_to(
+    info: &mut LpUserInfo,
+    acc: u128,
+    wallet_lp: u64,
+    owner_present: bool,
+    max: u64,
+) -> Result<u64> {
     require!(
         owner_present || wallet_lp >= info.lp_amount,
         SoladromeError::PartialBasisClaim
     );
     let pending = pending_osola(acc, info.reward_debt, reward_basis(info, wallet_lp));
-    info.reward_debt = acc;
-    Ok(pending)
+    let take = pending.min(max);
+    let left = pending - take;
+    info.reward_debt = if left == 0 {
+        acc
+    } else {
+        // `pending > 0` implies a basis > 0, hence `lp_amount > 0`.
+        let carried = (left as u128)
+            .checked_mul(LP_REWARD_PRECISION)
+            .ok_or(SoladromeError::Overflow)?
+            / info.lp_amount as u128;
+        // `carried ≤ left·P/basis ≤ acc − reward_debt`, so the debt never moves backwards.
+        acc.checked_sub(carried).ok_or(SoladromeError::Overflow)?
+    };
+    Ok(take)
 }
 
 // ── Floor guard ───────────────────────────────────────────────────────────────
