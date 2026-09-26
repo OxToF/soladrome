@@ -33,10 +33,18 @@ jobs:
         with:
           workspaces: "."
 
+      # ☢️ PINNED, and it must stay pinned. `stable` moves under us: `anchor build` compiles
+      # the program with whichever `cargo-build-sbf` that tag resolves to on the day, so the
+      # artefact under test was not reproducible and its compute-unit cost drifted between two
+      # runs of identical source. On 2026-09-17 that turned a green commit red with no code
+      # change, and a re-run of the same commit turned it green again. 4.1.1 is what devnet
+      # runs (Agave 4.1.x, see CLAUDE.md) and what the dev machine has — CI now agrees with
+      # both. Bump this deliberately, with the devnet cluster, never implicitly.
       - name: Install Solana CLI
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          sh -c "$(curl -sSfL https://release.anza.xyz/v4.1.1/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          solana --version
 
       # Prebuilt binary from the official release: building anchor-cli from source
       # pulls in `hidapi`, which needs libudev-dev — absent from ubuntu-latest
@@ -125,10 +133,13 @@ jobs:
         with:
           workspaces: "."
 
+      # ☢️ PINNED — rationale on the `anchor` job above. The two versions must move together:
+      # this job's validator runs the binary that job's `anchor build` produced.
       - name: Install Solana CLI
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          sh -c "$(curl -sSfL https://release.anza.xyz/v4.1.1/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          solana --version
 
       - name: Install Anchor CLI
         run: |

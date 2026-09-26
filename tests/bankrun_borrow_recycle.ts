@@ -28,6 +28,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { BN } from "@coral-xyz/anchor";
 import { startAnchor, ProgramTestContext } from "solana-bankrun";
 import { BankrunProvider } from "anchor-bankrun";
+import { withComputeBudget } from "./compute_budget";
 import {
   Keypair,
   PublicKey,
@@ -171,7 +172,7 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
 
   before(async () => {
     context = await startAnchor(".", [], []);
-    provider = new BankrunProvider(context);
+    provider = withComputeBudget(new BankrunProvider(context));
     payer = context.payer;
     idlJson = JSON.parse(fs.readFileSync("target/idl/soladrome.json", "utf8"));
     program = new anchor.Program(idlJson, provider);

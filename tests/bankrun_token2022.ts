@@ -51,6 +51,7 @@ import {
 } from "@solana/web3.js";
 import { startAnchor, ProgramTestContext } from "solana-bankrun";
 import { BankrunProvider } from "anchor-bankrun";
+import { withComputeBudget } from "./compute_budget";
 import {
   MINT_SIZE,
   TOKEN_PROGRAM_ID,
@@ -230,7 +231,7 @@ describe("soladrome — bankrun (the AMM speaks Token-2022)", () => {
 
   before(async () => {
     context = await startAnchor(".", [], []);
-    provider = new BankrunProvider(context);
+    provider = withComputeBudget(new BankrunProvider(context));
     payer = context.payer;
     program = new anchor.Program(
       JSON.parse(fs.readFileSync("target/idl/soladrome.json", "utf8")),
