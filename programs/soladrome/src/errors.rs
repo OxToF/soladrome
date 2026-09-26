@@ -177,4 +177,6 @@ pub enum SoladromeError {
     StrategyWrongMode,
     #[msg("This position's pool is on the route its rewards would take, so it cannot compound into it — the same pool cannot be both harvested and traded through in one round")]
     StrategyRouteConflict,
+    #[msg("This voting strategy has no USDC to pay a strike with: the owner's USDC account holds nothing, or has no allowance left to the strategy delegate")]
+    StrategyNoBudget,
 }

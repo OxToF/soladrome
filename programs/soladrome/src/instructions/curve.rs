@@ -218,6 +218,32 @@ pub fn exercise_fee(state: &ProtocolState, o_sola_amount: u64) -> Result<u64> {
     u64::try_from(f).map_err(|_| error!(SoladromeError::Overflow))
 }
 
+/// The most oSOLA that `budget` USDC exercises, strike and fee together: the largest round a
+/// payer holding `budget` can afford, never one it cannot.
+///
+/// `exercise_fee(x)` is `⌊⌊x·(vu − vs)/vs⌋·bps/10⁴⌋ ≤ x·(vu − vs)·bps/(vs·10⁴)`, so any `x` with
+/// `x·(1 + (vu − vs)·bps/(vs·10⁴)) ≤ budget` pays `x + exercise_fee(x) ≤ budget`. The figure
+/// below is the floor of that bound: it may leave a unit or two of budget unspent to the floors
+/// in the fee, and it can never overspend.
+pub fn max_exercisable(state: &ProtocolState, budget: u64) -> Result<u64> {
+    let vu = state.virtual_usdc as u128;
+    let vs = state.virtual_sola as u128;
+    let bps = state.exercise_fee_bps as u128;
+    if vu <= vs || vs == 0 || bps == 0 {
+        // No gain, no fee: one USDC exercises one oSOLA.
+        return Ok(budget);
+    }
+    let unit = vs.checked_mul(10_000).ok_or(SoladromeError::Overflow)?;
+    let per_unit = unit
+        .checked_add((vu - vs).checked_mul(bps).ok_or(SoladromeError::Overflow)?)
+        .ok_or(SoladromeError::Overflow)?;
+    let x = (budget as u128)
+        .checked_mul(unit)
+        .ok_or(SoladromeError::Overflow)?
+        / per_unit;
+    u64::try_from(x).map_err(|_| error!(SoladromeError::Overflow))
+}
+
 /// What exercising `o_sola_amount` gains before the fee, in USDC base units: the curve price
 /// above the 1 USDC strike, `amount × (vu − vs) / vs`, floored. Zero at or under the strike.
 ///

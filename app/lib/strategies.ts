@@ -318,9 +318,41 @@ export async function listCrankableStrategies(
     else if (!pend.fullBasis) why = "wallet holds less LP than recorded — only the owner may harvest";
     else if (s.mode === "vote" && !protocolState.exerciseEnabled) why = "exercise closed";
     else if (s.mode === "vote" && Number(protocolState.exerciseFeeBps) > s.maxFeeBps) why = "fee above the owner's bound";
-    out.push({ strategy: s, pending: pend.pending, ready: why === "", why });
+    // A voting round exercises what the owner's USDC pays for, and the rest stays accrued — so
+    // the round is the smaller of the two, and it is THAT which must reach `minHarvest`.
+    let round = pend.pending;
+    if (!why && s.mode === "vote") {
+      const budget = await voteBudget(connection, s.owner, protocolState.usdcMint);
+      round = Math.min(round, Number(maxExercisable(protocolState, budget)) / UNIT);
+      if (budget === BigInt(0)) why = "no USDC budget: allowance spent or wallet empty";
+      else if (round < s.minHarvest) why = `budget pays ${round.toFixed(4)} < ${s.minHarvest}`;
+    }
+    out.push({ strategy: s, pending: round, ready: why === "", why });
   }
   return out;
+}
+
+/// What one voting round can spend, in USDC base units: the allowance to the strategy delegate,
+/// capped by the balance behind it. Zero without that delegate. Mirrors `crank_pool_strategy_vote`.
+export async function voteBudget(connection: Connection, owner: PublicKey, usdcMint: PublicKey): Promise<bigint> {
+  const info = await connection.getAccountInfo(userAta(usdcMint, owner));
+  if (!info?.data || info.data.length < 129) return BigInt(0);
+  const data = Buffer.from(info.data);
+  if (data.readUInt32LE(72) !== 1 || !new PublicKey(data.subarray(76, 108)).equals(autoPda(owner))) return BigInt(0);
+  const amount = data.readBigUInt64LE(64);
+  const allowance = data.readBigUInt64LE(121);
+  return amount < allowance ? amount : allowance;
+}
+
+/// The most oSOLA `budget` USDC exercises, strike and fee together — `curve::max_exercisable`,
+/// bit for bit, so the keeper announces the round the program will actually run.
+export function maxExercisable(protocolState: any, budget: bigint): bigint {
+  const vu = BigInt(protocolState.virtualUsdc.toString());
+  const vs = BigInt(protocolState.virtualSola.toString());
+  const bps = BigInt(Number(protocolState.exerciseFeeBps ?? 0));
+  if (vu <= vs || vs === BigInt(0) || bps === BigInt(0)) return budget;
+  const unit = vs * BigInt(10_000);
+  return (budget * unit) / (unit + (vu - vs) * bps);
 }
 
 /// The owner's USDC allowance to the strategy delegate — what a voting strategy pays strikes from.
