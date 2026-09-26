@@ -298,6 +298,13 @@ async function heartbeat(ok: boolean): Promise<void> {
   }
 }
 
+// A network error inside a promise nobody awaits (web3.js races some of its own) must not end
+// the process: on 2026-09-26 one ECONNRESET killed a keeper mid-watch. Log it, keep the
+// schedule. A real fault still shows as failed passes, and in the heartbeat.
+process.on("unhandledRejection", (e: any) => {
+  console.log(`${stamp()}  unhandled rejection (kept running): ${String(e?.cause?.code ?? e?.message ?? e).slice(0, 140)}`);
+});
+
 async function fullPass(): Promise<void> {
   let ok = true;
   await pass().catch((e) => {
