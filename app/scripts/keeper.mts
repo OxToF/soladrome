@@ -24,7 +24,7 @@
 import { readFileSync } from "node:fs";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import {
-  Connection, Keypair, PublicKey, Transaction, ComputeBudgetProgram,
+  Connection, Keypair, PublicKey, Transaction,
 } from "@solana/web3.js";
 import { statePda, getProgram } from "../lib/program.ts";
 import {
@@ -35,6 +35,7 @@ import {
   buildStrategyLpCrankInstruction, buildStrategyVoteCrankInstruction, listCrankableStrategies,
 } from "../lib/strategies.ts";
 import { measureIxs, WIRE_LIMIT } from "../lib/recipe.ts";
+import { CU_SIM_LIMIT, computeBudget, cuLimitFor, feeLamports } from "../lib/cubudget.ts";
 
 const WATCH = process.argv.includes("--watch");
 const DRY_RUN = process.argv.includes("--dry-run");
@@ -155,10 +156,8 @@ async function pass(): Promise<void> {
         : ""),
   );
 
-  const budget = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
-    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
-  ];
+  // Simulated at the full limit; sent at what the simulation measured (see `lib/cubudget.ts`).
+  const budget = computeBudget(CU_SIM_LIMIT);
 
   for (const o of ready) {
     const who = o.owner.toBase58().slice(0, 8);
@@ -194,19 +193,23 @@ async function pass(): Promise<void> {
       if (DRY_RUN) {
         console.log(
           `${stamp()}  ${who}…  would fire — ${o.order.chunk} oSOLA` +
-            `${claims.length ? ` after ${claims.length} claim(s)` : ""}, ${sim.value.unitsConsumed} CU`,
+            `${claims.length ? ` after ${claims.length} claim(s)` : ""}, ${sim.value.unitsConsumed} CU used → ${cuLimitFor(sim.value.unitsConsumed)} requested`,
         );
         continue;
       }
 
-      tx.sign(keeper);
-      const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+      const units = cuLimitFor(sim.value.unitsConsumed);
+      const sized = new Transaction().add(...computeBudget(units), ...claims, crank);
+      sized.feePayer = keeper.publicKey;
+      sized.recentBlockhash = tx.recentBlockhash;
+      sized.sign(keeper);
+      const sig = await connection.sendRawTransaction(sized.serialize(), { skipPreflight: true });
       await connection.confirmTransaction(sig, "confirmed");
       // The WHOLE signature: a truncated one cannot be looked up, which is exactly what you
       // want to do the first time an order fires somewhere that matters.
       console.log(
         `${stamp()}  ${who}…  fired ${o.order.chunk} oSOLA${o.order.lpTarget ? ` into ${o.order.lpTarget.toBase58().slice(0, 6)}…` : ""}` +
-          `${claims.length ? ` (${claims.length} claim(s) first)` : ""} — ${sig}`,
+          `${claims.length ? ` (${claims.length} claim(s) first)` : ""}, ${units} CU / ${feeLamports(units)} lamports — ${sig}`,
       );
     } catch (e: any) {
       // One order's failure is not the pass's failure. A keeper that dies on the first bad
@@ -242,11 +245,7 @@ async function strategyPass(): Promise<void> {
       const ix = s.mode === "liquidity"
         ? await buildStrategyLpCrankInstruction(connection, wallet as any, state.usdcMint, s)
         : await buildStrategyVoteCrankInstruction(connection, wallet as any, state.usdcMint, s);
-      const tx = new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
-        ix,
-      );
+      const tx = new Transaction().add(...computeBudget(CU_SIM_LIMIT), ix);
       tx.feePayer = keeper.publicKey;
       tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
       const sim = await connection.simulateTransaction(tx);
@@ -255,13 +254,19 @@ async function strategyPass(): Promise<void> {
         continue;
       }
       if (DRY_RUN) {
-        console.log(`${stamp()}  ${who}  would harvest ~${x.pending.toFixed(4)} oSOLA → ${s.mode}, ${sim.value.unitsConsumed} CU`);
+        console.log(`${stamp()}  ${who}  would harvest ~${x.pending.toFixed(4)} oSOLA → ${s.mode}, ${sim.value.unitsConsumed} CU used → ${cuLimitFor(sim.value.unitsConsumed)} requested`);
         continue;
       }
-      tx.sign(keeper);
-      const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+      const units = cuLimitFor(sim.value.unitsConsumed);
+      const sized = new Transaction().add(...computeBudget(units), ix);
+      sized.feePayer = keeper.publicKey;
+      sized.recentBlockhash = tx.recentBlockhash;
+      sized.sign(keeper);
+      const sig = await connection.sendRawTransaction(sized.serialize(), { skipPreflight: true });
       await connection.confirmTransaction(sig, "confirmed");
-      console.log(`${stamp()}  ${who}  harvested ~${x.pending.toFixed(4)} oSOLA → ${s.mode} — ${sig}`);
+      console.log(
+        `${stamp()}  ${who}  harvested ~${x.pending.toFixed(4)} oSOLA → ${s.mode}, ${units} CU / ${feeLamports(units)} lamports — ${sig}`,
+      );
     } catch (e: any) {
       console.log(`${stamp()}  ${who}  ${String(e?.message ?? e).split("\n")[0].slice(0, 140)}`);
     }
