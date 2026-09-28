@@ -296,7 +296,7 @@ The result is a two-way clearing hub: bribes and liquidity from every ve(3,3) ec
 
 ### 8.1 Token bridging (LIVE)
 
-**In-app bridge: SODAX (mainnet).** The **Bridge** page in the frontend integrates the [SODAX](https://sodax.com) SDK. It moves USDC, USDT, SODA and bnUSD between Solana and Base, Arbitrum, Optimism, Ethereum, BNB Chain, Polygon, Avalanche and HyperEVM, plus SOL and JitoSOL to and from Sonic, SODAX's hub chain. In both directions the user signs on the source chain only and SODAX relays through its hub.
+**In-app bridge: SODAX (mainnet).** The **Bridge** page in the frontend integrates the [SODAX](https://sodax.com) SDK. It moves USDC, USDT, SODA and bnUSD between Solana and Robinhood Chain (where USDG is the dollar: USDG on Robinhood ↔ USDC on Solana), Base, Arbitrum, Optimism, Ethereum, BNB Chain, Polygon, Avalanche and HyperEVM, plus SOL and JitoSOL to and from Sonic, SODAX's hub chain. In both directions the user signs on the source chain only and SODAX relays through its hub.
 
 - **Mainnet only.** SODAX runs no testnet, so this page moves real funds while the rest of the app runs on devnet. The page says so and requires an explicit acknowledgement before the first signature.
 - **Non-custodial, no Soladrome fee.** Soladrome never holds the funds and takes nothing on the transfer.
@@ -705,7 +705,7 @@ Complete list of on-chain instructions (program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SE
 | Security review | ✅ Complete | Code review + Trident fuzzing (200k calls, 0 violations) |
 | Squads multisig | ✅ Complete | 1-of-2 Ledger multisig (`BxYTiKyDxWpK4hPDZEiYVW9qBj8YpzhSHEBCWpaZbWQ4`) |
 | Strategic allocations | ✅ Complete | Founder vesting, contributor system, partner auto-lock system |
-| In-app bridge (SODAX) | ✅ Live (mainnet) | USDC, USDT, SODA between Solana and 8 EVM chains; wAERO / wVELO remain accepted as bribes (Wormhole Portal) |
+| In-app bridge (SODAX) | ✅ Live (mainnet) | USDC, USDT, SODA between Solana and 9 EVM chains incl. Robinhood Chain (USDG ↔ USDC); wAERO / wVELO remain accepted as bribes (Wormhole Portal) |
 | MLCB DAO partnership | In progress | MLCB building an SPL OFT of fBOMB — their entry path to Solana, with Soladrome as the venue; terms finalized around mainnet (§8.3) |
 | Mainnet stage 1 — partner-only window | Upcoming | Founding partners seed pools, configure gauges, and accumulate locked hiSOLA; bonding curve closed (`curve_enabled = false`, §14.3) |
 | Mainnet stage 2 — public open | Upcoming | `curve_enabled` flipped: curve opening + TGE + on-chain airdrop as one event, a fixed number of epochs after stage 1 |

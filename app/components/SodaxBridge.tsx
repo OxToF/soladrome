@@ -54,7 +54,7 @@ export default function SodaxBridge() {
   const [sodax, setSodax] = useState<Sodax | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const [dir, setDir] = useState<Direction>("in");
-  const [evmChain, setEvmChain] = useState<EvmChainKey>("0x2105.base");
+  const [evmChain, setEvmChain] = useState<EvmChainKey>("robinhood");
   const [routeIdx, setRouteIdx] = useState(0);
   const [amount, setAmount] = useState("");
   const [evmRecipient, setEvmRecipient] = useState("");

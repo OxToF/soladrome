@@ -22,7 +22,7 @@ export function Bridge() {
         <div>
           <h2 className="text-lg font-bold text-white tracking-tight">Bridge</h2>
           <p className="text-sm text-brand-muted mt-0.5">
-            Move USDC, USDT and SODA between Solana and Base, Arbitrum, Ethereum &amp; more
+            Move USDC, USDT and SODA between Solana and Robinhood Chain, Base, Arbitrum, Ethereum &amp; more
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0 mt-0.5">

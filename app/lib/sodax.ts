@@ -14,10 +14,13 @@ import { resolveRpcUrl } from "@/lib/rpc";
 export const SOLANA = "solana" as const satisfies SpokeChainKey;
 
 // The EVM side of every route. Enumerated against the SDK on 2026-09-27: each of these bridges
-// USDC, USDT, SODA and bnUSD to and from Solana. Sonic is the SODAX hub and is the only chain
+// USDC, USDT, SODA and bnUSD to and from Solana — except Robinhood Chain, listed first on purpose
+// (tokenized stocks live there), whose dollar is USDG: USDG on Robinhood ↔ USDC on Solana, plus
+// SODA and bnUSD. Its native ETH has no route. Sonic is the SODAX hub and is the only chain
 // that also carries SOL and JitoSOL — the Solana LSTs and xStocks in the SDK's token list are
 // swap-only (solver intents), not bridgeable.
 export const EVM_CHAINS = [
+  { key: "robinhood",       label: "Robinhood", color: "#CCFF00" },
   { key: "0x2105.base",     label: "Base",      color: "#0052FF" },
   { key: "0xa4b1.arbitrum", label: "Arbitrum",  color: "#28A0F0" },
   { key: "0xa.optimism",    label: "Optimism",  color: "#FF0420" },
@@ -78,7 +81,7 @@ export function supportedTokens(chain: SpokeChainKey): XToken[] {
 export type Route = { src: XToken; dst: XToken };
 
 // USDC first: it is the base asset of every Soladrome pool, so it is the transfer this page exists for.
-const PREFERRED = ["USDC", "USDT", "SODA"];
+const PREFERRED = ["USDC", "USDG", "USDT", "SODA"];
 const rank = (s: string) => (PREFERRED.includes(s) ? PREFERRED.indexOf(s) : PREFERRED.length);
 
 /** Every token pair the SDK will bridge from `from` to `to`, USDC first. */
