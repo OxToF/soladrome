@@ -81,14 +81,23 @@ export default function SodaxBridge() {
   const route: Route | undefined = available[routeIdx] ?? available[0];
 
   useEffect(() => setRouteIdx(0), [srcChain, dstChain]);
+  // Prefill each recipient when a wallet connects or changes — and only then. Keyed on the
+  // field's own value, the prefill fired again the moment the user cleared it to paste another
+  // address, so a different recipient could never be typed.
   useEffect(() => {
-    if (evm.account && !evmRecipient) setEvmRecipient(evm.account);
-  }, [evm.account, evmRecipient]);
+    if (evm.account) setEvmRecipient(evm.account);
+  }, [evm.account]);
 
   const solAddr = sol.publicKey?.toBase58() ?? null;
   useEffect(() => {
-    if (solAddr && !solRecipient) setSolRecipient(solAddr);
-  }, [solAddr, solRecipient]);
+    if (solAddr) setSolRecipient(solAddr);
+  }, [solAddr]);
+
+  // Which network the EVM wallet is on now, and the one this bridge will sign on.
+  const evmSrcChain = dir === "in" ? getEvmViemChain(evmChain) : null;
+  const evmOnLabel =
+    evm.chainId === null ? null :
+    EVM_CHAINS.find((c) => getEvmViemChain(c.key).id === evm.chainId)?.label ?? `chain ${evm.chainId}`;
 
   const srcAddress = dir === "in" ? evm.account : solAddr;
   const recipient = dir === "in" ? solRecipient.trim() : evmRecipient.trim();
@@ -266,6 +275,16 @@ export default function SodaxBridge() {
           <div className="flex items-center gap-2 text-sm text-white">
             {evm.active && <img src={evm.active.info.icon} alt="" className="w-4 h-4" />}
             <span className="font-mono">{evm.account.slice(0, 6)}…{evm.account.slice(-4)}</span>
+            {evmOnLabel && <span className="text-xs text-brand-muted">on {evmOnLabel}</span>}
+            {evmSrcChain && evm.chainId !== evmSrcChain.id && (
+              <button
+                disabled={busy}
+                onClick={() => evm.switchTo(evmSrcChain).catch((e) => setError(errorText(e)))}
+                className="ml-auto btn-secondary !px-3 !py-1 !text-xs"
+              >
+                Switch to {chainLabel(evmChain)}
+              </button>
+            )}
           </div>
         ) : evm.wallets.length === 0 ? (
           <p className="text-xs text-brand-muted">No EVM wallet detected in this browser (MetaMask, Rabby, Phantom…).</p>
