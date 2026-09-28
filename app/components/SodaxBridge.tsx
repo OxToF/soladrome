@@ -5,7 +5,7 @@
 // why). Two directions, one form:
 //
 //   into Solana  — the EVM wallet signs on the source chain (approve if needed, then deposit);
-//                  the recipient is the connected Solana wallet, never a typed address.
+//                  the recipient is a Solana wallet address, prefilled from the connected one.
 //   out of Solana — the Solana wallet signs; the recipient is an EVM address, prefilled from the
 //                  connected EVM wallet.
 //
@@ -58,6 +58,7 @@ export default function SodaxBridge() {
   const [routeIdx, setRouteIdx] = useState(0);
   const [amount, setAmount] = useState("");
   const [evmRecipient, setEvmRecipient] = useState("");
+  const [solRecipient, setSolRecipient] = useState("");
   const [ack, setAck] = useState(false);
   const [balance, setBalance] = useState<bigint | null>(null);
   const [limit, setLimit] = useState<bigint | null>(null);
@@ -85,9 +86,16 @@ export default function SodaxBridge() {
   }, [evm.account, evmRecipient]);
 
   const solAddr = sol.publicKey?.toBase58() ?? null;
+  useEffect(() => {
+    if (solAddr && !solRecipient) setSolRecipient(solAddr);
+  }, [solAddr, solRecipient]);
+
   const srcAddress = dir === "in" ? evm.account : solAddr;
-  const recipient = dir === "in" ? solAddr : evmRecipient.trim();
-  const recipientOk = dir === "in" ? !!solAddr : isAddress(recipient ?? "");
+  const recipient = dir === "in" ? solRecipient.trim() : evmRecipient.trim();
+  const recipientOk = dir === "in" ? isSolanaWallet(recipient) : isAddress(recipient);
+  // A typed recipient is the one field where a slip loses the funds for good; say so when it
+  // isn't the wallet the user is connected with.
+  const foreignRecipient = dir === "in" && recipientOk && recipient !== solAddr;
 
   // ── Source balance (mainnet) ──────────────────────────────────────────────
   const loadBalance = useCallback(async () => {
@@ -143,8 +151,8 @@ export default function SodaxBridge() {
     !sodax ? "Loading SODAX…" :
     !route ? "No route for this pair" :
     dir === "in" && !evm.account ? "Connect an EVM wallet" :
-    !solAddr ? "Connect your Solana wallet" :
-    !recipientOk ? "Enter a valid EVM recipient" :
+    dir === "out" && !solAddr ? "Connect your Solana wallet" :
+    !recipientOk ? `Enter a valid ${chainLabel(dstChain)} recipient` :
     !parsed || parsed <= 0n ? "Enter an amount" :
     balance !== null && parsed > balance ? "Insufficient balance" :
     limit !== null && parsed > limit ? "Above what the route can move right now" :
@@ -327,7 +335,25 @@ export default function SodaxBridge() {
         <div className="flex flex-col gap-1">
           <span className="stat-label">Recipient on {chainLabel(dstChain)}</span>
           {dir === "in" ? (
-            <div className="input font-mono text-xs truncate">{solAddr ?? "Connect your Solana wallet"}</div>
+            <>
+              <input
+                className="input font-mono text-xs"
+                placeholder="Solana wallet address"
+                value={solRecipient}
+                disabled={busy}
+                onChange={(e) => setSolRecipient(e.target.value)}
+              />
+              {solRecipient.trim() && !recipientOk && (
+                <span className="text-[11px] text-red-400">
+                  Not a Solana wallet address (program-owned addresses are refused).
+                </span>
+              )}
+              {foreignRecipient && (
+                <span className="text-[11px] text-yellow-400">
+                  This is not your connected wallet. Check it character by character: a transfer to a wrong address cannot be recovered.
+                </span>
+              )}
+            </>
           ) : (
             <input
               className="input font-mono text-xs"
@@ -370,6 +396,16 @@ export default function SodaxBridge() {
       {history.length > 0 && <History entries={history} />}
     </div>
   );
+}
+
+// A plain wallet only: on-curve, so it has a private key. A PDA (a program's vault) would receive
+// the tokens in an account nobody can sign for, unless that program was built to take them.
+function isSolanaWallet(addr: string): boolean {
+  try {
+    return PublicKey.isOnCurve(new PublicKey(addr).toBytes());
+  } catch {
+    return false;
+  }
 }
 
 function ChainField({ label, chain, evmChain, setEvmChain, disabled }: {
