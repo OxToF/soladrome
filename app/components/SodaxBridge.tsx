@@ -14,6 +14,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { WalletReadyState } from "@solana/wallet-adapter-base";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { createPublicClient, createWalletClient, custom, erc20Abi, formatUnits, http, isAddress, parseUnits } from "viem";
 import type { Sodax, SpokeChainKey, XToken } from "@sodax/sdk";
@@ -89,6 +90,8 @@ export default function SodaxBridge() {
   }, [evm.account]);
 
   const solAddr = sol.publicKey?.toBase58() ?? null;
+  // Wallets actually installed in this browser; selecting one connects it (the provider autoConnects).
+  const solWallets = sol.wallets.filter((w) => w.readyState === WalletReadyState.Installed);
   useEffect(() => {
     if (solAddr) setSolRecipient(solAddr);
   }, [solAddr]);
@@ -159,8 +162,8 @@ export default function SodaxBridge() {
   const blocker =
     !sodax ? "Loading SODAX…" :
     !route ? "No route for this pair" :
-    dir === "in" && !evm.account ? "Connect an EVM wallet" :
-    dir === "out" && !solAddr ? "Connect your Solana wallet" :
+    dir === "in" && !evm.account ? `Connect your ${chainLabel(evmChain)} wallet above` :
+    dir === "out" && !solAddr ? "Connect your Solana wallet above" :
     !recipientOk ? `Enter a valid ${chainLabel(dstChain)} recipient` :
     !parsed || parsed <= 0n ? "Enter an amount" :
     balance !== null && parsed > balance ? "Insufficient balance" :
@@ -263,39 +266,56 @@ export default function SodaxBridge() {
         ))}
       </div>
 
-      {/* EVM wallet */}
+      {/* Source wallet — the one that signs, so it follows the direction */}
       <div className="card-flat flex flex-col gap-2">
         <div className="flex items-center justify-between">
-          <span className="stat-label">EVM wallet</span>
-          {evm.account && (
-            <button onClick={evm.disconnect} className="text-[11px] text-brand-muted hover:text-white">Disconnect</button>
+          <span className="stat-label">From · your {chainLabel(srcChain)} wallet</span>
+          {dir === "in" && evm.account && (
+            <button onClick={evm.disconnect} disabled={busy} className="text-[11px] text-brand-muted hover:text-white">Disconnect</button>
+          )}
+          {dir === "out" && sol.publicKey && (
+            <button onClick={() => sol.disconnect()} disabled={busy} className="text-[11px] text-brand-muted hover:text-white">Change wallet</button>
           )}
         </div>
-        {evm.account ? (
+
+        {dir === "in" ? (
+          evm.account ? (
+            <div className="flex items-center gap-2 text-sm text-white">
+              {evm.active && <img src={evm.active.info.icon} alt="" className="w-4 h-4" />}
+              <span className="font-mono">{evm.account.slice(0, 6)}…{evm.account.slice(-4)}</span>
+              {evmOnLabel && <span className="text-xs text-brand-muted">on {evmOnLabel}</span>}
+              {evmSrcChain && evm.chainId !== evmSrcChain.id && (
+                <button
+                  disabled={busy}
+                  onClick={() => evm.switchTo(evmSrcChain).catch((e) => setError(errorText(e)))}
+                  className="ml-auto btn-secondary !px-3 !py-1 !text-xs"
+                >
+                  Switch to {chainLabel(evmChain)}
+                </button>
+              )}
+            </div>
+          ) : evm.wallets.length === 0 ? (
+            <p className="text-xs text-brand-muted">No EVM wallet detected in this browser (MetaMask, Rabby, Phantom…).</p>
+          ) : (
+            <WalletButtons
+              items={evm.wallets.map((w) => ({ key: w.info.uuid, name: w.info.name, icon: w.info.icon, onClick: () => evm.connect(w).catch((e) => setError(errorText(e))) }))}
+              disabled={busy}
+            />
+          )
+        ) : sol.publicKey ? (
           <div className="flex items-center gap-2 text-sm text-white">
-            {evm.active && <img src={evm.active.info.icon} alt="" className="w-4 h-4" />}
-            <span className="font-mono">{evm.account.slice(0, 6)}…{evm.account.slice(-4)}</span>
-            {evmOnLabel && <span className="text-xs text-brand-muted">on {evmOnLabel}</span>}
-            {evmSrcChain && evm.chainId !== evmSrcChain.id && (
-              <button
-                disabled={busy}
-                onClick={() => evm.switchTo(evmSrcChain).catch((e) => setError(errorText(e)))}
-                className="ml-auto btn-secondary !px-3 !py-1 !text-xs"
-              >
-                Switch to {chainLabel(evmChain)}
-              </button>
-            )}
+            {sol.wallet && <img src={sol.wallet.adapter.icon} alt="" className="w-4 h-4" />}
+            <span>{sol.wallet?.adapter.name}</span>
+            <span className="font-mono text-brand-muted">{solAddr!.slice(0, 4)}…{solAddr!.slice(-4)}</span>
+            <span className="text-xs text-brand-muted">on Solana mainnet</span>
           </div>
-        ) : evm.wallets.length === 0 ? (
-          <p className="text-xs text-brand-muted">No EVM wallet detected in this browser (MetaMask, Rabby, Phantom…).</p>
+        ) : solWallets.length === 0 ? (
+          <p className="text-xs text-brand-muted">No Solana wallet detected in this browser (Phantom, Solflare, Backpack…).</p>
         ) : (
-          <div className="flex flex-wrap gap-2">
-            {evm.wallets.map((w) => (
-              <button key={w.info.uuid} onClick={() => evm.connect(w).catch((e) => setError(errorText(e)))} className="btn-secondary !px-3 !py-1.5 !text-xs">
-                <img src={w.info.icon} alt="" className="w-4 h-4" /> {w.info.name}
-              </button>
-            ))}
-          </div>
+          <WalletButtons
+            items={solWallets.map((w) => ({ key: w.adapter.name, name: w.adapter.name, icon: w.adapter.icon, onClick: () => sol.select(w.adapter.name) }))}
+            disabled={busy || sol.connecting}
+          />
         )}
       </div>
 
@@ -357,11 +377,27 @@ export default function SodaxBridge() {
             <>
               <input
                 className="input font-mono text-xs"
-                placeholder="Solana wallet address"
+                placeholder="Paste a Solana wallet address"
                 value={solRecipient}
                 disabled={busy}
                 onChange={(e) => setSolRecipient(e.target.value)}
               />
+              {solAddr ? (
+                solRecipient.trim() !== solAddr && (
+                  <button disabled={busy} onClick={() => setSolRecipient(solAddr)} className="self-start text-[11px] text-brand-muted hover:text-brand-green">
+                    Use my connected {sol.wallet?.adapter.name ?? "Solana"} wallet
+                  </button>
+                )
+              ) : solWallets.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-brand-muted">
+                  or fill from
+                  <WalletButtons
+                    small
+                    items={solWallets.map((w) => ({ key: w.adapter.name, name: w.adapter.name, icon: w.adapter.icon, onClick: () => sol.select(w.adapter.name) }))}
+                    disabled={busy || sol.connecting}
+                  />
+                </div>
+              )}
               {solRecipient.trim() && !recipientOk && (
                 <span className="text-[11px] text-red-400">
                   Not a Solana wallet address (program-owned addresses are refused).
@@ -374,13 +410,34 @@ export default function SodaxBridge() {
               )}
             </>
           ) : (
-            <input
-              className="input font-mono text-xs"
-              placeholder="0x…"
-              value={evmRecipient}
-              disabled={busy}
-              onChange={(e) => setEvmRecipient(e.target.value)}
-            />
+            <>
+              <input
+                className="input font-mono text-xs"
+                placeholder="Paste a 0x… address"
+                value={evmRecipient}
+                disabled={busy}
+                onChange={(e) => setEvmRecipient(e.target.value)}
+              />
+              {evmRecipient.trim() && !recipientOk && (
+                <span className="text-[11px] text-red-400">Not a valid EVM address.</span>
+              )}
+              {evm.account ? (
+                evmRecipient.trim().toLowerCase() !== evm.account.toLowerCase() && (
+                  <button disabled={busy} onClick={() => setEvmRecipient(evm.account!)} className="self-start text-[11px] text-brand-muted hover:text-brand-green">
+                    Use my connected {evm.active?.info.name ?? "EVM"} wallet
+                  </button>
+                )
+              ) : evm.wallets.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-brand-muted">
+                  or fill from
+                  <WalletButtons
+                    small
+                    items={evm.wallets.map((w) => ({ key: w.info.uuid, name: w.info.name, icon: w.info.icon, onClick: () => evm.connect(w).catch((e) => setError(errorText(e))) }))}
+                    disabled={busy}
+                  />
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -413,6 +470,27 @@ export default function SodaxBridge() {
       {error && <p className="text-xs text-red-400 break-words">{error}</p>}
 
       {history.length > 0 && <History entries={history} />}
+    </div>
+  );
+}
+
+function WalletButtons({ items, disabled, small }: {
+  items: { key: string; name: string; icon: string; onClick: () => void }[];
+  disabled: boolean;
+  small?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((w) => (
+        <button
+          key={w.key}
+          onClick={w.onClick}
+          disabled={disabled}
+          className={`btn-secondary ${small ? "!px-2 !py-1 !text-[11px] !gap-1" : "!px-3 !py-1.5 !text-xs"}`}
+        >
+          <img src={w.icon} alt="" className={small ? "w-3.5 h-3.5" : "w-4 h-4"} /> {w.name}
+        </button>
+      ))}
     </div>
   );
 }
