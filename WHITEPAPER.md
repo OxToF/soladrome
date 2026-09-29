@@ -289,24 +289,28 @@ Why oSOLA: an airdropped SOLA would be unbacked supply, redeemable 1:1 against a
 
 **Why this is Soladrome's core advantage.** ve(3,3) liquidity today is fragmented — Aerodrome on Base, Velodrome on Optimism, Beradrome on Berachain, fBOMB across ten EVM chains, and a growing set of Solana venues — each an island with its own gauges, bribes and mercenary capital. Soladrome's bridges turn it into the **interoperability layer that unifies ve(3,3) liquidity across chains**:
 
-- **Inbound** — any ve(3,3) protocol, on any chain, can route its governance token and bribes into Soladrome gauges (Wormhole Token Bridge for assets, LayerZero V2 for bribes), reaching Solana-native liquidity without migrating a treasury.
+- **Inbound** — any ve(3,3) protocol, on any chain, can route its governance token and bribes into Soladrome gauges (SODAX and Wormhole for assets, LayerZero V2 for bribes), reaching Solana-native liquidity without migrating a treasury.
 - **Outbound** — SOLA itself, floor-backed, can be bridged to EVM as wSOLA to seed pairs on those same ve(3,3) venues, exporting Soladrome's guaranteed-floor liquidity outward.
 
 The result is a two-way clearing hub: bribes and liquidity from every ve(3,3) ecosystem can converge on Soladrome, and Soladrome's floor-backed liquidity can flow back out to them. **The bridges are not a feature — they are the moat.** The rest of this section details the rails.
 
-### 8.1 Wormhole Token Bridge (LIVE)
+### 8.1 Token bridging (LIVE)
 
-Soladrome integrates the Wormhole Token Bridge to bring external DeFi liquidity into the Solana ecosystem. The bridge is accessible via the **Token Bridge** page in the frontend.
+**In-app bridge: SODAX (mainnet).** The **Bridge** page in the frontend integrates the [SODAX](https://sodax.com) SDK. It moves USDC, USDT, SODA and bnUSD between Solana and Robinhood Chain (where USDG is the dollar: USDG on Robinhood ↔ USDC on Solana), Base, Arbitrum, Optimism, Ethereum, BNB Chain, Polygon, Avalanche and HyperEVM, plus SOL and JitoSOL to and from Sonic, SODAX's hub chain. In both directions the user signs on the source chain only and SODAX relays through its hub.
 
-**Supported routes (live at mainnet):**
+- **Mainnet only.** SODAX runs no testnet, so this page moves real funds while the rest of the app runs on devnet. The page says so and requires an explicit acknowledgement before the first signature.
+- **Non-custodial, no Soladrome fee.** Soladrome never holds the funds and takes nothing on the transfer.
+- **Delivery, not composition.** SODAX delivers tokens to an address and does not call a program on arrival, so putting bridged USDC into a Soladrome pool or bribe is always a second, separate transaction.
+- **Capacity is per route and live.** Each route is bounded by what the SODAX hub vault can release on the destination chain at that moment; the page reads and displays it before signing.
+
+**Wormhole-wrapped tokens (accepted as bribes).**
 
 | Origin token | Origin chain | Wormhole-wrapped SPL | SPL mint address |
 |---|---|---|---|
 | AERO | Base | wAERO | `AXYvFSKMPwt9adL1eBZhrDNCvT29HXnhNQuPxNwDZin` |
 | VELO | Optimism | wVELO | `GaLBL77CzH9XSzStkNPmCkWhuXwkDU38du2ainTGrEMN` |
-| SOL | Solana | wSOL → Base | (canonical wSOL, bridged out) |
 
-Both wAERO and wVELO were attested on Wormhole before going live. Attestation anchors the SPL mint address permanently — any AERO locked on Base releases wAERO on Solana at the attested mint, and vice versa. wSOL follows the same mechanism in the Base-bound direction.
+Both wAERO and wVELO were attested on Wormhole. Attestation anchors the SPL mint address permanently: any AERO locked on Base releases wAERO on Solana at the attested mint, and vice versa. They are bridged through Wormhole's own Portal, outside the Soladrome app, since the in-app bridge moved to SODAX on 2026-09-27.
 
 **Use within Soladrome:** wAERO and wVELO are valid SPL tokens and can be deposited as bribe tokens in Soladrome gauges via `deposit_bribe`. This extends the bribe economy to include yield-bearing governance tokens from Base and Optimism without requiring custodians or synthetic wrappers.
 
@@ -701,7 +705,7 @@ Complete list of on-chain instructions (program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SE
 | Security review | ✅ Complete | Code review + Trident fuzzing (200k calls, 0 violations) |
 | Squads multisig | ✅ Complete | 1-of-2 Ledger multisig (`BxYTiKyDxWpK4hPDZEiYVW9qBj8YpzhSHEBCWpaZbWQ4`) |
 | Strategic allocations | ✅ Complete | Founder vesting, contributor system, partner auto-lock system |
-| Wormhole Token Bridge | ✅ Live | wAERO (Base→Solana), wVELO (Optimism→Solana), wSOL (Solana→Base) |
+| In-app bridge (SODAX) | ✅ Live (mainnet) | USDC, USDT, SODA between Solana and 9 EVM chains incl. Robinhood Chain (USDG ↔ USDC); wAERO / wVELO remain accepted as bribes (Wormhole Portal) |
 | MLCB DAO partnership | In progress | MLCB building an SPL OFT of fBOMB — their entry path to Solana, with Soladrome as the venue; terms finalized around mainnet (§8.3) |
 | Mainnet stage 1 — partner-only window | Upcoming | Founding partners seed pools, configure gauges, and accumulate locked hiSOLA; bonding curve closed (`curve_enabled = false`, §14.3) |
 | Mainnet stage 2 — public open | Upcoming | `curve_enabled` flipped: curve opening + TGE + on-chain airdrop as one event, a fixed number of epochs after stage 1 |
