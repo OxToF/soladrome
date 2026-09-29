@@ -9,6 +9,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # ☢️ PINNED, never "stable". `release.anza.xyz/stable` is a moving channel: on 2026-09-29 it
+  # jumped from the v4.2 line (commit e29e5d9, green on PR #49) to v4.3 (commit 44b42d4), and
+  # every bankrun case then died in its `before` hook with "invalid account data for
+  # instruction" — the .so the new toolchain emits is one bankrun cannot load (CLAUDE.md, the
+  # SBPFv3 note). It broke PR #51, which touches no Rust at all. v4.2.2 is the last tagged
+  # release on the line that passed; e29e5d9 differs from it only by Agave's own CI files.
+  # Bump deliberately, in its own PR, and read the bankrun job before merging it.
+  AGAVE_VERSION: v4.2.2
 
 jobs:
   # ── 1. Smart contract checks + the bankrun suite ──────────────────────────
@@ -35,8 +43,9 @@ jobs:
 
       - name: Install Solana CLI
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          sh -c "$(curl -sSfL https://release.anza.xyz/${AGAVE_VERSION}/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          "$HOME/.local/share/solana/install/active_release/bin/solana" --version
 
       # Prebuilt binary from the official release: building anchor-cli from source
       # pulls in `hidapi`, which needs libudev-dev — absent from ubuntu-latest
@@ -127,8 +136,9 @@ jobs:
 
       - name: Install Solana CLI
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          sh -c "$(curl -sSfL https://release.anza.xyz/${AGAVE_VERSION}/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          "$HOME/.local/share/solana/install/active_release/bin/solana" --version
 
       - name: Install Anchor CLI
         run: |
