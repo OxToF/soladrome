@@ -18,6 +18,9 @@
 //   ... scripts/keeper.mts --watch    # keep going, one pass a minute
 //   ... scripts/keeper.mts --dry-run  # look, decide, send nothing
 //   KEEPER_ONLY=<owner> ...            # serve one owner's order only (a rehearsal on devnet)
+//   KEEPER_HEARTBEAT_URL=<url> ...     # ping after every pass, so a silence can alert
+//
+// On a server: `deploy/keeper/` — one bundled file (`yarn build:keeper`), a systemd unit.
 //
 // The keypair pays fees and signs nothing that moves a user's tokens. A funded throwaway is the
 // right thing to give it; the deployer key is not.
@@ -43,7 +46,12 @@ const PASS_INTERVAL_MS = 60_000;
 
 // `KEEPER_RPC_URL` wins, so the same keeper serves a localnet rehearsal and the live cluster
 // without editing the app's own secret config to point somewhere else and forgetting to undo it.
-const env = readFileSync(new URL("../.env.local", import.meta.url), "utf8");
+// Optional: on a server (`deploy/keeper/`) there is no checkout and no `.env.local`, only the
+// environment the service unit passes.
+let env = "";
+try {
+  env = readFileSync(new URL("../.env.local", import.meta.url), "utf8");
+} catch {}
 // ☢️ `NEXT_PUBLIC_RPC_URL` is the BROWSER key: Next inlines it into the client bundle, so it is
 // served to every visitor of the site. A keeper is not a browser, and the day that key is
 // restricted to the domain a keeper still holding it simply stops — without a message saying so.
@@ -276,11 +284,39 @@ async function strategyPass(): Promise<void> {
 if (DRY_RUN) console.log(`dry run: nothing will be sent (fee payer ${keeper.publicKey.toBase58().slice(0, 8)}…, used only to simulate)`);
 else console.log(`keeper ${keeper.publicKey.toBase58()} — pays fees, holds no authority`);
 
-await pass();
-await strategyPass().catch((e) => console.log(`${stamp()}  strategy pass failed: ${String(e?.message ?? e).slice(0, 140)}`));
-if (WATCH) {
-  setInterval(() => {
-    pass().catch((e) => console.log(`${stamp()}  pass failed: ${String(e?.message ?? e).slice(0, 140)}`));
-    strategyPass().catch((e) => console.log(`${stamp()}  strategy pass failed: ${String(e?.message ?? e).slice(0, 140)}`));
-  }, PASS_INTERVAL_MS);
+// ☢️ A keeper that stops says nothing — on 2026-09-26 one had been down for two days before
+// anyone looked. `KEEPER_HEARTBEAT_URL` (a healthchecks.io check, or anything that alerts when
+// pings stop) is pinged after every pass, and `<url>/fail` when a pass threw. The alert is the
+// silence, so it also fires when the process, the machine or the network dies.
+async function heartbeat(ok: boolean): Promise<void> {
+  const url = process.env.KEEPER_HEARTBEAT_URL?.trim();
+  if (!url || DRY_RUN) return;
+  try {
+    await fetch(ok ? url : `${url.replace(/\/$/, "")}/fail`, { signal: AbortSignal.timeout(10_000) });
+  } catch (e: any) {
+    console.log(`${stamp()}  heartbeat failed: ${String(e?.message ?? e).slice(0, 140)}`);
+  }
 }
+
+// A network error inside a promise nobody awaits (web3.js races some of its own) must not end
+// the process: on 2026-09-26 one ECONNRESET killed a keeper mid-watch. Log it, keep the
+// schedule. A real fault still shows as failed passes, and in the heartbeat.
+process.on("unhandledRejection", (e: any) => {
+  console.log(`${stamp()}  unhandled rejection (kept running): ${String(e?.cause?.code ?? e?.message ?? e).slice(0, 140)}`);
+});
+
+async function fullPass(): Promise<void> {
+  let ok = true;
+  await pass().catch((e) => {
+    ok = false;
+    console.log(`${stamp()}  pass failed: ${String(e?.message ?? e).slice(0, 140)}`);
+  });
+  await strategyPass().catch((e) => {
+    ok = false;
+    console.log(`${stamp()}  strategy pass failed: ${String(e?.message ?? e).slice(0, 140)}`);
+  });
+  await heartbeat(ok);
+}
+
+await fullPass();
+if (WATCH) setInterval(fullPass, PASS_INTERVAL_MS);
