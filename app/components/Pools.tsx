@@ -142,6 +142,10 @@ export function Pools() {
   const wallet = useAnchorWallet();
   const { sendTransaction } = useWallet();
   const { usdcMint, protocolState } = useSoladrome();
+  // `create_pool` refuses everyone, authority included, while `lp_enabled` is false (the closed
+  // launch). Say so on the button instead of letting the chain answer with FeatureDisabled 6037.
+  // Unknown while the state loads: the button stays live rather than flashing disabled.
+  const creationClosed = !!protocolState && !(protocolState as any).lpEnabled;
   const tokens = getTokenList(usdcMint);
 
   const [view,      setView]      = useState<View>("list");
@@ -1203,9 +1207,12 @@ export function Pools() {
           </div>
 
           <button className="btn-primary w-full py-3 text-base font-bold"
-            onClick={createPool} disabled={loading || !wallet || newMintA === newMintB}>
+            onClick={createPool} disabled={loading || !wallet || newMintA === newMintB || creationClosed}>
             {loading ? "Processing…" : "Create pool"}
           </button>
+          {creationClosed && (
+            <p className="text-xs text-gray-500 text-center">Pool creation opens after launch.</p>
+          )}
           <StatusBanner message={status} />
         </div>
       </div>
@@ -1223,9 +1230,13 @@ export function Pools() {
           <h1 className="text-2xl font-black text-white">Pools</h1>
           <p className="text-xs text-gray-500 mt-0.5">Provide liquidity and earn fees + oSOLA</p>
         </div>
-        <button className="btn-secondary text-sm" onClick={() => { setView("create"); setStatus(""); }}>
-          + Create pool
-        </button>
+        <div className="flex flex-col items-end gap-1">
+          <button className="btn-secondary text-sm disabled:opacity-40" disabled={creationClosed}
+            onClick={() => { setView("create"); setStatus(""); }}>
+            + Create pool
+          </button>
+          {creationClosed && <span className="text-[11px] text-gray-500">Pool creation opens after launch.</span>}
+        </div>
       </div>
 
       <Rewards
@@ -1352,10 +1363,11 @@ export function Pools() {
             <p className="text-4xl mb-3">💧</p>
             <p className="text-gray-400 text-sm mb-1">No AMM pool yet.</p>
             <p className="text-gray-600 text-xs mb-4">Be the first to create liquidity.</p>
-            <button className="btn-primary text-sm"
+            <button className="btn-primary text-sm disabled:opacity-40" disabled={creationClosed}
               onClick={() => { setView("create"); setStatus(""); }}>
               Create the first pool
             </button>
+            {creationClosed && <p className="text-[11px] text-gray-500 mt-2">Pool creation opens after launch.</p>}
           </div>
         ) : (
           <div className="rounded-2xl border border-brand-border overflow-hidden">

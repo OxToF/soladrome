@@ -789,6 +789,8 @@ Ce widget permet aux utilisateurs de bridger des tokens généraux (USDC, SOL...
 
 **Recommandation** : épingler la version du bundle Wormhole Connect et vérifier son hash SHA256 après chaque mise à jour.
 
+> **Mise à jour 2026-09-27 :** surface retirée. `app/public/wh/` et la dépendance `wormhole-connect` sont supprimés ; la page Bridge utilise désormais le SDK SODAX (`@sodax/sdk` + `@sodax/wallet-sdk-core`, **versions épinglées exactes 2.1.0**, chargés uniquement sur cette page). Même nature de risque : supply-chain frontend et confiance dans le relais du pont, sans interaction avec le programme Soladrome.
+
 ---
 
 #### INFO — `_lzReceive` EVM : pas de valida­tion du GUID de confirmation

@@ -348,7 +348,7 @@ This decays linearly to 0 at lock expiry. Partners replenish by unlocking → re
 
 ## 7. External Bribe Tokens
 
-**Soladrome's bridges make it an interoperability hub for ve(3,3) liquidity across chains — its core strategic advantage.** Any ve(3,3) protocol (Aerodrome, Velodrome, Beradrome, fBOMB, …) can route bribes in from its home chain, and SOLA can flow outward as floor-backed wSOLA to seed pairs on those same venues (see WHITEPAPER §8). The Wormhole Token Bridge and cross-chain bribe bridge expand the set of tokens that can enter Soladrome bribe vaults far beyond native Solana assets.
+**Soladrome's bridges make it an interoperability hub for ve(3,3) liquidity across chains — its core strategic advantage.** Any ve(3,3) protocol (Aerodrome, Velodrome, Beradrome, fBOMB, …) can route bribes in from its home chain, and SOLA can flow outward as floor-backed wSOLA to seed pairs on those same venues (see WHITEPAPER §8). Wormhole-wrapped tokens, the in-app SODAX bridge and the cross-chain bribe bridge expand the set of tokens that can enter Soladrome bribe vaults far beyond native Solana assets.
 
 ### 7.1 Wormhole-Wrapped Tokens
 
@@ -357,7 +357,7 @@ This decays linearly to 0 at lock expiry. Partners replenish by unlocking → re
 | wAERO | Base (AERO) | `AXYvFSKMPwt9adL1eBZhrDNCvT29HXnhNQuPxNwDZin` | ✅ Live |
 | wVELO | Optimism (VELO) | `GaLBL77CzH9XSzStkNPmCkWhuXwkDU38du2ainTGrEMN` | ✅ Live |
 
-Both mints were attested on Wormhole before launch. They are standard SPL tokens and are accepted by `deposit_bribe` with no special handling. Bribe depositors bridge their AERO or VELO to Solana via the Token Bridge page, then deposit the resulting wAERO or wVELO into the target gauge.
+Both mints were attested on Wormhole before launch. They are standard SPL tokens and are accepted by `deposit_bribe` with no special handling. Bribe depositors bridge their AERO or VELO to Solana through Wormhole's Portal (the in-app Bridge page moved to SODAX on 2026-09-27 and carries USDC, USDT and SODA), then deposit the resulting wAERO or wVELO into the target gauge.
 
 ### 7.2 Cross-Chain Bridge Tokens (LayerZero V2)
 

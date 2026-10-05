@@ -14,14 +14,8 @@ const nextConfig = {
   // `NEXT_DIST_DIR` on any secondary server and it cannot happen.
   distDir: process.env.NEXT_DIST_DIR || ".next",
 
-  // Wormhole Connect v6 (Vite build) hard-codes absolute paths like /main.css.
-  // Rewrite to our local copy in /public/wh so the preload succeeds.
   async rewrites() {
     return [
-      // Wormhole Connect v6 (Vite) hardcodes absolute paths from root.
-      // Rewrite them to our local copy in /public/wh/.
-      { source: "/main.css",        destination: "/wh/main.css"        },
-      { source: "/assets/:path*",   destination: "/wh/assets/:path*"   },
       // Clean URL for the bribe-bridge satellite page (vercel cleanUrls is ignored
       // under the Next.js framework preset — must rewrite here).
       { source: "/bribebridge",     destination: "/bribebridge.html"   },
@@ -36,9 +30,6 @@ const nextConfig = {
     config.resolve.alias = {
       ...config.resolve.alias,
       "pino-pretty": false,
-      // sui-snap-wallet ships raw TS source with template literal types that
-      // Webpack can't parse. Point to the compiled dist instead.
-      "@kunalabs-io/sui-snap-wallet": require.resolve("@kunalabs-io/sui-snap-wallet"),
     };
     return config;
   },

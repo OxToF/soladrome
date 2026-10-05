@@ -24,6 +24,10 @@
 //        `last_reward_ts` even when nothing accrues, precisely so a pool re-enabled after a
 //        long pause does not mint the whole gap in one claim. If that timestamp ever stopped
 //        advancing, re-enabling a pool after a month would mint a month of emissions at once.
+//   C-6. ☢️ Finding B (2026-07-21): rewards are paid on `min(lp_amount, wallet)`, the deposit
+//        the program recorded. A wallet that only RECEIVED LP has nothing to claim.
+//   C-7. A withdrawal lowers the recorded deposit by exactly what left, and a position
+//        recorded at zero can still withdraw.
 
 import * as anchor from "@coral-xyz/anchor";
 import { BN } from "@coral-xyz/anchor";
@@ -703,6 +707,167 @@ describe("soladrome — bankrun (continuous emission stream)", () => {
       (await program.account.lpUserInfo.fetch(lpUserInfo)).rewardDebt.toString(),
       debtBefore,
       "self-service must be untouched by the guard",
+    );
+  });
+
+  // ── Finding B (2026-07-21), ported from the draft PR #4 ─────────────────────
+  //
+  // The confirmed devnet exploit: LP moved to a wallet that never deposited, then claimed.
+  // `reward_debt` initialised at zero, so the claim minted the whole accumulator since the
+  // pool was created (900 oSOLA out of nothing in the PoC). The fix pays on the deposit the
+  // program recorded, floored by the wallet: `reward_basis = min(lp_amount, wallet_lp)`.
+
+  /// A wallet with SOL for fees and rent, and nothing else.
+  async function freshWallet(): Promise<Keypair> {
+    const kp = Keypair.generate();
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: kp.publicKey,
+        lamports: 2 * LAMPORTS_PER_SOL,
+      }),
+    ]);
+    return kp;
+  }
+
+  /// Hand `amount` of the payer's LP to `to`, by plain SPL transfer: no deposit is recorded.
+  async function giveLp(to: PublicKey, amount: bigint): Promise<PublicKey> {
+    const ata = getAssociatedTokenAddressSync(lpMint, to);
+    await send([
+      createAssociatedTokenAccountInstruction(payer.publicKey, ata, to, lpMint),
+      createTransferInstruction(userLp, ata, payer.publicKey, Number(amount)),
+    ]);
+    return ata;
+  }
+
+  const lpUserInfoOf = (user: PublicKey) =>
+    pda([Buffer.from("lp_user"), poolPda.toBuffer(), user.toBuffer()]);
+
+  async function removeLiquidity(user: Keypair, amount: bigint) {
+    const ix = await program.methods
+      .removeLiquidity(new BN(amount.toString()), new BN(0), new BN(0))
+      .accounts({
+        user: user.publicKey,
+        pool: poolPda,
+        lpMint,
+        tokenAMint: mintA,
+        tokenBMint: mintB,
+        tokenAVault: vaultA,
+        tokenBVault: vaultB,
+        userLp: getAssociatedTokenAddressSync(lpMint, user.publicKey),
+        userTokenA: getAssociatedTokenAddressSync(mintA, user.publicKey),
+        userTokenB: getAssociatedTokenAddressSync(mintB, user.publicKey),
+        lpUserInfo: lpUserInfoOf(user.publicKey),
+        protocolState: statePda,
+        oSolaMint: oSolaM,
+        userOSola: getAssociatedTokenAddressSync(oSolaM, user.publicKey),
+        rent: SYSVAR_RENT_PUBKEY,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+    return send([ix], user.publicKey.equals(payer.publicKey) ? [] : [user]);
+  }
+
+  it("[stream] ☢️ a fresh wallet holding TRANSFERRED LP cannot claim (Finding B)", async () => {
+    // Re-arm rather than inherit, for the reason given in the stranger case above.
+    await setEmissionsEnabled(true);
+    await setPoolRewards(true);
+    const epochNow = Number((await context.banksClient.getClock()).unixTimestamp / BigInt(EPOCH_DURATION));
+    await program.methods
+      .configureContinuousEmissions(new BN(RATE_PER_SEC), new BN(epochNow + 50))
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+    await claimStream(100);
+
+    const fresh = await freshWallet();
+    const freshLp = await giveLp(fresh.publicKey, (await tokenBalance(userLp)) / BigInt(2));
+    const freshOSola = getAssociatedTokenAddressSync(oSolaM, fresh.publicKey);
+    await forwardSeconds(HOUR);
+
+    // The wallet claims for itself, so the owner guard is satisfied: only the basis decides.
+    const ix = await program.methods
+      .claimLpRewards()
+      .accounts({
+        user: fresh.publicKey,
+        payer: fresh.publicKey,
+        pool: poolPda,
+        lpMint,
+        userLp: freshLp,
+        lpUserInfo: lpUserInfoOf(fresh.publicKey),
+        protocolState: statePda,
+        oSolaMint: oSolaM,
+        userOSola: freshOSola,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .instruction();
+    const tx = new Transaction();
+    tx.recentBlockhash = context.lastBlockhash;
+    tx.feePayer = fresh.publicKey;
+    tx.add(ix);
+    tx.sign(fresh);
+
+    const code = idlJson.errors.find((x: any) => x.name === "NothingToClaim").code;
+    let error = "";
+    try {
+      await context.banksClient.processTransaction(tx);
+    } catch (e: any) {
+      error = e.toString();
+    }
+    assert.include(
+      error,
+      `0x${code.toString(16)}`,
+      `a claim on transferred LP must fail with NothingToClaim, got: ${error || "success"}`
+    );
+    assert.equal((await tokenBalance(freshOSola)).toString(), "0", "and nothing may be minted");
+
+    // The refusal is the basis, not a dry stream: the depositor still earns over the same hour.
+    assert.isAbove(Number(await claimStream(101)), 0, "the stream was live all along");
+  });
+
+  it("[stream] a withdrawal lowers the recorded deposit by exactly what left", async () => {
+    // The mirror image of Finding B, and the migration path testers were given (remove,
+    // then add). A withdrawal that left `lp_amount` untouched would keep paying on capital
+    // that is gone.
+    const before = BigInt((await program.account.lpUserInfo.fetch(lpUserInfo)).lpAmount.toString());
+    const out = (await tokenBalance(userLp)) / BigInt(2);
+    assert.isTrue(out > BigInt(0), "the payer must still hold LP to withdraw");
+
+    await removeLiquidity(payer, out);
+
+    const after = BigInt((await program.account.lpUserInfo.fetch(lpUserInfo)).lpAmount.toString());
+    assert.equal(after.toString(), (before - out).toString(), "lp_amount must fall by exactly what was withdrawn");
+  });
+
+  it("[stream] a position recorded at zero can still withdraw its LP", async () => {
+    // Positions opened before `lp_amount` existed, and LP acquired by transfer, both read
+    // `lp_amount = 0`. `remove_liquidity` floors with `saturating_sub`; were it a checked
+    // subtraction, the Finding B fix would have stranded every one of those positions.
+    const holder = await freshWallet();
+    const holderLp = await giveLp(holder.publicKey, (await tokenBalance(userLp)) / BigInt(2));
+    const held = await tokenBalance(holderLp);
+    const holderA = getAssociatedTokenAddressSync(mintA, holder.publicKey);
+    const holderB = getAssociatedTokenAddressSync(mintB, holder.publicKey);
+    await send([
+      createAssociatedTokenAccountInstruction(payer.publicKey, holderA, holder.publicKey, mintA),
+      createAssociatedTokenAccountInstruction(payer.publicKey, holderB, holder.publicKey, mintB),
+    ]);
+
+    await removeLiquidity(holder, held);
+
+    assert.equal((await tokenBalance(holderLp)).toString(), "0", "the LP was burned");
+    assert.isAbove(Number(await tokenBalance(holderA)), 0, "and paid out in token A");
+    assert.isAbove(Number(await tokenBalance(holderB)), 0, "and in token B");
+    assert.equal(
+      (await program.account.lpUserInfo.fetch(lpUserInfoOf(holder.publicKey))).lpAmount.toString(),
+      "0",
+      "the recorded deposit floors at zero"
     );
   });
 });

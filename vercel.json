@@ -1,7 +1,7 @@
 {
   "framework": "nextjs",
   "buildCommand": "cd app && yarn build",
-  "installCommand": "cd app && yarn install",
+  "installCommand": "cd app && rm -rf node_modules && yarn install --frozen-lockfile",
   "outputDirectory": ".next",
   "cleanUrls": true
 }
