@@ -23,6 +23,10 @@
 //   M-3. Weight earned in a later epoch cannot be spent against an earlier pot.
 //   M-4. The oSOLA supply added over the epoch ≤ the scheduled emission. (The property
 //        that actually gates arming `osola_emission_initial > 0` on mainnet.)
+//   M-5. Finding A (2026-07-21): a deposit made late in an epoch banks weight from the
+//        deposit on, never from `epoch_start`.
+//   M-6. Finding A, second half: LP walked to another wallet banks no weight on either
+//        side. The basis is `min(lp_amount, wallet)`, never the raw balance.
 
 import * as anchor from "@coral-xyz/anchor";
 import { BN } from "@coral-xyz/anchor";
@@ -45,6 +49,7 @@ import {
   createInitializeMint2Instruction,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
+  createTransferInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { assert } from "chai";
@@ -909,6 +914,151 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
     assert.isTrue(
       weight < lpHeld * BigInt(86_400),
       `the unbanked day was credited anyway: ${weight}`
+    );
+  });
+
+  // ── Finding A (2026-07-21), ported from the draft PR #4 ─────────────────────
+  //
+  // Before the fix, `checkpoint_lp` billed the window from `epoch_start` and weighed it on
+  // the WALLET balance. Two exploits followed: deposit at T−ε and bill the whole epoch, and
+  // walk one position through N fresh wallets, each banking the same weight against a
+  // denominator that counts the LP supply once. Both shapes are asserted exactly here.
+
+  /// A wallet that has never touched the protocol, funded to provide liquidity on poolX.
+  async function freshLp(): Promise<Keypair> {
+    const kp = Keypair.generate();
+    const usdc = getAssociatedTokenAddressSync(usdcMint, kp.publicKey);
+    const x = getAssociatedTokenAddressSync(tknX, kp.publicKey);
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: kp.publicKey,
+        lamports: 2 * LAMPORTS_PER_SOL,
+      }),
+      createAssociatedTokenAccountInstruction(payer.publicKey, usdc, kp.publicKey, usdcMint),
+      createAssociatedTokenAccountInstruction(payer.publicKey, x, kp.publicKey, tknX),
+      createMintToInstruction(usdcMint, usdc, payer.publicKey, 1_000_000_000),
+      createMintToInstruction(tknX, x, payer.publicKey, 1_000_000_000),
+    ]);
+    return kp;
+  }
+
+  /// Park `offset` seconds into the next epoch and return that epoch.
+  async function nextEpochAt(offset: number): Promise<number> {
+    const start =
+      (Math.floor((await nowSeconds()) / EPOCH_DURATION) + 1) * EPOCH_DURATION;
+    await forwardSeconds(start + offset - (await nowSeconds()));
+    return Math.floor((await nowSeconds()) / EPOCH_DURATION);
+  }
+
+  const lpOf = (pool: Pool, user: Keypair) =>
+    tokenBalance(getAssociatedTokenAddressSync(pool.lpMint, user.publicKey));
+
+  it("[emissions/multi] ☢️ a late depositor banks weight from its deposit, not from epoch_start (Finding A)", async () => {
+    // The bug is invisible on a long-standing position: back-crediting an LP that held all
+    // epoch changes almost nothing. It only shows on the exploit shape, so compare an LP who
+    // held ~7 days with one who arrived ~0.9 day before the end. Under the bug the late LP
+    // would be credited from `epoch_start`, and the two would converge per unit of LP.
+    const epoch = await nextEpochAt(60);
+    const early = await freshLp();
+    const late = await freshLp();
+
+    await addLiquidity(poolX, early, 50_000_000, 50_000_000);
+    await checkpoint(poolX, early, epoch); // opens the window, banks nothing
+    const tEarly = await nowSeconds();
+
+    await forwardSeconds(6 * 86_400 - 60);
+    await addLiquidity(poolX, late, 50_000_000, 50_000_000);
+    await checkpoint(poolX, early, epoch);
+    await checkpoint(poolX, late, epoch);
+    const tLate = await nowSeconds();
+
+    await forwardSeconds(77_760); // +0.9 day, still inside the epoch
+    await checkpoint(poolX, early, epoch);
+    await checkpoint(poolX, late, epoch);
+    const tEnd = await nowSeconds();
+
+    const lpE = await lpOf(poolX, early);
+    const lpL = await lpOf(poolX, late);
+    const wE = BigInt((await ckptOf(poolX, early)).weightedBalance.toString());
+    const wL = BigInt((await ckptOf(poolX, late)).weightedBalance.toString());
+    assert.isTrue(lpE > BigInt(0) && lpL > BigInt(0), "both wallets hold LP");
+
+    assert.equal(
+      wL.toString(),
+      (lpL * BigInt(tEnd - tLate)).toString(),
+      "the late LP must bank exactly the time since its deposit; more means a back-credit"
+    );
+    assert.equal(
+      wE.toString(),
+      (lpE * BigInt(tEnd - tEarly)).toString(),
+      "the early LP banks its whole holding period"
+    );
+    // Normalised per LP unit, so the comparison is time and not deposit size.
+    assert.isTrue(
+      wE / lpE > (wL / lpL) * BigInt(5),
+      `the ~7-day LP must bank multiples of the ~0.9-day LP per unit (${wE / lpE} vs ${wL / lpL})`
+    );
+  });
+
+  it("[emissions/multi] ☢️ LP walked to another wallet banks no weight on either side (Finding A)", async () => {
+    const epoch = await nextEpochAt(60);
+    const walker = await freshLp();
+    const receiver = Keypair.generate();
+    await send([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: receiver.publicKey,
+        lamports: 2 * LAMPORTS_PER_SOL,
+      }),
+    ]);
+
+    await addLiquidity(poolX, walker, 50_000_000, 50_000_000);
+    await checkpoint(poolX, walker, epoch);
+
+    // The whole position leaves for a wallet that never deposited.
+    const walkerLp = getAssociatedTokenAddressSync(poolX.lpMint, walker.publicKey);
+    const receiverLp = getAssociatedTokenAddressSync(poolX.lpMint, receiver.publicKey);
+    const held = await tokenBalance(walkerLp);
+    await send(
+      [
+        createAssociatedTokenAccountInstruction(
+          payer.publicKey,
+          receiverLp,
+          receiver.publicKey,
+          poolX.lpMint
+        ),
+        createTransferInstruction(walkerLp, receiverLp, walker.publicKey, held),
+      ],
+      [walker]
+    );
+    await checkpoint(poolX, receiver, epoch);
+
+    await forwardSeconds(86_400);
+    await checkpoint(poolX, walker, epoch);
+    await checkpoint(poolX, receiver, epoch);
+
+    const recorded = (
+      await program.account.lpUserInfo.fetch(
+        pda([Buffer.from("lp_user"), poolX.key.toBuffer(), walker.publicKey.toBuffer()])
+      )
+    ).lpAmount;
+    assert.isTrue(recorded.gtn(0), "the precondition: the walker's deposit is still recorded");
+    assert.equal(
+      (await lpOf(poolX, receiver)).toString(),
+      held.toString(),
+      "the precondition: the receiver holds the whole position"
+    );
+
+    assert.equal(
+      (await ckptOf(poolX, walker)).weightedBalance.toString(),
+      "0",
+      "an empty wallet banks nothing, whatever lp_amount says: min(lp_amount, 0) = 0"
+    );
+    assert.equal(
+      (await ckptOf(poolX, receiver)).weightedBalance.toString(),
+      "0",
+      "a wallet that never deposited banks nothing, whatever it holds: min(0, held) = 0"
     );
   });
 });
