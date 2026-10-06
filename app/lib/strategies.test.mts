@@ -72,3 +72,73 @@ test("with no gain on the curve, one USDC exercises one oSOLA", () => {
   const st = { virtualSola: "1000000000000", virtualUsdc: "1000000000000", exerciseFeeBps: 1_000 };
   assert.equal(maxExercisable(st, BigInt(123_456)), BigInt(123_456));
 });
+
+// ── What the strategy screen tells the owner (2026-10-07) ────────────────────
+import { costPerOSola, strategyConflicts, voteRoundFromTx, type PoolStrategy } from "./strategies.ts";
+
+const state = (vu: number, vs: number, bps: number) => ({ virtualUsdc: vu, virtualSola: vs, exerciseFeeBps: bps });
+
+test("costPerOSola is the inverse of maxExercisable", () => {
+  const s = state(3_000_000, 1_000_000, 1_000); // price 3, gain 2, 10 % of it
+  assert.equal(costPerOSola(s), 1.2);
+  const budget = BigInt(1_200_000_000);
+  assert.equal(Number(maxExercisable(s, budget)) * costPerOSola(s), Number(budget));
+  assert.equal(costPerOSola(state(1_000_000, 1_000_000, 1_000)), 1, "no gain, no fee: the strike alone");
+  assert.equal(costPerOSola(state(3_000_000, 1_000_000, 0)), 1);
+});
+
+const strat = (source: PublicKey, mode: PoolStrategy["mode"], target: PublicKey | null): PoolStrategy => ({
+  address: Keypair.generate().publicKey, owner: USDC, sourcePool: source, targetPool: target, mode,
+  minHarvest: 1, minInterval: 3_600, lastTs: 0, rounds: 0, harvested: 0, minIntrinsicBps: 7_000, maxFeeBps: 2_000,
+});
+
+test("a deposit into a pool that has its own strategy is reported — the devnet case", () => {
+  // 2Bhw, 2026-10-06: USDC/GLDx compounds into jitoSOL/SOL, whose own rewards were meant to vote.
+  const m = new Map([
+    [tkn.key.toBase58(), strat(tkn.key, "liquidity", lst.key)],
+    [lst.key.toBase58(), strat(lst.key, "vote", null)],
+  ]);
+  assert.deepEqual(strategyConflicts(m), [{ source: tkn.key.toBase58(), target: lst.key.toBase58(), targetMode: "vote" }]);
+});
+
+test("compounding into itself, into a pool without a strategy, or voting is no conflict", () => {
+  const m = new Map([
+    [tkn.key.toBase58(), strat(tkn.key, "liquidity", tkn.key)],
+    [lst.key.toBase58(), strat(lst.key, "liquidity", hop.key)],
+    [hop.key.toBase58(), strat(hop.key, "vote", null)],
+  ]);
+  // lst → hop IS one: hop has its own (voting) strategy.
+  assert.deepEqual(strategyConflicts(m).map((c) => c.source), [lst.key.toBase58()]);
+  m.delete(hop.key.toBase58());
+  assert.deepEqual(strategyConflicts(m), []);
+});
+
+// The balances of a real round: 4tst…, 2026-10-06 22:12:06, signature 3uceGydh….
+const OWNER = "4tstWLNxrL6mWH3Cw852STTpU2AP6CFJyD2mxq62BJGp";
+const VAULTS = "9MP8MbbC9BNWd7pUqXnzw5kHMknTeVtd8h5ToEVcxX1M";
+const U = "3N8EKeBPF8Gp9ayQ3WJzcxmDcWAMYKjwnuZXWC71FLtd";
+const S = "CaGHeRis6ioEKJpP1kpJKXQmJKyszmsDTQHvrfqxcXwQ";
+const bal = (accountIndex: number, mint: string, owner: string, uiAmount: number) => ({ accountIndex, mint, owner, uiTokenAmount: { uiAmount } });
+const round = (logs: string[], err: unknown = null) => ({
+  blockTime: 1_791_324_726,
+  meta: {
+    err,
+    logMessages: logs,
+    preTokenBalances: [bal(1, U, OWNER, 633.0), bal(2, S, VAULTS, 10_000), bal(3, U, VAULTS, 50_000), bal(4, U, VAULTS, 100)],
+    postTokenBalances: [bal(1, U, OWNER, 2.0077), bal(2, S, VAULTS, 10_628.2748), bal(3, U, VAULTS, 50_628.2748), bal(4, U, VAULTS, 102.7175)],
+  },
+});
+const VOTE_LOG = "Program log: Instruction: CrankPoolStrategyVote";
+
+test("a voting round reads as USDC out of the wallet and hiSOLA onto the position", () => {
+  const r = voteRoundFromTx(round([VOTE_LOG]), "sig", OWNER, U, S)!;
+  assert.equal(r.usdcSpent.toFixed(4), "630.9923");
+  assert.equal(r.hiSola.toFixed(4), "628.2748");
+  assert.equal(r.time, 1_791_324_726);
+});
+
+test("anything that is not a successful voting round is skipped", () => {
+  assert.equal(voteRoundFromTx(round(["Program log: Instruction: CrankAutoCompound"]), "s", OWNER, U, S), null);
+  assert.equal(voteRoundFromTx(round([VOTE_LOG], { InstructionError: [2, { Custom: 6058 }] }), "s", OWNER, U, S), null);
+  assert.equal(voteRoundFromTx(null, "s", OWNER, U, S), null);
+});

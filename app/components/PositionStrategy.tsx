@@ -7,16 +7,17 @@
 //
 // ☢️ Per position, and independent: the program harvests each position's rewards at the source
 // (`crank_pool_strategy_*`), so changing this row never touches another position's rewards.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { createApproveInstruction, createRevokeInstruction } from "@solana/spl-token";
 import { sendTx, userAta } from "@/lib/program";
 import { explainRpcRefusal } from "@/lib/txerror";
 import { autoPda } from "@/lib/autocompound";
+import { useSoladrome } from "@/lib/SoladromeContext";
 import {
   STRATEGY_DEFAULTS, buildCloseStrategyInstruction, buildSetStrategyInstruction, canCompound,
-  voteAllowance, type PoolStrategy,
+  costPerOSola, recentVoteRounds, voteAllowance, type PoolStrategy, type VoteRound,
 } from "@/lib/strategies";
 
 /// A pool as the strategy controls need it.
@@ -110,9 +111,25 @@ export function buildVoteBudgetInstruction(owner: PublicKey, usdcMint: PublicKey
   return createApproveInstruction(ata, autoPda(owner), owner, BigInt(Math.round(usdc * 1_000_000)));
 }
 
+const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+// The explorer links follow the RPC, the way `lib/tokens.ts` tells devnet from mainnet.
+const CLUSTER_QS = (process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com").includes("devnet") ? "?cluster=devnet" : "";
+
+/// A warning in the strategy controls: amber, one paragraph, never a modal.
+function Caution({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] leading-relaxed text-yellow-200/90">
+      {children}
+    </p>
+  );
+}
+
 export function PositionStrategy({
   source,
   strategy,
+  allStrategies,
+  pending = 0,
   destinations,
   usdcMint,
   exerciseOpen,
@@ -121,6 +138,10 @@ export function PositionStrategy({
 }: {
   source: StrategyPool;
   strategy: PoolStrategy | undefined;
+  /// Every strategy of this owner, keyed by source pool: what this position's choice interacts with.
+  allStrategies?: Map<string, PoolStrategy>;
+  /// oSOLA this position has accrued and not yet harvested.
+  pending?: number;
   /// Every pool a strategy could compound into (pairs USDC or SOL, holds no oSOLA, has liquidity).
   destinations: StrategyPool[];
   usdcMint: PublicKey | null;
@@ -130,6 +151,7 @@ export function PositionStrategy({
 }) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
+  const { protocolState } = useSoladrome();
   const [draft, setDraft] = useState<Choice | null>(null);
   const [budgetText, setBudgetText] = useState(String(VOTE_BUDGET_DEFAULT));
   const [allowance, setAllowance] = useState<bigint | null | undefined>(undefined);
@@ -163,6 +185,22 @@ export function PositionStrategy({
   }, [switchingToVote, connection, wallet, usdcMint]);
   const needsBudget = switchingToVote && allowance !== undefined && (allowance === null || allowance < BigInt(1_000_000));
   const budget = parseFloat(budgetText) || 0;
+  const unitCost = protocolState ? costPerOSola(protocolState) : 1;
+
+  // ☢️ What this choice does to the owner's OTHER positions, and they to it. A deposit into a pool
+  // settles the owner's position there and mints its accrual to the wallet (`credit_lp_deposit`),
+  // so a pool that receives compounding cannot also run a strategy of its own on its rewards: the
+  // devnet owner who sent everything into jitoSOL/SOL and voted jitoSOL/SOL's own rewards saw that
+  // vote refused 337 times a day, and never knew why.
+  const outgoing =
+    choice.kind === "liquidity" && choice.target !== source.address ? allStrategies?.get(choice.target) : undefined;
+  const incoming =
+    choice.kind === "keep" || !allStrategies
+      ? []
+      : [...allStrategies.values()].filter(
+          (s) => s.mode === "liquidity" && s.targetPool?.toBase58() === source.address && s.sourcePool.toBase58() !== source.address,
+        );
+  const modeWord = (m: PoolStrategy["mode"]) => (m === "vote" ? "into voting power" : "into liquidity");
 
   async function save() {
     if (!wallet || !usdcMint || !dirty) return;
@@ -246,6 +284,31 @@ export function PositionStrategy({
         </div>
       )}
 
+      {outgoing && (
+        <Caution>
+          ⚠️ {labelOf(choice.kind === "liquidity" ? choice.target : "")} has a strategy of its own (rewards{" "}
+          {modeWord(outgoing.mode)}). Every round of this one deposits there, and a deposit first pays that
+          position&apos;s pending oSOLA to your wallet, as plain oSOLA. Its own strategy then only gets what
+          accrues between two of these rounds, and may never run. Pick another destination, or keep this
+          one hourly and claim the oSOLA from your wallet with &quot;Right now, by hand&quot;.
+        </Caution>
+      )}
+      {incoming.length > 0 && (
+        <Caution>
+          ⚠️ {incoming.length === 1 ? "One of your positions compounds" : `${incoming.length} of your positions compound`} into
+          this pool ({incoming.map((s) => labelOf(s.sourcePool.toBase58())).join(", ")}). Each of their deposits pays
+          this position&apos;s pending oSOLA to your wallet first, so the strategy chosen here only gets what accrues
+          in between.
+        </Caution>
+      )}
+      {choice.kind === "vote" && pending >= STRATEGY_DEFAULTS.minHarvest && (
+        <p className="text-[11px] leading-relaxed text-gray-400">
+          {fmt(pending)} oSOLA are already waiting on this position: the next round exercises them and spends
+          about <span className="font-mono text-gray-200">{fmt(pending * unitCost)} USDC</span> of your budget
+          at once, as soon as a keeper passes (within minutes), for as much hiSOLA.
+        </p>
+      )}
+
       {dirty && (
         <button
           onClick={save}
@@ -268,7 +331,9 @@ export function PositionStrategy({
           {choice.kind !== "keep" &&
             ` A round runs when a keeper calls it, ${intervalWord(interval)} at most, once ${STRATEGY_DEFAULTS.minHarvest} oSOLA has accrued.`}
           {strategy && strategy.rounds > 0 &&
-            ` · ${strategy.rounds} round${strategy.rounds === 1 ? "" : "s"}, ${strategy.harvested.toLocaleString("en-US", { maximumFractionDigits: 2 })} oSOLA so far.`}
+            ` · ${strategy.rounds} round${strategy.rounds === 1 ? "" : "s"} so far, ${fmt(strategy.harvested)} ${
+              strategy.mode === "vote" ? "hiSOLA added to your stake" : "oSOLA compounded"
+            }.`}
         </p>
       )}
       {status && <p className="text-[11px] text-gray-400">{status}</p>}
@@ -284,15 +349,22 @@ export function PositionStrategy({
 export function VoteBudget({
   usdcMint,
   voters,
+  backlog = 0,
   refreshKey = 0,
 }: {
   usdcMint: PublicKey | null;
   /// How many positions currently turn their rewards into voting power.
   voters: number;
+  /// oSOLA already accrued on those positions: what the next rounds spend the budget on first.
+  backlog?: number;
   refreshKey?: number;
 }) {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
+  const { protocolState } = useSoladrome();
+  const [rounds, setRounds] = useState<VoteRound[] | null>(null);
+  const [showRounds, setShowRounds] = useState(false);
+  const [roundsError, setRoundsError] = useState("");
   const [left, setLeft] = useState<bigint | null | undefined>(undefined);
   const [balance, setBalance] = useState<number | null>(null);
   const [text, setText] = useState("");
@@ -311,11 +383,31 @@ export function VoteBudget({
   }, [connection, wallet, usdcMint]);
   useEffect(() => { load(); }, [load, refreshKey]);
 
+  // The history is read on demand only: one RPC call per round, for a list most never open.
+  useEffect(() => {
+    if (!showRounds || !wallet || !usdcMint) return;
+    setRoundsError("");
+    recentVoteRounds(connection, wallet.publicKey, usdcMint)
+      .then(setRounds)
+      .catch((e) => setRoundsError(String(e?.message ?? e).slice(0, 120)));
+  }, [showRounds, connection, wallet, usdcMint, refreshKey]);
+
   if (!wallet || !usdcMint || voters === 0) return null;
 
   const leftUsdc = left ? Number(left) / 1_000_000 : 0;
-  const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
   const value = text === "" ? null : parseFloat(text);
+  const unitCost = protocolState ? costPerOSola(protocolState) : 1;
+  const backlogUsdc = backlog * unitCost;
+  // A round spends min(allowance, balance): the screen says which one is the real limit.
+  const spendable = balance === null ? leftUsdc : Math.min(leftUsdc, balance);
+  // What a new amount does at once: the backlog takes its share first, at the next keeper pass.
+  const preview =
+    value !== null && !Number.isNaN(value) && value > 0 && backlog >= STRATEGY_DEFAULTS.minHarvest
+      ? (() => {
+          const now = Math.min(value, balance ?? value, backlogUsdc);
+          return { now, hiSola: now / unitCost, rest: Math.max(0, Math.min(value, balance ?? value) - now) };
+        })()
+      : null;
 
   async function apply() {
     if (!wallet || !usdcMint || value === null || Number.isNaN(value)) return;
@@ -366,16 +458,73 @@ export function VoteBudget({
           </button>
         </div>
       </div>
+      {backlog >= STRATEGY_DEFAULTS.minHarvest && (
+        <p className="text-[11px] leading-relaxed text-gray-400">
+          Waiting on your voting positions:{" "}
+          <span className="font-mono text-gray-200">{fmt(backlog)} oSOLA</span>, about{" "}
+          <span className="font-mono text-gray-200">{fmt(backlogUsdc)} USDC</span> of strikes.{" "}
+          {spendable >= 1
+            ? "The next rounds spend the budget on these first."
+            : "They are exercised as soon as the budget covers them: within minutes of setting one."}
+        </p>
+      )}
+      {preview && (
+        <p className="rounded-lg border border-brand-border bg-black/20 px-3 py-2 text-[11px] leading-relaxed text-gray-300">
+          With {fmt(value!)} USDC: about <span className="font-mono">{fmt(preview.now)} USDC</span> is spent within
+          minutes on what is already waiting (≈ +{fmt(preview.hiSola)} hiSOLA)
+          {preview.rest > 0
+            ? `, and ${fmt(preview.rest)} USDC is left for rewards still to come.`
+            : ". Nothing is left after that: rounds stop until you set a new budget."}
+        </p>
+      )}
+      {balance !== null && left !== undefined && leftUsdc >= 1 && balance < leftUsdc && (
+        <Caution>
+          ⚠️ Your wallet holds {fmt(balance)} USDC, less than the budget: rounds stop at what the wallet holds.
+        </Caution>
+      )}
       <p className="text-[11px] leading-relaxed text-gray-600">
         {left !== undefined && leftUsdc < 1
           ? "⚠️ Nothing left to pay the strike with: your voting positions are armed but skip every round. "
           : ""}
-        A round never spends more than what is left: past it, the rest of your rewards stays accrued
-        on the position until the budget covers it. The new amount replaces what is left, it does not
-        add to it. It is an SPL allowance: your
-        USDC stays in your wallet, the token program enforces the cap, and revoking it from your
-        wallet stops every voting round.
+        This is a spending cap, not a deposit: every round lowers it, and the USDC it spends becomes
+        hiSOLA on your stake (credited to your position, so it does not show as a token in your
+        wallet). A round never spends more than what is left: past it, the rest of your rewards
+        stays accrued on the position until the budget covers it. The new amount replaces what is
+        left, it does not add to it. Your USDC stays in your wallet until a round spends it, and
+        revoking the allowance from your wallet stops every voting round.
       </p>
+      <button
+        onClick={() => setShowRounds((o) => !o)}
+        className="text-[11px] text-gray-500 transition-colors hover:text-gray-300"
+      >
+        {showRounds ? "▾" : "▸"} Recent voting rounds
+      </button>
+      {showRounds && (
+        <div className="space-y-1">
+          {roundsError ? (
+            <p className="text-[11px] text-gray-500">Could not read the history: {roundsError}</p>
+          ) : rounds === null ? (
+            <p className="text-[11px] text-gray-500">Reading…</p>
+          ) : rounds.length === 0 ? (
+            <p className="text-[11px] text-gray-500">No voting round yet.</p>
+          ) : (
+            rounds.map((r) => (
+              <a
+                key={r.signature}
+                href={`https://explorer.solana.com/tx/${r.signature}${CLUSTER_QS}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex justify-between gap-3 font-mono text-[11px] text-gray-400 hover:text-gray-200"
+              >
+                <span>{r.time ? new Date(r.time * 1000).toLocaleString() : "—"}</span>
+                <span>
+                  −{fmt(r.usdcSpent)} USDC → <span className="text-brand-green/90">+{fmt(r.hiSola)} hiSOLA</span>
+                </span>
+              </a>
+            ))
+          )}
+        </div>
+      )}
       {status && <p className="text-[11px] text-gray-400">{status}</p>}
     </div>
   );
