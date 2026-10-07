@@ -169,13 +169,30 @@ the public lands on a protocol that already has liquidity and active incentives.
 "1 external SOLA/jitoSOL pool" plan below. Reasoning: the bonding curve
 (System 1) has no on-chain rebase — its virtual-reserve price only ever moves
 up (only `buy_sola`/`deploy_pol` touch it, `sell_sola` never does, see
-[JUPITER_ADAPTER_DESIGN.md §6](JUPITER_ADAPTER_DESIGN.md)). ⚠️ **No longer true since
-2026-10-07**: `sell_sola` sells back down the curve, so the curve price now moves both ways and
-a SOLA-paired pool would arbitrage against it rather than decorrelate. The decision below was
-taken on the old premise and deserves a second look before launch. Any AMM pool priced
+[JUPITER_ADAPTER_DESIGN.md §6](JUPITER_ADAPTER_DESIGN.md)). ⚠️ That premise is **no longer true
+since 2026-10-07** (`sell_sola` sells back down the curve), but the decision stands — re-taken on
+2026-10-08, see **4a** below. Any AMM pool priced
 in SOLA creates a second, independent market price for the protocol's core
 mechanism that can permanently decorrelate from the curve, with no way to
 correct it after the fact. Judged too risky to introduce at launch.
+
+**4a. ✅ 2026-10-08 — decision re-taken after the curve change: SOLA trades on the curve only.**
+- **SOLA**: bought and sold **on the curve only** (since 2026-10-07 a sale goes back down the
+  curve at its price less 1 %, never below the floor — the Beradrome model). Staked, unstaked,
+  voted with. **No SOLA-paired pool, at launch or later, by design.**
+- **oSOLA**: tradable against anything — USDC, SOL, BTC, ETH — like oBERO on Beradrome.
+  **At minimum an oSOLA/USDC pool at launch.** This supersedes the oSOLA part of 4b (the exercise
+  fee it waited for has shipped, and a sale on the curve gives oSOLA an intrinsic value anyway).
+- ⚠️ What "only on the curve" cannot mean: the AMM is permissionless and SOLA is a plain SPL
+  token, so **anyone can still open a SOLA pool, here or on Raydium/Orca**. The protocol simply
+  does not seed one, route to one, or point emissions at one. Refusing SOLA pairs in
+  `create_pool` would close it on this AMM only, and is a program change not made.
+- ⚠️ The 4b argument ("any SOLA market makes exercise-and-dump profitable") now applies **to the
+  curve itself**: exercise at ~1 + fee, sell down the curve. That is the oBERO design, bounded by
+  the exercise fee (10 % of the gain, max 50 %) and by the founder's 5M oSOLA vesting over 48
+  months (12-month cliff) since 2026-10-08.
+- ⚠️ **`deploy_pol` is hardcoded to SOLA/USDC** (it buys SOLA on the curve and pairs it). Under
+  this decision it must stay unused, or be retargeted (program change) before POL is switched on.
 
 1. **Launch pools — ecosystem-only, no SOLA in any pair:**
    `jitoSOL-SOL`, `mSOL-SOL`, `bSOL-SOL`, `jupSOL-SOL` (LST/SOL),
