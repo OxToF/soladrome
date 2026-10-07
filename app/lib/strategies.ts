@@ -368,3 +368,111 @@ export async function voteAllowance(
   if (!new PublicKey(data.subarray(76, 108)).equals(autoPda(owner))) return null;
   return data.readBigUInt64LE(121);
 }
+
+/// USDC one oSOLA costs to exercise right now, strike and fee together: the inverse of
+/// `maxExercisable`. 1 + the fee on the gain, `(vu/vs − 1)·bps`, so it never falls below 1.
+export function costPerOSola(protocolState: any): number {
+  const vu = Number(protocolState.virtualUsdc.toString());
+  const vs = Number(protocolState.virtualSola.toString());
+  const bps = Number(protocolState.exerciseFeeBps ?? 0);
+  if (vu <= vs || vs === 0 || bps === 0) return 1;
+  return 1 + ((vu - vs) * bps) / (vs * 10_000);
+}
+
+/// A liquidity strategy that deposits into a pool where the same owner has a position with its
+/// own strategy.
+///
+/// ☢️ Why it matters: a deposit changes the target position's size, so the program first settles
+/// what that position has accrued (`credit_lp_deposit`) and mints it to the owner's WALLET as
+/// plain oSOLA. The target's own strategy only ever sees what accrues between two deposits — with
+/// a source that runs every few minutes, nothing (2026-10-06: 337 refused rounds a day on devnet,
+/// the owner's "jitoSOL/SOL → voting power" plan never ran once).
+export type StrategyConflict = { source: string; target: string; targetMode: PoolStrategy["mode"] };
+
+export function strategyConflicts(strategies: Map<string, PoolStrategy>): StrategyConflict[] {
+  const out: StrategyConflict[] = [];
+  for (const [source, s] of strategies) {
+    const target = s.mode === "liquidity" ? s.targetPool?.toBase58() : undefined;
+    if (!target || target === source) continue;
+    const there = strategies.get(target);
+    if (there) out.push({ source, target, targetMode: there.mode });
+  }
+  return out;
+}
+
+/// One voting round as the owner lived it: USDC out of the wallet, hiSOLA onto the position.
+export type VoteRound = {
+  signature: string;
+  time: number | null;
+  /// Net USDC that left the owner's account. Net, because the same round pays the owner the
+  /// protocol fees their existing stake had earned — so it can be a little less than the strike.
+  usdcSpent: number;
+  /// SOLA minted and staked for the owner — hiSOLA is credited on the position, never minted.
+  hiSola: number;
+};
+
+/// Read a voting round out of a parsed transaction, or null when it is not one. Pure, so the
+/// arithmetic is tested against a real round's balances rather than against a live RPC.
+export function voteRoundFromTx(
+  tx: {
+    blockTime?: number | null;
+    meta: {
+      err: unknown;
+      logMessages?: string[] | null;
+      preTokenBalances?: { accountIndex: number; mint: string; owner?: string; uiTokenAmount: { uiAmount: number | null } }[] | null;
+      postTokenBalances?: { accountIndex: number; mint: string; owner?: string; uiTokenAmount: { uiAmount: number | null } }[] | null;
+    } | null;
+  } | null,
+  signature: string,
+  owner: string,
+  usdcMint: string,
+  solaMint: string,
+): VoteRound | null {
+  if (!tx?.meta || tx.meta.err) return null;
+  if (!tx.meta.logMessages?.some((l) => l === "Program log: Instruction: CrankPoolStrategyVote")) return null;
+  const pre = new Map((tx.meta.preTokenBalances ?? []).map((b) => [b.accountIndex, b.uiTokenAmount.uiAmount ?? 0]));
+  let usdc = 0, sola = 0;
+  for (const b of tx.meta.postTokenBalances ?? []) {
+    const d = (b.uiTokenAmount.uiAmount ?? 0) - (pre.get(b.accountIndex) ?? 0);
+    if (b.mint === usdcMint && b.owner === owner) usdc -= d;
+    // The stake lands in the protocol's SOLA vault: every unit minted in this round is the owner's.
+    if (b.mint === solaMint && d > 0) sola += d;
+  }
+  return { signature, time: tx.blockTime ?? null, usdcSpent: usdc, hiSola: sola };
+}
+
+/// The owner's latest voting rounds, newest first. Every round signs through the owner's `auto`
+/// delegate, so its history is that account's. Read on demand only: one RPC call per round.
+export async function recentVoteRounds(
+  connection: Connection,
+  owner: PublicKey,
+  usdcMint: PublicKey,
+  limit = 10,
+): Promise<VoteRound[]> {
+  const sigs = await connection.getSignaturesForAddress(autoPda(owner), { limit: limit * 2 });
+  const ok = sigs.filter((s) => !s.err).map((s) => s.signature);
+  if (!ok.length) return [];
+  const txs = await connection.getParsedTransactions(ok, { maxSupportedTransactionVersion: 0 });
+  const out: VoteRound[] = [];
+  txs.forEach((tx, i) => {
+    const r = voteRoundFromTx(tx as any, ok[i], owner.toBase58(), usdcMint.toBase58(), solaM.toBase58());
+    if (r) out.push(r);
+  });
+  return out.slice(0, limit);
+}
+
+/// The budget offered by default when a position switches to voting power: the usual amount, but
+/// never more than the wallet holds. Rounded DOWN to the cent, so it never exceeds the balance.
+///
+/// ☢️ An allowance above the balance does not stop at the balance: it waits. USDC that reaches the
+/// wallet later, for any other purpose, is spent up to what is left of it (devnet, 2026-10-06:
+/// ~1 400 USDC exercised a minute after they arrived). Offering the balance keeps the default from
+/// creating such a dormant remainder.
+export function suggestedVoteBudget(balanceUsdc: number, usual = 100): number {
+  return Math.max(0, Math.min(usual, Math.floor(balanceUsdc * 100) / 100));
+}
+
+/// The part of the remaining budget the wallet cannot cover today, which future USDC would fund.
+export function dormantAllowance(leftUsdc: number, balanceUsdc: number): number {
+  return Math.max(0, leftUsdc - balanceUsdc);
+}

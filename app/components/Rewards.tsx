@@ -154,6 +154,10 @@ export function Rewards({
   const [allStatus, setAllStatus] = useState("");
   const activeCount = positions.filter((p) => strategies.has(p.pool.address)).length;
   const voters = [...strategies.values()].filter((s) => s.mode === "vote").length;
+  // What the voting positions have already accrued: the first thing a new budget is spent on.
+  const voteBacklog = positions
+    .filter((p) => strategies.get(p.pool.address)?.mode === "vote")
+    .reduce((sum, p) => sum + p.pending, 0);
   // The shortcut's destination, defaulting to the first pool every position could reach.
   const allTarget = allInto || destinations[0]?.address || "";
 
@@ -367,6 +371,8 @@ export function Rewards({
                 <PositionStrategy
                   source={p.pool}
                   strategy={strategies.get(p.pool.address)}
+                  allStrategies={strategies}
+                  pending={p.pending}
                   destinations={destinations}
                   usdcMint={usdcMint ?? null}
                   exerciseOpen={exerciseOpen}
@@ -376,7 +382,7 @@ export function Rewards({
             ))}
           </div>
         )}
-        <VoteBudget usdcMint={usdcMint ?? null} voters={voters} refreshKey={strategies.size + voters} />
+        <VoteBudget usdcMint={usdcMint ?? null} voters={voters} backlog={voteBacklog} refreshKey={strategies.size + voters} />
       </div>
 
       <div className="card glow">

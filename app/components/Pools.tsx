@@ -896,6 +896,8 @@ export function Pools() {
             <PositionStrategy
               source={asStrategyPool(selected)}
               strategy={selectedStrategy}
+              allStrategies={strategies}
+              pending={selected ? pendingOsola[selected.address] ?? 0 : 0}
               destinations={destinations}
               usdcMint={usdcMint ?? null}
               exerciseOpen={!!protocolState?.exerciseEnabled}
