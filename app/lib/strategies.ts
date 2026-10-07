@@ -460,3 +460,19 @@ export async function recentVoteRounds(
   });
   return out.slice(0, limit);
 }
+
+/// The budget offered by default when a position switches to voting power: the usual amount, but
+/// never more than the wallet holds. Rounded DOWN to the cent, so it never exceeds the balance.
+///
+/// ☢️ An allowance above the balance does not stop at the balance: it waits. USDC that reaches the
+/// wallet later, for any other purpose, is spent up to what is left of it (devnet, 2026-10-06:
+/// ~1 400 USDC exercised a minute after they arrived). Offering the balance keeps the default from
+/// creating such a dormant remainder.
+export function suggestedVoteBudget(balanceUsdc: number, usual = 100): number {
+  return Math.max(0, Math.min(usual, Math.floor(balanceUsdc * 100) / 100));
+}
+
+/// The part of the remaining budget the wallet cannot cover today, which future USDC would fund.
+export function dormantAllowance(leftUsdc: number, balanceUsdc: number): number {
+  return Math.max(0, leftUsdc - balanceUsdc);
+}

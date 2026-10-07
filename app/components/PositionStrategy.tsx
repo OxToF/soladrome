@@ -17,7 +17,8 @@ import { autoPda } from "@/lib/autocompound";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import {
   STRATEGY_DEFAULTS, buildCloseStrategyInstruction, buildSetStrategyInstruction, canCompound,
-  costPerOSola, recentVoteRounds, voteAllowance, type PoolStrategy, type VoteRound,
+  costPerOSola, dormantAllowance, recentVoteRounds, suggestedVoteBudget, voteAllowance,
+  type PoolStrategy, type VoteRound,
 } from "@/lib/strategies";
 
 /// A pool as the strategy controls need it.
@@ -26,8 +27,9 @@ export type StrategyPool = { address: string; label: string; mintA: string; mint
 /// A pool rewards may compound into, as the pool list names it.
 export type LpChoice = { address: string; label: string };
 
-/// The USDC budget granted the first time a position switches to voting power, if none is in place.
-/// Shared by every voting strategy: one delegate, one allowance.
+/// The USDC budget offered the first time a position switches to voting power, if none is in place,
+/// capped by what the wallet holds (`suggestedVoteBudget`). Shared by every voting strategy: one
+/// delegate, one allowance.
 export const VOTE_BUDGET_DEFAULT = 100;
 
 type Choice = { kind: "liquidity"; target: string } | { kind: "vote" } | { kind: "keep" };
@@ -54,8 +56,9 @@ export const intervalWord = (secs: number) =>
 ///
 /// `budgetUsdc`, when given, REPLACES the USDC allowance of the `auto` PDA. ☢️ That allowance is
 /// one number shared by every voting strategy (and any wallet order left from before): an SPL token account has a
-/// single delegate. Without it, the first switch to voting power grants `VOTE_BUDGET_DEFAULT` if
-/// less than 1 USDC is in place, so a strategy is never armed with nothing to pay the strike.
+/// single delegate. Without it, the first switch to voting power grants `VOTE_BUDGET_DEFAULT`, capped
+/// by the wallet's balance, if less than 1 USDC is in place. A budget of 0 grants nothing: the
+/// strategy is armed and waits for one, rather than leaving an allowance the wallet cannot cover.
 export async function strategyChangeIxs(
   connection: ReturnType<typeof useConnection>["connection"],
   wallet: NonNullable<ReturnType<typeof useAnchorWallet>>,
@@ -98,9 +101,16 @@ export async function strategyChangeIxs(
   let budget = opts.budgetUsdc ?? null;
   if (budget === null) {
     const allowance = await voteAllowance(connection, wallet.publicKey, usdcMint);
-    if (allowance === null || allowance < BigInt(1_000_000)) budget = VOTE_BUDGET_DEFAULT;
+    if (allowance === null || allowance < BigInt(1_000_000)) {
+      const balance = await connection
+        .getTokenAccountBalance(userAta(usdcMint, wallet.publicKey))
+        .then((r) => r.value.uiAmount ?? 0)
+        .catch(() => 0);
+      budget = suggestedVoteBudget(balance, VOTE_BUDGET_DEFAULT);
+    }
   }
-  if (budget !== null) ixs.push(buildVoteBudgetInstruction(wallet.publicKey, usdcMint, budget));
+  // ☢️ Never a revoke here: 0 means "grant nothing now", not "withdraw the other positions' budget".
+  if (budget !== null && budget > 0) ixs.push(buildVoteBudgetInstruction(wallet.publicKey, usdcMint, budget));
   return { ixs, grantsBudget: budget };
 }
 
@@ -155,6 +165,8 @@ export function PositionStrategy({
   const [draft, setDraft] = useState<Choice | null>(null);
   const [budgetText, setBudgetText] = useState(String(VOTE_BUDGET_DEFAULT));
   const [allowance, setAllowance] = useState<bigint | null | undefined>(undefined);
+  const [walletUsdc, setWalletUsdc] = useState<number | null>(null);
+  const [budgetTouched, setBudgetTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
 
@@ -182,7 +194,15 @@ export function PositionStrategy({
   useEffect(() => {
     if (!switchingToVote || !wallet || !usdcMint) return;
     voteAllowance(connection, wallet.publicKey, usdcMint).then(setAllowance).catch(() => setAllowance(null));
+    connection
+      .getTokenAccountBalance(userAta(usdcMint, wallet.publicKey))
+      .then((r) => setWalletUsdc(r.value.uiAmount ?? 0))
+      .catch(() => setWalletUsdc(0));
   }, [switchingToVote, connection, wallet, usdcMint]);
+  // The offered amount follows the wallet until the owner types their own.
+  useEffect(() => {
+    if (walletUsdc !== null && !budgetTouched) setBudgetText(String(suggestedVoteBudget(walletUsdc, VOTE_BUDGET_DEFAULT)));
+  }, [walletUsdc, budgetTouched]);
   const needsBudget = switchingToVote && allowance !== undefined && (allowance === null || allowance < BigInt(1_000_000));
   const budget = parseFloat(budgetText) || 0;
   const unitCost = protocolState ? costPerOSola(protocolState) : 1;
@@ -212,7 +232,13 @@ export function PositionStrategy({
         { budgetUsdc: needsBudget ? budget : undefined },
       );
       if (ixs.length) await sendTx(connection, wallet, ixs);
-      setStatus(grantsBudget !== null ? `✅ Saved, with a ${grantsBudget} USDC budget for strikes.` : "✅ Saved.");
+      setStatus(
+        grantsBudget === null
+          ? "✅ Saved."
+          : grantsBudget > 0
+            ? `✅ Saved, with a ${grantsBudget} USDC budget for strikes.`
+            : "✅ Saved, without a budget: the strategy waits until you set one below.",
+      );
       setDraft(null);
       onChanged();
     } catch (e: any) {
@@ -276,12 +302,27 @@ export function PositionStrategy({
           <span>Budget for strikes, shared by your voting positions</span>
           <input
             value={budgetText}
-            onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && setBudgetText(e.target.value)}
+            onChange={(e) => {
+              if (!/^\d*\.?\d*$/.test(e.target.value)) return;
+              setBudgetTouched(true);
+              setBudgetText(e.target.value);
+            }}
             inputMode="decimal"
             className="w-20 rounded-lg border border-brand-border bg-black/30 px-2 py-1.5 text-[11px] text-white focus:border-brand-green focus:outline-none"
           />
-          <span>USDC</span>
+          <span>USDC{walletUsdc !== null ? ` · ${fmt(walletUsdc)} in your wallet` : ""}</span>
         </div>
+      )}
+      {needsBudget && walletUsdc !== null && budget > walletUsdc && (
+        <Caution>
+          ⚠️ That is more than your wallet holds. The {fmt(budget - walletUsdc)} USDC above it do not stay unused:
+          any USDC that reaches this wallet later can be spent on strikes, up to that amount.
+        </Caution>
+      )}
+      {needsBudget && budget <= 0 && (
+        <p className="text-[11px] leading-relaxed text-gray-500">
+          No budget: the strategy is armed but skips every round until you set one.
+        </p>
       )}
 
       {outgoing && (
@@ -312,7 +353,7 @@ export function PositionStrategy({
       {dirty && (
         <button
           onClick={save}
-          disabled={busy || (needsBudget && budget <= 0)}
+          disabled={busy}
           className="btn-primary px-3 py-1.5 text-[11px] disabled:opacity-40"
         >
           {busy ? "Sending…" : "Save"}
@@ -400,6 +441,8 @@ export function VoteBudget({
   const backlogUsdc = backlog * unitCost;
   // A round spends min(allowance, balance): the screen says which one is the real limit.
   const spendable = balance === null ? leftUsdc : Math.min(leftUsdc, balance);
+  const dormant = balance === null || left === undefined ? 0 : dormantAllowance(leftUsdc, balance);
+  const aboveBalance = value !== null && !Number.isNaN(value) && balance !== null ? dormantAllowance(value, balance) : 0;
   // What a new amount does at once: the backlog takes its share first, at the next keeper pass.
   const preview =
     value !== null && !Number.isNaN(value) && value > 0 && backlog >= STRATEGY_DEFAULTS.minHarvest
@@ -409,13 +452,13 @@ export function VoteBudget({
         })()
       : null;
 
-  async function apply() {
-    if (!wallet || !usdcMint || value === null || Number.isNaN(value)) return;
+  async function apply(amount: number | null = value) {
+    if (!wallet || !usdcMint || amount === null || Number.isNaN(amount)) return;
     setBusy(true);
     setStatus("");
     try {
-      await sendTx(connection, wallet, [buildVoteBudgetInstruction(wallet.publicKey, usdcMint, value)]);
-      setStatus(value > 0 ? `✅ Budget set to ${fmt(value)} USDC.` : "✅ Budget withdrawn: voting rounds are paused.");
+      await sendTx(connection, wallet, [buildVoteBudgetInstruction(wallet.publicKey, usdcMint, amount)]);
+      setStatus(amount > 0 ? `✅ Budget set to ${fmt(amount)} USDC.` : "✅ Budget withdrawn: voting rounds are paused.");
       setText("");
       setTimeout(load, 1500);
     } catch (e: any) {
@@ -444,18 +487,28 @@ export function VoteBudget({
           <input
             value={text}
             onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && setText(e.target.value)}
-            placeholder={left ? fmt(leftUsdc) : String(VOTE_BUDGET_DEFAULT)}
+            placeholder={left ? fmt(leftUsdc) : String(suggestedVoteBudget(balance ?? 0, VOTE_BUDGET_DEFAULT))}
             inputMode="decimal"
             className="w-24 rounded-lg border border-brand-border bg-black/30 px-2 py-1.5 text-[11px] text-white placeholder:text-gray-600 focus:border-brand-green focus:outline-none"
           />
           <span className="text-[11px] text-gray-500">USDC</span>
           <button
-            onClick={apply}
+            onClick={() => apply()}
             disabled={busy || value === null || Number.isNaN(value)}
             className="btn-secondary px-3 py-1.5 text-[11px] disabled:opacity-40"
           >
             {busy ? "Sending…" : "Set"}
           </button>
+          {leftUsdc > 0 && (
+            <button
+              onClick={() => apply(0)}
+              disabled={busy}
+              title="Revokes the allowance: no voting round can spend anything until you set a new budget"
+              className="rounded-lg border border-brand-border px-3 py-1.5 text-[11px] text-gray-400 transition-colors hover:border-red-400/40 hover:text-red-300 disabled:opacity-40"
+            >
+              Withdraw the rest
+            </button>
+          )}
         </div>
       </div>
       {backlog >= STRATEGY_DEFAULTS.minHarvest && (
@@ -477,10 +530,20 @@ export function VoteBudget({
             : ". Nothing is left after that: rounds stop until you set a new budget."}
         </p>
       )}
-      {balance !== null && left !== undefined && leftUsdc >= 1 && balance < leftUsdc && (
+      {aboveBalance >= 0.01 ? (
         <Caution>
-          ⚠️ Your wallet holds {fmt(balance)} USDC, less than the budget: rounds stop at what the wallet holds.
+          ⚠️ {fmt(value!)} USDC is more than your wallet holds ({fmt(balance!)}). The {fmt(aboveBalance)} USDC above it
+          do not stay unused: any USDC that reaches this wallet later can be spent on strikes, up to that amount.
         </Caution>
+      ) : (
+        value === null &&
+        dormant >= 1 && (
+          <Caution>
+            ⚠️ {fmt(leftUsdc)} USDC of budget is left, but your wallet holds {fmt(balance!)}. The other{" "}
+            {fmt(dormant)} USDC are waiting: any USDC that reaches this wallet, for whatever reason, can be spent on
+            strikes within minutes, up to that amount. &quot;Withdraw the rest&quot; stops it.
+          </Caution>
+        )
       )}
       <p className="text-[11px] leading-relaxed text-gray-600">
         {left !== undefined && leftUsdc < 1

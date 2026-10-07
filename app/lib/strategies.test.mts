@@ -142,3 +142,17 @@ test("anything that is not a successful voting round is skipped", () => {
   assert.equal(voteRoundFromTx(round([VOTE_LOG], { InstructionError: [2, { Custom: 6058 }] }), "s", OWNER, U, S), null);
   assert.equal(voteRoundFromTx(null, "s", OWNER, U, S), null);
 });
+
+import { dormantAllowance, suggestedVoteBudget } from "./strategies.ts";
+
+test("the default budget never exceeds what the wallet holds", () => {
+  assert.equal(suggestedVoteBudget(1_400), 100, "the usual amount when the wallet covers it");
+  assert.equal(suggestedVoteBudget(42.678), 42.67, "rounded down, never up past the balance");
+  assert.equal(suggestedVoteBudget(0), 0, "an empty wallet is offered nothing");
+});
+
+test("the budget the wallet cannot cover today is reported as dormant", () => {
+  // 2Bhw…, 2026-10-06: 135.645094 USDC of allowance over 0.631037 USDC in the wallet.
+  assert.equal(dormantAllowance(135.645094, 0.631037).toFixed(6), "135.014057");
+  assert.equal(dormantAllowance(50, 1_400), 0);
+});
