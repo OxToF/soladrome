@@ -23,6 +23,124 @@ pub fn sola_out(virtual_usdc: u64, virtual_sola: u64, k: u128, usdc_in: u64) -> 
     Ok(out as u64)
 }
 
+/// A purchase on the curve, split three ways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurveBuy {
+    /// To `market_vault`: the stakers' fee, taken before the curve prices anything.
+    pub fee: u64,
+    /// SOLA minted. Also the USDC that goes to `floor_vault`, 1 per SOLA.
+    pub sola_out: u64,
+    /// To the market reserve: what the buyer paid above the floor, owed back to sellers.
+    pub premium: u64,
+    /// The curve after the trade.
+    pub new_vu: u64,
+    pub new_vs: u64,
+}
+
+/// Price a purchase of `usdc_in`: the fee first, then the rest through the curve.
+///
+/// `premium` moves `vu + vs` by exactly its own amount (Δvu = net, Δvs = −sola_out), which is what
+/// keeps the market reserve equal to `reserve_required` without any rounding drift.
+pub fn curve_buy(vu: u64, vs: u64, k: u128, usdc_in: u64, fee_bps: u64) -> Result<CurveBuy> {
+    let fee = ((usdc_in as u128) * (fee_bps as u128) / 10_000) as u64;
+    let net = usdc_in.checked_sub(fee).ok_or(SoladromeError::Overflow)?;
+    let sola_out = sola_out(vu, vs, k, net)?;
+    // The curve never prices SOLA below the floor: `vs` only falls below its start through buys,
+    // so the average price of any purchase is at least 1 and `net >= sola_out`.
+    let premium = net.checked_sub(sola_out).ok_or(SoladromeError::Overflow)?;
+    Ok(CurveBuy {
+        fee,
+        sola_out,
+        premium,
+        new_vu: vu.checked_add(net).ok_or(SoladromeError::Overflow)?,
+        new_vs: vs.checked_sub(sola_out).ok_or(SoladromeError::Overflow)?,
+    })
+}
+
+/// A sale back to the protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurveSell {
+    /// From `floor_vault`, 1 per SOLA sold — on the curve or below it.
+    pub from_floor: u64,
+    /// From the market reserve to the seller: the premium of the curve part, less the fee.
+    pub from_reserve: u64,
+    /// From the market reserve to `market_vault`.
+    pub fee: u64,
+    /// SOLA sold back down the curve; the rest of the sale is redeemed at the floor.
+    pub on_curve: u64,
+    pub new_vu: u64,
+    pub new_vs: u64,
+}
+
+impl CurveSell {
+    /// What the seller receives in all.
+    pub fn usdc_out(&self) -> u64 {
+        self.from_floor.saturating_add(self.from_reserve)
+    }
+    /// What leaves the market reserve in all (seller's share and fee).
+    pub fn reserve_out(&self) -> u64 {
+        self.from_reserve.saturating_add(self.fee)
+    }
+}
+
+/// Price a sale of `sola_amount` back to the protocol, the exact mirror of `curve_buy`.
+///
+/// The SOLA goes back down the curve while the curve is above its starting point (`vs < init_vs`,
+/// i.e. price above 1): the seller gets the curve's price, 1 of it from the floor and the rest —
+/// the premium earlier buyers paid — from the market reserve. Whatever is left once the curve is
+/// back at its start is redeemed at the floor, 1:1, as before.
+///
+/// ☢️ The fee is charged on the curve proceeds but capped at the premium: near the bottom of the
+/// curve 1 % of the proceeds exceeds the premium, and charging it would pay a SOLA less than the
+/// floor — the one promise this protocol makes. The floor part is never charged.
+///
+/// Rounding: `vs` rounds down on a buy (`sola_out`) and the new `vu` rounds UP here, so a sale
+/// never extracts more than the curve holds. If that rounding leaves the curve proceeds a unit
+/// short of the SOLA sold at the very bottom, they are lifted to it (premium 0): the seller still
+/// gets the floor, and `vu + vs` still moves by exactly −premium.
+pub fn curve_sell(
+    vu: u64,
+    vs: u64,
+    k: u128,
+    init_vs: u64,
+    sola_amount: u64,
+    fee_bps: u64,
+) -> Result<CurveSell> {
+    require!(sola_amount > 0, SoladromeError::InvalidAmount);
+    let on_curve = sola_amount.min(init_vs.saturating_sub(vs));
+    let (proceeds, new_vu, new_vs) = if on_curve == 0 {
+        (0u64, vu, vs)
+    } else {
+        let new_vs = vs.checked_add(on_curve).ok_or(SoladromeError::Overflow)?;
+        let vu_after = k
+            .checked_add(new_vs as u128 - 1)
+            .ok_or(SoladromeError::Overflow)?
+            .checked_div(new_vs as u128)
+            .ok_or(SoladromeError::Overflow)?; // ceil(k / new_vs)
+        let raw = (vu as u128).saturating_sub(vu_after) as u64;
+        let proceeds = raw.max(on_curve);
+        let new_vu = vu.checked_sub(proceeds).ok_or(SoladromeError::Overflow)?;
+        (proceeds, new_vu, new_vs)
+    };
+    let premium = proceeds - on_curve.min(proceeds);
+    let fee = (((proceeds as u128) * (fee_bps as u128) / 10_000) as u64).min(premium);
+    Ok(CurveSell {
+        from_floor: sola_amount,
+        from_reserve: premium - fee,
+        fee,
+        on_curve,
+        new_vu,
+        new_vs,
+    })
+}
+
+/// What the market reserve must hold for the curve to be sold all the way back to its start:
+/// `vu + vs − (init_vu + init_vs)`, every premium paid and not yet returned. Never negative in
+/// practice; floored at 0 against the unit of rounding at the bottom.
+pub fn reserve_required(vu: u64, vs: u64, init_vu: u64, init_vs: u64) -> u64 {
+    ((vu as u128 + vs as u128).saturating_sub(init_vu as u128 + init_vs as u128)) as u64
+}
+
 /// Advance the global fee accumulator with any new fees in market_vault.
 /// Returns updated fees_per_hi_sola.
 pub fn advance_accumulator(
@@ -432,5 +550,104 @@ mod tests {
         // produce an astronomically high epoch, past every `init` seed the program uses.
         assert_eq!(current_epoch(-1), 0);
         assert_eq!(current_epoch(i64::MIN), 0);
+    }
+
+    // ── curve_buy / curve_sell: the curve both ways (2026-10-07) ────────────
+
+    const N: u64 = INIT_VIRTUAL_SOLA;
+    const NU: u64 = INIT_VIRTUAL_USDC;
+    const FEE: u64 = crate::constants::CURVE_FEE_BPS;
+
+    #[test]
+    fn a_buy_splits_into_fee_floor_and_premium_and_nothing_else() {
+        let b = curve_buy(NU, N, init_k(), 100_000_000_000, FEE).unwrap(); // 100 000 USDC
+        assert_eq!(b.fee, 1_000_000_000, "1 % before the curve");
+        assert_eq!(b.fee + b.sola_out + b.premium, 100_000_000_000);
+        assert!(b.premium > 0);
+        assert_eq!(
+            reserve_required(b.new_vu, b.new_vs, NU, N),
+            b.premium,
+            "the reserve owed is exactly the premium paid"
+        );
+    }
+
+    #[test]
+    fn selling_what_was_bought_returns_the_purchase_less_the_two_fees() {
+        // The bug this replaces: a SOLA bought above 1 sold back for exactly 1.
+        let usdc_in = 500_000_000_000; // 500 000 USDC, price ≈ 2.2
+        let b = curve_buy(NU, N, init_k(), usdc_in, FEE).unwrap();
+        let s = curve_sell(b.new_vu, b.new_vs, init_k(), N, b.sola_out, FEE).unwrap();
+        assert_eq!(s.on_curve, b.sola_out, "all of it goes back down the curve");
+        assert_eq!(s.from_floor, b.sola_out);
+        let back = s.usdc_out() as f64 / usdc_in as f64;
+        assert!(back > 0.979 && back < 0.981, "≈ 0.99 × 0.99, got {back}");
+        // Average price of this purchase ≈ 1.49 (2.2 is the marginal price at the top).
+        assert!(
+            s.usdc_out() > b.sola_out * 14 / 10,
+            "far above the floor, not 1 per SOLA"
+        );
+        assert_eq!(
+            s.reserve_out(),
+            b.premium,
+            "the reserve pays back exactly what it took"
+        );
+        assert_eq!(
+            (s.new_vu, s.new_vs),
+            (NU, N),
+            "the curve is back at its start"
+        );
+    }
+
+    #[test]
+    fn a_sale_past_the_bottom_of_the_curve_is_redeemed_at_the_floor() {
+        let b = curve_buy(NU, N, init_k(), 10_000_000_000, FEE).unwrap();
+        let extra = 5_000_000_000; // exercised SOLA, never bought on the curve
+        let s = curve_sell(b.new_vu, b.new_vs, init_k(), N, b.sola_out + extra, FEE).unwrap();
+        assert_eq!(s.on_curve, b.sola_out);
+        assert_eq!(
+            s.from_floor,
+            b.sola_out + extra,
+            "1 per SOLA from the floor, curve or not"
+        );
+        assert_eq!(s.new_vs, N, "never below the start");
+        assert_eq!(s.reserve_out(), b.premium);
+    }
+
+    #[test]
+    fn a_sale_at_the_bottom_pays_exactly_the_floor_and_no_fee() {
+        let s = curve_sell(NU, N, init_k(), N, 1_000_000, FEE).unwrap();
+        assert_eq!(
+            (s.on_curve, s.from_floor, s.from_reserve, s.fee),
+            (0, 1_000_000, 0, 0)
+        );
+    }
+
+    #[test]
+    fn the_fee_never_takes_a_sale_below_the_floor() {
+        // Just above 1: 1 % of the proceeds would exceed the premium.
+        let b = curve_buy(NU, N, init_k(), 1_000_000, FEE).unwrap(); // 1 USDC
+        let s = curve_sell(b.new_vu, b.new_vs, init_k(), N, b.sola_out, FEE).unwrap();
+        assert!(s.usdc_out() >= b.sola_out, "never less than 1 per SOLA");
+        assert!(s.fee <= s.reserve_out());
+    }
+
+    #[test]
+    fn many_round_trips_never_leave_the_reserve_short() {
+        // The reserve moves by exactly ±premium and `vu + vs` by the same amount, every trade.
+        let (mut vu, mut vs, mut reserve) = (NU, N, 0u64);
+        for i in 1..200u64 {
+            let b = curve_buy(vu, vs, init_k(), i * 7_919_000 + 13, FEE).unwrap();
+            reserve += b.premium;
+            vu = b.new_vu;
+            vs = b.new_vs;
+            let s = curve_sell(vu, vs, init_k(), N, b.sola_out / 3 + 1, FEE).unwrap();
+            reserve -= s.reserve_out();
+            vu = s.new_vu;
+            vs = s.new_vs;
+            assert!(
+                reserve >= reserve_required(vu, vs, NU, N),
+                "short at round {i}"
+            );
+        }
     }
 }

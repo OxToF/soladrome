@@ -163,7 +163,7 @@ Read this first: the economic design is **not** original. It ports [Beradrome](h
 | BERO / hiBERO / oBERO | SOLA / hiSOLA / oSOLA |
 | HONEY (base) | USDC (base) |
 | Floor Reserves — floor 1 HONEY, unlimited capacity | `floor_vault` — floor 1 USDC, unlimited via `exercise_o_sola` |
-| Market Reserves — virtual bonding curve | `virtual_usdc` / `virtual_sola` / `k` |
+| Market Reserves — virtual bonding curve | `virtual_usdc` / `virtual_sola` / `k` + `market_reserve` (the premium, owed to sellers) |
 | Borrow against hiBERO, 2% origination, no interest | `borrow_usdc`, `BORROW_FEE_BPS = 200` |
 | oBERO emissions, −1%/week | `osola_emission_decay_bps = 9_900`, −1%/epoch (epoch = 7 d) |
 | Real Deal (1M hiBERO to partner DAOs) | partner system (`PARTNER_SEED`, `register_partner`) |
@@ -220,8 +220,9 @@ account structs under `state/`.
 
 **System 1 — Bonding curve + floor reserve (SOLA/hiSOLA/oSOLA)**
 - Single global `ProtocolState` PDA `[b"state"]`
-- `buy_sola`: USDC in → split between `floor_vault` (1:1 backing) and `market_vault` (excess = fees)
-- `sell_sola`: burn SOLA → redeem 1:1 from `floor_vault` only (never touches curve)
+- `buy_sola`: USDC in → 1 % fee to `market_vault` (stakers), 1 per SOLA to `floor_vault` (backing), the premium above the floor to `market_reserve` (owed to sellers)
+- `sell_sola(amount, min_usdc_out)`: burn SOLA → back **down** the curve: 1 per SOLA from `floor_vault`, the premium from `market_reserve`, less 1 % capped at that premium (never below the floor). Floor 1:1 once the curve is back at its start
+- ☢️ **Until 2026-10-07 the premium was distributed and `sell_sola` paid the floor only** — a SOLA bought at 5 sold back for 1. That was a divergence from Beradrome nobody had written down; the port now matches it. See `tests/bankrun_curve_sell.ts`
 - `stake_sola` / `unstake_hi_sola`: SOLA ↔ hiSOLA 1:1, SOLA locked in `sola_vault`. **hiSOLA is a non-transferable position (`UserPosition.hi_sola`), not an SPL token** — see the section below
 - `claim_fees`: pro-rata share of `market_vault` via reward-per-token accumulator (`PRECISION = 1e12`)
 - `borrow_usdc` / `repay_usdc`: hiSOLA collateral → USDC from `floor_vault`, max = `staked_amount.min(hi_sola)`, no interest, no liquidation
@@ -334,7 +335,8 @@ a holder sees their balance.
 
 - **All tokens use 6 decimals** — floor price is always 1:1 in base units (1 USDC = 1 SOLA at floor)
 - **`k` is never recomputed** — set once at `initialize` (`1e12 × 1e12 = 1e24`, i.e. N = 1M tokens at 6 dec); virtual reserves drift, `k` stays fixed. It is the only irreversible number in the protocol — see the curve-depth section below
-- **`sell_sola` does not move virtual reserves** — only `buy_sola` updates `virtual_usdc` / `virtual_sola`
+- **`market_reserve ≥ virtual_usdc + virtual_sola − 2N`** — every premium paid and not yet returned. Each trade moves both sides by exactly the premium; `sell_sola` checks it. (Until 2026-10-07 the rule here was "`sell_sola` does not move virtual reserves", true then, false now)
+- **`market_reserve` and `market_vault` must never be one vault** — the staker accumulator advances on `market_vault`'s balance, so a premium parked there would be distributed as fees
 - **Accumulator must be advanced before changing `total_hi_sola`** — both `stake_sola` and `mint_founder_allocation` snapshot the accumulator first
 - **Founder allocation is one-time** — guarded by `founder_allocated` flag on `ProtocolState`. ⚠️ **Not hardcoded since 2026-08-23**: the address lives in `ProtocolState.founder_wallet`, written once at `initialize` with no setter, which is what let the `devnet` feature be deleted. The mainnet address is the Ledger Nano S `46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4`; **devnet currently holds the test wallet `4T1gHVpLRDPJQrsW1QUfHMYuCBLzVLgP7tu1yuoWtYGH`** (`scripts/init_devnet.ts`), so read the field on-chain rather than assuming the Ledger — that is the whole reason the read-back warning below exists
 
@@ -557,6 +559,7 @@ ProtocolState    → [b"state"]
 UserPosition     → [b"position", user_pubkey]
 floor_vault      → [b"floor_vault"]
 market_vault     → [b"market_vault"]
+market_reserve   → [b"market_reserve"]
 sola_vault       → [b"sola_vault"]
 sola_mint        → [b"sola_mint"]
 hi_sola_mint     → [b"hi_sola_mint"]

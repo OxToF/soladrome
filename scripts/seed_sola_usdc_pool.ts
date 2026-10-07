@@ -136,9 +136,9 @@ async function main() {
 
   // ── 2. buy SOLA on the curve ──────────────────────────────────────────────
   // `buy_sola(usdc_in, min_sola_out)` — the second arg is the slippage guard. 1 % below the
-  // quote computed above: the curve is monotonic, so the only way to get less is somebody
-  // buying between our quote and our landing.
-  const minSolaOut = new anchor.BN(Math.floor(solaOut * DEC * 0.99));
+  // quote computed above, plus the 1 % curve fee the quote leaves out (2026-10-07): the only
+  // other way to get less is somebody buying between our quote and our landing.
+  const minSolaOut = new anchor.BN(Math.floor(solaOut * DEC * 0.98));
   const sig2 = await (program.methods as any)
     .buySola(new anchor.BN(usdcToSpend), minSolaOut)
     .accountsPartial({

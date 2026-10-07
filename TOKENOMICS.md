@@ -38,7 +38,7 @@ Spot price at 10k buy: ≈1.10 USDC/SOLA
 Spot price at 100k buy:≈2.00 USDC/SOLA
 ```
 
-The price premium above 1.0 USDC/SOLA flows entirely to `market_vault` and is distributed to hiSOLA stakers.
+The price premium above 1.0 USDC/SOLA stays in `market_reserve` and is paid back to sellers, who sell back down the curve. A 1 % fee on every buy and every sale goes to `market_vault` and is distributed to hiSOLA stakers. (Until 2026-10-07 the whole premium was distributed and a sale only ever paid the floor.)
 
 ---
 

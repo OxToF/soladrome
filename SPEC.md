@@ -57,27 +57,36 @@ All tokens use **6 decimals**. The floor price invariant is always 1:1 in base u
 ```
 sola_out = virtual_sola - k / (virtual_usdc + usdc_in)
 
-USDC split on buy:
-  floor_portion = sola_out           // 1 USDC per SOLA minted (6-dec base units)
-  market_portion = usdc_in - floor_portion
+USDC split on buy (fee first, then the curve on the rest):
+  fee            = usdc_in × CURVE_FEE_BPS / 10 000     // 1 %
+  floor_portion  = sola_out                             // 1 USDC per SOLA minted (6-dec base units)
+  premium        = usdc_in - fee - floor_portion
 
-floor_vault  += floor_portion        // backs every SOLA 1:1 permanently
-market_vault += market_portion       // fee revenue → hiSOLA stakers
-virtual_usdc += usdc_in
-virtual_sola -= sola_out
+floor_vault    += floor_portion      // backs every SOLA 1:1 permanently
+market_reserve += premium            // owed back to sellers (§3.2), never distributed
+market_vault   += fee                // fee revenue → hiSOLA stakers
+virtual_usdc   += usdc_in - fee
+virtual_sola   -= sola_out
 total_sola   += sola_out
 ```
 
 **Slippage guard:** caller passes `min_sola_out`; tx reverts if `sola_out < min_sola_out`.
 
-### 3.2 Sell (`sell_sola`)
+### 3.2 Sell (`sell_sola(sola_amount, min_usdc_out)`)
 
-Sell does **not** touch the virtual reserves. It is a pure redemption:
+Since 2026-10-07 a sale goes back **down** the curve (before, it paid 1 USDC per SOLA whatever the curve said):
 
 ```
-floor_vault -= sola_amount    // 1 USDC per SOLA, no slippage, no curve impact
-burn(sola_amount)
-total_sola  -= sola_amount
+on_curve      = min(sola_amount, INIT_VIRTUAL_SOLA - virtual_sola)
+proceeds      = virtual_usdc - ceil(k / (virtual_sola + on_curve))
+premium       = proceeds - on_curve
+fee           = min(proceeds × 1 %, premium)        // a sale never pays less than the floor
+floor_vault    -= sola_amount                       // 1 USDC per SOLA
+market_reserve -= premium                           // premium - fee to the seller, fee to market_vault
+virtual_usdc   -= proceeds ; virtual_sola += on_curve
+burn(sola_amount) ; total_sola -= sola_amount
+require(usdc_out >= min_usdc_out)
+require(market_reserve_post >= virtual_usdc + virtual_sola - 2N)
 ```
 
 **Critical invariant:** `floor_vault.amount ≥ total_sola` always holds because every buy deposits exactly 1 USDC per SOLA minted.
@@ -177,7 +186,7 @@ fee = amount_in × swap_fee_bps / 10_000
 |---|-----------|----------------|
 | I-1 | `floor_vault ≥ total_sola` (6-dec units) | buy_sola split logic |
 | I-2 | `k` is never recomputed after initialize | lib.rs — no k assignment outside initialize |
-| I-3 | `sell_sola` does not modify virtual reserves | lib.rs — only buy_sola writes virtual_usdc/sola |
+| I-3 | `market_reserve ≥ virtual_usdc + virtual_sola − 2N` (every premium not yet paid back) | sell_sola; holds by construction since every trade moves both sides by the premium |
 | I-4 | Accumulator advanced before any `total_hi_sola` change | stake, unstake, mint_founder, mint_ecosystem |
 | I-5 | `usdc_borrowed ≤ hi_sola_balance` at all times | borrow_usdc + unstake_hi_sola checks |
 | I-6 | One-time allocations guarded by boolean flags | founder_allocated, ecosystem_allocated |

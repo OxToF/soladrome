@@ -11,7 +11,7 @@ import {
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
 } from "@solana/spl-token";
-import { getProgram, statePda, poolPda, solaM, oSolaM, toUi, fromUi, PROGRAM_ID, sendTx } from "@/lib/program";
+import { getProgram, statePda, poolPda, solaM, oSolaM, toUi, fromUi, PROGRAM_ID, sendTx, marketReserve } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 
 const CALLER_SHARE = 0.10; // 10% to caller, flash-arb direction only
@@ -260,11 +260,14 @@ export function FlashArb() {
         } as any)
         .instruction();
 
+      // `min_usdc_out` = the USDC spent: the sale pays at least the floor for every SOLA, and the
+      // bound makes the pair of instructions refuse outright rather than ever lose money.
       const sellIx = await program.methods
-        .sellSola(minOut)
+        .sellSola(minOut, fromUi(amt))
         .accounts({
           user: wallet.publicKey, protocolState: statePda, solaMint: solaM,
           userSola, floorVault: s.floorVault as PublicKey, userUsdc,
+          marketReserve, marketVault: s.marketVault as PublicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         } as any)
         .instruction();

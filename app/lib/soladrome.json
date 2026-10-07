@@ -1098,6 +1098,36 @@
           "writable": true
         },
         {
+          "name": "market_reserve",
+          "docs": [
+            "Receives the premium above the floor (see `MARKET_RESERVE_SEED`)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  114,
+                  101,
+                  115,
+                  101,
+                  114,
+                  118,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -5960,7 +5990,41 @@
         },
         {
           "name": "market_vault",
+          "docs": [
+            "No longer written by `deploy_pol` (the premium goes to `market_reserve` since 2026-10-07).",
+            "Kept so the account list callers build does not change shape for nothing."
+          ],
           "writable": true
+        },
+        {
+          "name": "market_reserve",
+          "docs": [
+            "Receives the premium of the POL's curve purchase, like `buy_sola`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  114,
+                  101,
+                  115,
+                  101,
+                  114,
+                  118,
+                  101
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "pool",
@@ -7121,6 +7185,94 @@
       ]
     },
     {
+      "name": "fund_market_reserve",
+      "docs": [
+        "Permissionless, inflow only: create the market reserve if needed and pay USDC into it."
+      ],
+      "discriminator": [
+        0,
+        34,
+        109,
+        91,
+        89,
+        1,
+        37,
+        5
+      ],
+      "accounts": [
+        {
+          "name": "funder",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "market_reserve",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  114,
+                  101,
+                  115,
+                  101,
+                  114,
+                  118,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "funder_usdc",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "fund_partner_bribe_stream",
       "discriminator": [
         32,
@@ -7460,6 +7612,37 @@
                   117,
                   108,
                   116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_reserve",
+          "docs": [
+            "The premium buyers pay above the floor, owed back to sellers (`MARKET_RESERVE_SEED`).",
+            "Created here on a fresh deployment; `fund_market_reserve` creates it on an older one."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  114,
+                  101,
+                  115,
+                  101,
+                  114,
+                  118,
+                  101
                 ]
               }
             ]
@@ -9294,6 +9477,43 @@
           "writable": true
         },
         {
+          "name": "market_reserve",
+          "docs": [
+            "Pays the premium part of a sale on the curve."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  114,
+                  101,
+                  115,
+                  101,
+                  114,
+                  118,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Receives the sale fee."
+          ],
+          "writable": true
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
@@ -9301,6 +9521,10 @@
       "args": [
         {
           "name": "sola_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_usdc_out",
           "type": "u64"
         }
       ]
@@ -11827,6 +12051,11 @@
       "code": 6068,
       "name": "StrategyNoBudget",
       "msg": "This voting strategy has no USDC to pay a strike with: the owner's USDC account holds nothing, or has no allowance left to the strategy delegate"
+    },
+    {
+      "code": 6069,
+      "name": "InsufficientMarketReserve",
+      "msg": "The market reserve does not hold what the rest of the curve owes its sellers: this sale is refused rather than paid from their share"
     }
   ],
   "types": [

@@ -175,7 +175,8 @@ describe("soladrome", () => {
     const vS = BigInt(stateBefore.virtualSola.toString());
     const k  = BigInt(stateBefore.k.toString());
     const minUsdc = k / (vS - TARGET_SOLA) - vU;
-    const buyAmount = new BN((minUsdc + 1_000_000n).toString()); // +1 USDC safety buffer
+    // The curve prices what is left after the 1 % fee (CURVE_FEE_BPS), so gross it up.
+    const buyAmount = new BN(((minUsdc * 10_000n) / 9_900n + 2_000_000n).toString()); // +2 USDC buffer
 
     await program.methods
       .buySola(buyAmount, new BN(1)) // min_sola_out = 0.000001 SOLA
@@ -212,8 +213,11 @@ describe("soladrome", () => {
     );
   });
 
-  // ── 3. Sell SOLA at floor ─────────────────────────────────────────────────
-  it("sells SOLA at floor price (1:1)", async () => {
+  // ── 3. Sell SOLA back down the curve ───────────────────────────────────────
+  // Until 2026-10-07 this asserted exactly 1 USDC per SOLA whatever the curve said: the premium
+  // above the floor was distributed and nothing could pay it back. A sale now pays the curve's
+  // price — 1 from the floor, the rest from the market reserve — and never less than the floor.
+  it("sells SOLA at the curve's price, never below the floor", async () => {
     const userSolaAta = anchor.utils.token.associatedAddress({
       mint:  solaM,
       owner: wallet.publicKey,
@@ -225,13 +229,13 @@ describe("soladrome", () => {
 
     // Sell 1 SOLA
     await program.methods
-      .sellSola(ONE)
+      .sellSola(ONE, new BN(0))
       .accounts({
         user:          wallet.publicKey,
         protocolState: statePda,
         solaMint:      solaM,
         userSola:      userSolaAta,
-        floorVault:    floorV,
+        floorVault:    floorV, marketVault: marketV,
         userUsdc:      userUsdcAta,
         tokenProgram:  TOKEN_PROGRAM_ID,
       } as any)
@@ -246,10 +250,9 @@ describe("soladrome", () => {
       Number(ONE.toString()),
       "burned 1 SOLA"
     );
-    assert.equal(
-      Number(usdcAfter - usdcBefore),
-      Number(ONE.toString()),
-      "received 1 USDC (floor 1:1)"
+    assert.isTrue(
+      usdcAfter - usdcBefore >= BigInt(ONE.toString()),
+      `received ${usdcAfter - usdcBefore}, less than the 1 USDC floor`
     );
     assert.equal(
       Number(floorBefore - floorAfter),
@@ -257,7 +260,7 @@ describe("soladrome", () => {
       "floor vault decreased by 1 USDC"
     );
 
-    console.log("✅ sell_sola — floor redemption 1:1 verified");
+    console.log(`✅ sell_sola — 1 SOLA sold for ${Number(usdcAfter - usdcBefore) / 1e6} USDC, 1 of it from the floor`);
   });
 
   // ── 4. Stake SOLA → hiSOLA ────────────────────────────────────────────────
@@ -2167,13 +2170,13 @@ describe("soladrome", () => {
 
     // Sell 1 SOLA
     await program.methods
-      .sellSola(ONE)
+      .sellSola(ONE, new BN(0))
       .accounts({
         user:          wallet.publicKey,
         protocolState: statePda,
         solaMint:      solaM,
         userSola:      userSolaAta,
-        floorVault:    floorV,
+        floorVault:    floorV, marketVault: marketV,
         userUsdc:      userUsdcAta,
         tokenProgram:  TOKEN_PROGRAM_ID,
       } as any)
@@ -2262,10 +2265,10 @@ describe("soladrome", () => {
     );
 
     // ── Sell 1 liquid SOLA — must succeed (backed by hiSOLA collateral) ──
-    await program.methods.sellSola(ONE).accounts({
+    await program.methods.sellSola(ONE, new BN(0)).accounts({
       user: wallet.publicKey, protocolState: statePda,
       solaMint: solaM, userSola: userSolaAta,
-      floorVault: floorV, userUsdc: userUsdcAta,
+      floorVault: floorV, marketVault: marketV, userUsdc: userUsdcAta,
       tokenProgram: TOKEN_PROGRAM_ID,
     } as any).rpc();
     await checkInvariant("after sell 1 SOLA (while borrow active)");
@@ -2296,12 +2299,12 @@ describe("soladrome", () => {
     const hugeAmount = new BN(1_000_000_000_000); // 1 000 000 SOLA — way more than floor holds
 
     try {
-      await program.methods.sellSola(hugeAmount).accounts({
+      await program.methods.sellSola(hugeAmount, new BN(0)).accounts({
         user:          wallet.publicKey,
         protocolState: statePda,
         solaMint:      solaM,
         userSola:      userSolaAta,
-        floorVault:    floorV,
+        floorVault:    floorV, marketVault: marketV,
         userUsdc:      userUsdcAta,
         tokenProgram:  TOKEN_PROGRAM_ID,
       } as any).rpc();
@@ -2495,10 +2498,10 @@ describe("soladrome", () => {
     );
 
     // ── Sell 1 SOLA → total_purchased_sola must decrease ─────────────────
-    await program.methods.sellSola(ONE).accounts({
+    await program.methods.sellSola(ONE, new BN(0)).accounts({
       user: wallet.publicKey, protocolState: statePda,
       solaMint: solaM, userSola: userSolaAta,
-      floorVault: floorV, userUsdc: userUsdcAta,
+      floorVault: floorV, marketVault: marketV, userUsdc: userUsdcAta,
       tokenProgram: TOKEN_PROGRAM_ID,
     } as any).rpc();
 

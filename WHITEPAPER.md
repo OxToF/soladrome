@@ -109,15 +109,20 @@ curve): a 2× price move requires ~414k USDC of cumulative buys, a 10× requires
 When a user sends `usdc_in` USDC:
 
 ```
-sola_out = V_sola - K / (V_usdc + usdc_in)
-floor_amount = sola_out          # 1 USDC per SOLA → floor_vault
-market_amount = usdc_in - floor_amount  # excess → market_vault (fees)
+fee      = usdc_in × 1%                 # CURVE_FEE_BPS → market_vault (stakers)
+net      = usdc_in - fee
+sola_out = V_sola - K / (V_usdc + net)
+floor_amount = sola_out                 # 1 USDC per SOLA → floor_vault
+premium      = net - sola_out           # above the floor → market_reserve
 ```
 
 - `floor_vault` receives exactly `sola_out` USDC (maintaining 1:1 backing)
-- `market_vault` receives the price premium above floor (the "market fee")
-- `virtual_usdc` increases by `usdc_in`; `virtual_sola` decreases by `sola_out`
+- `market_reserve` receives the premium above the floor. It is **not** a fee: it is what the curve owes back to sellers (§3.3)
+- `market_vault` receives the 1 % fee, distributed to hiSOLA stakers
+- `virtual_usdc` increases by `net`; `virtual_sola` decreases by `sola_out`
 - `total_purchased_sola` increments by `sola_out`
+
+⚠️ Until 2026-10-07 the whole premium went to `market_vault` and was distributed, so nothing held it and a seller could only ever get the floor back. That diverged from Beradrome, whose market reserves keep the premium and pay sellers the curve's price; the port now matches it.
 
 The split ensures the floor backing is always maintained regardless of curve position.
 
@@ -125,16 +130,24 @@ The split ensures the floor backing is always maintained regardless of curve pos
 
 ### 3.3 Sell Mechanics (`sell_sola`)
 
-Selling does **not** use the bonding curve. It redeems directly at floor price:
+Selling goes back **down** the curve, the exact mirror of a buy, and never pays less than the floor:
 
 ```
-usdc_out = sola_amount  # exactly 1:1
+on_curve = min(sola_amount, INIT_V_sola - V_sola)     # the part the curve can take back
+proceeds = V_usdc - ceil(K / (V_sola + on_curve))      # the curve's price for it
+premium  = proceeds - on_curve
+fee      = min(proceeds × 1%, premium)                 # never takes a sale below the floor
+usdc_out = sola_amount + premium - fee
 ```
 
 - `sola_amount` SOLA is burned
-- `sola_amount` USDC is transferred from `floor_vault` to the user
-- Virtual reserves are **not updated** (sell_sola does not affect the curve)
+- `sola_amount` USDC comes from `floor_vault` (1 per SOLA)
+- `premium - fee` comes from `market_reserve` to the seller, `fee` from `market_reserve` to `market_vault`
+- `virtual_usdc` / `virtual_sola` move back down the curve; once the curve is back at its start (price 1), the rest of a sale is redeemed at the floor, 1:1
 - `total_purchased_sola` decrements by `sola_amount`
+- `min_usdc_out` is the seller's slippage bound, as `min_sola_out` is the buyer's
+
+**Market reserve invariant**, checked on every sale: `market_reserve ≥ V_usdc + V_sola − (INIT_V_usdc + INIT_V_sola)`, every premium paid and not yet returned. Each trade moves the reserve and `V_usdc + V_sola` by exactly the same amount, so it holds by construction; the check turns a mistake in that arithmetic into a refused sale rather than the last sellers' money.
 
 **Critical invariant enforced on every sell:**
 ```
@@ -151,7 +164,7 @@ At initialization, the spot price is:
 spot_price = V_usdc / V_sola = 1.0 USDC/SOLA
 ```
 
-As users buy, `V_usdc` increases and `V_sola` decreases, raising the spot price. The floor price remains 1.0 USDC/SOLA forever — the gap between spot and floor is the market premium that flows to stakers.
+As users buy, `V_usdc` increases and `V_sola` decreases, raising the spot price; as they sell, the price comes back down. The floor price remains 1.0 USDC/SOLA forever — the gap between spot and floor is held in `market_reserve` and paid back to sellers, less the 1 % fee each way that goes to stakers.
 
 ---
 
@@ -549,7 +562,7 @@ There is no protocol-controlled inflation. oSOLA is the primary incentive token;
 ### 13.3 Revenue Model
 
 Protocol revenue flows to `market_vault`:
-- **Bonding curve premium** — spread between purchase price and floor price
+- **Bonding curve fee** — 1 % of every buy and every sale (`CURVE_FEE_BPS`). Until 2026-10-07 this line was the whole premium above the floor; that premium now stays in `market_reserve`, owed to sellers
 - **AMM protocol fees** — `protocol_fee_share_bps` of each swap
 - **Borrow origination fees** — 2% of each `borrow_usdc` / `borrow_against_locked`
 - **Flash arbitrage** — 90% of arb profit

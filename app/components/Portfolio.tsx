@@ -11,6 +11,7 @@ import {
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { ammPriceVsUsdc, FLOOR_PRICE } from "@/lib/prices";
+import { marginalSellPrice } from "@/lib/curve";
 import { currentEpoch } from "@/lib/epoch";
 import { PublicKey } from "@solana/web3.js";
 import { unpackAccount } from "@solana/spl-token";
@@ -134,15 +135,20 @@ export function Portfolio() {
     return () => window.removeEventListener("soladrome:refresh", loadBribeSummary);
   }, [loadBribeSummary]);
 
-  // Realisable valuation: value SOLA (and hiSOLA, which unstakes 1:1) at the
-  // SOLA/USDC AMM market price when such a pool exists, else the $1 floor
-  // (sell_sola redemption). We deliberately do NOT use the curve price
-  // (virtual_usdc/virtual_sola) — that is the buy/mint price and can't be
-  // realised by a seller, so it would overstate the balance. oSOLA is an option:
-  // its market price if a pool exists, else its intrinsic value max(0, SOLA − 1)
-  // (the $1 exercise cost), which is 0 while SOLA sits at the floor.
+  // Realisable valuation: value SOLA (and hiSOLA, which unstakes 1:1) at the SOLA/USDC AMM
+  // market price when such a pool exists, else at what `sell_sola` pays for it now — the
+  // curve's price less the 1 % fee, never below the $1 floor. (Until 2026-10-07 a sale paid the
+  // floor and nothing else, so this fell back to $1.) oSOLA is an option: its market price if a
+  // pool exists, else its intrinsic value max(0, SOLA − 1), the $1 exercise cost.
   const usdcStr   = usdcMint?.toString() ?? "";
-  const solaPrice = ammPriceVsUsdc(ammPools, solaM.toString(), usdcStr) ?? FLOOR_PRICE;
+  const curveSell = protocolState
+    ? marginalSellPrice({
+        virtualUsdc: BigInt(protocolState.virtualUsdc.toString()),
+        virtualSola: BigInt(protocolState.virtualSola.toString()),
+        k:           BigInt(protocolState.k.toString()),
+      })
+    : FLOOR_PRICE;
+  const solaPrice = ammPriceVsUsdc(ammPools, solaM.toString(), usdcStr) ?? curveSell;
   const oSolaPrice = ammPriceVsUsdc(ammPools, oSolaM.toString(), usdcStr)
     ?? Math.max(0, solaPrice - FLOOR_PRICE);
   const totalValue = data
