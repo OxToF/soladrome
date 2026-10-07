@@ -49,7 +49,7 @@ The price premium above 1.0 USDC/SOLA stays in `market_reserve` and is paid back
 | Tranche | Amount | Token | Cliff | Vesting | Mechanism |
 |---|---|---|---|---|---|
 | Governance | 7,000,000 | hiSOLA | 6 months | 24 months linear | `claim_founder_hi_sola` |
-| Options | 5,000,000 | oSOLA | 6 months | 24 months linear | `claim_founder_vesting` |
+| Options | 5,000,000 | oSOLA | 12 months (25 % at the cliff) | 48 months in all, linear | `claim_founder_vesting` |
 | Liquid operational | 250,000 | SOLA | None | Immediate | `mint_ecosystem_allocation` |
 
 **Governance tranche (7M hiSOLA):**
@@ -60,7 +60,7 @@ The dedicated `founder_borrow_usdc` instruction and its `FOUNDER_BORROW_CAP_BPS`
 The founder wallet is also **non-voting by default** (`founder_voting_enabled = false`): the governance tranche is a dormant anti-capture reserve, votable only via the authority break-glass `set_founder_voting`.
 
 **Options tranche (5M oSOLA):**
-Each exercise of `exercise_o_sola` adds 1 USDC to `floor_vault` — every option conversion structurally strengthens the floor for all users.
+Each exercise of `exercise_o_sola` adds 1 USDC to `floor_vault` — every option conversion structurally strengthens the floor for all users. Since 2026-10-07 the tranche vests on its own, slower schedule (12-month cliff, 48 months in all, `FOUNDER_O_SOLA_*`): a sale now pays the curve's price, so an oSOLA is a claim on the premium curve buyers left in the market reserve, and the 2-year schedule shared with the hiSOLA tranche would have released 2.5M a year against it. It releases 1.25M.
 
 **Team tranche (250k):**
 Minted by `mint_ecosystem_allocation` to a **separate team wallet** (`BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA`), distinct from the founder wallet.
@@ -201,7 +201,7 @@ Used sparingly — a handful of individuals, small amounts. KOLs and contest win
 |---|---|---|---|---|---|---|---|
 | User purchases (curve) | Unlimited | — | none | yes | yes | 100% | yes |
 | Founder governance | 7,000,000 | — | for life | **no** | **no** | 20% | no |
-| Founder options | — | 5,000,000 | 6m cliff / 24m vest | n/a | n/a | n/a | at exercise |
+| Founder options | — | 5,000,000 | 12m cliff / 48m vest | n/a | n/a | n/a | at exercise |
 | Team | 250,000 | — | for life | yes, 4× | yes | 20% | no |
 | Contributors | ≤ 100,000 | ≤ 100,000 | for life / immediate | yes, 4× | yes | 20% | half |
 | Protocol partners | per tier, ~410,000 at a year | — | for life | yes, 4× | yes | 20% | no |

@@ -248,6 +248,19 @@ pub const VESTING_CLIFF_SECS: u64 = 180 * 24 * 3_600;
 /// Linear vesting window that starts after the cliff. 24 months.
 pub const VESTING_DURATION_SECS: u64 = 720 * 24 * 3_600;
 
+/// The founder's 5M oSOLA (`FOUNDER_LIQUID`) vest on their own, slower schedule: a 12-month cliff
+/// and 48 months in all, measured from `mint_founder_allocation` (25 % at the cliff, then linear).
+///
+/// ☢️ Decided 2026-10-07 with selling on the curve. Until then exercised SOLA could only be
+/// redeemed at the floor, so an oSOLA was worth something only to someone who wanted SOLA. Since a
+/// sale pays the curve's price, every oSOLA is a claim on the premium curve buyers left in the
+/// market reserve — exercise at ~1.1, sell down the curve — and 5M is enough to take the whole
+/// curve back to 1 at almost any price. The 2-year schedule shared with the hiSOLA tranche would
+/// have released 2.5M a year; this releases 1.25M. The hiSOLA tranche keeps its schedule: it is
+/// locked for life and never reaches a sale.
+pub const FOUNDER_O_SOLA_CLIFF_SECS: u64 = 365 * 24 * 3_600;
+pub const FOUNDER_O_SOLA_VESTING_SECS: u64 = 4 * 365 * 24 * 3_600;
+
 // (BASE_BAG_VEST_SECS removed 2026-08-27 with the streamed welcome bag. The bag is now
 //  delivered whole the moment the partner escrows their bribe schedule — it is the signature
 //  signal, not the compensation, and it is small for that reason. What used to be the rest of

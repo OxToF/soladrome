@@ -47,8 +47,9 @@ impl FounderHiSolaVesting {
 /// Founder claims oSOLA linearly; exercises via exercise_o_sola to get SOLA
 /// at floor price — each exercise ADDS 1 USDC to floor_vault (net positive).
 ///
-/// Vesting formula (after cliff):
-///   total_vested = total_amount × min(elapsed, VESTING_DURATION_SECS) / VESTING_DURATION_SECS
+/// Vesting formula (after a 12-month cliff, `FOUNDER_O_SOLA_CLIFF_SECS`, since 2026-10-07):
+///   total_vested = total_amount × min(elapsed, FOUNDER_O_SOLA_VESTING_SECS) / FOUNDER_O_SOLA_VESTING_SECS
+///   (48 months; was the hiSOLA tranche's 24, see the constant for why)
 ///   claimable    = total_vested − already_claimed
 ///
 /// PDA: [b"founder_vesting"]
