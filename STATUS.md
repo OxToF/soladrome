@@ -13,6 +13,16 @@ deliberate decision, taken with the trade-off named: the tag is what an auditor 
 what runs on devnet is now that tag plus this feature. Anything quoting "the audited binary is
 what is deployed" is stale from this date onward.
 
+☢️ **2026-10-07 — `sell_sola` paid the floor, not the curve. Fixed on `fix/curve-sell`, not yet
+deployed.** Since the first commit the whole premium above the floor was distributed to stakers and
+a sale paid 1 USDC per SOLA whatever the curve said — a SOLA bought at 5 sold back for 1. The branch
+ports Beradrome's market reserve: the premium is kept in `market_reserve` and a sale goes back down
+the curve, 1 % fee each way to stakers. It changes `buy_sola` / `sell_sola` (new argument
+`min_usdc_out`, new accounts), `deploy_pol`, `initialize`, and adds `fund_market_reserve` and two
+`ProtocolState` fields (`curve_ref_slot` / `curve_ref_vu_usdc`, carved from spare bytes) that
+price every exercise at the curve as it stood before the slot's trades, so a sale cannot be used
+to cheapen an exercise in the same transaction. **The audit scope changes on `curve.rs`.**
+
 ---
 
 ## The artefact
@@ -24,9 +34,9 @@ what is deployed" is stale from this date onward.
 | Branch | `main` — one trunk, and the deployed tree |
 | Program id (devnet) | `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe` |
 | Devnet binary | sha256 `fa483503…`, 1 921 288 bytes, SBPFv3, deployed 2026-09-24 at slot `503048080` from commit `832a775` (branch `feat/pool-strategies`), verified byte-for-byte by dump |
-| Instructions | **65** (54 at the audit tag, plus four standing-order, three LP-order and four per-position strategy instructions) |
+| Instructions | **66** on branch `fix/curve-sell` (65 on `main`: 54 at the audit tag, plus four standing-order, three LP-order and four per-position strategy instructions; + `fund_market_reserve`, 2026-10-07) |
 | Account parameters | 503 at the audit tag; the four new instructions add their own |
-| Error variants | **68** (58 at the audit tag, plus the ten `Auto*` / `PartialBasisClaim` / `Strategy*` variants) |
+| Error variants | **70** on `fix/curve-sell` (69 on `main`; + `InsufficientMarketReserve`, 2026-10-07) |
 | On-chain account types | **24** (22 at the audit tag, plus `AutoCompound` and `PoolStrategy`) |
 | Tests | **114 bankrun cases passing, 0 failing** — 13 per-position strategy (incl. the duplicate-pool regression), 9 LP order, 8 standing order, 4 permissionless claim; mutations on every guard · 80 cargo unit tests · 48 frontend unit tests |
 

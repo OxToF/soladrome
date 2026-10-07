@@ -16,7 +16,8 @@ use crate::math;
 use crate::state::*;
 
 // Deposit USDC → receive SOLA via constant-product curve.
-// USDC splits: floor vault (1:1 backing) + market vault (excess fees).
+// USDC splits three ways: the fee (market vault, stakers), 1 per SOLA (floor vault), and the
+// premium above the floor (market reserve, owed back to sellers — see `sell_sola`).
 pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Result<()> {
     require!(
         !ctx.accounts.protocol_state.paused,
@@ -30,47 +31,43 @@ pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Resul
         ctx.accounts.protocol_state.curve_enabled,
         SoladromeError::FeatureDisabled
     );
-    let vu = ctx.accounts.protocol_state.virtual_usdc;
-    let vs = ctx.accounts.protocol_state.virtual_sola;
-    let k = ctx.accounts.protocol_state.k;
+    require!(usdc_in > 0, SoladromeError::InvalidAmount);
     let bump = ctx.accounts.protocol_state.bump;
+    let slot = Clock::get()?.slot;
+    ctx.accounts.protocol_state.note_curve_trade(slot);
 
-    let sola_amount = math::sola_out(vu, vs, k, usdc_in)?;
-    require!(
-        sola_amount >= min_sola_out,
-        SoladromeError::SlippageExceeded
-    );
-    require!(sola_amount > 0, SoladromeError::InvalidAmount);
-
-    let floor_amount = sola_amount; // 1 USDC per SOLA (1:1, both 6 dec)
-    let market_amount = usdc_in
-        .checked_sub(floor_amount)
-        .ok_or(SoladromeError::Overflow)?;
-
-    token::transfer(
-        CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.user_usdc.to_account_info(),
-                to: ctx.accounts.floor_vault.to_account_info(),
-                authority: ctx.accounts.user.to_account_info(),
-            },
-        ),
-        floor_amount,
+    let q = math::curve_buy(
+        ctx.accounts.protocol_state.virtual_usdc,
+        ctx.accounts.protocol_state.virtual_sola,
+        ctx.accounts.protocol_state.k,
+        usdc_in,
+        CURVE_FEE_BPS,
     )?;
+    require!(q.sola_out >= min_sola_out, SoladromeError::SlippageExceeded);
+    require!(q.sola_out > 0, SoladromeError::InvalidAmount);
 
-    if market_amount > 0 {
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.user_usdc.to_account_info(),
-                    to: ctx.accounts.market_vault.to_account_info(),
-                    authority: ctx.accounts.user.to_account_info(),
-                },
-            ),
-            market_amount,
-        )?;
+    // ☢️ The premium is NOT a fee. Until 2026-10-07 it went to `market_vault` and was distributed
+    // to stakers, so the protocol held nothing above the floor and `sell_sola` could only ever pay
+    // 1 USDC — for a SOLA bought at 1.5, or at 5. It now stays in the market reserve, which is
+    // what pays a seller the curve's price. Only `q.fee` is the stakers'.
+    for (to, amount) in [
+        (ctx.accounts.floor_vault.to_account_info(), q.sola_out),
+        (ctx.accounts.market_reserve.to_account_info(), q.premium),
+        (ctx.accounts.market_vault.to_account_info(), q.fee),
+    ] {
+        if amount > 0 {
+            token::transfer(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.user_usdc.to_account_info(),
+                        to,
+                        authority: ctx.accounts.user.to_account_info(),
+                    },
+                ),
+                amount,
+            )?;
+        }
     }
 
     let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
@@ -84,43 +81,79 @@ pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Resul
             },
             &[seeds],
         ),
-        sola_amount,
+        q.sola_out,
     )?;
 
     let s = &mut ctx.accounts.protocol_state;
-    s.virtual_usdc = s
-        .virtual_usdc
-        .checked_add(usdc_in)
-        .ok_or(SoladromeError::Overflow)?;
-    s.virtual_sola = s
-        .virtual_sola
-        .checked_sub(sola_amount)
-        .ok_or(SoladromeError::Overflow)?;
+    s.virtual_usdc = q.new_vu;
+    s.virtual_sola = q.new_vs;
     s.total_sola = s
         .total_sola
-        .checked_add(sola_amount)
+        .checked_add(q.sola_out)
         .ok_or(SoladromeError::Overflow)?;
     s.total_purchased_sola = s
         .total_purchased_sola
-        .checked_add(sola_amount)
+        .checked_add(q.sola_out)
         .ok_or(SoladromeError::Overflow)?;
     s.accumulated_fees = s
         .accumulated_fees
-        .checked_add(market_amount)
+        .checked_add(q.fee)
         .ok_or(SoladromeError::Overflow)?;
     Ok(())
 }
 
-// Burn SOLA → receive 1 USDC per SOLA from floor reserve.
-// Does not touch the virtual curve; market price stays the same.
-pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64) -> Result<()> {
+// Burn SOLA → receive the curve's price for it, never less than 1 USDC per SOLA.
+//
+// The SOLA goes back down the curve while its price is above 1: 1 USDC per SOLA from the floor
+// vault, the premium above it from the market reserve, less `CURVE_FEE_BPS` (capped at that
+// premium) to the stakers. What is left once the curve is back at its start is redeemed at the
+// floor, 1:1. Before 2026-10-07 every sale took this last branch, whatever the curve said.
+pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64, min_usdc_out: u64) -> Result<()> {
     require!(sola_amount > 0, SoladromeError::InvalidAmount);
-    let usdc_out = sola_amount;
     let bump = ctx.accounts.protocol_state.bump;
+    let slot = Clock::get()?.slot;
+    ctx.accounts.protocol_state.note_curve_trade(slot);
 
+    // ☢️ Paused: the exit stays open, but only through the floor, 1:1 — the market reserve and the
+    // curve are not touched. A pause is what the authority reaches for when something is wrong,
+    // and the reserve path is the newest arithmetic in the program; a pause that left it running
+    // would protect everything except the part most likely to need it. Passing the current `vs`
+    // as the curve's start leaves no room on the curve, so `curve_sell` redeems it all at 1.
+    let paused = ctx.accounts.protocol_state.paused;
+    let q = math::curve_sell(
+        ctx.accounts.protocol_state.virtual_usdc,
+        ctx.accounts.protocol_state.virtual_sola,
+        ctx.accounts.protocol_state.k,
+        if paused {
+            ctx.accounts.protocol_state.virtual_sola
+        } else {
+            INIT_VIRTUAL_SOLA
+        },
+        sola_amount,
+        CURVE_FEE_BPS,
+    )?;
     require!(
-        ctx.accounts.floor_vault.amount >= usdc_out,
+        q.usdc_out() >= min_usdc_out,
+        SoladromeError::SlippageExceeded
+    );
+    require!(
+        ctx.accounts.floor_vault.amount >= q.from_floor,
         SoladromeError::InsufficientFloorReserve
+    );
+
+    // ☢️ The market reserve must still cover the rest of the curve after this sale. It moves by
+    // exactly the premium on every trade, so this holds by construction — the check is what makes
+    // a mistake in that arithmetic a refused sale instead of the last sellers' money.
+    let reserve_after = ctx
+        .accounts
+        .market_reserve
+        .amount
+        .checked_sub(q.reserve_out())
+        .ok_or(SoladromeError::InsufficientMarketReserve)?;
+    require!(
+        reserve_after
+            >= math::reserve_required(q.new_vu, q.new_vs, INIT_VIRTUAL_USDC, INIT_VIRTUAL_SOLA),
+        SoladromeError::InsufficientMarketReserve
     );
 
     token::burn(
@@ -136,24 +169,49 @@ pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64) -> Result<()> {
     )?;
 
     let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
-    token::transfer(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.floor_vault.to_account_info(),
-                to: ctx.accounts.user_usdc.to_account_info(),
-                authority: ctx.accounts.protocol_state.to_account_info(),
-            },
-            &[seeds],
+    for (from, to, amount) in [
+        (
+            ctx.accounts.floor_vault.to_account_info(),
+            ctx.accounts.user_usdc.to_account_info(),
+            q.from_floor,
         ),
-        usdc_out,
-    )?;
+        (
+            ctx.accounts.market_reserve.to_account_info(),
+            ctx.accounts.user_usdc.to_account_info(),
+            q.from_reserve,
+        ),
+        (
+            ctx.accounts.market_reserve.to_account_info(),
+            ctx.accounts.market_vault.to_account_info(),
+            q.fee,
+        ),
+    ] {
+        if amount > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from,
+                        to,
+                        authority: ctx.accounts.protocol_state.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                amount,
+            )?;
+        }
+    }
 
-    ctx.accounts.protocol_state.total_sola = ctx
-        .accounts
-        .protocol_state
+    let s = &mut ctx.accounts.protocol_state;
+    s.virtual_usdc = q.new_vu;
+    s.virtual_sola = q.new_vs;
+    s.total_sola = s
         .total_sola
         .checked_sub(sola_amount)
+        .ok_or(SoladromeError::Overflow)?;
+    s.accumulated_fees = s
+        .accumulated_fees
+        .checked_add(q.fee)
         .ok_or(SoladromeError::Overflow)?;
 
     // ── Under-collateralisation guard ─────────────────────────────────────
@@ -161,24 +219,23 @@ pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64) -> Result<()> {
     //
     // Only SOLA minted via buy_sola or exercise_o_sola carries 1 USDC of
     // floor backing. Founder/ecosystem allocations are excluded: they are
-    // never added to total_purchased_sola, so they cannot be redeemed at
-    // floor price via sell_sola (this check enforces that).
+    // never added to total_purchased_sola, so they cannot be redeemed against
+    // the floor (this check enforces that). Every one of them is a permanent
+    // ve lock today, so none can reach this instruction (census 2026-10-07).
     require!(
-        ctx.accounts.protocol_state.total_purchased_sola >= sola_amount,
+        s.total_purchased_sola >= q.from_floor,
         SoladromeError::InsufficientFloorReserve
     );
-    ctx.accounts.protocol_state.total_purchased_sola = ctx
-        .accounts
-        .protocol_state
+    s.total_purchased_sola = s
         .total_purchased_sola
-        .checked_sub(sola_amount)
+        .checked_sub(q.from_floor)
         .ok_or(SoladromeError::Overflow)?;
 
     let floor_post = ctx
         .accounts
         .floor_vault
         .amount
-        .checked_sub(usdc_out)
+        .checked_sub(q.from_floor)
         .ok_or(SoladromeError::Overflow)?;
     let backed = floor_post
         .checked_add(ctx.accounts.protocol_state.total_usdc_borrowed)
@@ -188,6 +245,30 @@ pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64) -> Result<()> {
         SoladromeError::InsufficientFloorReserve
     );
 
+    Ok(())
+}
+
+/// Put USDC into the market reserve, creating it on the first call.
+///
+/// Two uses, both one-off: creating the reserve on a deployment initialised before it existed,
+/// and paying in what that deployment's curve already owes — premiums distributed to stakers
+/// before 2026-10-07, which `sell_sola` would otherwise find missing (`reserve_required`). A fresh
+/// deployment gets the reserve from `initialize` and never needs this. Anyone may pay in; nobody
+/// can take out: the only outflow is a sale.
+pub fn fund_market_reserve(ctx: Context<FundMarketReserve>, amount: u64) -> Result<()> {
+    if amount > 0 {
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.funder_usdc.to_account_info(),
+                    to: ctx.accounts.market_reserve.to_account_info(),
+                    authority: ctx.accounts.funder.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
+    }
     Ok(())
 }
 
@@ -226,8 +307,8 @@ pub fn exercise_fee(state: &ProtocolState, o_sola_amount: u64) -> Result<u64> {
 /// below is the floor of that bound: it may leave a unit or two of budget unspent to the floors
 /// in the fee, and it can never overspend.
 pub fn max_exercisable(state: &ProtocolState, budget: u64) -> Result<u64> {
-    let vu = state.virtual_usdc as u128;
-    let vs = state.virtual_sola as u128;
+    let (vu, vs) = state.exercise_reserves(Clock::get()?.slot);
+    let (vu, vs) = (vu as u128, vs as u128);
     let bps = state.exercise_fee_bps as u128;
     if vu <= vs || vs == 0 || bps == 0 {
         // No gain, no fee: one USDC exercises one oSOLA.
@@ -251,8 +332,11 @@ pub fn max_exercisable(state: &ProtocolState, budget: u64) -> Result<u64> {
 /// Its bound is "sell for at least a share of what exercising would net", and a second copy of
 /// this arithmetic is how that bound and the fee would drift apart.
 pub fn exercise_gain(state: &ProtocolState, o_sola_amount: u64) -> Result<u64> {
-    let vu = state.virtual_usdc as u128;
-    let vs = state.virtual_sola as u128;
+    // ☢️ Priced at the curve as it stood before this slot's trades — see
+    // `ProtocolState::exercise_reserves`. Since `sell_sola` moves the curve down, the live price is
+    // one a single transaction can lower (sell, exercise or crank, buy back); this one is not.
+    let (vu, vs) = state.exercise_reserves(Clock::get()?.slot);
+    let (vu, vs) = (vu as u128, vs as u128);
     // Out of the money (or exactly at the floor) => no gain => no fee. vs is never 0 while
     // k > 0, but guard anyway rather than divide blindly.
     if vu <= vs || vs == 0 {
@@ -639,6 +723,10 @@ pub struct BuySola<'info> {
     #[account(mut, address = protocol_state.market_vault)]
     pub market_vault: Box<Account<'info, TokenAccount>>,
 
+    /// Receives the premium above the floor (see `MARKET_RESERVE_SEED`).
+    #[account(mut, seeds = [MARKET_RESERVE_SEED], bump)]
+    pub market_reserve: Box<Account<'info, TokenAccount>>,
+
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -669,7 +757,47 @@ pub struct SellSola<'info> {
     )]
     pub user_usdc: Account<'info, TokenAccount>,
 
+    /// Pays the premium part of a sale on the curve.
+    #[account(mut, seeds = [MARKET_RESERVE_SEED], bump)]
+    pub market_reserve: Account<'info, TokenAccount>,
+
+    /// Receives the sale fee.
+    #[account(mut, address = protocol_state.market_vault)]
+    pub market_vault: Account<'info, TokenAccount>,
+
     pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct FundMarketReserve<'info> {
+    #[account(mut)]
+    pub funder: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(address = protocol_state.usdc_mint)]
+    pub usdc_mint: Box<Account<'info, Mint>>,
+
+    #[account(
+        init_if_needed,
+        payer = funder,
+        token::mint = usdc_mint,
+        token::authority = protocol_state,
+        seeds = [MARKET_RESERVE_SEED],
+        bump,
+    )]
+    pub market_reserve: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        constraint = funder_usdc.mint == protocol_state.usdc_mint @ SoladromeError::InvalidAmount,
+        token::authority = funder,
+    )]
+    pub funder_usdc: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

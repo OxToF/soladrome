@@ -169,7 +169,10 @@ the public lands on a protocol that already has liquidity and active incentives.
 "1 external SOLA/jitoSOL pool" plan below. Reasoning: the bonding curve
 (System 1) has no on-chain rebase — its virtual-reserve price only ever moves
 up (only `buy_sola`/`deploy_pol` touch it, `sell_sola` never does, see
-[JUPITER_ADAPTER_DESIGN.md §6](JUPITER_ADAPTER_DESIGN.md)). Any AMM pool priced
+[JUPITER_ADAPTER_DESIGN.md §6](JUPITER_ADAPTER_DESIGN.md)). ⚠️ **No longer true since
+2026-10-07**: `sell_sola` sells back down the curve, so the curve price now moves both ways and
+a SOLA-paired pool would arbitrage against it rather than decorrelate. The decision below was
+taken on the old premise and deserves a second look before launch. Any AMM pool priced
 in SOLA creates a second, independent market price for the protocol's core
 mechanism that can permanently decorrelate from the curve, with no way to
 correct it after the fact. Judged too risky to introduce at launch.

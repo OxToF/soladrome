@@ -15,6 +15,11 @@
 //      on-chain. Reproducing the algebra in a different order (or in floats) rounds the other
 //      way and quotes a base unit the program will not mint.
 
+/** `CURVE_FEE_BPS`: 1 % of every curve trade, buy and sell, to hiSOLA stakers. */
+export const CURVE_FEE_BPS = 100n;
+/** `INIT_VIRTUAL_SOLA`: where the curve starts, i.e. price 1. A sale never takes it past this. */
+export const INIT_VIRTUAL_SOLA = 1_000_000_000_000n;
+
 /** Raw u128/u64 reserves, exactly as `ProtocolState` stores them. */
 export interface CurveReserves {
   virtualUsdc: bigint;
@@ -44,18 +49,60 @@ export function solaOut(r: CurveReserves, usdcIn: bigint): bigint | null {
 }
 
 /**
- * USDC returned for `solaIn`, in base units.
- *
- * `sell_sola` is not a curve trade: it redeems against the floor at 1:1 and never touches the
- * virtual reserves (`usdc_out = sola_amount`, both mints at 6 decimals). The identity is the
- * whole point of the floor, so it is spelled out here rather than left implicit at the call
- * site — and it is why a sell quote can never move with demand.
- *
- * The caller must still check the floor vault covers it: `sell_sola` requires
- * `floor_vault.amount >= usdc_out` and fails `InsufficientFloorReserve` otherwise.
+ * A purchase, as `math.rs::curve_buy` prices it: the 1 % fee first, then the rest through the
+ * curve. `solaOut` is what `min_sola_out` is checked against — quoting it without the fee would
+ * put every buy 1 % short of its own slippage bound.
  */
-export function usdcOut(solaIn: bigint): bigint {
-  return solaIn;
+export function quoteBuy(
+  r: CurveReserves,
+  usdcIn: bigint,
+): { fee: bigint; solaOut: bigint; premium: bigint } | null {
+  if (usdcIn <= 0n) return null;
+  const fee = (usdcIn * CURVE_FEE_BPS) / 10_000n;
+  const out = solaOut(r, usdcIn - fee);
+  if (out === null) return null;
+  return { fee, solaOut: out, premium: usdcIn - fee - out };
+}
+
+/**
+ * A sale back to the protocol, as `math.rs::curve_sell` prices it.
+ *
+ * ☢️ Until 2026-10-07 this was the identity — `sell_sola` paid 1 USDC per SOLA whatever the
+ * curve said, because the premium buyers paid had been distributed and nothing held it. A sale
+ * now goes back DOWN the curve: 1 per SOLA from the floor, the premium from the market reserve,
+ * less 1 % capped at that premium so a SOLA never fetches less than the floor. What is left once
+ * the curve is back at its start (price 1) is redeemed at the floor.
+ *
+ * The new `vu` rounds UP (`ceil(k / new_vs)`), as on chain, so the quote never promises a unit
+ * the program will not pay.
+ */
+export function quoteSell(
+  r: CurveReserves,
+  solaIn: bigint,
+): { usdcOut: bigint; fee: bigint; fromFloor: bigint; onCurve: bigint } | null {
+  if (solaIn <= 0n) return null;
+  const room = INIT_VIRTUAL_SOLA > r.virtualSola ? INIT_VIRTUAL_SOLA - r.virtualSola : 0n;
+  const onCurve = solaIn < room ? solaIn : room;
+  let proceeds = 0n;
+  if (onCurve > 0n) {
+    const newVs = r.virtualSola + onCurve;
+    const vuAfter = (r.k + newVs - 1n) / newVs;
+    const raw = r.virtualUsdc > vuAfter ? r.virtualUsdc - vuAfter : 0n;
+    proceeds = raw > onCurve ? raw : onCurve;
+  }
+  const premium = proceeds - onCurve;
+  const feeRaw = (proceeds * CURVE_FEE_BPS) / 10_000n;
+  const fee = feeRaw < premium ? feeRaw : premium;
+  return { usdcOut: solaIn + premium - fee, fee, fromFloor: solaIn, onCurve };
+}
+
+/**
+ * What one SOLA fetches if sold back to the protocol now, as a float, for display and
+ * valuation: the curve's marginal price less the fee, never below the floor.
+ */
+export function marginalSellPrice(r: CurveReserves): number {
+  const spot = spotPrice(r);
+  return Math.max(1, spot - (spot * Number(CURVE_FEE_BPS)) / 10_000);
 }
 
 /**
@@ -125,9 +172,9 @@ export function effectivePrice(usdcIn: bigint, solaOut: bigint): number {
 /**
  * How far the effective price sits above the floor, as a percentage.
  *
- * Reported instead of "price impact against spot" because the floor — 1 USDC, guaranteed by
- * `sell_sola` — is the number that bounds the buyer's downside. A buy at 1.04 means 4% of the
- * outlay is above what the floor will redeem, which is the premium at risk.
+ * The floor — 1 USDC, paid by `sell_sola` at the very worst — bounds the buyer's downside. Since
+ * 2026-10-07 the premium is no longer lost on a sale: it sits in the market reserve and comes
+ * back down the curve, less the 1 % fee. What is at risk is the curve moving down, never below 1.
  */
 export function premiumOverFloorPct(usdcIn: bigint, solaOut: bigint): number {
   if (solaOut === 0n) return 0;

@@ -6,6 +6,7 @@
 use anchor_lang::prelude::*;
 
 #[account]
+#[derive(InitSpace)]
 pub struct ProtocolState {
     pub authority: Pubkey,
     pub usdc_mint: Pubkey,
@@ -169,6 +170,24 @@ pub struct ProtocolState {
     /// of this artefact. Either way `Pubkey::default()` matches no signer, so an unwritten
     /// field fails every founder guard closed rather than open.
     pub founder_wallet: Pubkey,
+
+    /// The slot of the first curve trade (`buy_sola`, `sell_sola`, `deploy_pol`) seen in it, and
+    /// `virtual_usdc` as it stood just before that trade, in whole USDC rounded UP. See
+    /// `exercise_reserves`.
+    ///
+    /// ☢️ Added 2026-10-07, when `sell_sola` started moving the curve DOWN. Until then the curve
+    /// price could only rise, so a gain priced on it could not be lowered by the caller; now one
+    /// transaction can sell down the curve, exercise (or crank someone's strategy) at the lowered
+    /// price, and buy back. Pricing every exercise at the curve as it stood BEFORE the slot's
+    /// trades makes that round trip worthless: what one slot does to the curve is invisible to
+    /// exercises in the same slot.
+    ///
+    /// Two `u32` because only 9 bytes were spare (439 used of 448, discriminator included):
+    /// a slot fits a u32 for ~50 years at 400 ms, and `virtual_usdc` in whole USDC moves the
+    /// price by at most 2e-6 at the curve's 1M depth. Appended last, so an existing singleton
+    /// reads 0 — "no trade recorded" — and prices at the curve.
+    pub curve_ref_slot: u32,
+    pub curve_ref_vu_usdc: u32,
 }
 
 impl ProtocolState {
@@ -182,6 +201,7 @@ impl ProtocolState {
     // Emissions:  bool(1) = 1             ← emissions_enabled, appended last
     // Exercise:   u16(2) = 2              ← exercise_fee_bps, appended last
     // Founder pk: Pubkey(32) = 32         ← founder_wallet, 2026-08-23
+    // Curve ref:  u32×2 = 8               ← curve_ref_slot / curve_ref_vu_usdc, 2026-10-07 (447 of 448)
     //
     // ⚠️ Update this value whenever a field is added or removed.
     //
@@ -190,11 +210,38 @@ impl ProtocolState {
     // live singleton is what caused the 3003 devnet brick in July — which is why nothing in
     // this program reallocs it. `initialize` allocates at LEN once; there is no resize path.
     pub const LEN: usize = 448;
+
+    /// Call before any instruction moves the curve: remembers where it stood when the slot began.
+    pub fn note_curve_trade(&mut self, slot: u64) {
+        let slot = slot as u32;
+        if self.curve_ref_slot != slot || self.curve_ref_vu_usdc == 0 {
+            self.curve_ref_slot = slot;
+            self.curve_ref_vu_usdc =
+                self.virtual_usdc.div_ceil(1_000_000).min(u32::MAX as u64) as u32;
+        }
+    }
+
+    /// The virtual reserves an exercise is priced at: the curve before this slot's trades, if any
+    /// moved it, else the curve as it stands. `vs` is recomputed as `k / vu`, the curve's own
+    /// rounding on a buy.
+    pub fn exercise_reserves(&self, slot: u64) -> (u64, u64) {
+        if self.curve_ref_slot == slot as u32 && self.curve_ref_vu_usdc != 0 {
+            let vu = self.curve_ref_vu_usdc as u64 * 1_000_000;
+            (vu, (self.k / vu as u128) as u64)
+        } else {
+            (self.virtual_usdc, self.virtual_sola)
+        }
+    }
 }
 
 // Compile-time guard: if ProtocolState grows past LEN the program will fail to
 // deploy rather than silently corrupting accounts at runtime.
+//
+// ☢️ Measured with `INIT_SPACE` (the Borsh wire size) since 2026-10-07, NOT `size_of`, for the
+// reason given at the `UserPosition` guard: `size_of` pads the struct to the 16-byte alignment
+// of its u128 fields, padding that never reaches the account. The `size_of` form refused the
+// two u32 curve-reference fields although the account had room for them.
 const _: () = assert!(
-    ProtocolState::LEN >= 8 + std::mem::size_of::<ProtocolState>(),
+    ProtocolState::LEN >= 8 + ProtocolState::INIT_SPACE,
     "ProtocolState::LEN is too small — update it to fit the struct"
 );

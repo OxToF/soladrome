@@ -53,6 +53,10 @@ pub mod soladrome {
 
         pub lp_mint: AccountMeta,
 
+        pub token_a_mint: AccountMeta,
+
+        pub token_b_mint: AccountMeta,
+
         pub token_a_vault: AccountMeta,
 
         pub token_b_vault: AccountMeta,
@@ -77,6 +81,10 @@ pub mod soladrome {
 
         pub rent: AccountMeta,
 
+        pub token_a_program: AccountMeta,
+
+        pub token_b_program: AccountMeta,
+
         pub token_program: AccountMeta,
 
         pub associated_token_program: AccountMeta,
@@ -92,6 +100,10 @@ pub mod soladrome {
         pub pool: Pubkey,
 
         pub lp_mint: Pubkey,
+
+        pub token_a_mint: Pubkey,
+
+        pub token_b_mint: Pubkey,
 
         pub token_a_vault: Pubkey,
 
@@ -112,6 +124,10 @@ pub mod soladrome {
         pub o_sola_mint: Pubkey,
 
         pub user_o_sola: Pubkey,
+
+        pub token_a_program: Pubkey,
+
+        pub token_b_program: Pubkey,
     }
 
     impl AddLiquidityInstructionAccounts {
@@ -121,6 +137,10 @@ pub mod soladrome {
             pool: Pubkey,
 
             lp_mint: Pubkey,
+
+            token_a_mint: Pubkey,
+
+            token_b_mint: Pubkey,
 
             token_a_vault: Pubkey,
 
@@ -141,6 +161,10 @@ pub mod soladrome {
             o_sola_mint: Pubkey,
 
             user_o_sola: Pubkey,
+
+            token_a_program: Pubkey,
+
+            token_b_program: Pubkey,
         ) -> Self {
             Self {
                 user,
@@ -148,6 +172,10 @@ pub mod soladrome {
                 pool,
 
                 lp_mint,
+
+                token_a_mint,
+
+                token_b_mint,
 
                 token_a_vault,
 
@@ -168,6 +196,10 @@ pub mod soladrome {
                 o_sola_mint,
 
                 user_o_sola,
+
+                token_a_program,
+
+                token_b_program,
             }
         }
     }
@@ -215,6 +247,10 @@ pub mod soladrome {
 
             self.accounts.lp_mint = AccountMeta::new(accounts.lp_mint, false);
 
+            self.accounts.token_a_mint = AccountMeta::new_readonly(accounts.token_a_mint, false);
+
+            self.accounts.token_b_mint = AccountMeta::new_readonly(accounts.token_b_mint, false);
+
             self.accounts.token_a_vault = AccountMeta::new(accounts.token_a_vault, false);
 
             self.accounts.token_b_vault = AccountMeta::new(accounts.token_b_vault, false);
@@ -243,6 +279,12 @@ pub mod soladrome {
                 pubkey!("SysvarRent111111111111111111111111111111111"),
                 false,
             );
+
+            self.accounts.token_a_program =
+                AccountMeta::new_readonly(accounts.token_a_program, false);
+
+            self.accounts.token_b_program =
+                AccountMeta::new_readonly(accounts.token_b_program, false);
 
             self.accounts.token_program = AccountMeta::new_readonly(
                 pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
@@ -274,6 +316,10 @@ pub mod soladrome {
 
             metas.push(self.accounts.lp_mint.clone());
 
+            metas.push(self.accounts.token_a_mint.clone());
+
+            metas.push(self.accounts.token_b_mint.clone());
+
             metas.push(self.accounts.token_a_vault.clone());
 
             metas.push(self.accounts.token_b_vault.clone());
@@ -297,6 +343,10 @@ pub mod soladrome {
             metas.push(self.accounts.user_o_sola.clone());
 
             metas.push(self.accounts.rent.clone());
+
+            metas.push(self.accounts.token_a_program.clone());
+
+            metas.push(self.accounts.token_b_program.clone());
 
             metas.push(self.accounts.token_program.clone());
 
@@ -337,6 +387,10 @@ pub mod soladrome {
 
         pub pool: AccountMeta,
 
+        pub token_a_mint: AccountMeta,
+
+        pub token_b_mint: AccountMeta,
+
         pub token_a_vault: AccountMeta,
 
         pub token_b_vault: AccountMeta,
@@ -349,7 +403,9 @@ pub mod soladrome {
 
         pub protocol_state: AccountMeta,
 
-        pub token_program: AccountMeta,
+        pub token_a_program: AccountMeta,
+
+        pub token_b_program: AccountMeta,
     }
 
     /// Account pubkeys for AmmSwap instruction
@@ -358,6 +414,10 @@ pub mod soladrome {
         pub user: Pubkey,
 
         pub pool: Pubkey,
+
+        pub token_a_mint: Pubkey,
+
+        pub token_b_mint: Pubkey,
 
         pub token_a_vault: Pubkey,
 
@@ -370,6 +430,10 @@ pub mod soladrome {
         pub market_vault: Pubkey,
 
         pub protocol_state: Pubkey,
+
+        pub token_a_program: Pubkey,
+
+        pub token_b_program: Pubkey,
     }
 
     impl AmmSwapInstructionAccounts {
@@ -377,6 +441,10 @@ pub mod soladrome {
             user: Pubkey,
 
             pool: Pubkey,
+
+            token_a_mint: Pubkey,
+
+            token_b_mint: Pubkey,
 
             token_a_vault: Pubkey,
 
@@ -389,11 +457,19 @@ pub mod soladrome {
             market_vault: Pubkey,
 
             protocol_state: Pubkey,
+
+            token_a_program: Pubkey,
+
+            token_b_program: Pubkey,
         ) -> Self {
             Self {
                 user,
 
                 pool,
+
+                token_a_mint,
+
+                token_b_mint,
 
                 token_a_vault,
 
@@ -406,6 +482,10 @@ pub mod soladrome {
                 market_vault,
 
                 protocol_state,
+
+                token_a_program,
+
+                token_b_program,
             }
         }
     }
@@ -451,6 +531,10 @@ pub mod soladrome {
 
             self.accounts.pool = AccountMeta::new(accounts.pool, false);
 
+            self.accounts.token_a_mint = AccountMeta::new_readonly(accounts.token_a_mint, false);
+
+            self.accounts.token_b_mint = AccountMeta::new_readonly(accounts.token_b_mint, false);
+
             self.accounts.token_a_vault = AccountMeta::new(accounts.token_a_vault, false);
 
             self.accounts.token_b_vault = AccountMeta::new(accounts.token_b_vault, false);
@@ -463,10 +547,11 @@ pub mod soladrome {
 
             self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
 
-            self.accounts.token_program = AccountMeta::new_readonly(
-                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-                false,
-            );
+            self.accounts.token_a_program =
+                AccountMeta::new_readonly(accounts.token_a_program, false);
+
+            self.accounts.token_b_program =
+                AccountMeta::new_readonly(accounts.token_b_program, false);
 
             self
         }
@@ -483,6 +568,10 @@ pub mod soladrome {
 
             metas.push(self.accounts.pool.clone());
 
+            metas.push(self.accounts.token_a_mint.clone());
+
+            metas.push(self.accounts.token_b_mint.clone());
+
             metas.push(self.accounts.token_a_vault.clone());
 
             metas.push(self.accounts.token_b_vault.clone());
@@ -495,7 +584,9 @@ pub mod soladrome {
 
             metas.push(self.accounts.protocol_state.clone());
 
-            metas.push(self.accounts.token_program.clone());
+            metas.push(self.accounts.token_a_program.clone());
+
+            metas.push(self.accounts.token_b_program.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -729,10 +820,6 @@ pub mod soladrome {
 
         pub protocol_state: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
-        pub user_hi_sola: AccountMeta,
-
         pub floor_vault: AccountMeta,
 
         pub market_vault: AccountMeta,
@@ -753,10 +840,6 @@ pub mod soladrome {
 
         pub protocol_state: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
-        pub user_hi_sola: Pubkey,
-
         pub floor_vault: Pubkey,
 
         pub market_vault: Pubkey,
@@ -772,10 +855,6 @@ pub mod soladrome {
 
             protocol_state: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
-            user_hi_sola: Pubkey,
-
             floor_vault: Pubkey,
 
             market_vault: Pubkey,
@@ -788,10 +867,6 @@ pub mod soladrome {
                 user,
 
                 protocol_state,
-
-                hi_sola_mint,
-
-                user_hi_sola,
 
                 floor_vault,
 
@@ -835,10 +910,6 @@ pub mod soladrome {
 
             self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new_readonly(accounts.hi_sola_mint, false);
-
-            self.accounts.user_hi_sola = AccountMeta::new_readonly(accounts.user_hi_sola, false);
-
             self.accounts.floor_vault = AccountMeta::new(accounts.floor_vault, false);
 
             self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
@@ -869,10 +940,6 @@ pub mod soladrome {
             metas.push(self.accounts.user.clone());
 
             metas.push(self.accounts.protocol_state.clone());
-
-            metas.push(self.accounts.hi_sola_mint.clone());
-
-            metas.push(self.accounts.user_hi_sola.clone());
 
             metas.push(self.accounts.floor_vault.clone());
 
@@ -923,9 +990,7 @@ pub mod soladrome {
 
         pub user_o_sola: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
-        pub user_hi_sola: AccountMeta,
+        pub user_position: AccountMeta,
 
         pub lock_position: AccountMeta,
 
@@ -949,9 +1014,7 @@ pub mod soladrome {
 
         pub user_o_sola: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
-        pub user_hi_sola: Pubkey,
+        pub user_position: Pubkey,
 
         pub lock_position: Pubkey,
 
@@ -968,9 +1031,7 @@ pub mod soladrome {
 
             user_o_sola: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
-            user_hi_sola: Pubkey,
+            user_position: Pubkey,
 
             lock_position: Pubkey,
 
@@ -985,9 +1046,7 @@ pub mod soladrome {
 
                 user_o_sola,
 
-                hi_sola_mint,
-
-                user_hi_sola,
+                user_position,
 
                 lock_position,
 
@@ -1034,9 +1093,7 @@ pub mod soladrome {
 
             self.accounts.user_o_sola = AccountMeta::new(accounts.user_o_sola, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new_readonly(accounts.hi_sola_mint, false);
-
-            self.accounts.user_hi_sola = AccountMeta::new_readonly(accounts.user_hi_sola, false);
+            self.accounts.user_position = AccountMeta::new_readonly(accounts.user_position, false);
 
             self.accounts.lock_position = AccountMeta::new_readonly(accounts.lock_position, false);
 
@@ -1074,9 +1131,7 @@ pub mod soladrome {
 
             metas.push(self.accounts.user_o_sola.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
-
-            metas.push(self.accounts.user_hi_sola.clone());
+            metas.push(self.accounts.user_position.clone());
 
             metas.push(self.accounts.lock_position.clone());
 
@@ -1131,6 +1186,8 @@ pub mod soladrome {
 
         pub market_vault: AccountMeta,
 
+        pub market_reserve: AccountMeta,
+
         pub token_program: AccountMeta,
 
         pub associated_token_program: AccountMeta,
@@ -1154,6 +1211,8 @@ pub mod soladrome {
         pub floor_vault: Pubkey,
 
         pub market_vault: Pubkey,
+
+        pub market_reserve: Pubkey,
     }
 
     impl BuySolaInstructionAccounts {
@@ -1171,6 +1230,8 @@ pub mod soladrome {
             floor_vault: Pubkey,
 
             market_vault: Pubkey,
+
+            market_reserve: Pubkey,
         ) -> Self {
             Self {
                 user,
@@ -1186,6 +1247,8 @@ pub mod soladrome {
                 floor_vault,
 
                 market_vault,
+
+                market_reserve,
             }
         }
     }
@@ -1237,6 +1300,8 @@ pub mod soladrome {
 
             self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
 
+            self.accounts.market_reserve = AccountMeta::new(accounts.market_reserve, false);
+
             self.accounts.token_program = AccountMeta::new_readonly(
                 pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
                 false,
@@ -1274,6 +1339,8 @@ pub mod soladrome {
             metas.push(self.accounts.floor_vault.clone());
 
             metas.push(self.accounts.market_vault.clone());
+
+            metas.push(self.accounts.market_reserve.clone());
 
             metas.push(self.accounts.token_program.clone());
 
@@ -1548,6 +1615,8 @@ pub mod soladrome {
         pub user_vote_receipt: Pubkey,
 
         pub user_bribe_claim: Pubkey,
+
+        pub token_program: Pubkey,
     }
 
     impl ClaimBribeInstructionAccounts {
@@ -1569,6 +1638,8 @@ pub mod soladrome {
             user_vote_receipt: Pubkey,
 
             user_bribe_claim: Pubkey,
+
+            token_program: Pubkey,
         ) -> Self {
             Self {
                 user,
@@ -1588,6 +1659,8 @@ pub mod soladrome {
                 user_vote_receipt,
 
                 user_bribe_claim,
+
+                token_program,
             }
         }
     }
@@ -1638,10 +1711,7 @@ pub mod soladrome {
 
             self.accounts.user_bribe_claim = AccountMeta::new(accounts.user_bribe_claim, false);
 
-            self.accounts.token_program = AccountMeta::new_readonly(
-                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-                false,
-            );
+            self.accounts.token_program = AccountMeta::new_readonly(accounts.token_program, false);
 
             self.accounts.associated_token_program = AccountMeta::new_readonly(
                 pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
@@ -1728,15 +1798,11 @@ pub mod soladrome {
 
         pub sola_mint: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
         pub sola_vault: AccountMeta,
 
         pub market_vault: AccountMeta,
 
         pub lock_position: AccountMeta,
-
-        pub ve_lock_vault: AccountMeta,
 
         pub contributor_position: AccountMeta,
 
@@ -1758,15 +1824,11 @@ pub mod soladrome {
 
         pub sola_mint: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
         pub sola_vault: Pubkey,
 
         pub market_vault: Pubkey,
 
         pub lock_position: Pubkey,
-
-        pub ve_lock_vault: Pubkey,
 
         pub contributor_position: Pubkey,
 
@@ -1781,15 +1843,11 @@ pub mod soladrome {
 
             sola_mint: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
             sola_vault: Pubkey,
 
             market_vault: Pubkey,
 
             lock_position: Pubkey,
-
-            ve_lock_vault: Pubkey,
 
             contributor_position: Pubkey,
 
@@ -1802,15 +1860,11 @@ pub mod soladrome {
 
                 sola_mint,
 
-                hi_sola_mint,
-
                 sola_vault,
 
                 market_vault,
 
                 lock_position,
-
-                ve_lock_vault,
 
                 contributor_position,
 
@@ -1850,15 +1904,11 @@ pub mod soladrome {
 
             self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new(accounts.hi_sola_mint, false);
-
             self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
 
             self.accounts.market_vault = AccountMeta::new_readonly(accounts.market_vault, false);
 
             self.accounts.lock_position = AccountMeta::new(accounts.lock_position, false);
-
-            self.accounts.ve_lock_vault = AccountMeta::new(accounts.ve_lock_vault, false);
 
             self.accounts.contributor_position =
                 AccountMeta::new(accounts.contributor_position, false);
@@ -1896,15 +1946,11 @@ pub mod soladrome {
 
             metas.push(self.accounts.sola_mint.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
-
             metas.push(self.accounts.sola_vault.clone());
 
             metas.push(self.accounts.market_vault.clone());
 
             metas.push(self.accounts.lock_position.clone());
-
-            metas.push(self.accounts.ve_lock_vault.clone());
 
             metas.push(self.accounts.contributor_position.clone());
 
@@ -2112,10 +2158,6 @@ pub mod soladrome {
 
         pub protocol_state: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
-        pub user_hi_sola: AccountMeta,
-
         pub market_vault: AccountMeta,
 
         pub user_usdc: AccountMeta,
@@ -2132,10 +2174,6 @@ pub mod soladrome {
 
         pub protocol_state: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
-        pub user_hi_sola: Pubkey,
-
         pub market_vault: Pubkey,
 
         pub user_usdc: Pubkey,
@@ -2149,10 +2187,6 @@ pub mod soladrome {
 
             protocol_state: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
-            user_hi_sola: Pubkey,
-
             market_vault: Pubkey,
 
             user_usdc: Pubkey,
@@ -2163,10 +2197,6 @@ pub mod soladrome {
                 user,
 
                 protocol_state,
-
-                hi_sola_mint,
-
-                user_hi_sola,
 
                 market_vault,
 
@@ -2206,10 +2236,6 @@ pub mod soladrome {
 
             self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new_readonly(accounts.hi_sola_mint, false);
-
-            self.accounts.user_hi_sola = AccountMeta::new_readonly(accounts.user_hi_sola, false);
-
             self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
 
             self.accounts.user_usdc = AccountMeta::new(accounts.user_usdc, false);
@@ -2235,10 +2261,6 @@ pub mod soladrome {
             metas.push(self.accounts.user.clone());
 
             metas.push(self.accounts.protocol_state.clone());
-
-            metas.push(self.accounts.hi_sola_mint.clone());
-
-            metas.push(self.accounts.user_hi_sola.clone());
 
             metas.push(self.accounts.market_vault.clone());
 
@@ -2277,21 +2299,17 @@ pub mod soladrome {
     /// Account metadata for ClaimFounderHiSola instruction
     #[derive(Debug, Clone, Default)]
     pub struct ClaimFounderHiSolaInstructionAccountMetas {
-        pub founder: AccountMeta,
-
         pub protocol_state: AccountMeta,
 
-        pub sola_mint: AccountMeta,
+        pub founder: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
+        pub sola_mint: AccountMeta,
 
         pub sola_vault: AccountMeta,
 
         pub market_vault: AccountMeta,
 
         pub lock_position: AccountMeta,
-
-        pub ve_lock_vault: AccountMeta,
 
         pub founder_position: AccountMeta,
 
@@ -2307,21 +2325,17 @@ pub mod soladrome {
     /// Account pubkeys for ClaimFounderHiSola instruction
     #[derive(Debug, Clone)]
     pub struct ClaimFounderHiSolaInstructionAccounts {
-        pub founder: Pubkey,
-
         pub protocol_state: Pubkey,
 
-        pub sola_mint: Pubkey,
+        pub founder: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
+        pub sola_mint: Pubkey,
 
         pub sola_vault: Pubkey,
 
         pub market_vault: Pubkey,
 
         pub lock_position: Pubkey,
-
-        pub ve_lock_vault: Pubkey,
 
         pub founder_position: Pubkey,
 
@@ -2330,13 +2344,11 @@ pub mod soladrome {
 
     impl ClaimFounderHiSolaInstructionAccounts {
         pub fn new(
-            founder: Pubkey,
-
             protocol_state: Pubkey,
 
-            sola_mint: Pubkey,
+            founder: Pubkey,
 
-            hi_sola_mint: Pubkey,
+            sola_mint: Pubkey,
 
             sola_vault: Pubkey,
 
@@ -2344,28 +2356,22 @@ pub mod soladrome {
 
             lock_position: Pubkey,
 
-            ve_lock_vault: Pubkey,
-
             founder_position: Pubkey,
 
             founder_hi_vesting: Pubkey,
         ) -> Self {
             Self {
-                founder,
-
                 protocol_state,
 
-                sola_mint,
+                founder,
 
-                hi_sola_mint,
+                sola_mint,
 
                 sola_vault,
 
                 market_vault,
 
                 lock_position,
-
-                ve_lock_vault,
 
                 founder_position,
 
@@ -2399,21 +2405,17 @@ pub mod soladrome {
         }
 
         pub fn accounts(mut self, accounts: ClaimFounderHiSolaInstructionAccounts) -> Self {
-            self.accounts.founder = AccountMeta::new(accounts.founder, true);
-
             self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
 
-            self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
+            self.accounts.founder = AccountMeta::new(accounts.founder, true);
 
-            self.accounts.hi_sola_mint = AccountMeta::new(accounts.hi_sola_mint, false);
+            self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
 
             self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
 
             self.accounts.market_vault = AccountMeta::new_readonly(accounts.market_vault, false);
 
             self.accounts.lock_position = AccountMeta::new(accounts.lock_position, false);
-
-            self.accounts.ve_lock_vault = AccountMeta::new(accounts.ve_lock_vault, false);
 
             self.accounts.founder_position = AccountMeta::new(accounts.founder_position, false);
 
@@ -2443,21 +2445,17 @@ pub mod soladrome {
         fn to_account_metas(&self) -> Vec<AccountMeta> {
             let mut metas = Vec::new();
 
-            metas.push(self.accounts.founder.clone());
-
             metas.push(self.accounts.protocol_state.clone());
 
-            metas.push(self.accounts.sola_mint.clone());
+            metas.push(self.accounts.founder.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
+            metas.push(self.accounts.sola_mint.clone());
 
             metas.push(self.accounts.sola_vault.clone());
 
             metas.push(self.accounts.market_vault.clone());
 
             metas.push(self.accounts.lock_position.clone());
-
-            metas.push(self.accounts.ve_lock_vault.clone());
 
             metas.push(self.accounts.founder_position.clone());
 
@@ -2498,9 +2496,9 @@ pub mod soladrome {
     /// Account metadata for ClaimFounderVesting instruction
     #[derive(Debug, Clone, Default)]
     pub struct ClaimFounderVestingInstructionAccountMetas {
-        pub founder: AccountMeta,
-
         pub protocol_state: AccountMeta,
+
+        pub founder: AccountMeta,
 
         pub o_sola_mint: AccountMeta,
 
@@ -2518,9 +2516,9 @@ pub mod soladrome {
     /// Account pubkeys for ClaimFounderVesting instruction
     #[derive(Debug, Clone)]
     pub struct ClaimFounderVestingInstructionAccounts {
-        pub founder: Pubkey,
-
         pub protocol_state: Pubkey,
+
+        pub founder: Pubkey,
 
         pub o_sola_mint: Pubkey,
 
@@ -2531,9 +2529,9 @@ pub mod soladrome {
 
     impl ClaimFounderVestingInstructionAccounts {
         pub fn new(
-            founder: Pubkey,
-
             protocol_state: Pubkey,
+
+            founder: Pubkey,
 
             o_sola_mint: Pubkey,
 
@@ -2542,9 +2540,9 @@ pub mod soladrome {
             founder_o_sola: Pubkey,
         ) -> Self {
             Self {
-                founder,
-
                 protocol_state,
+
+                founder,
 
                 o_sola_mint,
 
@@ -2580,10 +2578,10 @@ pub mod soladrome {
         }
 
         pub fn accounts(mut self, accounts: ClaimFounderVestingInstructionAccounts) -> Self {
-            self.accounts.founder = AccountMeta::new(accounts.founder, true);
-
             self.accounts.protocol_state =
                 AccountMeta::new_readonly(accounts.protocol_state, false);
+
+            self.accounts.founder = AccountMeta::new(accounts.founder, true);
 
             self.accounts.o_sola_mint = AccountMeta::new(accounts.o_sola_mint, false);
 
@@ -2615,9 +2613,9 @@ pub mod soladrome {
         fn to_account_metas(&self) -> Vec<AccountMeta> {
             let mut metas = Vec::new();
 
-            metas.push(self.accounts.founder.clone());
-
             metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.founder.clone());
 
             metas.push(self.accounts.o_sola_mint.clone());
 
@@ -2871,6 +2869,8 @@ pub mod soladrome {
     pub struct ClaimLpRewardsInstructionAccountMetas {
         pub user: AccountMeta,
 
+        pub payer: AccountMeta,
+
         pub pool: AccountMeta,
 
         pub lp_mint: AccountMeta,
@@ -2899,6 +2899,8 @@ pub mod soladrome {
     pub struct ClaimLpRewardsInstructionAccounts {
         pub user: Pubkey,
 
+        pub payer: Pubkey,
+
         pub pool: Pubkey,
 
         pub lp_mint: Pubkey,
@@ -2918,6 +2920,8 @@ pub mod soladrome {
         pub fn new(
             user: Pubkey,
 
+            payer: Pubkey,
+
             pool: Pubkey,
 
             lp_mint: Pubkey,
@@ -2934,6 +2938,8 @@ pub mod soladrome {
         ) -> Self {
             Self {
                 user,
+
+                payer,
 
                 pool,
 
@@ -2977,7 +2983,9 @@ pub mod soladrome {
         }
 
         pub fn accounts(mut self, accounts: ClaimLpRewardsInstructionAccounts) -> Self {
-            self.accounts.user = AccountMeta::new(accounts.user, true);
+            self.accounts.user = AccountMeta::new_readonly(accounts.user, false);
+
+            self.accounts.payer = AccountMeta::new(accounts.payer, true);
 
             self.accounts.pool = AccountMeta::new(accounts.pool, false);
 
@@ -3024,6 +3032,8 @@ pub mod soladrome {
             let mut metas = Vec::new();
 
             metas.push(self.accounts.user.clone());
+
+            metas.push(self.accounts.payer.clone());
 
             metas.push(self.accounts.pool.clone());
 
@@ -3082,8 +3092,6 @@ pub mod soladrome {
 
         pub sola_mint: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
         pub sola_vault: AccountMeta,
 
         pub market_vault: AccountMeta,
@@ -3091,8 +3099,6 @@ pub mod soladrome {
         pub partner_allocation: AccountMeta,
 
         pub lock_position: AccountMeta,
-
-        pub ve_lock_vault: AccountMeta,
 
         pub partner_position: AccountMeta,
 
@@ -3112,8 +3118,6 @@ pub mod soladrome {
 
         pub sola_mint: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
         pub sola_vault: Pubkey,
 
         pub market_vault: Pubkey,
@@ -3121,8 +3125,6 @@ pub mod soladrome {
         pub partner_allocation: Pubkey,
 
         pub lock_position: Pubkey,
-
-        pub ve_lock_vault: Pubkey,
 
         pub partner_position: Pubkey,
     }
@@ -3135,8 +3137,6 @@ pub mod soladrome {
 
             sola_mint: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
             sola_vault: Pubkey,
 
             market_vault: Pubkey,
@@ -3144,8 +3144,6 @@ pub mod soladrome {
             partner_allocation: Pubkey,
 
             lock_position: Pubkey,
-
-            ve_lock_vault: Pubkey,
 
             partner_position: Pubkey,
         ) -> Self {
@@ -3156,8 +3154,6 @@ pub mod soladrome {
 
                 sola_mint,
 
-                hi_sola_mint,
-
                 sola_vault,
 
                 market_vault,
@@ -3165,8 +3161,6 @@ pub mod soladrome {
                 partner_allocation,
 
                 lock_position,
-
-                ve_lock_vault,
 
                 partner_position,
             }
@@ -3204,8 +3198,6 @@ pub mod soladrome {
 
             self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new(accounts.hi_sola_mint, false);
-
             self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
 
             self.accounts.market_vault = AccountMeta::new_readonly(accounts.market_vault, false);
@@ -3213,8 +3205,6 @@ pub mod soladrome {
             self.accounts.partner_allocation = AccountMeta::new(accounts.partner_allocation, false);
 
             self.accounts.lock_position = AccountMeta::new(accounts.lock_position, false);
-
-            self.accounts.ve_lock_vault = AccountMeta::new(accounts.ve_lock_vault, false);
 
             self.accounts.partner_position = AccountMeta::new(accounts.partner_position, false);
 
@@ -3248,8 +3238,6 @@ pub mod soladrome {
 
             metas.push(self.accounts.sola_mint.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
-
             metas.push(self.accounts.sola_vault.clone());
 
             metas.push(self.accounts.market_vault.clone());
@@ -3258,8 +3246,6 @@ pub mod soladrome {
 
             metas.push(self.accounts.lock_position.clone());
 
-            metas.push(self.accounts.ve_lock_vault.clone());
-
             metas.push(self.accounts.partner_position.clone());
 
             metas.push(self.accounts.token_program.clone());
@@ -3267,6 +3253,445 @@ pub mod soladrome {
             metas.push(self.accounts.system_program.clone());
 
             metas.push(self.accounts.rent.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: ClearAutoCompoundLp
+    // ....................................................................
+
+    /// Main instruction struct for ClearAutoCompoundLp
+    pub struct ClearAutoCompoundLpInstruction {
+        pub accounts: ClearAutoCompoundLpInstructionAccountMetas,
+        pub data: ClearAutoCompoundLpInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for ClearAutoCompoundLp instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct ClearAutoCompoundLpInstructionAccountMetas {
+        pub user: AccountMeta,
+
+        pub auto: AccountMeta,
+    }
+
+    /// Account pubkeys for ClearAutoCompoundLp instruction
+    #[derive(Debug, Clone)]
+    pub struct ClearAutoCompoundLpInstructionAccounts {
+        pub user: Pubkey,
+
+        pub auto: Pubkey,
+    }
+
+    impl ClearAutoCompoundLpInstructionAccounts {
+        pub fn new(user: Pubkey, auto: Pubkey) -> Self {
+            Self { user, auto }
+        }
+    }
+
+    /// Instruction data for ClearAutoCompoundLp
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct ClearAutoCompoundLpInstructionData {}
+
+    impl ClearAutoCompoundLpInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for ClearAutoCompoundLpInstruction
+    impl ClearAutoCompoundLpInstruction {
+        fn discriminator() -> [u8; 8] {
+            [21u8, 246u8, 18u8, 154u8, 40u8, 141u8, 118u8, 163u8]
+        }
+
+        pub fn data(data: ClearAutoCompoundLpInstructionData) -> Self {
+            Self {
+                accounts: ClearAutoCompoundLpInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: ClearAutoCompoundLpInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new_readonly(accounts.user, true);
+
+            self.accounts.auto = AccountMeta::new(accounts.auto, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.user.clone());
+
+            metas.push(self.accounts.auto.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: CloseAutoCompound
+    // ....................................................................
+
+    /// Main instruction struct for CloseAutoCompound
+    pub struct CloseAutoCompoundInstruction {
+        pub accounts: CloseAutoCompoundInstructionAccountMetas,
+        pub data: CloseAutoCompoundInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for CloseAutoCompound instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct CloseAutoCompoundInstructionAccountMetas {
+        pub user: AccountMeta,
+
+        pub auto: AccountMeta,
+    }
+
+    /// Account pubkeys for CloseAutoCompound instruction
+    #[derive(Debug, Clone)]
+    pub struct CloseAutoCompoundInstructionAccounts {
+        pub user: Pubkey,
+
+        pub auto: Pubkey,
+    }
+
+    impl CloseAutoCompoundInstructionAccounts {
+        pub fn new(user: Pubkey, auto: Pubkey) -> Self {
+            Self { user, auto }
+        }
+    }
+
+    /// Instruction data for CloseAutoCompound
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct CloseAutoCompoundInstructionData {}
+
+    impl CloseAutoCompoundInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for CloseAutoCompoundInstruction
+    impl CloseAutoCompoundInstruction {
+        fn discriminator() -> [u8; 8] {
+            [185u8, 246u8, 167u8, 48u8, 184u8, 124u8, 178u8, 192u8]
+        }
+
+        pub fn data(data: CloseAutoCompoundInstructionData) -> Self {
+            Self {
+                accounts: CloseAutoCompoundInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: CloseAutoCompoundInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new(accounts.user, true);
+
+            self.accounts.auto = AccountMeta::new(accounts.auto, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.user.clone());
+
+            metas.push(self.accounts.auto.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: ClosePartnerAllocation
+    // ....................................................................
+
+    /// Main instruction struct for ClosePartnerAllocation
+    pub struct ClosePartnerAllocationInstruction {
+        pub accounts: ClosePartnerAllocationInstructionAccountMetas,
+        pub data: ClosePartnerAllocationInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for ClosePartnerAllocation instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct ClosePartnerAllocationInstructionAccountMetas {
+        pub authority: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub partner_wallet: AccountMeta,
+
+        pub partner_allocation: AccountMeta,
+
+        pub lp_mint: AccountMeta,
+
+        pub partner_lp_token: AccountMeta,
+
+        pub bribe_stream: AccountMeta,
+    }
+
+    /// Account pubkeys for ClosePartnerAllocation instruction
+    #[derive(Debug, Clone)]
+    pub struct ClosePartnerAllocationInstructionAccounts {
+        pub authority: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub partner_wallet: Pubkey,
+
+        pub partner_allocation: Pubkey,
+
+        pub lp_mint: Pubkey,
+
+        pub partner_lp_token: Pubkey,
+
+        pub bribe_stream: Pubkey,
+    }
+
+    impl ClosePartnerAllocationInstructionAccounts {
+        pub fn new(
+            authority: Pubkey,
+
+            protocol_state: Pubkey,
+
+            partner_wallet: Pubkey,
+
+            partner_allocation: Pubkey,
+
+            lp_mint: Pubkey,
+
+            partner_lp_token: Pubkey,
+
+            bribe_stream: Pubkey,
+        ) -> Self {
+            Self {
+                authority,
+
+                protocol_state,
+
+                partner_wallet,
+
+                partner_allocation,
+
+                lp_mint,
+
+                partner_lp_token,
+
+                bribe_stream,
+            }
+        }
+    }
+
+    /// Instruction data for ClosePartnerAllocation
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct ClosePartnerAllocationInstructionData {}
+
+    impl ClosePartnerAllocationInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for ClosePartnerAllocationInstruction
+    impl ClosePartnerAllocationInstruction {
+        fn discriminator() -> [u8; 8] {
+            [151u8, 113u8, 76u8, 242u8, 124u8, 163u8, 120u8, 234u8]
+        }
+
+        pub fn data(data: ClosePartnerAllocationInstructionData) -> Self {
+            Self {
+                accounts: ClosePartnerAllocationInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: ClosePartnerAllocationInstructionAccounts) -> Self {
+            self.accounts.authority = AccountMeta::new(accounts.authority, true);
+
+            self.accounts.protocol_state =
+                AccountMeta::new_readonly(accounts.protocol_state, false);
+
+            self.accounts.partner_wallet =
+                AccountMeta::new_readonly(accounts.partner_wallet, false);
+
+            self.accounts.partner_allocation = AccountMeta::new(accounts.partner_allocation, false);
+
+            self.accounts.lp_mint = AccountMeta::new_readonly(accounts.lp_mint, false);
+
+            self.accounts.partner_lp_token =
+                AccountMeta::new_readonly(accounts.partner_lp_token, false);
+
+            self.accounts.bribe_stream = AccountMeta::new_readonly(accounts.bribe_stream, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.authority.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.partner_wallet.clone());
+
+            metas.push(self.accounts.partner_allocation.clone());
+
+            metas.push(self.accounts.lp_mint.clone());
+
+            metas.push(self.accounts.partner_lp_token.clone());
+
+            metas.push(self.accounts.bribe_stream.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: ClosePoolStrategy
+    // ....................................................................
+
+    /// Main instruction struct for ClosePoolStrategy
+    pub struct ClosePoolStrategyInstruction {
+        pub accounts: ClosePoolStrategyInstructionAccountMetas,
+        pub data: ClosePoolStrategyInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for ClosePoolStrategy instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct ClosePoolStrategyInstructionAccountMetas {
+        pub user: AccountMeta,
+
+        pub strategy: AccountMeta,
+    }
+
+    /// Account pubkeys for ClosePoolStrategy instruction
+    #[derive(Debug, Clone)]
+    pub struct ClosePoolStrategyInstructionAccounts {
+        pub user: Pubkey,
+
+        pub strategy: Pubkey,
+    }
+
+    impl ClosePoolStrategyInstructionAccounts {
+        pub fn new(user: Pubkey, strategy: Pubkey) -> Self {
+            Self { user, strategy }
+        }
+    }
+
+    /// Instruction data for ClosePoolStrategy
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct ClosePoolStrategyInstructionData {}
+
+    impl ClosePoolStrategyInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for ClosePoolStrategyInstruction
+    impl ClosePoolStrategyInstruction {
+        fn discriminator() -> [u8; 8] {
+            [122u8, 237u8, 37u8, 236u8, 122u8, 163u8, 202u8, 104u8]
+        }
+
+        pub fn data(data: ClosePoolStrategyInstructionData) -> Self {
+            Self {
+                accounts: ClosePoolStrategyInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: ClosePoolStrategyInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new(accounts.user, true);
+
+            self.accounts.strategy = AccountMeta::new(accounts.strategy, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.user.clone());
+
+            metas.push(self.accounts.strategy.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -3414,6 +3839,149 @@ pub mod soladrome {
             metas.push(self.accounts.pol_usdc_vault.clone());
 
             metas.push(self.accounts.token_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: ConfigureAutoCompound
+    // ....................................................................
+
+    /// Main instruction struct for ConfigureAutoCompound
+    pub struct ConfigureAutoCompoundInstruction {
+        pub accounts: ConfigureAutoCompoundInstructionAccountMetas,
+        pub data: ConfigureAutoCompoundInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for ConfigureAutoCompound instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct ConfigureAutoCompoundInstructionAccountMetas {
+        pub user: AccountMeta,
+
+        pub auto: AccountMeta,
+
+        pub user_position: AccountMeta,
+
+        pub system_program: AccountMeta,
+    }
+
+    /// Account pubkeys for ConfigureAutoCompound instruction
+    #[derive(Debug, Clone)]
+    pub struct ConfigureAutoCompoundInstructionAccounts {
+        pub user: Pubkey,
+
+        pub auto: Pubkey,
+
+        pub user_position: Pubkey,
+    }
+
+    impl ConfigureAutoCompoundInstructionAccounts {
+        pub fn new(user: Pubkey, auto: Pubkey, user_position: Pubkey) -> Self {
+            Self {
+                user,
+
+                auto,
+
+                user_position,
+            }
+        }
+    }
+
+    /// Instruction data for ConfigureAutoCompound
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct ConfigureAutoCompoundInstructionData {
+        pub threshold: u64,
+
+        pub chunk: u64,
+
+        pub max_cost_per_unit: u64,
+
+        pub min_interval: i64,
+
+        pub max_fee_bps: u16,
+    }
+
+    impl ConfigureAutoCompoundInstructionData {
+        pub fn new(
+            threshold: u64,
+
+            chunk: u64,
+
+            max_cost_per_unit: u64,
+
+            min_interval: i64,
+
+            max_fee_bps: u16,
+        ) -> Self {
+            Self {
+                threshold,
+
+                chunk,
+
+                max_cost_per_unit,
+
+                min_interval,
+
+                max_fee_bps,
+            }
+        }
+    }
+
+    /// Implementation for ConfigureAutoCompoundInstruction
+    impl ConfigureAutoCompoundInstruction {
+        fn discriminator() -> [u8; 8] {
+            [157u8, 77u8, 249u8, 137u8, 28u8, 227u8, 213u8, 154u8]
+        }
+
+        pub fn data(data: ConfigureAutoCompoundInstructionData) -> Self {
+            Self {
+                accounts: ConfigureAutoCompoundInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: ConfigureAutoCompoundInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new(accounts.user, true);
+
+            self.accounts.auto = AccountMeta::new(accounts.auto, false);
+
+            self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
+
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.user.clone());
+
+            metas.push(self.accounts.auto.clone());
+
+            metas.push(self.accounts.user_position.clone());
+
+            metas.push(self.accounts.system_program.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -3646,6 +4214,1491 @@ pub mod soladrome {
     }
 
     // ....................................................................
+    // Instruction: CrankAutoCompound
+    // ....................................................................
+
+    /// Main instruction struct for CrankAutoCompound
+    pub struct CrankAutoCompoundInstruction {
+        pub accounts: CrankAutoCompoundInstructionAccountMetas,
+        pub data: CrankAutoCompoundInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for CrankAutoCompound instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct CrankAutoCompoundInstructionAccountMetas {
+        pub cranker: AccountMeta,
+
+        pub owner: AccountMeta,
+
+        pub auto: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub user_position: AccountMeta,
+
+        pub sola_mint: AccountMeta,
+
+        pub o_sola_mint: AccountMeta,
+
+        pub user_o_sola: AccountMeta,
+
+        pub user_usdc: AccountMeta,
+
+        pub usdc_mint: AccountMeta,
+
+        pub floor_vault: AccountMeta,
+
+        pub market_vault: AccountMeta,
+
+        pub sola_vault: AccountMeta,
+
+        pub token_program: AccountMeta,
+    }
+
+    /// Account pubkeys for CrankAutoCompound instruction
+    #[derive(Debug, Clone)]
+    pub struct CrankAutoCompoundInstructionAccounts {
+        pub cranker: Pubkey,
+
+        pub owner: Pubkey,
+
+        pub auto: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub user_position: Pubkey,
+
+        pub sola_mint: Pubkey,
+
+        pub o_sola_mint: Pubkey,
+
+        pub user_o_sola: Pubkey,
+
+        pub user_usdc: Pubkey,
+
+        pub usdc_mint: Pubkey,
+
+        pub floor_vault: Pubkey,
+
+        pub market_vault: Pubkey,
+
+        pub sola_vault: Pubkey,
+    }
+
+    impl CrankAutoCompoundInstructionAccounts {
+        pub fn new(
+            cranker: Pubkey,
+
+            owner: Pubkey,
+
+            auto: Pubkey,
+
+            protocol_state: Pubkey,
+
+            user_position: Pubkey,
+
+            sola_mint: Pubkey,
+
+            o_sola_mint: Pubkey,
+
+            user_o_sola: Pubkey,
+
+            user_usdc: Pubkey,
+
+            usdc_mint: Pubkey,
+
+            floor_vault: Pubkey,
+
+            market_vault: Pubkey,
+
+            sola_vault: Pubkey,
+        ) -> Self {
+            Self {
+                cranker,
+
+                owner,
+
+                auto,
+
+                protocol_state,
+
+                user_position,
+
+                sola_mint,
+
+                o_sola_mint,
+
+                user_o_sola,
+
+                user_usdc,
+
+                usdc_mint,
+
+                floor_vault,
+
+                market_vault,
+
+                sola_vault,
+            }
+        }
+    }
+
+    /// Instruction data for CrankAutoCompound
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct CrankAutoCompoundInstructionData {}
+
+    impl CrankAutoCompoundInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for CrankAutoCompoundInstruction
+    impl CrankAutoCompoundInstruction {
+        fn discriminator() -> [u8; 8] {
+            [132u8, 13u8, 134u8, 210u8, 115u8, 29u8, 43u8, 77u8]
+        }
+
+        pub fn data(data: CrankAutoCompoundInstructionData) -> Self {
+            Self {
+                accounts: CrankAutoCompoundInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: CrankAutoCompoundInstructionAccounts) -> Self {
+            self.accounts.cranker = AccountMeta::new_readonly(accounts.cranker, true);
+
+            self.accounts.owner = AccountMeta::new_readonly(accounts.owner, false);
+
+            self.accounts.auto = AccountMeta::new(accounts.auto, false);
+
+            self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
+
+            self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
+
+            self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
+
+            self.accounts.o_sola_mint = AccountMeta::new(accounts.o_sola_mint, false);
+
+            self.accounts.user_o_sola = AccountMeta::new(accounts.user_o_sola, false);
+
+            self.accounts.user_usdc = AccountMeta::new(accounts.user_usdc, false);
+
+            self.accounts.usdc_mint = AccountMeta::new_readonly(accounts.usdc_mint, false);
+
+            self.accounts.floor_vault = AccountMeta::new(accounts.floor_vault, false);
+
+            self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
+
+            self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.cranker.clone());
+
+            metas.push(self.accounts.owner.clone());
+
+            metas.push(self.accounts.auto.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.user_position.clone());
+
+            metas.push(self.accounts.sola_mint.clone());
+
+            metas.push(self.accounts.o_sola_mint.clone());
+
+            metas.push(self.accounts.user_o_sola.clone());
+
+            metas.push(self.accounts.user_usdc.clone());
+
+            metas.push(self.accounts.usdc_mint.clone());
+
+            metas.push(self.accounts.floor_vault.clone());
+
+            metas.push(self.accounts.market_vault.clone());
+
+            metas.push(self.accounts.sola_vault.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: CrankAutoCompoundLp
+    // ....................................................................
+
+    /// Main instruction struct for CrankAutoCompoundLp
+    pub struct CrankAutoCompoundLpInstruction {
+        pub accounts: CrankAutoCompoundLpInstructionAccountMetas,
+        pub data: CrankAutoCompoundLpInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for CrankAutoCompoundLp instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct CrankAutoCompoundLpInstructionAccountMetas {
+        pub cranker: AccountMeta,
+
+        pub owner: AccountMeta,
+
+        pub auto: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub o_sola_mint: AccountMeta,
+
+        pub user_o_sola: AccountMeta,
+
+        pub sell_pool: AccountMeta,
+
+        pub sell_o_sola_vault: AccountMeta,
+
+        pub sell_usdc_vault: AccountMeta,
+
+        pub hop_pool: AccountMeta,
+
+        pub hop_usdc_vault: AccountMeta,
+
+        pub hop_sol_vault: AccountMeta,
+
+        pub target_pool: AccountMeta,
+
+        pub target_deposit_vault: AccountMeta,
+
+        pub lp_mint: AccountMeta,
+
+        pub user_lp: AccountMeta,
+
+        pub lp_user_info: AccountMeta,
+
+        pub market_vault: AccountMeta,
+
+        pub token_program: AccountMeta,
+    }
+
+    /// Account pubkeys for CrankAutoCompoundLp instruction
+    #[derive(Debug, Clone)]
+    pub struct CrankAutoCompoundLpInstructionAccounts {
+        pub cranker: Pubkey,
+
+        pub owner: Pubkey,
+
+        pub auto: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub o_sola_mint: Pubkey,
+
+        pub user_o_sola: Pubkey,
+
+        pub sell_pool: Pubkey,
+
+        pub sell_o_sola_vault: Pubkey,
+
+        pub sell_usdc_vault: Pubkey,
+
+        pub hop_pool: Pubkey,
+
+        pub hop_usdc_vault: Pubkey,
+
+        pub hop_sol_vault: Pubkey,
+
+        pub target_pool: Pubkey,
+
+        pub target_deposit_vault: Pubkey,
+
+        pub lp_mint: Pubkey,
+
+        pub user_lp: Pubkey,
+
+        pub lp_user_info: Pubkey,
+
+        pub market_vault: Pubkey,
+    }
+
+    impl CrankAutoCompoundLpInstructionAccounts {
+        pub fn new(
+            cranker: Pubkey,
+
+            owner: Pubkey,
+
+            auto: Pubkey,
+
+            protocol_state: Pubkey,
+
+            o_sola_mint: Pubkey,
+
+            user_o_sola: Pubkey,
+
+            sell_pool: Pubkey,
+
+            sell_o_sola_vault: Pubkey,
+
+            sell_usdc_vault: Pubkey,
+
+            hop_pool: Pubkey,
+
+            hop_usdc_vault: Pubkey,
+
+            hop_sol_vault: Pubkey,
+
+            target_pool: Pubkey,
+
+            target_deposit_vault: Pubkey,
+
+            lp_mint: Pubkey,
+
+            user_lp: Pubkey,
+
+            lp_user_info: Pubkey,
+
+            market_vault: Pubkey,
+        ) -> Self {
+            Self {
+                cranker,
+
+                owner,
+
+                auto,
+
+                protocol_state,
+
+                o_sola_mint,
+
+                user_o_sola,
+
+                sell_pool,
+
+                sell_o_sola_vault,
+
+                sell_usdc_vault,
+
+                hop_pool,
+
+                hop_usdc_vault,
+
+                hop_sol_vault,
+
+                target_pool,
+
+                target_deposit_vault,
+
+                lp_mint,
+
+                user_lp,
+
+                lp_user_info,
+
+                market_vault,
+            }
+        }
+    }
+
+    /// Instruction data for CrankAutoCompoundLp
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct CrankAutoCompoundLpInstructionData {}
+
+    impl CrankAutoCompoundLpInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for CrankAutoCompoundLpInstruction
+    impl CrankAutoCompoundLpInstruction {
+        fn discriminator() -> [u8; 8] {
+            [48u8, 215u8, 236u8, 157u8, 73u8, 129u8, 72u8, 20u8]
+        }
+
+        pub fn data(data: CrankAutoCompoundLpInstructionData) -> Self {
+            Self {
+                accounts: CrankAutoCompoundLpInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: CrankAutoCompoundLpInstructionAccounts) -> Self {
+            self.accounts.cranker = AccountMeta::new_readonly(accounts.cranker, true);
+
+            self.accounts.owner = AccountMeta::new_readonly(accounts.owner, false);
+
+            self.accounts.auto = AccountMeta::new(accounts.auto, false);
+
+            self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
+
+            self.accounts.o_sola_mint = AccountMeta::new(accounts.o_sola_mint, false);
+
+            self.accounts.user_o_sola = AccountMeta::new(accounts.user_o_sola, false);
+
+            self.accounts.sell_pool = AccountMeta::new(accounts.sell_pool, false);
+
+            self.accounts.sell_o_sola_vault = AccountMeta::new(accounts.sell_o_sola_vault, false);
+
+            self.accounts.sell_usdc_vault = AccountMeta::new(accounts.sell_usdc_vault, false);
+
+            self.accounts.hop_pool = AccountMeta::new(accounts.hop_pool, false);
+
+            self.accounts.hop_usdc_vault = AccountMeta::new(accounts.hop_usdc_vault, false);
+
+            self.accounts.hop_sol_vault = AccountMeta::new(accounts.hop_sol_vault, false);
+
+            self.accounts.target_pool = AccountMeta::new(accounts.target_pool, false);
+
+            self.accounts.target_deposit_vault =
+                AccountMeta::new(accounts.target_deposit_vault, false);
+
+            self.accounts.lp_mint = AccountMeta::new(accounts.lp_mint, false);
+
+            self.accounts.user_lp = AccountMeta::new(accounts.user_lp, false);
+
+            self.accounts.lp_user_info = AccountMeta::new(accounts.lp_user_info, false);
+
+            self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.cranker.clone());
+
+            metas.push(self.accounts.owner.clone());
+
+            metas.push(self.accounts.auto.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.o_sola_mint.clone());
+
+            metas.push(self.accounts.user_o_sola.clone());
+
+            metas.push(self.accounts.sell_pool.clone());
+
+            metas.push(self.accounts.sell_o_sola_vault.clone());
+
+            metas.push(self.accounts.sell_usdc_vault.clone());
+
+            metas.push(self.accounts.hop_pool.clone());
+
+            metas.push(self.accounts.hop_usdc_vault.clone());
+
+            metas.push(self.accounts.hop_sol_vault.clone());
+
+            metas.push(self.accounts.target_pool.clone());
+
+            metas.push(self.accounts.target_deposit_vault.clone());
+
+            metas.push(self.accounts.lp_mint.clone());
+
+            metas.push(self.accounts.user_lp.clone());
+
+            metas.push(self.accounts.lp_user_info.clone());
+
+            metas.push(self.accounts.market_vault.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: CrankPartnerEpoch
+    // ....................................................................
+
+    /// Main instruction struct for CrankPartnerEpoch
+    pub struct CrankPartnerEpochInstruction {
+        pub accounts: CrankPartnerEpochInstructionAccountMetas,
+        pub data: CrankPartnerEpochInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for CrankPartnerEpoch instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct CrankPartnerEpochInstructionAccountMetas {
+        pub caller: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub partner: AccountMeta,
+
+        pub bribe_stream: AccountMeta,
+
+        pub partner_allocation: AccountMeta,
+
+        pub stream_vault: AccountMeta,
+
+        pub pool_id: AccountMeta,
+
+        pub reward_mint: AccountMeta,
+
+        pub bribe_vault: AccountMeta,
+
+        pub bribe_token_vault: AccountMeta,
+
+        pub lp_mint: AccountMeta,
+
+        pub partner_lp_token: AccountMeta,
+
+        pub sola_mint: AccountMeta,
+
+        pub sola_vault: AccountMeta,
+
+        pub market_vault: AccountMeta,
+
+        pub lock_position: AccountMeta,
+
+        pub partner_position: AccountMeta,
+
+        pub bribe_token_program: AccountMeta,
+
+        pub token_program: AccountMeta,
+
+        pub system_program: AccountMeta,
+
+        pub rent: AccountMeta,
+    }
+
+    /// Account pubkeys for CrankPartnerEpoch instruction
+    #[derive(Debug, Clone)]
+    pub struct CrankPartnerEpochInstructionAccounts {
+        pub caller: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub partner: Pubkey,
+
+        pub bribe_stream: Pubkey,
+
+        pub partner_allocation: Pubkey,
+
+        pub stream_vault: Pubkey,
+
+        pub pool_id: Pubkey,
+
+        pub reward_mint: Pubkey,
+
+        pub bribe_vault: Pubkey,
+
+        pub bribe_token_vault: Pubkey,
+
+        pub lp_mint: Pubkey,
+
+        pub partner_lp_token: Pubkey,
+
+        pub sola_mint: Pubkey,
+
+        pub sola_vault: Pubkey,
+
+        pub market_vault: Pubkey,
+
+        pub lock_position: Pubkey,
+
+        pub partner_position: Pubkey,
+
+        pub bribe_token_program: Pubkey,
+    }
+
+    impl CrankPartnerEpochInstructionAccounts {
+        pub fn new(
+            caller: Pubkey,
+
+            protocol_state: Pubkey,
+
+            partner: Pubkey,
+
+            bribe_stream: Pubkey,
+
+            partner_allocation: Pubkey,
+
+            stream_vault: Pubkey,
+
+            pool_id: Pubkey,
+
+            reward_mint: Pubkey,
+
+            bribe_vault: Pubkey,
+
+            bribe_token_vault: Pubkey,
+
+            lp_mint: Pubkey,
+
+            partner_lp_token: Pubkey,
+
+            sola_mint: Pubkey,
+
+            sola_vault: Pubkey,
+
+            market_vault: Pubkey,
+
+            lock_position: Pubkey,
+
+            partner_position: Pubkey,
+
+            bribe_token_program: Pubkey,
+        ) -> Self {
+            Self {
+                caller,
+
+                protocol_state,
+
+                partner,
+
+                bribe_stream,
+
+                partner_allocation,
+
+                stream_vault,
+
+                pool_id,
+
+                reward_mint,
+
+                bribe_vault,
+
+                bribe_token_vault,
+
+                lp_mint,
+
+                partner_lp_token,
+
+                sola_mint,
+
+                sola_vault,
+
+                market_vault,
+
+                lock_position,
+
+                partner_position,
+
+                bribe_token_program,
+            }
+        }
+    }
+
+    /// Instruction data for CrankPartnerEpoch
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct CrankPartnerEpochInstructionData {
+        pub epoch: u64,
+    }
+
+    impl CrankPartnerEpochInstructionData {
+        pub fn new(epoch: u64) -> Self {
+            Self { epoch }
+        }
+    }
+
+    /// Implementation for CrankPartnerEpochInstruction
+    impl CrankPartnerEpochInstruction {
+        fn discriminator() -> [u8; 8] {
+            [143u8, 200u8, 154u8, 229u8, 120u8, 7u8, 29u8, 154u8]
+        }
+
+        pub fn data(data: CrankPartnerEpochInstructionData) -> Self {
+            Self {
+                accounts: CrankPartnerEpochInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: CrankPartnerEpochInstructionAccounts) -> Self {
+            self.accounts.caller = AccountMeta::new(accounts.caller, true);
+
+            self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
+
+            self.accounts.partner = AccountMeta::new_readonly(accounts.partner, false);
+
+            self.accounts.bribe_stream = AccountMeta::new(accounts.bribe_stream, false);
+
+            self.accounts.partner_allocation = AccountMeta::new(accounts.partner_allocation, false);
+
+            self.accounts.stream_vault = AccountMeta::new(accounts.stream_vault, false);
+
+            self.accounts.pool_id = AccountMeta::new_readonly(accounts.pool_id, false);
+
+            self.accounts.reward_mint = AccountMeta::new_readonly(accounts.reward_mint, false);
+
+            self.accounts.bribe_vault = AccountMeta::new(accounts.bribe_vault, false);
+
+            self.accounts.bribe_token_vault = AccountMeta::new(accounts.bribe_token_vault, false);
+
+            self.accounts.lp_mint = AccountMeta::new_readonly(accounts.lp_mint, false);
+
+            self.accounts.partner_lp_token =
+                AccountMeta::new_readonly(accounts.partner_lp_token, false);
+
+            self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
+
+            self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
+
+            self.accounts.market_vault = AccountMeta::new_readonly(accounts.market_vault, false);
+
+            self.accounts.lock_position = AccountMeta::new(accounts.lock_position, false);
+
+            self.accounts.partner_position = AccountMeta::new(accounts.partner_position, false);
+
+            self.accounts.bribe_token_program =
+                AccountMeta::new_readonly(accounts.bribe_token_program, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+
+            self.accounts.rent = AccountMeta::new_readonly(
+                pubkey!("SysvarRent111111111111111111111111111111111"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.caller.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.partner.clone());
+
+            metas.push(self.accounts.bribe_stream.clone());
+
+            metas.push(self.accounts.partner_allocation.clone());
+
+            metas.push(self.accounts.stream_vault.clone());
+
+            metas.push(self.accounts.pool_id.clone());
+
+            metas.push(self.accounts.reward_mint.clone());
+
+            metas.push(self.accounts.bribe_vault.clone());
+
+            metas.push(self.accounts.bribe_token_vault.clone());
+
+            metas.push(self.accounts.lp_mint.clone());
+
+            metas.push(self.accounts.partner_lp_token.clone());
+
+            metas.push(self.accounts.sola_mint.clone());
+
+            metas.push(self.accounts.sola_vault.clone());
+
+            metas.push(self.accounts.market_vault.clone());
+
+            metas.push(self.accounts.lock_position.clone());
+
+            metas.push(self.accounts.partner_position.clone());
+
+            metas.push(self.accounts.bribe_token_program.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.push(self.accounts.system_program.clone());
+
+            metas.push(self.accounts.rent.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: CrankPoolStrategyLp
+    // ....................................................................
+
+    /// Main instruction struct for CrankPoolStrategyLp
+    pub struct CrankPoolStrategyLpInstruction {
+        pub accounts: CrankPoolStrategyLpInstructionAccountMetas,
+        pub data: CrankPoolStrategyLpInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for CrankPoolStrategyLp instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct CrankPoolStrategyLpInstructionAccountMetas {
+        pub cranker: AccountMeta,
+
+        pub owner: AccountMeta,
+
+        pub strategy: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub o_sola_mint: AccountMeta,
+
+        pub user_o_sola: AccountMeta,
+
+        pub source_pool: AccountMeta,
+
+        pub source_lp_user_info: AccountMeta,
+
+        pub source_user_lp: AccountMeta,
+
+        pub sell_pool: AccountMeta,
+
+        pub sell_o_sola_vault: AccountMeta,
+
+        pub sell_usdc_vault: AccountMeta,
+
+        pub hop_pool: AccountMeta,
+
+        pub hop_usdc_vault: AccountMeta,
+
+        pub hop_sol_vault: AccountMeta,
+
+        pub target_pool: AccountMeta,
+
+        pub target_deposit_vault: AccountMeta,
+
+        pub lp_mint: AccountMeta,
+
+        pub user_lp: AccountMeta,
+
+        pub target_lp_user_info: AccountMeta,
+
+        pub market_vault: AccountMeta,
+
+        pub token_program: AccountMeta,
+    }
+
+    /// Account pubkeys for CrankPoolStrategyLp instruction
+    #[derive(Debug, Clone)]
+    pub struct CrankPoolStrategyLpInstructionAccounts {
+        pub cranker: Pubkey,
+
+        pub owner: Pubkey,
+
+        pub strategy: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub o_sola_mint: Pubkey,
+
+        pub user_o_sola: Pubkey,
+
+        pub source_pool: Pubkey,
+
+        pub source_lp_user_info: Pubkey,
+
+        pub source_user_lp: Pubkey,
+
+        pub sell_pool: Pubkey,
+
+        pub sell_o_sola_vault: Pubkey,
+
+        pub sell_usdc_vault: Pubkey,
+
+        pub hop_pool: Pubkey,
+
+        pub hop_usdc_vault: Pubkey,
+
+        pub hop_sol_vault: Pubkey,
+
+        pub target_pool: Pubkey,
+
+        pub target_deposit_vault: Pubkey,
+
+        pub lp_mint: Pubkey,
+
+        pub user_lp: Pubkey,
+
+        pub target_lp_user_info: Pubkey,
+
+        pub market_vault: Pubkey,
+    }
+
+    impl CrankPoolStrategyLpInstructionAccounts {
+        pub fn new(
+            cranker: Pubkey,
+
+            owner: Pubkey,
+
+            strategy: Pubkey,
+
+            protocol_state: Pubkey,
+
+            o_sola_mint: Pubkey,
+
+            user_o_sola: Pubkey,
+
+            source_pool: Pubkey,
+
+            source_lp_user_info: Pubkey,
+
+            source_user_lp: Pubkey,
+
+            sell_pool: Pubkey,
+
+            sell_o_sola_vault: Pubkey,
+
+            sell_usdc_vault: Pubkey,
+
+            hop_pool: Pubkey,
+
+            hop_usdc_vault: Pubkey,
+
+            hop_sol_vault: Pubkey,
+
+            target_pool: Pubkey,
+
+            target_deposit_vault: Pubkey,
+
+            lp_mint: Pubkey,
+
+            user_lp: Pubkey,
+
+            target_lp_user_info: Pubkey,
+
+            market_vault: Pubkey,
+        ) -> Self {
+            Self {
+                cranker,
+
+                owner,
+
+                strategy,
+
+                protocol_state,
+
+                o_sola_mint,
+
+                user_o_sola,
+
+                source_pool,
+
+                source_lp_user_info,
+
+                source_user_lp,
+
+                sell_pool,
+
+                sell_o_sola_vault,
+
+                sell_usdc_vault,
+
+                hop_pool,
+
+                hop_usdc_vault,
+
+                hop_sol_vault,
+
+                target_pool,
+
+                target_deposit_vault,
+
+                lp_mint,
+
+                user_lp,
+
+                target_lp_user_info,
+
+                market_vault,
+            }
+        }
+    }
+
+    /// Instruction data for CrankPoolStrategyLp
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct CrankPoolStrategyLpInstructionData {}
+
+    impl CrankPoolStrategyLpInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for CrankPoolStrategyLpInstruction
+    impl CrankPoolStrategyLpInstruction {
+        fn discriminator() -> [u8; 8] {
+            [19u8, 238u8, 142u8, 211u8, 236u8, 12u8, 16u8, 177u8]
+        }
+
+        pub fn data(data: CrankPoolStrategyLpInstructionData) -> Self {
+            Self {
+                accounts: CrankPoolStrategyLpInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: CrankPoolStrategyLpInstructionAccounts) -> Self {
+            self.accounts.cranker = AccountMeta::new_readonly(accounts.cranker, true);
+
+            self.accounts.owner = AccountMeta::new_readonly(accounts.owner, false);
+
+            self.accounts.strategy = AccountMeta::new(accounts.strategy, false);
+
+            self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
+
+            self.accounts.o_sola_mint = AccountMeta::new(accounts.o_sola_mint, false);
+
+            self.accounts.user_o_sola = AccountMeta::new(accounts.user_o_sola, false);
+
+            self.accounts.source_pool = AccountMeta::new(accounts.source_pool, false);
+
+            self.accounts.source_lp_user_info =
+                AccountMeta::new(accounts.source_lp_user_info, false);
+
+            self.accounts.source_user_lp =
+                AccountMeta::new_readonly(accounts.source_user_lp, false);
+
+            self.accounts.sell_pool = AccountMeta::new(accounts.sell_pool, false);
+
+            self.accounts.sell_o_sola_vault = AccountMeta::new(accounts.sell_o_sola_vault, false);
+
+            self.accounts.sell_usdc_vault = AccountMeta::new(accounts.sell_usdc_vault, false);
+
+            self.accounts.hop_pool = AccountMeta::new(accounts.hop_pool, false);
+
+            self.accounts.hop_usdc_vault = AccountMeta::new(accounts.hop_usdc_vault, false);
+
+            self.accounts.hop_sol_vault = AccountMeta::new(accounts.hop_sol_vault, false);
+
+            self.accounts.target_pool = AccountMeta::new(accounts.target_pool, false);
+
+            self.accounts.target_deposit_vault =
+                AccountMeta::new(accounts.target_deposit_vault, false);
+
+            self.accounts.lp_mint = AccountMeta::new(accounts.lp_mint, false);
+
+            self.accounts.user_lp = AccountMeta::new(accounts.user_lp, false);
+
+            self.accounts.target_lp_user_info =
+                AccountMeta::new(accounts.target_lp_user_info, false);
+
+            self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.cranker.clone());
+
+            metas.push(self.accounts.owner.clone());
+
+            metas.push(self.accounts.strategy.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.o_sola_mint.clone());
+
+            metas.push(self.accounts.user_o_sola.clone());
+
+            metas.push(self.accounts.source_pool.clone());
+
+            metas.push(self.accounts.source_lp_user_info.clone());
+
+            metas.push(self.accounts.source_user_lp.clone());
+
+            metas.push(self.accounts.sell_pool.clone());
+
+            metas.push(self.accounts.sell_o_sola_vault.clone());
+
+            metas.push(self.accounts.sell_usdc_vault.clone());
+
+            metas.push(self.accounts.hop_pool.clone());
+
+            metas.push(self.accounts.hop_usdc_vault.clone());
+
+            metas.push(self.accounts.hop_sol_vault.clone());
+
+            metas.push(self.accounts.target_pool.clone());
+
+            metas.push(self.accounts.target_deposit_vault.clone());
+
+            metas.push(self.accounts.lp_mint.clone());
+
+            metas.push(self.accounts.user_lp.clone());
+
+            metas.push(self.accounts.target_lp_user_info.clone());
+
+            metas.push(self.accounts.market_vault.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: CrankPoolStrategyVote
+    // ....................................................................
+
+    /// Main instruction struct for CrankPoolStrategyVote
+    pub struct CrankPoolStrategyVoteInstruction {
+        pub accounts: CrankPoolStrategyVoteInstructionAccountMetas,
+        pub data: CrankPoolStrategyVoteInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for CrankPoolStrategyVote instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct CrankPoolStrategyVoteInstructionAccountMetas {
+        pub cranker: AccountMeta,
+
+        pub owner: AccountMeta,
+
+        pub strategy: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub source_pool: AccountMeta,
+
+        pub source_lp_mint: AccountMeta,
+
+        pub source_lp_user_info: AccountMeta,
+
+        pub source_user_lp: AccountMeta,
+
+        pub user_position: AccountMeta,
+
+        pub user_usdc: AccountMeta,
+
+        pub usdc_mint: AccountMeta,
+
+        pub auto_delegate: AccountMeta,
+
+        pub sola_mint: AccountMeta,
+
+        pub floor_vault: AccountMeta,
+
+        pub market_vault: AccountMeta,
+
+        pub sola_vault: AccountMeta,
+
+        pub token_program: AccountMeta,
+    }
+
+    /// Account pubkeys for CrankPoolStrategyVote instruction
+    #[derive(Debug, Clone)]
+    pub struct CrankPoolStrategyVoteInstructionAccounts {
+        pub cranker: Pubkey,
+
+        pub owner: Pubkey,
+
+        pub strategy: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub source_pool: Pubkey,
+
+        pub source_lp_mint: Pubkey,
+
+        pub source_lp_user_info: Pubkey,
+
+        pub source_user_lp: Pubkey,
+
+        pub user_position: Pubkey,
+
+        pub user_usdc: Pubkey,
+
+        pub usdc_mint: Pubkey,
+
+        pub auto_delegate: Pubkey,
+
+        pub sola_mint: Pubkey,
+
+        pub floor_vault: Pubkey,
+
+        pub market_vault: Pubkey,
+
+        pub sola_vault: Pubkey,
+    }
+
+    impl CrankPoolStrategyVoteInstructionAccounts {
+        pub fn new(
+            cranker: Pubkey,
+
+            owner: Pubkey,
+
+            strategy: Pubkey,
+
+            protocol_state: Pubkey,
+
+            source_pool: Pubkey,
+
+            source_lp_mint: Pubkey,
+
+            source_lp_user_info: Pubkey,
+
+            source_user_lp: Pubkey,
+
+            user_position: Pubkey,
+
+            user_usdc: Pubkey,
+
+            usdc_mint: Pubkey,
+
+            auto_delegate: Pubkey,
+
+            sola_mint: Pubkey,
+
+            floor_vault: Pubkey,
+
+            market_vault: Pubkey,
+
+            sola_vault: Pubkey,
+        ) -> Self {
+            Self {
+                cranker,
+
+                owner,
+
+                strategy,
+
+                protocol_state,
+
+                source_pool,
+
+                source_lp_mint,
+
+                source_lp_user_info,
+
+                source_user_lp,
+
+                user_position,
+
+                user_usdc,
+
+                usdc_mint,
+
+                auto_delegate,
+
+                sola_mint,
+
+                floor_vault,
+
+                market_vault,
+
+                sola_vault,
+            }
+        }
+    }
+
+    /// Instruction data for CrankPoolStrategyVote
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct CrankPoolStrategyVoteInstructionData {}
+
+    impl CrankPoolStrategyVoteInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for CrankPoolStrategyVoteInstruction
+    impl CrankPoolStrategyVoteInstruction {
+        fn discriminator() -> [u8; 8] {
+            [133u8, 84u8, 168u8, 192u8, 134u8, 49u8, 167u8, 115u8]
+        }
+
+        pub fn data(data: CrankPoolStrategyVoteInstructionData) -> Self {
+            Self {
+                accounts: CrankPoolStrategyVoteInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: CrankPoolStrategyVoteInstructionAccounts) -> Self {
+            self.accounts.cranker = AccountMeta::new_readonly(accounts.cranker, true);
+
+            self.accounts.owner = AccountMeta::new_readonly(accounts.owner, false);
+
+            self.accounts.strategy = AccountMeta::new(accounts.strategy, false);
+
+            self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
+
+            self.accounts.source_pool = AccountMeta::new(accounts.source_pool, false);
+
+            self.accounts.source_lp_mint =
+                AccountMeta::new_readonly(accounts.source_lp_mint, false);
+
+            self.accounts.source_lp_user_info =
+                AccountMeta::new(accounts.source_lp_user_info, false);
+
+            self.accounts.source_user_lp =
+                AccountMeta::new_readonly(accounts.source_user_lp, false);
+
+            self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
+
+            self.accounts.user_usdc = AccountMeta::new(accounts.user_usdc, false);
+
+            self.accounts.usdc_mint = AccountMeta::new_readonly(accounts.usdc_mint, false);
+
+            self.accounts.auto_delegate = AccountMeta::new_readonly(accounts.auto_delegate, false);
+
+            self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
+
+            self.accounts.floor_vault = AccountMeta::new(accounts.floor_vault, false);
+
+            self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
+
+            self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.cranker.clone());
+
+            metas.push(self.accounts.owner.clone());
+
+            metas.push(self.accounts.strategy.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.source_pool.clone());
+
+            metas.push(self.accounts.source_lp_mint.clone());
+
+            metas.push(self.accounts.source_lp_user_info.clone());
+
+            metas.push(self.accounts.source_user_lp.clone());
+
+            metas.push(self.accounts.user_position.clone());
+
+            metas.push(self.accounts.user_usdc.clone());
+
+            metas.push(self.accounts.usdc_mint.clone());
+
+            metas.push(self.accounts.auto_delegate.clone());
+
+            metas.push(self.accounts.sola_mint.clone());
+
+            metas.push(self.accounts.floor_vault.clone());
+
+            metas.push(self.accounts.market_vault.clone());
+
+            metas.push(self.accounts.sola_vault.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
     // Instruction: CreatePool
     // ....................................................................
 
@@ -3675,6 +5728,10 @@ pub mod soladrome {
 
         pub token_b_vault: AccountMeta,
 
+        pub token_a_program: AccountMeta,
+
+        pub token_b_program: AccountMeta,
+
         pub token_program: AccountMeta,
 
         pub system_program: AccountMeta,
@@ -3700,6 +5757,10 @@ pub mod soladrome {
         pub token_a_vault: Pubkey,
 
         pub token_b_vault: Pubkey,
+
+        pub token_a_program: Pubkey,
+
+        pub token_b_program: Pubkey,
     }
 
     impl CreatePoolInstructionAccounts {
@@ -3719,6 +5780,10 @@ pub mod soladrome {
             token_a_vault: Pubkey,
 
             token_b_vault: Pubkey,
+
+            token_a_program: Pubkey,
+
+            token_b_program: Pubkey,
         ) -> Self {
             Self {
                 creator,
@@ -3736,6 +5801,10 @@ pub mod soladrome {
                 token_a_vault,
 
                 token_b_vault,
+
+                token_a_program,
+
+                token_b_program,
             }
         }
     }
@@ -3790,6 +5859,12 @@ pub mod soladrome {
 
             self.accounts.token_b_vault = AccountMeta::new(accounts.token_b_vault, false);
 
+            self.accounts.token_a_program =
+                AccountMeta::new_readonly(accounts.token_a_program, false);
+
+            self.accounts.token_b_program =
+                AccountMeta::new_readonly(accounts.token_b_program, false);
+
             self.accounts.token_program = AccountMeta::new_readonly(
                 pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
                 false,
@@ -3829,6 +5904,10 @@ pub mod soladrome {
             metas.push(self.accounts.token_a_vault.clone());
 
             metas.push(self.accounts.token_b_vault.clone());
+
+            metas.push(self.accounts.token_a_program.clone());
+
+            metas.push(self.accounts.token_b_program.clone());
 
             metas.push(self.accounts.token_program.clone());
 
@@ -3881,7 +5960,7 @@ pub mod soladrome {
 
         pub floor_vault: AccountMeta,
 
-        pub market_vault: AccountMeta,
+        pub market_reserve: AccountMeta,
 
         pub pool: AccountMeta,
 
@@ -3921,7 +6000,7 @@ pub mod soladrome {
 
         pub floor_vault: Pubkey,
 
-        pub market_vault: Pubkey,
+        pub market_reserve: Pubkey,
 
         pub pool: Pubkey,
 
@@ -3952,7 +6031,7 @@ pub mod soladrome {
 
             floor_vault: Pubkey,
 
-            market_vault: Pubkey,
+            market_reserve: Pubkey,
 
             pool: Pubkey,
 
@@ -3981,7 +6060,7 @@ pub mod soladrome {
 
                 floor_vault,
 
-                market_vault,
+                market_reserve,
 
                 pool,
 
@@ -4067,7 +6146,7 @@ pub mod soladrome {
 
             self.accounts.floor_vault = AccountMeta::new(accounts.floor_vault, false);
 
-            self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
+            self.accounts.market_reserve = AccountMeta::new(accounts.market_reserve, false);
 
             self.accounts.pool = AccountMeta::new(accounts.pool, false);
 
@@ -4122,7 +6201,7 @@ pub mod soladrome {
 
             metas.push(self.accounts.floor_vault.clone());
 
-            metas.push(self.accounts.market_vault.clone());
+            metas.push(self.accounts.market_reserve.clone());
 
             metas.push(self.accounts.pool.clone());
 
@@ -4208,6 +6287,8 @@ pub mod soladrome {
         pub bribe_vault: Pubkey,
 
         pub bribe_token_vault: Pubkey,
+
+        pub token_program: Pubkey,
     }
 
     impl DepositBribeInstructionAccounts {
@@ -4225,6 +6306,8 @@ pub mod soladrome {
             bribe_vault: Pubkey,
 
             bribe_token_vault: Pubkey,
+
+            token_program: Pubkey,
         ) -> Self {
             Self {
                 depositor,
@@ -4240,6 +6323,8 @@ pub mod soladrome {
                 bribe_vault,
 
                 bribe_token_vault,
+
+                token_program,
             }
         }
     }
@@ -4288,10 +6373,7 @@ pub mod soladrome {
 
             self.accounts.bribe_token_vault = AccountMeta::new(accounts.bribe_token_vault, false);
 
-            self.accounts.token_program = AccountMeta::new_readonly(
-                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-                false,
-            );
+            self.accounts.token_program = AccountMeta::new_readonly(accounts.token_program, false);
 
             self.accounts.system_program =
                 AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
@@ -5176,6 +7258,370 @@ pub mod soladrome {
     }
 
     // ....................................................................
+    // Instruction: FundMarketReserve
+    // ....................................................................
+
+    /// Main instruction struct for FundMarketReserve
+    pub struct FundMarketReserveInstruction {
+        pub accounts: FundMarketReserveInstructionAccountMetas,
+        pub data: FundMarketReserveInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for FundMarketReserve instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct FundMarketReserveInstructionAccountMetas {
+        pub funder: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub usdc_mint: AccountMeta,
+
+        pub market_reserve: AccountMeta,
+
+        pub funder_usdc: AccountMeta,
+
+        pub token_program: AccountMeta,
+
+        pub system_program: AccountMeta,
+    }
+
+    /// Account pubkeys for FundMarketReserve instruction
+    #[derive(Debug, Clone)]
+    pub struct FundMarketReserveInstructionAccounts {
+        pub funder: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub usdc_mint: Pubkey,
+
+        pub market_reserve: Pubkey,
+
+        pub funder_usdc: Pubkey,
+    }
+
+    impl FundMarketReserveInstructionAccounts {
+        pub fn new(
+            funder: Pubkey,
+
+            protocol_state: Pubkey,
+
+            usdc_mint: Pubkey,
+
+            market_reserve: Pubkey,
+
+            funder_usdc: Pubkey,
+        ) -> Self {
+            Self {
+                funder,
+
+                protocol_state,
+
+                usdc_mint,
+
+                market_reserve,
+
+                funder_usdc,
+            }
+        }
+    }
+
+    /// Instruction data for FundMarketReserve
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct FundMarketReserveInstructionData {
+        pub amount: u64,
+    }
+
+    impl FundMarketReserveInstructionData {
+        pub fn new(amount: u64) -> Self {
+            Self { amount }
+        }
+    }
+
+    /// Implementation for FundMarketReserveInstruction
+    impl FundMarketReserveInstruction {
+        fn discriminator() -> [u8; 8] {
+            [0u8, 34u8, 109u8, 91u8, 89u8, 1u8, 37u8, 5u8]
+        }
+
+        pub fn data(data: FundMarketReserveInstructionData) -> Self {
+            Self {
+                accounts: FundMarketReserveInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: FundMarketReserveInstructionAccounts) -> Self {
+            self.accounts.funder = AccountMeta::new(accounts.funder, true);
+
+            self.accounts.protocol_state =
+                AccountMeta::new_readonly(accounts.protocol_state, false);
+
+            self.accounts.usdc_mint = AccountMeta::new_readonly(accounts.usdc_mint, false);
+
+            self.accounts.market_reserve = AccountMeta::new(accounts.market_reserve, false);
+
+            self.accounts.funder_usdc = AccountMeta::new(accounts.funder_usdc, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.funder.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.usdc_mint.clone());
+
+            metas.push(self.accounts.market_reserve.clone());
+
+            metas.push(self.accounts.funder_usdc.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.push(self.accounts.system_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: FundPartnerBribeStream
+    // ....................................................................
+
+    /// Main instruction struct for FundPartnerBribeStream
+    pub struct FundPartnerBribeStreamInstruction {
+        pub accounts: FundPartnerBribeStreamInstructionAccountMetas,
+        pub data: FundPartnerBribeStreamInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for FundPartnerBribeStream instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct FundPartnerBribeStreamInstructionAccountMetas {
+        pub partner: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub partner_allocation: AccountMeta,
+
+        pub pool_id: AccountMeta,
+
+        pub bribe_mint: AccountMeta,
+
+        pub partner_token: AccountMeta,
+
+        pub bribe_stream: AccountMeta,
+
+        pub stream_vault: AccountMeta,
+
+        pub token_program: AccountMeta,
+
+        pub system_program: AccountMeta,
+
+        pub rent: AccountMeta,
+    }
+
+    /// Account pubkeys for FundPartnerBribeStream instruction
+    #[derive(Debug, Clone)]
+    pub struct FundPartnerBribeStreamInstructionAccounts {
+        pub partner: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub partner_allocation: Pubkey,
+
+        pub pool_id: Pubkey,
+
+        pub bribe_mint: Pubkey,
+
+        pub partner_token: Pubkey,
+
+        pub bribe_stream: Pubkey,
+
+        pub stream_vault: Pubkey,
+
+        pub token_program: Pubkey,
+    }
+
+    impl FundPartnerBribeStreamInstructionAccounts {
+        pub fn new(
+            partner: Pubkey,
+
+            protocol_state: Pubkey,
+
+            partner_allocation: Pubkey,
+
+            pool_id: Pubkey,
+
+            bribe_mint: Pubkey,
+
+            partner_token: Pubkey,
+
+            bribe_stream: Pubkey,
+
+            stream_vault: Pubkey,
+
+            token_program: Pubkey,
+        ) -> Self {
+            Self {
+                partner,
+
+                protocol_state,
+
+                partner_allocation,
+
+                pool_id,
+
+                bribe_mint,
+
+                partner_token,
+
+                bribe_stream,
+
+                stream_vault,
+
+                token_program,
+            }
+        }
+    }
+
+    /// Instruction data for FundPartnerBribeStream
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct FundPartnerBribeStreamInstructionData {
+        pub epochs_total: u64,
+
+        pub amount_per_epoch: u64,
+    }
+
+    impl FundPartnerBribeStreamInstructionData {
+        pub fn new(epochs_total: u64, amount_per_epoch: u64) -> Self {
+            Self {
+                epochs_total,
+
+                amount_per_epoch,
+            }
+        }
+    }
+
+    /// Implementation for FundPartnerBribeStreamInstruction
+    impl FundPartnerBribeStreamInstruction {
+        fn discriminator() -> [u8; 8] {
+            [32u8, 112u8, 53u8, 36u8, 34u8, 247u8, 130u8, 255u8]
+        }
+
+        pub fn data(data: FundPartnerBribeStreamInstructionData) -> Self {
+            Self {
+                accounts: FundPartnerBribeStreamInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: FundPartnerBribeStreamInstructionAccounts) -> Self {
+            self.accounts.partner = AccountMeta::new(accounts.partner, true);
+
+            self.accounts.protocol_state =
+                AccountMeta::new_readonly(accounts.protocol_state, false);
+
+            self.accounts.partner_allocation = AccountMeta::new(accounts.partner_allocation, false);
+
+            self.accounts.pool_id = AccountMeta::new_readonly(accounts.pool_id, false);
+
+            self.accounts.bribe_mint = AccountMeta::new_readonly(accounts.bribe_mint, false);
+
+            self.accounts.partner_token = AccountMeta::new(accounts.partner_token, false);
+
+            self.accounts.bribe_stream = AccountMeta::new(accounts.bribe_stream, false);
+
+            self.accounts.stream_vault = AccountMeta::new(accounts.stream_vault, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(accounts.token_program, false);
+
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+
+            self.accounts.rent = AccountMeta::new_readonly(
+                pubkey!("SysvarRent111111111111111111111111111111111"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.partner.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.partner_allocation.clone());
+
+            metas.push(self.accounts.pool_id.clone());
+
+            metas.push(self.accounts.bribe_mint.clone());
+
+            metas.push(self.accounts.partner_token.clone());
+
+            metas.push(self.accounts.bribe_stream.clone());
+
+            metas.push(self.accounts.stream_vault.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.push(self.accounts.system_program.clone());
+
+            metas.push(self.accounts.rent.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
     // Instruction: Initialize
     // ....................................................................
 
@@ -5207,6 +7653,8 @@ pub mod soladrome {
 
         pub sola_vault: AccountMeta,
 
+        pub market_reserve: AccountMeta,
+
         pub token_program: AccountMeta,
 
         pub system_program: AccountMeta,
@@ -5234,6 +7682,8 @@ pub mod soladrome {
         pub market_vault: Pubkey,
 
         pub sola_vault: Pubkey,
+
+        pub market_reserve: Pubkey,
     }
 
     impl InitializeInstructionAccounts {
@@ -5255,6 +7705,8 @@ pub mod soladrome {
             market_vault: Pubkey,
 
             sola_vault: Pubkey,
+
+            market_reserve: Pubkey,
         ) -> Self {
             Self {
                 authority,
@@ -5274,17 +7726,21 @@ pub mod soladrome {
                 market_vault,
 
                 sola_vault,
+
+                market_reserve,
             }
         }
     }
 
     /// Instruction data for Initialize
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct InitializeInstructionData {}
+    pub struct InitializeInstructionData {
+        pub founder_wallet: Pubkey,
+    }
 
     impl InitializeInstructionData {
-        pub fn new() -> Self {
-            Self {}
+        pub fn new(founder_wallet: Pubkey) -> Self {
+            Self { founder_wallet }
         }
     }
 
@@ -5320,6 +7776,8 @@ pub mod soladrome {
             self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
 
             self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
+
+            self.accounts.market_reserve = AccountMeta::new(accounts.market_reserve, false);
 
             self.accounts.token_program = AccountMeta::new_readonly(
                 pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
@@ -5362,6 +7820,8 @@ pub mod soladrome {
             metas.push(self.accounts.market_vault.clone());
 
             metas.push(self.accounts.sola_vault.clone());
+
+            metas.push(self.accounts.market_reserve.clone());
 
             metas.push(self.accounts.token_program.clone());
 
@@ -5596,19 +8056,11 @@ pub mod soladrome {
 
         pub protocol_state: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
-        pub user_hi_sola: AccountMeta,
-
         pub lock_position: AccountMeta,
-
-        pub ve_lock_vault: AccountMeta,
 
         pub market_vault: AccountMeta,
 
         pub user_position: AccountMeta,
-
-        pub token_program: AccountMeta,
 
         pub system_program: AccountMeta,
 
@@ -5622,13 +8074,7 @@ pub mod soladrome {
 
         pub protocol_state: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
-        pub user_hi_sola: Pubkey,
-
         pub lock_position: Pubkey,
-
-        pub ve_lock_vault: Pubkey,
 
         pub market_vault: Pubkey,
 
@@ -5641,13 +8087,7 @@ pub mod soladrome {
 
             protocol_state: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
-            user_hi_sola: Pubkey,
-
             lock_position: Pubkey,
-
-            ve_lock_vault: Pubkey,
 
             market_vault: Pubkey,
 
@@ -5658,13 +8098,7 @@ pub mod soladrome {
 
                 protocol_state,
 
-                hi_sola_mint,
-
-                user_hi_sola,
-
                 lock_position,
-
-                ve_lock_vault,
 
                 market_vault,
 
@@ -5710,22 +8144,11 @@ pub mod soladrome {
 
             self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new_readonly(accounts.hi_sola_mint, false);
-
-            self.accounts.user_hi_sola = AccountMeta::new(accounts.user_hi_sola, false);
-
             self.accounts.lock_position = AccountMeta::new(accounts.lock_position, false);
-
-            self.accounts.ve_lock_vault = AccountMeta::new(accounts.ve_lock_vault, false);
 
             self.accounts.market_vault = AccountMeta::new_readonly(accounts.market_vault, false);
 
             self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
-
-            self.accounts.token_program = AccountMeta::new_readonly(
-                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-                false,
-            );
 
             self.accounts.system_program =
                 AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
@@ -5750,229 +8173,15 @@ pub mod soladrome {
 
             metas.push(self.accounts.protocol_state.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
-
-            metas.push(self.accounts.user_hi_sola.clone());
-
             metas.push(self.accounts.lock_position.clone());
-
-            metas.push(self.accounts.ve_lock_vault.clone());
 
             metas.push(self.accounts.market_vault.clone());
 
             metas.push(self.accounts.user_position.clone());
 
-            metas.push(self.accounts.token_program.clone());
-
             metas.push(self.accounts.system_program.clone());
 
             metas.push(self.accounts.rent.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: MigrateProtocolState
-    // ....................................................................
-
-    /// Main instruction struct for MigrateProtocolState
-    pub struct MigrateProtocolStateInstruction {
-        pub accounts: MigrateProtocolStateInstructionAccountMetas,
-        pub data: MigrateProtocolStateInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for MigrateProtocolState instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct MigrateProtocolStateInstructionAccountMetas {
-        pub authority: AccountMeta,
-
-        pub protocol_state: AccountMeta,
-
-        pub system_program: AccountMeta,
-    }
-
-    /// Account pubkeys for MigrateProtocolState instruction
-    #[derive(Debug, Clone)]
-    pub struct MigrateProtocolStateInstructionAccounts {
-        pub authority: Pubkey,
-
-        pub protocol_state: Pubkey,
-    }
-
-    impl MigrateProtocolStateInstructionAccounts {
-        pub fn new(authority: Pubkey, protocol_state: Pubkey) -> Self {
-            Self {
-                authority,
-
-                protocol_state,
-            }
-        }
-    }
-
-    /// Instruction data for MigrateProtocolState
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct MigrateProtocolStateInstructionData {}
-
-    impl MigrateProtocolStateInstructionData {
-        pub fn new() -> Self {
-            Self {}
-        }
-    }
-
-    /// Implementation for MigrateProtocolStateInstruction
-    impl MigrateProtocolStateInstruction {
-        fn discriminator() -> [u8; 8] {
-            [29u8, 107u8, 8u8, 182u8, 172u8, 205u8, 210u8, 178u8]
-        }
-
-        pub fn data(data: MigrateProtocolStateInstructionData) -> Self {
-            Self {
-                accounts: MigrateProtocolStateInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: MigrateProtocolStateInstructionAccounts) -> Self {
-            self.accounts.authority = AccountMeta::new(accounts.authority, true);
-
-            self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
-
-            self.accounts.system_program =
-                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.authority.clone());
-
-            metas.push(self.accounts.protocol_state.clone());
-
-            metas.push(self.accounts.system_program.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: MigrateUserPosition
-    // ....................................................................
-
-    /// Main instruction struct for MigrateUserPosition
-    pub struct MigrateUserPositionInstruction {
-        pub accounts: MigrateUserPositionInstructionAccountMetas,
-        pub data: MigrateUserPositionInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for MigrateUserPosition instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct MigrateUserPositionInstructionAccountMetas {
-        pub user: AccountMeta,
-
-        pub user_position: AccountMeta,
-
-        pub system_program: AccountMeta,
-    }
-
-    /// Account pubkeys for MigrateUserPosition instruction
-    #[derive(Debug, Clone)]
-    pub struct MigrateUserPositionInstructionAccounts {
-        pub user: Pubkey,
-
-        pub user_position: Pubkey,
-    }
-
-    impl MigrateUserPositionInstructionAccounts {
-        pub fn new(user: Pubkey, user_position: Pubkey) -> Self {
-            Self {
-                user,
-
-                user_position,
-            }
-        }
-    }
-
-    /// Instruction data for MigrateUserPosition
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct MigrateUserPositionInstructionData {}
-
-    impl MigrateUserPositionInstructionData {
-        pub fn new() -> Self {
-            Self {}
-        }
-    }
-
-    /// Implementation for MigrateUserPositionInstruction
-    impl MigrateUserPositionInstruction {
-        fn discriminator() -> [u8; 8] {
-            [247u8, 89u8, 105u8, 105u8, 212u8, 67u8, 232u8, 16u8]
-        }
-
-        pub fn data(data: MigrateUserPositionInstructionData) -> Self {
-            Self {
-                accounts: MigrateUserPositionInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: MigrateUserPositionInstructionAccounts) -> Self {
-            self.accounts.user = AccountMeta::new(accounts.user, true);
-
-            self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
-
-            self.accounts.system_program =
-                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.user.clone());
-
-            metas.push(self.accounts.user_position.clone());
-
-            metas.push(self.accounts.system_program.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -6009,8 +8218,6 @@ pub mod soladrome {
 
         pub sola_mint: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
         pub sola_vault: AccountMeta,
 
         pub market_vault: AccountMeta,
@@ -6018,8 +8225,6 @@ pub mod soladrome {
         pub team_wallet: AccountMeta,
 
         pub team_lock_position: AccountMeta,
-
-        pub team_ve_lock_vault: AccountMeta,
 
         pub team_position: AccountMeta,
 
@@ -6041,8 +8246,6 @@ pub mod soladrome {
 
         pub sola_mint: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
         pub sola_vault: Pubkey,
 
         pub market_vault: Pubkey,
@@ -6050,8 +8253,6 @@ pub mod soladrome {
         pub team_wallet: Pubkey,
 
         pub team_lock_position: Pubkey,
-
-        pub team_ve_lock_vault: Pubkey,
 
         pub team_position: Pubkey,
     }
@@ -6064,8 +8265,6 @@ pub mod soladrome {
 
             sola_mint: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
             sola_vault: Pubkey,
 
             market_vault: Pubkey,
@@ -6073,8 +8272,6 @@ pub mod soladrome {
             team_wallet: Pubkey,
 
             team_lock_position: Pubkey,
-
-            team_ve_lock_vault: Pubkey,
 
             team_position: Pubkey,
         ) -> Self {
@@ -6085,8 +8282,6 @@ pub mod soladrome {
 
                 sola_mint,
 
-                hi_sola_mint,
-
                 sola_vault,
 
                 market_vault,
@@ -6094,8 +8289,6 @@ pub mod soladrome {
                 team_wallet,
 
                 team_lock_position,
-
-                team_ve_lock_vault,
 
                 team_position,
             }
@@ -6133,8 +8326,6 @@ pub mod soladrome {
 
             self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new(accounts.hi_sola_mint, false);
-
             self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
 
             self.accounts.market_vault = AccountMeta::new_readonly(accounts.market_vault, false);
@@ -6142,8 +8333,6 @@ pub mod soladrome {
             self.accounts.team_wallet = AccountMeta::new_readonly(accounts.team_wallet, false);
 
             self.accounts.team_lock_position = AccountMeta::new(accounts.team_lock_position, false);
-
-            self.accounts.team_ve_lock_vault = AccountMeta::new(accounts.team_ve_lock_vault, false);
 
             self.accounts.team_position = AccountMeta::new(accounts.team_position, false);
 
@@ -6182,8 +8371,6 @@ pub mod soladrome {
 
             metas.push(self.accounts.sola_mint.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
-
             metas.push(self.accounts.sola_vault.clone());
 
             metas.push(self.accounts.market_vault.clone());
@@ -6191,8 +8378,6 @@ pub mod soladrome {
             metas.push(self.accounts.team_wallet.clone());
 
             metas.push(self.accounts.team_lock_position.clone());
-
-            metas.push(self.accounts.team_ve_lock_vault.clone());
 
             metas.push(self.accounts.team_position.clone());
 
@@ -6372,208 +8557,6 @@ pub mod soladrome {
     }
 
     // ....................................................................
-    // Instruction: PartnerDepositBribe
-    // ....................................................................
-
-    /// Main instruction struct for PartnerDepositBribe
-    pub struct PartnerDepositBribeInstruction {
-        pub accounts: PartnerDepositBribeInstructionAccountMetas,
-        pub data: PartnerDepositBribeInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for PartnerDepositBribe instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct PartnerDepositBribeInstructionAccountMetas {
-        pub partner: AccountMeta,
-
-        pub protocol_state: AccountMeta,
-
-        pub partner_allocation: AccountMeta,
-
-        pub pool_id: AccountMeta,
-
-        pub reward_mint: AccountMeta,
-
-        pub partner_token: AccountMeta,
-
-        pub bribe_vault: AccountMeta,
-
-        pub bribe_token_vault: AccountMeta,
-
-        pub token_program: AccountMeta,
-
-        pub system_program: AccountMeta,
-
-        pub rent: AccountMeta,
-    }
-
-    /// Account pubkeys for PartnerDepositBribe instruction
-    #[derive(Debug, Clone)]
-    pub struct PartnerDepositBribeInstructionAccounts {
-        pub partner: Pubkey,
-
-        pub protocol_state: Pubkey,
-
-        pub partner_allocation: Pubkey,
-
-        pub pool_id: Pubkey,
-
-        pub reward_mint: Pubkey,
-
-        pub partner_token: Pubkey,
-
-        pub bribe_vault: Pubkey,
-
-        pub bribe_token_vault: Pubkey,
-    }
-
-    impl PartnerDepositBribeInstructionAccounts {
-        pub fn new(
-            partner: Pubkey,
-
-            protocol_state: Pubkey,
-
-            partner_allocation: Pubkey,
-
-            pool_id: Pubkey,
-
-            reward_mint: Pubkey,
-
-            partner_token: Pubkey,
-
-            bribe_vault: Pubkey,
-
-            bribe_token_vault: Pubkey,
-        ) -> Self {
-            Self {
-                partner,
-
-                protocol_state,
-
-                partner_allocation,
-
-                pool_id,
-
-                reward_mint,
-
-                partner_token,
-
-                bribe_vault,
-
-                bribe_token_vault,
-            }
-        }
-    }
-
-    /// Instruction data for PartnerDepositBribe
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct PartnerDepositBribeInstructionData {
-        pub epoch: u64,
-
-        pub amount: u64,
-    }
-
-    impl PartnerDepositBribeInstructionData {
-        pub fn new(epoch: u64, amount: u64) -> Self {
-            Self { epoch, amount }
-        }
-    }
-
-    /// Implementation for PartnerDepositBribeInstruction
-    impl PartnerDepositBribeInstruction {
-        fn discriminator() -> [u8; 8] {
-            [82u8, 194u8, 24u8, 115u8, 184u8, 240u8, 160u8, 196u8]
-        }
-
-        pub fn data(data: PartnerDepositBribeInstructionData) -> Self {
-            Self {
-                accounts: PartnerDepositBribeInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: PartnerDepositBribeInstructionAccounts) -> Self {
-            self.accounts.partner = AccountMeta::new(accounts.partner, true);
-
-            self.accounts.protocol_state =
-                AccountMeta::new_readonly(accounts.protocol_state, false);
-
-            self.accounts.partner_allocation = AccountMeta::new(accounts.partner_allocation, false);
-
-            self.accounts.pool_id = AccountMeta::new_readonly(accounts.pool_id, false);
-
-            self.accounts.reward_mint = AccountMeta::new_readonly(accounts.reward_mint, false);
-
-            self.accounts.partner_token = AccountMeta::new(accounts.partner_token, false);
-
-            self.accounts.bribe_vault = AccountMeta::new(accounts.bribe_vault, false);
-
-            self.accounts.bribe_token_vault = AccountMeta::new(accounts.bribe_token_vault, false);
-
-            self.accounts.token_program = AccountMeta::new_readonly(
-                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-                false,
-            );
-
-            self.accounts.system_program =
-                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
-
-            self.accounts.rent = AccountMeta::new_readonly(
-                pubkey!("SysvarRent111111111111111111111111111111111"),
-                false,
-            );
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.partner.clone());
-
-            metas.push(self.accounts.protocol_state.clone());
-
-            metas.push(self.accounts.partner_allocation.clone());
-
-            metas.push(self.accounts.pool_id.clone());
-
-            metas.push(self.accounts.reward_mint.clone());
-
-            metas.push(self.accounts.partner_token.clone());
-
-            metas.push(self.accounts.bribe_vault.clone());
-
-            metas.push(self.accounts.bribe_token_vault.clone());
-
-            metas.push(self.accounts.token_program.clone());
-
-            metas.push(self.accounts.system_program.clone());
-
-            metas.push(self.accounts.rent.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
     // Instruction: Pause
     // ....................................................................
 
@@ -6670,6 +8653,169 @@ pub mod soladrome {
     }
 
     // ....................................................................
+    // Instruction: RecycleLpEmissions
+    // ....................................................................
+
+    /// Main instruction struct for RecycleLpEmissions
+    pub struct RecycleLpEmissionsInstruction {
+        pub accounts: RecycleLpEmissionsInstructionAccountMetas,
+        pub data: RecycleLpEmissionsInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for RecycleLpEmissions instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct RecycleLpEmissionsInstructionAccountMetas {
+        pub caller: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub pool: AccountMeta,
+
+        pub old_pool_epoch_accum: AccountMeta,
+
+        pub new_pool_epoch_accum: AccountMeta,
+
+        pub system_program: AccountMeta,
+
+        pub rent: AccountMeta,
+    }
+
+    /// Account pubkeys for RecycleLpEmissions instruction
+    #[derive(Debug, Clone)]
+    pub struct RecycleLpEmissionsInstructionAccounts {
+        pub caller: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub pool: Pubkey,
+
+        pub old_pool_epoch_accum: Pubkey,
+
+        pub new_pool_epoch_accum: Pubkey,
+    }
+
+    impl RecycleLpEmissionsInstructionAccounts {
+        pub fn new(
+            caller: Pubkey,
+
+            protocol_state: Pubkey,
+
+            pool: Pubkey,
+
+            old_pool_epoch_accum: Pubkey,
+
+            new_pool_epoch_accum: Pubkey,
+        ) -> Self {
+            Self {
+                caller,
+
+                protocol_state,
+
+                pool,
+
+                old_pool_epoch_accum,
+
+                new_pool_epoch_accum,
+            }
+        }
+    }
+
+    /// Instruction data for RecycleLpEmissions
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct RecycleLpEmissionsInstructionData {
+        pub old_epoch: u64,
+
+        pub new_epoch: u64,
+    }
+
+    impl RecycleLpEmissionsInstructionData {
+        pub fn new(old_epoch: u64, new_epoch: u64) -> Self {
+            Self {
+                old_epoch,
+
+                new_epoch,
+            }
+        }
+    }
+
+    /// Implementation for RecycleLpEmissionsInstruction
+    impl RecycleLpEmissionsInstruction {
+        fn discriminator() -> [u8; 8] {
+            [6u8, 240u8, 126u8, 69u8, 43u8, 67u8, 137u8, 169u8]
+        }
+
+        pub fn data(data: RecycleLpEmissionsInstructionData) -> Self {
+            Self {
+                accounts: RecycleLpEmissionsInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: RecycleLpEmissionsInstructionAccounts) -> Self {
+            self.accounts.caller = AccountMeta::new(accounts.caller, true);
+
+            self.accounts.protocol_state =
+                AccountMeta::new_readonly(accounts.protocol_state, false);
+
+            self.accounts.pool = AccountMeta::new_readonly(accounts.pool, false);
+
+            self.accounts.old_pool_epoch_accum =
+                AccountMeta::new(accounts.old_pool_epoch_accum, false);
+
+            self.accounts.new_pool_epoch_accum =
+                AccountMeta::new(accounts.new_pool_epoch_accum, false);
+
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+
+            self.accounts.rent = AccountMeta::new_readonly(
+                pubkey!("SysvarRent111111111111111111111111111111111"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.caller.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.pool.clone());
+
+            metas.push(self.accounts.old_pool_epoch_accum.clone());
+
+            metas.push(self.accounts.new_pool_epoch_accum.clone());
+
+            metas.push(self.accounts.system_program.clone());
+
+            metas.push(self.accounts.rent.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
     // Instruction: RegisterContributor
     // ....................................................................
 
@@ -6691,6 +8837,8 @@ pub mod soladrome {
 
         pub contributor_vesting: AccountMeta,
 
+        pub contributor_registry: AccountMeta,
+
         pub system_program: AccountMeta,
 
         pub rent: AccountMeta,
@@ -6706,6 +8854,8 @@ pub mod soladrome {
         pub contributor_wallet: Pubkey,
 
         pub contributor_vesting: Pubkey,
+
+        pub contributor_registry: Pubkey,
     }
 
     impl RegisterContributorInstructionAccounts {
@@ -6717,6 +8867,8 @@ pub mod soladrome {
             contributor_wallet: Pubkey,
 
             contributor_vesting: Pubkey,
+
+            contributor_registry: Pubkey,
         ) -> Self {
             Self {
                 authority,
@@ -6726,6 +8878,8 @@ pub mod soladrome {
                 contributor_wallet,
 
                 contributor_vesting,
+
+                contributor_registry,
             }
         }
     }
@@ -6774,6 +8928,9 @@ pub mod soladrome {
             self.accounts.contributor_vesting =
                 AccountMeta::new(accounts.contributor_vesting, false);
 
+            self.accounts.contributor_registry =
+                AccountMeta::new(accounts.contributor_registry, false);
+
             self.accounts.system_program =
                 AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
 
@@ -6800,6 +8957,8 @@ pub mod soladrome {
             metas.push(self.accounts.contributor_wallet.clone());
 
             metas.push(self.accounts.contributor_vesting.clone());
+
+            metas.push(self.accounts.contributor_registry.clone());
 
             metas.push(self.accounts.system_program.clone());
 
@@ -6886,43 +9045,55 @@ pub mod soladrome {
     pub struct RegisterPartnerInstructionData {
         pub bribe_mint: Pubkey,
 
-        pub rate_num: u64,
+        pub lp_mint: Pubkey,
 
-        pub rate_den: u64,
+        pub lp_threshold: u64,
 
-        pub cap_hi_sola: u64,
+        pub retainer_per_epoch: u64,
 
         pub base_hi_sola: u64,
 
         pub lock_duration_secs: u64,
+
+        pub schedule_epochs: u64,
+
+        pub min_bribe_per_epoch: u64,
     }
 
     impl RegisterPartnerInstructionData {
         pub fn new(
             bribe_mint: Pubkey,
 
-            rate_num: u64,
+            lp_mint: Pubkey,
 
-            rate_den: u64,
+            lp_threshold: u64,
 
-            cap_hi_sola: u64,
+            retainer_per_epoch: u64,
 
             base_hi_sola: u64,
 
             lock_duration_secs: u64,
+
+            schedule_epochs: u64,
+
+            min_bribe_per_epoch: u64,
         ) -> Self {
             Self {
                 bribe_mint,
 
-                rate_num,
+                lp_mint,
 
-                rate_den,
+                lp_threshold,
 
-                cap_hi_sola,
+                retainer_per_epoch,
 
                 base_hi_sola,
 
                 lock_duration_secs,
+
+                schedule_epochs,
+
+                min_bribe_per_epoch,
             }
         }
     }
@@ -7018,6 +9189,10 @@ pub mod soladrome {
 
         pub lp_mint: AccountMeta,
 
+        pub token_a_mint: AccountMeta,
+
+        pub token_b_mint: AccountMeta,
+
         pub token_a_vault: AccountMeta,
 
         pub token_b_vault: AccountMeta,
@@ -7038,6 +9213,10 @@ pub mod soladrome {
 
         pub rent: AccountMeta,
 
+        pub token_a_program: AccountMeta,
+
+        pub token_b_program: AccountMeta,
+
         pub token_program: AccountMeta,
 
         pub associated_token_program: AccountMeta,
@@ -7053,6 +9232,10 @@ pub mod soladrome {
         pub pool: Pubkey,
 
         pub lp_mint: Pubkey,
+
+        pub token_a_mint: Pubkey,
+
+        pub token_b_mint: Pubkey,
 
         pub token_a_vault: Pubkey,
 
@@ -7071,6 +9254,10 @@ pub mod soladrome {
         pub o_sola_mint: Pubkey,
 
         pub user_o_sola: Pubkey,
+
+        pub token_a_program: Pubkey,
+
+        pub token_b_program: Pubkey,
     }
 
     impl RemoveLiquidityInstructionAccounts {
@@ -7080,6 +9267,10 @@ pub mod soladrome {
             pool: Pubkey,
 
             lp_mint: Pubkey,
+
+            token_a_mint: Pubkey,
+
+            token_b_mint: Pubkey,
 
             token_a_vault: Pubkey,
 
@@ -7098,6 +9289,10 @@ pub mod soladrome {
             o_sola_mint: Pubkey,
 
             user_o_sola: Pubkey,
+
+            token_a_program: Pubkey,
+
+            token_b_program: Pubkey,
         ) -> Self {
             Self {
                 user,
@@ -7105,6 +9300,10 @@ pub mod soladrome {
                 pool,
 
                 lp_mint,
+
+                token_a_mint,
+
+                token_b_mint,
 
                 token_a_vault,
 
@@ -7123,6 +9322,10 @@ pub mod soladrome {
                 o_sola_mint,
 
                 user_o_sola,
+
+                token_a_program,
+
+                token_b_program,
             }
         }
     }
@@ -7170,6 +9373,10 @@ pub mod soladrome {
 
             self.accounts.lp_mint = AccountMeta::new(accounts.lp_mint, false);
 
+            self.accounts.token_a_mint = AccountMeta::new_readonly(accounts.token_a_mint, false);
+
+            self.accounts.token_b_mint = AccountMeta::new_readonly(accounts.token_b_mint, false);
+
             self.accounts.token_a_vault = AccountMeta::new(accounts.token_a_vault, false);
 
             self.accounts.token_b_vault = AccountMeta::new(accounts.token_b_vault, false);
@@ -7193,6 +9400,12 @@ pub mod soladrome {
                 pubkey!("SysvarRent111111111111111111111111111111111"),
                 false,
             );
+
+            self.accounts.token_a_program =
+                AccountMeta::new_readonly(accounts.token_a_program, false);
+
+            self.accounts.token_b_program =
+                AccountMeta::new_readonly(accounts.token_b_program, false);
 
             self.accounts.token_program = AccountMeta::new_readonly(
                 pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
@@ -7224,6 +9437,10 @@ pub mod soladrome {
 
             metas.push(self.accounts.lp_mint.clone());
 
+            metas.push(self.accounts.token_a_mint.clone());
+
+            metas.push(self.accounts.token_b_mint.clone());
+
             metas.push(self.accounts.token_a_vault.clone());
 
             metas.push(self.accounts.token_b_vault.clone());
@@ -7243,6 +9460,10 @@ pub mod soladrome {
             metas.push(self.accounts.user_o_sola.clone());
 
             metas.push(self.accounts.rent.clone());
+
+            metas.push(self.accounts.token_a_program.clone());
+
+            metas.push(self.accounts.token_b_program.clone());
 
             metas.push(self.accounts.token_program.clone());
 
@@ -7432,15 +9653,9 @@ pub mod soladrome {
 
         pub protocol_state: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
         pub market_vault: AccountMeta,
 
-        pub user_hi_sola: AccountMeta,
-
         pub lock_position: AccountMeta,
-
-        pub vote_escrow_vault: AccountMeta,
 
         pub user_position: AccountMeta,
 
@@ -7472,15 +9687,9 @@ pub mod soladrome {
 
         pub protocol_state: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
         pub market_vault: Pubkey,
 
-        pub user_hi_sola: Pubkey,
-
         pub lock_position: Pubkey,
-
-        pub vote_escrow_vault: Pubkey,
 
         pub user_position: Pubkey,
 
@@ -7505,15 +9714,9 @@ pub mod soladrome {
 
             protocol_state: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
             market_vault: Pubkey,
 
-            user_hi_sola: Pubkey,
-
             lock_position: Pubkey,
-
-            vote_escrow_vault: Pubkey,
 
             user_position: Pubkey,
 
@@ -7536,15 +9739,9 @@ pub mod soladrome {
 
                 protocol_state,
 
-                hi_sola_mint,
-
                 market_vault,
 
-                user_hi_sola,
-
                 lock_position,
-
-                vote_escrow_vault,
 
                 user_position,
 
@@ -7597,16 +9794,9 @@ pub mod soladrome {
             self.accounts.protocol_state =
                 AccountMeta::new_readonly(accounts.protocol_state, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new_readonly(accounts.hi_sola_mint, false);
-
             self.accounts.market_vault = AccountMeta::new_readonly(accounts.market_vault, false);
 
-            self.accounts.user_hi_sola = AccountMeta::new_readonly(accounts.user_hi_sola, false);
-
             self.accounts.lock_position = AccountMeta::new_readonly(accounts.lock_position, false);
-
-            self.accounts.vote_escrow_vault =
-                AccountMeta::new_readonly(accounts.vote_escrow_vault, false);
 
             self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
 
@@ -7652,15 +9842,9 @@ pub mod soladrome {
 
             metas.push(self.accounts.protocol_state.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
-
             metas.push(self.accounts.market_vault.clone());
 
-            metas.push(self.accounts.user_hi_sola.clone());
-
             metas.push(self.accounts.lock_position.clone());
-
-            metas.push(self.accounts.vote_escrow_vault.clone());
 
             metas.push(self.accounts.user_position.clone());
 
@@ -7752,6 +9936,8 @@ pub mod soladrome {
         pub new_bribe_vault: Pubkey,
 
         pub new_bribe_token_vault: Pubkey,
+
+        pub token_program: Pubkey,
     }
 
     impl RolloverBribeInstructionAccounts {
@@ -7771,6 +9957,8 @@ pub mod soladrome {
             new_bribe_vault: Pubkey,
 
             new_bribe_token_vault: Pubkey,
+
+            token_program: Pubkey,
         ) -> Self {
             Self {
                 payer,
@@ -7788,6 +9976,8 @@ pub mod soladrome {
                 new_bribe_vault,
 
                 new_bribe_token_vault,
+
+                token_program,
             }
         }
     }
@@ -7845,10 +10035,7 @@ pub mod soladrome {
             self.accounts.new_bribe_token_vault =
                 AccountMeta::new(accounts.new_bribe_token_vault, false);
 
-            self.accounts.token_program = AccountMeta::new_readonly(
-                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-                false,
-            );
+            self.accounts.token_program = AccountMeta::new_readonly(accounts.token_program, false);
 
             self.accounts.system_program =
                 AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
@@ -7932,6 +10119,10 @@ pub mod soladrome {
 
         pub user_usdc: AccountMeta,
 
+        pub market_reserve: AccountMeta,
+
+        pub market_vault: AccountMeta,
+
         pub token_program: AccountMeta,
     }
 
@@ -7949,6 +10140,10 @@ pub mod soladrome {
         pub floor_vault: Pubkey,
 
         pub user_usdc: Pubkey,
+
+        pub market_reserve: Pubkey,
+
+        pub market_vault: Pubkey,
     }
 
     impl SellSolaInstructionAccounts {
@@ -7964,6 +10159,10 @@ pub mod soladrome {
             floor_vault: Pubkey,
 
             user_usdc: Pubkey,
+
+            market_reserve: Pubkey,
+
+            market_vault: Pubkey,
         ) -> Self {
             Self {
                 user,
@@ -7977,6 +10176,10 @@ pub mod soladrome {
                 floor_vault,
 
                 user_usdc,
+
+                market_reserve,
+
+                market_vault,
             }
         }
     }
@@ -7985,11 +10188,17 @@ pub mod soladrome {
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
     pub struct SellSolaInstructionData {
         pub sola_amount: u64,
+
+        pub min_usdc_out: u64,
     }
 
     impl SellSolaInstructionData {
-        pub fn new(sola_amount: u64) -> Self {
-            Self { sola_amount }
+        pub fn new(sola_amount: u64, min_usdc_out: u64) -> Self {
+            Self {
+                sola_amount,
+
+                min_usdc_out,
+            }
         }
     }
 
@@ -8020,6 +10229,10 @@ pub mod soladrome {
 
             self.accounts.user_usdc = AccountMeta::new(accounts.user_usdc, false);
 
+            self.accounts.market_reserve = AccountMeta::new(accounts.market_reserve, false);
+
+            self.accounts.market_vault = AccountMeta::new(accounts.market_vault, false);
+
             self.accounts.token_program = AccountMeta::new_readonly(
                 pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
                 false,
@@ -8048,7 +10261,301 @@ pub mod soladrome {
 
             metas.push(self.accounts.user_usdc.clone());
 
+            metas.push(self.accounts.market_reserve.clone());
+
+            metas.push(self.accounts.market_vault.clone());
+
             metas.push(self.accounts.token_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: SetAutoCompoundEnabled
+    // ....................................................................
+
+    /// Main instruction struct for SetAutoCompoundEnabled
+    pub struct SetAutoCompoundEnabledInstruction {
+        pub accounts: SetAutoCompoundEnabledInstructionAccountMetas,
+        pub data: SetAutoCompoundEnabledInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for SetAutoCompoundEnabled instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct SetAutoCompoundEnabledInstructionAccountMetas {
+        pub user: AccountMeta,
+
+        pub auto: AccountMeta,
+
+        pub owner: AccountMeta,
+    }
+
+    /// Account pubkeys for SetAutoCompoundEnabled instruction
+    #[derive(Debug, Clone)]
+    pub struct SetAutoCompoundEnabledInstructionAccounts {
+        pub user: Pubkey,
+
+        pub auto: Pubkey,
+
+        pub owner: Pubkey,
+    }
+
+    impl SetAutoCompoundEnabledInstructionAccounts {
+        pub fn new(user: Pubkey, auto: Pubkey, owner: Pubkey) -> Self {
+            Self { user, auto, owner }
+        }
+    }
+
+    /// Instruction data for SetAutoCompoundEnabled
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct SetAutoCompoundEnabledInstructionData {
+        pub enabled: bool,
+    }
+
+    impl SetAutoCompoundEnabledInstructionData {
+        pub fn new(enabled: bool) -> Self {
+            Self { enabled }
+        }
+    }
+
+    /// Implementation for SetAutoCompoundEnabledInstruction
+    impl SetAutoCompoundEnabledInstruction {
+        fn discriminator() -> [u8; 8] {
+            [84u8, 97u8, 118u8, 185u8, 126u8, 106u8, 135u8, 209u8]
+        }
+
+        pub fn data(data: SetAutoCompoundEnabledInstructionData) -> Self {
+            Self {
+                accounts: SetAutoCompoundEnabledInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: SetAutoCompoundEnabledInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new_readonly(accounts.user, true);
+
+            self.accounts.auto = AccountMeta::new(accounts.auto, false);
+
+            self.accounts.owner = AccountMeta::new_readonly(accounts.owner, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.user.clone());
+
+            metas.push(self.accounts.auto.clone());
+
+            metas.push(self.accounts.owner.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: SetAutoCompoundLp
+    // ....................................................................
+
+    /// Main instruction struct for SetAutoCompoundLp
+    pub struct SetAutoCompoundLpInstruction {
+        pub accounts: SetAutoCompoundLpInstructionAccountMetas,
+        pub data: SetAutoCompoundLpInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for SetAutoCompoundLp instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct SetAutoCompoundLpInstructionAccountMetas {
+        pub user: AccountMeta,
+
+        pub auto: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub target_pool: AccountMeta,
+
+        pub lp_mint: AccountMeta,
+
+        pub user_lp: AccountMeta,
+
+        pub lp_user_info: AccountMeta,
+
+        pub token_program: AccountMeta,
+
+        pub associated_token_program: AccountMeta,
+
+        pub system_program: AccountMeta,
+    }
+
+    /// Account pubkeys for SetAutoCompoundLp instruction
+    #[derive(Debug, Clone)]
+    pub struct SetAutoCompoundLpInstructionAccounts {
+        pub user: Pubkey,
+
+        pub auto: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub target_pool: Pubkey,
+
+        pub lp_mint: Pubkey,
+
+        pub user_lp: Pubkey,
+
+        pub lp_user_info: Pubkey,
+    }
+
+    impl SetAutoCompoundLpInstructionAccounts {
+        pub fn new(
+            user: Pubkey,
+
+            auto: Pubkey,
+
+            protocol_state: Pubkey,
+
+            target_pool: Pubkey,
+
+            lp_mint: Pubkey,
+
+            user_lp: Pubkey,
+
+            lp_user_info: Pubkey,
+        ) -> Self {
+            Self {
+                user,
+
+                auto,
+
+                protocol_state,
+
+                target_pool,
+
+                lp_mint,
+
+                user_lp,
+
+                lp_user_info,
+            }
+        }
+    }
+
+    /// Instruction data for SetAutoCompoundLp
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct SetAutoCompoundLpInstructionData {
+        pub min_intrinsic_bps: u16,
+    }
+
+    impl SetAutoCompoundLpInstructionData {
+        pub fn new(min_intrinsic_bps: u16) -> Self {
+            Self { min_intrinsic_bps }
+        }
+    }
+
+    /// Implementation for SetAutoCompoundLpInstruction
+    impl SetAutoCompoundLpInstruction {
+        fn discriminator() -> [u8; 8] {
+            [27u8, 232u8, 39u8, 68u8, 246u8, 71u8, 60u8, 182u8]
+        }
+
+        pub fn data(data: SetAutoCompoundLpInstructionData) -> Self {
+            Self {
+                accounts: SetAutoCompoundLpInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: SetAutoCompoundLpInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new(accounts.user, true);
+
+            self.accounts.auto = AccountMeta::new(accounts.auto, false);
+
+            self.accounts.protocol_state =
+                AccountMeta::new_readonly(accounts.protocol_state, false);
+
+            self.accounts.target_pool = AccountMeta::new_readonly(accounts.target_pool, false);
+
+            self.accounts.lp_mint = AccountMeta::new_readonly(accounts.lp_mint, false);
+
+            self.accounts.user_lp = AccountMeta::new(accounts.user_lp, false);
+
+            self.accounts.lp_user_info = AccountMeta::new(accounts.lp_user_info, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self.accounts.associated_token_program = AccountMeta::new_readonly(
+                pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+                false,
+            );
+
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.user.clone());
+
+            metas.push(self.accounts.auto.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.target_pool.clone());
+
+            metas.push(self.accounts.lp_mint.clone());
+
+            metas.push(self.accounts.user_lp.clone());
+
+            metas.push(self.accounts.lp_user_info.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.push(self.accounts.associated_token_program.clone());
+
+            metas.push(self.accounts.system_program.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -8503,6 +11010,272 @@ pub mod soladrome {
     }
 
     // ....................................................................
+    // Instruction: SetPoolStrategy
+    // ....................................................................
+
+    /// Main instruction struct for SetPoolStrategy
+    pub struct SetPoolStrategyInstruction {
+        pub accounts: SetPoolStrategyInstructionAccountMetas,
+        pub data: SetPoolStrategyInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for SetPoolStrategy instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct SetPoolStrategyInstructionAccountMetas {
+        pub user: AccountMeta,
+
+        pub strategy: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub source_pool: AccountMeta,
+
+        pub target_pool: AccountMeta,
+
+        pub target_lp_mint: AccountMeta,
+
+        pub target_user_lp: AccountMeta,
+
+        pub target_lp_user_info: AccountMeta,
+
+        pub o_sola_mint: AccountMeta,
+
+        pub user_o_sola: AccountMeta,
+
+        pub user_position: AccountMeta,
+
+        pub token_program: AccountMeta,
+
+        pub associated_token_program: AccountMeta,
+
+        pub system_program: AccountMeta,
+    }
+
+    /// Account pubkeys for SetPoolStrategy instruction
+    #[derive(Debug, Clone)]
+    pub struct SetPoolStrategyInstructionAccounts {
+        pub user: Pubkey,
+
+        pub strategy: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub source_pool: Pubkey,
+
+        pub target_pool: Pubkey,
+
+        pub target_lp_mint: Pubkey,
+
+        pub target_user_lp: Pubkey,
+
+        pub target_lp_user_info: Pubkey,
+
+        pub o_sola_mint: Pubkey,
+
+        pub user_o_sola: Pubkey,
+
+        pub user_position: Pubkey,
+    }
+
+    impl SetPoolStrategyInstructionAccounts {
+        pub fn new(
+            user: Pubkey,
+
+            strategy: Pubkey,
+
+            protocol_state: Pubkey,
+
+            source_pool: Pubkey,
+
+            target_pool: Pubkey,
+
+            target_lp_mint: Pubkey,
+
+            target_user_lp: Pubkey,
+
+            target_lp_user_info: Pubkey,
+
+            o_sola_mint: Pubkey,
+
+            user_o_sola: Pubkey,
+
+            user_position: Pubkey,
+        ) -> Self {
+            Self {
+                user,
+
+                strategy,
+
+                protocol_state,
+
+                source_pool,
+
+                target_pool,
+
+                target_lp_mint,
+
+                target_user_lp,
+
+                target_lp_user_info,
+
+                o_sola_mint,
+
+                user_o_sola,
+
+                user_position,
+            }
+        }
+    }
+
+    /// Instruction data for SetPoolStrategy
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct SetPoolStrategyInstructionData {
+        pub mode: u8,
+
+        pub min_harvest: u64,
+
+        pub min_interval: i64,
+
+        pub min_intrinsic_bps: u16,
+
+        pub max_fee_bps: u16,
+    }
+
+    impl SetPoolStrategyInstructionData {
+        pub fn new(
+            mode: u8,
+
+            min_harvest: u64,
+
+            min_interval: i64,
+
+            min_intrinsic_bps: u16,
+
+            max_fee_bps: u16,
+        ) -> Self {
+            Self {
+                mode,
+
+                min_harvest,
+
+                min_interval,
+
+                min_intrinsic_bps,
+
+                max_fee_bps,
+            }
+        }
+    }
+
+    /// Implementation for SetPoolStrategyInstruction
+    impl SetPoolStrategyInstruction {
+        fn discriminator() -> [u8; 8] {
+            [146u8, 205u8, 255u8, 175u8, 6u8, 194u8, 48u8, 80u8]
+        }
+
+        pub fn data(data: SetPoolStrategyInstructionData) -> Self {
+            Self {
+                accounts: SetPoolStrategyInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: SetPoolStrategyInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new(accounts.user, true);
+
+            self.accounts.strategy = AccountMeta::new(accounts.strategy, false);
+
+            self.accounts.protocol_state =
+                AccountMeta::new_readonly(accounts.protocol_state, false);
+
+            self.accounts.source_pool = AccountMeta::new_readonly(accounts.source_pool, false);
+
+            self.accounts.target_pool = AccountMeta::new_readonly(accounts.target_pool, false);
+
+            self.accounts.target_lp_mint =
+                AccountMeta::new_readonly(accounts.target_lp_mint, false);
+
+            self.accounts.target_user_lp = AccountMeta::new(accounts.target_user_lp, false);
+
+            self.accounts.target_lp_user_info =
+                AccountMeta::new(accounts.target_lp_user_info, false);
+
+            self.accounts.o_sola_mint = AccountMeta::new_readonly(accounts.o_sola_mint, false);
+
+            self.accounts.user_o_sola = AccountMeta::new(accounts.user_o_sola, false);
+
+            self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self.accounts.associated_token_program = AccountMeta::new_readonly(
+                pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+                false,
+            );
+
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.user.clone());
+
+            metas.push(self.accounts.strategy.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.source_pool.clone());
+
+            metas.push(self.accounts.target_pool.clone());
+
+            metas.push(self.accounts.target_lp_mint.clone());
+
+            metas.push(self.accounts.target_user_lp.clone());
+
+            metas.push(self.accounts.target_lp_user_info.clone());
+
+            metas.push(self.accounts.o_sola_mint.clone());
+
+            metas.push(self.accounts.user_o_sola.clone());
+
+            metas.push(self.accounts.user_position.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.push(self.accounts.associated_token_program.clone());
+
+            metas.push(self.accounts.system_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
     // Instruction: SetVoteConfig
     // ....................................................................
 
@@ -8661,11 +11434,7 @@ pub mod soladrome {
 
         pub sola_mint: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
         pub user_sola: AccountMeta,
-
-        pub user_hi_sola: AccountMeta,
 
         pub sola_vault: AccountMeta,
 
@@ -8693,11 +11462,7 @@ pub mod soladrome {
 
         pub sola_mint: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
         pub user_sola: Pubkey,
-
-        pub user_hi_sola: Pubkey,
 
         pub sola_vault: Pubkey,
 
@@ -8718,11 +11483,7 @@ pub mod soladrome {
 
             sola_mint: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
             user_sola: Pubkey,
-
-            user_hi_sola: Pubkey,
 
             sola_vault: Pubkey,
 
@@ -8741,11 +11502,7 @@ pub mod soladrome {
 
                 sola_mint,
 
-                hi_sola_mint,
-
                 user_sola,
-
-                user_hi_sola,
 
                 sola_vault,
 
@@ -8793,11 +11550,7 @@ pub mod soladrome {
 
             self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new(accounts.hi_sola_mint, false);
-
             self.accounts.user_sola = AccountMeta::new(accounts.user_sola, false);
-
-            self.accounts.user_hi_sola = AccountMeta::new(accounts.user_hi_sola, false);
 
             self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
 
@@ -8839,11 +11592,7 @@ pub mod soladrome {
 
             metas.push(self.accounts.sola_mint.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
-
             metas.push(self.accounts.user_sola.clone());
-
-            metas.push(self.accounts.user_hi_sola.clone());
 
             metas.push(self.accounts.sola_vault.clone());
 
@@ -9000,21 +11749,11 @@ pub mod soladrome {
 
         pub protocol_state: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
-        pub user_hi_sola: AccountMeta,
-
         pub lock_position: AccountMeta,
-
-        pub ve_lock_vault: AccountMeta,
 
         pub market_vault: AccountMeta,
 
         pub user_position: AccountMeta,
-
-        pub token_program: AccountMeta,
-
-        pub associated_token_program: AccountMeta,
 
         pub system_program: AccountMeta,
     }
@@ -9026,13 +11765,7 @@ pub mod soladrome {
 
         pub protocol_state: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
-        pub user_hi_sola: Pubkey,
-
         pub lock_position: Pubkey,
-
-        pub ve_lock_vault: Pubkey,
 
         pub market_vault: Pubkey,
 
@@ -9045,13 +11778,7 @@ pub mod soladrome {
 
             protocol_state: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
-            user_hi_sola: Pubkey,
-
             lock_position: Pubkey,
-
-            ve_lock_vault: Pubkey,
 
             market_vault: Pubkey,
 
@@ -9062,13 +11789,7 @@ pub mod soladrome {
 
                 protocol_state,
 
-                hi_sola_mint,
-
-                user_hi_sola,
-
                 lock_position,
-
-                ve_lock_vault,
 
                 market_vault,
 
@@ -9106,27 +11827,11 @@ pub mod soladrome {
 
             self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new_readonly(accounts.hi_sola_mint, false);
-
-            self.accounts.user_hi_sola = AccountMeta::new(accounts.user_hi_sola, false);
-
             self.accounts.lock_position = AccountMeta::new(accounts.lock_position, false);
-
-            self.accounts.ve_lock_vault = AccountMeta::new(accounts.ve_lock_vault, false);
 
             self.accounts.market_vault = AccountMeta::new_readonly(accounts.market_vault, false);
 
             self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
-
-            self.accounts.token_program = AccountMeta::new_readonly(
-                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-                false,
-            );
-
-            self.accounts.associated_token_program = AccountMeta::new_readonly(
-                pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
-                false,
-            );
 
             self.accounts.system_program =
                 AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
@@ -9146,21 +11851,11 @@ pub mod soladrome {
 
             metas.push(self.accounts.protocol_state.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
-
-            metas.push(self.accounts.user_hi_sola.clone());
-
             metas.push(self.accounts.lock_position.clone());
-
-            metas.push(self.accounts.ve_lock_vault.clone());
 
             metas.push(self.accounts.market_vault.clone());
 
             metas.push(self.accounts.user_position.clone());
-
-            metas.push(self.accounts.token_program.clone());
-
-            metas.push(self.accounts.associated_token_program.clone());
 
             metas.push(self.accounts.system_program.clone());
 
@@ -9295,10 +11990,6 @@ pub mod soladrome {
 
         pub sola_mint: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
-        pub user_hi_sola: AccountMeta,
-
         pub user_sola: AccountMeta,
 
         pub sola_vault: AccountMeta,
@@ -9329,10 +12020,6 @@ pub mod soladrome {
 
         pub sola_mint: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
-        pub user_hi_sola: Pubkey,
-
         pub user_sola: Pubkey,
 
         pub sola_vault: Pubkey,
@@ -9356,10 +12043,6 @@ pub mod soladrome {
 
             sola_mint: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
-            user_hi_sola: Pubkey,
-
             user_sola: Pubkey,
 
             sola_vault: Pubkey,
@@ -9380,10 +12063,6 @@ pub mod soladrome {
                 protocol_state,
 
                 sola_mint,
-
-                hi_sola_mint,
-
-                user_hi_sola,
 
                 user_sola,
 
@@ -9435,10 +12114,6 @@ pub mod soladrome {
 
             self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new(accounts.hi_sola_mint, false);
-
-            self.accounts.user_hi_sola = AccountMeta::new(accounts.user_hi_sola, false);
-
             self.accounts.user_sola = AccountMeta::new(accounts.user_sola, false);
 
             self.accounts.sola_vault = AccountMeta::new(accounts.sola_vault, false);
@@ -9483,10 +12158,6 @@ pub mod soladrome {
             metas.push(self.accounts.protocol_state.clone());
 
             metas.push(self.accounts.sola_mint.clone());
-
-            metas.push(self.accounts.hi_sola_mint.clone());
-
-            metas.push(self.accounts.user_hi_sola.clone());
 
             metas.push(self.accounts.user_sola.clone());
 
@@ -9543,13 +12214,7 @@ pub mod soladrome {
 
         pub protocol_state: AccountMeta,
 
-        pub hi_sola_mint: AccountMeta,
-
         pub market_vault: AccountMeta,
-
-        pub user_hi_sola: AccountMeta,
-
-        pub vote_escrow_vault: AccountMeta,
 
         pub user_position: AccountMeta,
 
@@ -9579,13 +12244,7 @@ pub mod soladrome {
 
         pub protocol_state: Pubkey,
 
-        pub hi_sola_mint: Pubkey,
-
         pub market_vault: Pubkey,
-
-        pub user_hi_sola: Pubkey,
-
-        pub vote_escrow_vault: Pubkey,
 
         pub user_position: Pubkey,
 
@@ -9608,13 +12267,7 @@ pub mod soladrome {
 
             protocol_state: Pubkey,
 
-            hi_sola_mint: Pubkey,
-
             market_vault: Pubkey,
-
-            user_hi_sola: Pubkey,
-
-            vote_escrow_vault: Pubkey,
 
             user_position: Pubkey,
 
@@ -9635,13 +12288,7 @@ pub mod soladrome {
 
                 protocol_state,
 
-                hi_sola_mint,
-
                 market_vault,
-
-                user_hi_sola,
-
-                vote_escrow_vault,
 
                 user_position,
 
@@ -9694,13 +12341,7 @@ pub mod soladrome {
             self.accounts.protocol_state =
                 AccountMeta::new_readonly(accounts.protocol_state, false);
 
-            self.accounts.hi_sola_mint = AccountMeta::new_readonly(accounts.hi_sola_mint, false);
-
             self.accounts.market_vault = AccountMeta::new_readonly(accounts.market_vault, false);
-
-            self.accounts.user_hi_sola = AccountMeta::new(accounts.user_hi_sola, false);
-
-            self.accounts.vote_escrow_vault = AccountMeta::new(accounts.vote_escrow_vault, false);
 
             self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
 
@@ -9744,13 +12385,7 @@ pub mod soladrome {
 
             metas.push(self.accounts.protocol_state.clone());
 
-            metas.push(self.accounts.hi_sola_mint.clone());
-
             metas.push(self.accounts.market_vault.clone());
-
-            metas.push(self.accounts.user_hi_sola.clone());
-
-            metas.push(self.accounts.vote_escrow_vault.clone());
 
             metas.push(self.accounts.user_position.clone());
 
@@ -9769,164 +12404,6 @@ pub mod soladrome {
             metas.push(self.accounts.system_program.clone());
 
             metas.push(self.accounts.rent.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: WithdrawVoteEscrow
-    // ....................................................................
-
-    /// Main instruction struct for WithdrawVoteEscrow
-    pub struct WithdrawVoteEscrowInstruction {
-        pub accounts: WithdrawVoteEscrowInstructionAccountMetas,
-        pub data: WithdrawVoteEscrowInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for WithdrawVoteEscrow instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct WithdrawVoteEscrowInstructionAccountMetas {
-        pub user: AccountMeta,
-
-        pub protocol_state: AccountMeta,
-
-        pub hi_sola_mint: AccountMeta,
-
-        pub user_hi_sola: AccountMeta,
-
-        pub vote_escrow_vault: AccountMeta,
-
-        pub user_position: AccountMeta,
-
-        pub token_program: AccountMeta,
-    }
-
-    /// Account pubkeys for WithdrawVoteEscrow instruction
-    #[derive(Debug, Clone)]
-    pub struct WithdrawVoteEscrowInstructionAccounts {
-        pub user: Pubkey,
-
-        pub protocol_state: Pubkey,
-
-        pub hi_sola_mint: Pubkey,
-
-        pub user_hi_sola: Pubkey,
-
-        pub vote_escrow_vault: Pubkey,
-
-        pub user_position: Pubkey,
-    }
-
-    impl WithdrawVoteEscrowInstructionAccounts {
-        pub fn new(
-            user: Pubkey,
-
-            protocol_state: Pubkey,
-
-            hi_sola_mint: Pubkey,
-
-            user_hi_sola: Pubkey,
-
-            vote_escrow_vault: Pubkey,
-
-            user_position: Pubkey,
-        ) -> Self {
-            Self {
-                user,
-
-                protocol_state,
-
-                hi_sola_mint,
-
-                user_hi_sola,
-
-                vote_escrow_vault,
-
-                user_position,
-            }
-        }
-    }
-
-    /// Instruction data for WithdrawVoteEscrow
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct WithdrawVoteEscrowInstructionData {}
-
-    impl WithdrawVoteEscrowInstructionData {
-        pub fn new() -> Self {
-            Self {}
-        }
-    }
-
-    /// Implementation for WithdrawVoteEscrowInstruction
-    impl WithdrawVoteEscrowInstruction {
-        fn discriminator() -> [u8; 8] {
-            [157u8, 14u8, 20u8, 12u8, 52u8, 136u8, 197u8, 83u8]
-        }
-
-        pub fn data(data: WithdrawVoteEscrowInstructionData) -> Self {
-            Self {
-                accounts: WithdrawVoteEscrowInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: WithdrawVoteEscrowInstructionAccounts) -> Self {
-            self.accounts.user = AccountMeta::new(accounts.user, true);
-
-            self.accounts.protocol_state =
-                AccountMeta::new_readonly(accounts.protocol_state, false);
-
-            self.accounts.hi_sola_mint = AccountMeta::new_readonly(accounts.hi_sola_mint, false);
-
-            self.accounts.user_hi_sola = AccountMeta::new(accounts.user_hi_sola, false);
-
-            self.accounts.vote_escrow_vault = AccountMeta::new(accounts.vote_escrow_vault, false);
-
-            self.accounts.user_position = AccountMeta::new(accounts.user_position, false);
-
-            self.accounts.token_program = AccountMeta::new_readonly(
-                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-                false,
-            );
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.user.clone());
-
-            metas.push(self.accounts.protocol_state.clone());
-
-            metas.push(self.accounts.hi_sola_mint.clone());
-
-            metas.push(self.accounts.user_hi_sola.clone());
-
-            metas.push(self.accounts.vote_escrow_vault.clone());
-
-            metas.push(self.accounts.user_position.clone());
-
-            metas.push(self.accounts.token_program.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -10046,6 +12523,94 @@ impl AmmPool {
     }
 }
 
+/// Custom struct: AutoCompound
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct AutoCompound {
+    pub owner: Pubkey,
+
+    pub threshold: u64,
+
+    pub chunk: u64,
+
+    pub max_cost_per_unit: u64,
+
+    pub usdc_spent: u64,
+
+    pub rounds: u64,
+
+    pub last_crank_ts: i64,
+
+    pub min_interval: i64,
+
+    pub enabled: bool,
+
+    pub bump: u8,
+
+    pub max_fee_bps: u16,
+
+    pub lp_target: Pubkey,
+
+    pub min_intrinsic_bps: u16,
+}
+
+impl AutoCompound {
+    pub fn new(
+        owner: Pubkey,
+
+        threshold: u64,
+
+        chunk: u64,
+
+        max_cost_per_unit: u64,
+
+        usdc_spent: u64,
+
+        rounds: u64,
+
+        last_crank_ts: i64,
+
+        min_interval: i64,
+
+        enabled: bool,
+
+        bump: u8,
+
+        max_fee_bps: u16,
+
+        lp_target: Pubkey,
+
+        min_intrinsic_bps: u16,
+    ) -> Self {
+        Self {
+            owner,
+
+            threshold,
+
+            chunk,
+
+            max_cost_per_unit,
+
+            usdc_spent,
+
+            rounds,
+
+            last_crank_ts,
+
+            min_interval,
+
+            enabled,
+
+            bump,
+
+            max_fee_bps,
+
+            lp_target,
+
+            min_intrinsic_bps,
+        }
+    }
+}
+
 /// Custom struct: BribeVault
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
 pub struct BribeVault {
@@ -10080,6 +12645,28 @@ impl BribeVault {
             epoch,
 
             total_bribed,
+
+            bump,
+        }
+    }
+}
+
+/// Custom struct: ContributorRegistry
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct ContributorRegistry {
+    pub hi_sola_allocated: u64,
+
+    pub o_sola_allocated: u64,
+
+    pub bump: u8,
+}
+
+impl ContributorRegistry {
+    pub fn new(hi_sola_allocated: u64, o_sola_allocated: u64, bump: u8) -> Self {
+        Self {
+            hi_sola_allocated,
+
+            o_sola_allocated,
 
             bump,
         }
@@ -10270,6 +12857,8 @@ pub struct LpPoolEpochAccum {
     pub bump: u8,
 
     pub osola_claimed: u64,
+
+    pub carry_in: u64,
 }
 
 impl LpPoolEpochAccum {
@@ -10291,6 +12880,8 @@ impl LpPoolEpochAccum {
         bump: u8,
 
         osola_claimed: u64,
+
+        carry_in: u64,
     ) -> Self {
         Self {
             pool,
@@ -10310,6 +12901,8 @@ impl LpPoolEpochAccum {
             bump,
 
             osola_claimed,
+
+            carry_in,
         }
     }
 }
@@ -10393,13 +12986,15 @@ pub struct PartnerAllocation {
 
     pub bribe_mint: Pubkey,
 
-    pub rate_num: u64,
+    pub lp_mint: Pubkey,
 
-    pub rate_den: u64,
+    pub lp_threshold: u64,
 
-    pub cap_hi_sola: u64,
+    pub retainer_per_epoch: u64,
 
-    pub total_bribed_credited: u64,
+    pub last_credited_epoch: u64,
+
+    pub epochs_qualified: u32,
 
     pub hi_sola_claimed: u64,
 
@@ -10410,6 +13005,14 @@ pub struct PartnerAllocation {
     pub bump: u8,
 
     pub base_hi_sola: u64,
+
+    pub bag_claimed: bool,
+
+    pub stream_start_ts: i64,
+
+    pub schedule_epochs: u64,
+
+    pub min_bribe_per_epoch: u64,
 }
 
 impl PartnerAllocation {
@@ -10418,13 +13021,15 @@ impl PartnerAllocation {
 
         bribe_mint: Pubkey,
 
-        rate_num: u64,
+        lp_mint: Pubkey,
 
-        rate_den: u64,
+        lp_threshold: u64,
 
-        cap_hi_sola: u64,
+        retainer_per_epoch: u64,
 
-        total_bribed_credited: u64,
+        last_credited_epoch: u64,
+
+        epochs_qualified: u32,
 
         hi_sola_claimed: u64,
 
@@ -10435,19 +13040,29 @@ impl PartnerAllocation {
         bump: u8,
 
         base_hi_sola: u64,
+
+        bag_claimed: bool,
+
+        stream_start_ts: i64,
+
+        schedule_epochs: u64,
+
+        min_bribe_per_epoch: u64,
     ) -> Self {
         Self {
             partner,
 
             bribe_mint,
 
-            rate_num,
+            lp_mint,
 
-            rate_den,
+            lp_threshold,
 
-            cap_hi_sola,
+            retainer_per_epoch,
 
-            total_bribed_credited,
+            last_credited_epoch,
+
+            epochs_qualified,
 
             hi_sola_claimed,
 
@@ -10458,6 +13073,78 @@ impl PartnerAllocation {
             bump,
 
             base_hi_sola,
+
+            bag_claimed,
+
+            stream_start_ts,
+
+            schedule_epochs,
+
+            min_bribe_per_epoch,
+        }
+    }
+}
+
+/// Custom struct: PartnerBribeStream
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct PartnerBribeStream {
+    pub partner: Pubkey,
+
+    pub bribe_mint: Pubkey,
+
+    pub pool_id: Pubkey,
+
+    pub amount_per_epoch: u64,
+
+    pub epochs_total: u64,
+
+    pub epochs_released: u64,
+
+    pub last_release_epoch: u64,
+
+    pub start_ts: i64,
+
+    pub bump: u8,
+}
+
+impl PartnerBribeStream {
+    pub fn new(
+        partner: Pubkey,
+
+        bribe_mint: Pubkey,
+
+        pool_id: Pubkey,
+
+        amount_per_epoch: u64,
+
+        epochs_total: u64,
+
+        epochs_released: u64,
+
+        last_release_epoch: u64,
+
+        start_ts: i64,
+
+        bump: u8,
+    ) -> Self {
+        Self {
+            partner,
+
+            bribe_mint,
+
+            pool_id,
+
+            amount_per_epoch,
+
+            epochs_total,
+
+            epochs_released,
+
+            last_release_epoch,
+
+            start_ts,
+
+            bump,
         }
     }
 }
@@ -10482,6 +13169,88 @@ impl PolState {
             target_pool,
 
             usdc_accumulated,
+
+            bump,
+        }
+    }
+}
+
+/// Custom struct: PoolStrategy
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct PoolStrategy {
+    pub owner: Pubkey,
+
+    pub source_pool: Pubkey,
+
+    pub target_pool: Pubkey,
+
+    pub mode: u8,
+
+    pub min_harvest: u64,
+
+    pub min_interval: i64,
+
+    pub last_ts: i64,
+
+    pub rounds: u64,
+
+    pub harvested: u64,
+
+    pub min_intrinsic_bps: u16,
+
+    pub max_fee_bps: u16,
+
+    pub bump: u8,
+}
+
+impl PoolStrategy {
+    pub fn new(
+        owner: Pubkey,
+
+        source_pool: Pubkey,
+
+        target_pool: Pubkey,
+
+        mode: u8,
+
+        min_harvest: u64,
+
+        min_interval: i64,
+
+        last_ts: i64,
+
+        rounds: u64,
+
+        harvested: u64,
+
+        min_intrinsic_bps: u16,
+
+        max_fee_bps: u16,
+
+        bump: u8,
+    ) -> Self {
+        Self {
+            owner,
+
+            source_pool,
+
+            target_pool,
+
+            mode,
+
+            min_harvest,
+
+            min_interval,
+
+            last_ts,
+
+            rounds,
+
+            harvested,
+
+            min_intrinsic_bps,
+
+            max_fee_bps,
 
             bump,
         }
@@ -10564,6 +13333,12 @@ pub struct ProtocolState {
     pub emissions_enabled: bool,
 
     pub exercise_fee_bps: u16,
+
+    pub founder_wallet: Pubkey,
+
+    pub curve_ref_slot: u32,
+
+    pub curve_ref_vu_usdc: u32,
 }
 
 impl ProtocolState {
@@ -10641,6 +13416,12 @@ impl ProtocolState {
         emissions_enabled: bool,
 
         exercise_fee_bps: u16,
+
+        founder_wallet: Pubkey,
+
+        curve_ref_slot: u32,
+
+        curve_ref_vu_usdc: u32,
     ) -> Self {
         Self {
             authority,
@@ -10716,6 +13497,12 @@ impl ProtocolState {
             emissions_enabled,
 
             exercise_fee_bps,
+
+            founder_wallet,
+
+            curve_ref_slot,
+
+            curve_ref_vu_usdc,
         }
     }
 }
@@ -10796,6 +13583,14 @@ pub struct UserPosition {
     pub escrow_epoch: u64,
 
     pub staked_amount: u64,
+
+    pub hi_sola: u64,
+
+    pub vote_locked: u64,
+
+    pub vote_lock_epoch: u64,
+
+    pub fee_shares: u64,
 }
 
 impl UserPosition {
@@ -10815,6 +13610,14 @@ impl UserPosition {
         escrow_epoch: u64,
 
         staked_amount: u64,
+
+        hi_sola: u64,
+
+        vote_locked: u64,
+
+        vote_lock_epoch: u64,
+
+        fee_shares: u64,
     ) -> Self {
         Self {
             owner,
@@ -10832,6 +13635,14 @@ impl UserPosition {
             escrow_epoch,
 
             staked_amount,
+
+            hi_sola,
+
+            vote_locked,
+
+            vote_lock_epoch,
+
+            fee_shares,
         }
     }
 }

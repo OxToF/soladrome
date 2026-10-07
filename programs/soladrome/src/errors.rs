@@ -179,4 +179,6 @@ pub enum SoladromeError {
     StrategyRouteConflict,
     #[msg("This voting strategy has no USDC to pay a strike with: the owner's USDC account holds nothing, or has no allowance left to the strategy delegate")]
     StrategyNoBudget,
+    #[msg("The market reserve does not hold what the rest of the curve owes its sellers: this sale is refused rather than paid from their share")]
+    InsufficientMarketReserve,
 }

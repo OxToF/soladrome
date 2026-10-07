@@ -314,6 +314,18 @@ pub struct Initialize<'info> {
     )]
     pub sola_vault: Box<Account<'info, TokenAccount>>,
 
+    /// The premium buyers pay above the floor, owed back to sellers (`MARKET_RESERVE_SEED`).
+    /// Created here on a fresh deployment; `fund_market_reserve` creates it on an older one.
+    #[account(
+        init,
+        payer = authority,
+        token::mint = usdc_mint,
+        token::authority = protocol_state,
+        seeds = [MARKET_RESERVE_SEED],
+        bump,
+    )]
+    pub market_reserve: Box<Account<'info, TokenAccount>>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,

@@ -6,11 +6,12 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { BN } from "@coral-xyz/anchor";
 import {
-  getProgram, statePda, solaM, floorVault, marketVault,
+  getProgram, statePda, solaM, floorVault, marketVault, marketReserve,
   userAta, commonAccounts, fromUi, toUi, sendTx,
 } from "@/lib/program";
 import {
-  solaOut, usdcOut, effectivePrice, premiumOverFloorPct, minReceived, frontRunHeadroom,
+  quoteBuy, quoteSell, effectivePrice, premiumOverFloorPct, minReceived, frontRunHeadroom,
+  CURVE_FEE_BPS,
 } from "@/lib/curve";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { trackQuest } from "@/lib/quests";
@@ -72,55 +73,55 @@ export function BuySell() {
   // ── What you actually receive ──────────────────────────────────────────────
   //
   // The card showed only the amount being spent, so a buyer had no way to know what the
-  // curve would mint before signing — and a seller no way to see what the floor would pay.
-  // Both sides are quoted here against on-chain reserves that `SoladromeContext` re-fetches
-  // every 10 s.
+  // curve would mint before signing. Both sides are quoted here against on-chain reserves that
+  // `SoladromeContext` re-fetches every 10 s, with the 1 % curve fee included — a quote without
+  // it would put every trade 1 % short of its own slippage bound.
   const quote = useMemo(() => {
     const ui = Number(amount);
-    if (!amount || !Number.isFinite(ui) || ui <= 0) return null;
+    if (!amount || !Number.isFinite(ui) || ui <= 0 || !protocolState) return null;
+    const reserves = {
+      virtualUsdc: BigInt(protocolState.virtualUsdc.toString()),
+      virtualSola: BigInt(protocolState.virtualSola.toString()),
+      k:           BigInt(protocolState.k.toString()),
+    };
 
     if (tab === "sell") {
-      // Not a curve trade: the floor redeems 1:1 and the virtual reserves never move.
+      // Back down the curve since 2026-10-07: the curve's price less 1 %, never below the floor.
       const solaIn = BigInt(fromUi(ui).toString());
-      const out    = usdcOut(solaIn);
-      // `sell_sola` requires `floor_vault.amount >= usdc_out`. The vault is an SPL token
-      // account; its `amount` is a little-endian u64 at offset 64.
+      const q = quoteSell(reserves, solaIn);
+      if (q === null) return null;
+      // `sell_sola` requires `floor_vault.amount >= sola_amount` (1 per SOLA comes from the
+      // floor). The vault is an SPL token account; its `amount` is a little-endian u64 at 64.
       const floorRaw = vaultInfos[0]
         ? vaultInfos[0]!.data.readBigUInt64LE(64)
         : null;
       return {
-        out,
-        symbol: "SOLA",
-        shortfall: floorRaw !== null && out > floorRaw ? floorRaw : null,
+        out:     q.usdcOut,
+        fee:     q.fee,
+        price:   effectivePrice(q.usdcOut, solaIn),
+        minOut:  minReceived(q.usdcOut, slippageBps),
+        shortfall: floorRaw !== null && q.fromFloor > floorRaw ? floorRaw : null,
       };
     }
 
-    if (!protocolState) return null;
     const usdcIn = BigInt(fromUi(ui).toString());
-    const out = solaOut(
-      {
-        virtualUsdc: BigInt(protocolState.virtualUsdc.toString()),
-        virtualSola: BigInt(protocolState.virtualSola.toString()),
-        k:           BigInt(protocolState.k.toString()),
-      },
-      usdcIn,
-    );
-    if (out === null) return null;
+    const q = quoteBuy(reserves, usdcIn);
+    if (q === null) return null;
     return {
-      out,
-      symbol: "USDC",
-      price:   effectivePrice(usdcIn, out),
-      premium: premiumOverFloorPct(usdcIn, out),
+      out:     q.solaOut,
+      fee:     q.fee,
+      price:   effectivePrice(usdcIn, q.solaOut),
+      premium: premiumOverFloorPct(usdcIn, q.solaOut),
       // The bound the transaction will actually carry, derived from this same quote.
-      minOut:  minReceived(out, slippageBps),
+      minOut:  minReceived(q.solaOut, slippageBps),
       shortfall: null as bigint | null,
     };
   }, [amount, tab, protocolState, vaultInfos, slippageBps]);
 
-  // A buy with no quote would have to fall back to an unbounded `min_sola_out`, which is the
-  // thing being removed. Refuse the trade instead — protocolState only stays null when it has
-  // never loaded, since the context keeps stale data through transient RPC errors.
-  const quoteUnavailable = tab === "buy" && amount !== "" && Number(amount) > 0 && !quote;
+  // A trade with no quote would have to fall back to an unbounded minimum, which is the thing
+  // being removed. Refuse it instead — protocolState only stays null when it has never loaded,
+  // since the context keeps stale data through transient RPC errors.
+  const quoteUnavailable = amount !== "" && Number(amount) > 0 && !quote;
 
   function applyPct(pct: number) {
     if (balance === null || balance <= 0) return;
@@ -182,6 +183,7 @@ export function BuySell() {
             userSola,
             floorVault,
             marketVault,
+            marketReserve,
             ...commonAccounts,
           } as any)
           .instruction();
@@ -190,8 +192,11 @@ export function BuySell() {
         trackQuest(wallet.publicKey.toBase58(), "swap");
         window.dispatchEvent(new CustomEvent("soladrome:refresh"));
       } else {
+        // Same rule as the buy: what is signed is what was shown, less the tolerance. A sale
+        // ahead of yours moves the curve down; below this bound the chain refuses the sale.
+        if (!quote?.minOut) throw new Error("No live quote — refusing an unbounded sale.");
         const ix = await program.methods
-          .sellSola(fromUi(+amount))
+          .sellSola(fromUi(+amount), new BN(quote.minOut.toString()))
           .accounts({
             user: wallet.publicKey,
             protocolState: statePda,
@@ -199,6 +204,8 @@ export function BuySell() {
             userSola,
             floorVault,
             userUsdc,
+            marketReserve,
+            marketVault,
             tokenProgram: commonAccounts.tokenProgram,
           } as any)
           .instruction();
@@ -211,11 +218,18 @@ export function BuySell() {
       // The bound now actually binds, so this is a real outcome rather than an impossible
       // one: someone bought ahead and moved the curve. Say that, instead of showing a raw
       // Anchor code — "SlippageExceeded" reads as a broken app to a first-time tester.
-      if (msg.includes("SlippageExceeded") || msg.includes("6000")) {
+      if (msg.includes("InsufficientMarketReserve")) {
+        // The reserve that pays a sale its premium is short of what the curve owes. The program
+        // refuses rather than pay one seller out of the next ones' share. Nothing was sold.
         setStatus(
-          `❌ The curve moved while you were signing — the buy was rejected rather than ` +
-          `filled above your ${slippageBps / 100}% tolerance. Nothing was spent. Retry, or ` +
-          `raise the tolerance.`,
+          "❌ Sales are on hold: the market reserve does not yet cover what the curve owes its " +
+          "sellers. Nothing was sold. Retry later.",
+        );
+      } else if (msg.includes("SlippageExceeded") || msg.includes("6000")) {
+        setStatus(
+          `❌ The curve moved while you were signing — the ${tab === "buy" ? "buy" : "sale"} was ` +
+          `rejected rather than filled beyond your ${slippageBps / 100}% tolerance. Nothing ` +
+          `moved. Retry, or raise the tolerance.`,
         );
       } else {
         setStatus(`❌ ${msg}`);
@@ -302,31 +316,44 @@ export function BuySell() {
               </span>
             </span>
           </div>
-          {tab === "buy" && quote.price !== undefined && (
+          {quote.price !== undefined && (
             <div className="flex items-baseline justify-between gap-2 mt-1.5 pt-1.5 border-t border-brand-border">
               <span className="text-[11px] text-gray-500">Average price</span>
               <span className="text-[11px] text-gray-400 font-mono">
                 {quote.price.toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC / SOLA
                 {/* The premium over the floor, not impact against spot: the floor is what
                     bounds the downside, so it is the number worth showing. */}
-                <span className="text-gray-600">
-                  {" · "}+{(quote.premium ?? 0).toLocaleString(undefined, {
-                    maximumFractionDigits: 2,
-                  })}% over floor
-                </span>
+                {tab === "buy" && (
+                  <span className="text-gray-600">
+                    {" · "}+{(quote.premium ?? 0).toLocaleString(undefined, {
+                      maximumFractionDigits: 2,
+                    })}% over floor
+                  </span>
+                )}
               </span>
             </div>
           )}
+          <div className="flex items-baseline justify-between gap-2 mt-1.5">
+            <span className="text-[11px] text-gray-500">
+              Fee to hiSOLA stakers ({Number(CURVE_FEE_BPS) / 100}%)
+            </span>
+            <span className="text-[11px] text-gray-400 font-mono">
+              {toUi(new BN(quote.fee.toString())).toLocaleString(undefined, {
+                maximumFractionDigits: 6,
+              })}{" "}
+              USDC
+            </span>
+          </div>
           {/* What the signed transaction actually guarantees. Below this the chain rejects
-              the buy rather than filling it at a worse price. */}
-          {tab === "buy" && quote.minOut !== undefined && (
+              the trade rather than filling it at a worse price. */}
+          {quote.minOut !== undefined && (
             <div className="flex items-baseline justify-between gap-2 mt-1.5">
               <span className="text-[11px] text-gray-500">Minimum received</span>
               <span className="text-[11px] text-gray-400 font-mono">
                 {toUi(new BN(quote.minOut.toString())).toLocaleString(undefined, {
                   maximumFractionDigits: 6,
                 })}{" "}
-                SOLA
+                {tab === "buy" ? "SOLA" : "USDC"}
               </span>
             </div>
           )}
@@ -334,14 +361,15 @@ export function BuySell() {
       )}
 
       {/* ── Slippage tolerance ── */}
-      {tab === "buy" && (
+      {(
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[11px] text-gray-500">Max slippage</span>
             {/* The tolerance restated as what it protects against. A bare percentage tells
                 the user nothing about the risk; "absorbs ~2 500 USDC of buying ahead of you"
-                is the same number in the units of the actual hazard. */}
-            {protocolState && (
+                is the same number in the units of the actual hazard. Buy side only: the
+                derivation is for buys landing ahead. */}
+            {protocolState && tab === "buy" && (
               <span className="text-[11px] text-gray-600">
                 absorbs ~
                 {frontRunHeadroom(
@@ -389,12 +417,14 @@ export function BuySell() {
 
       {tab === "buy" && (
         <p className="text-xs text-gray-500 mb-4">
-          Floor price: 1 USDC / SOLA · Market price rises with demand
+          Floor price: 1 USDC / SOLA · the price rises with buying and falls with selling ·{" "}
+          {Number(CURVE_FEE_BPS) / 100}% fee each way, to hiSOLA stakers
         </p>
       )}
       {tab === "sell" && (
         <p className="text-xs text-gray-500 mb-4">
-          Redeem at floor — always receive 1 USDC per SOLA
+          Sold back down the curve at its price, less {Number(CURVE_FEE_BPS) / 100}% · never less
+          than 1 USDC per SOLA
         </p>
       )}
 
@@ -409,8 +439,8 @@ export function BuySell() {
 
       {quoteUnavailable && (
         <p className="text-xs text-yellow-500 mb-2">
-          No live quote from the curve right now — a buy would have to go out unbounded, so
-          it is held back. Retry in a moment.
+          No live quote from the curve right now — the trade would have to go out unbounded,
+          so it is held back. Retry in a moment.
         </p>
       )}
 

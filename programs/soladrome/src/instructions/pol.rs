@@ -180,8 +180,15 @@ pub fn deploy_pol(
     ];
 
     // ── Phase 1: Buy SOLA via bonding curve ───────────────────────────────────
+    if usdc_for_sola > 0 {
+        let slot = Clock::get()?.slot;
+        ctx.accounts.protocol_state.note_curve_trade(slot);
+    }
     let sola_minted: u64 = if usdc_for_sola > 0 {
-        let sola_amount = math::sola_out(vu, vs, k_val, usdc_for_sola)?;
+        // No curve fee here: this USDC is already the stakers' (skimmed from `market_vault` by
+        // `collect_to_pol`), and charging it would only send part of it back where it came from.
+        let q = math::curve_buy(vu, vs, k_val, usdc_for_sola, 0)?;
+        let sola_amount = q.sola_out;
         require!(
             sola_amount >= min_sola_out,
             SoladromeError::SlippageExceeded
@@ -189,9 +196,9 @@ pub fn deploy_pol(
         require!(sola_amount > 0, SoladromeError::InvalidAmount);
 
         let floor_amount = sola_amount;
-        let market_amount = usdc_for_sola
-            .checked_sub(floor_amount)
-            .ok_or(SoladromeError::Overflow)?;
+        // ☢️ The premium stays in the market reserve, owed to sellers — see `buy_sola`. It went
+        // to `market_vault` until 2026-10-07, which made POL buys a fee stakers paid themselves.
+        let premium = q.premium;
 
         // pol_usdc_vault → floor_vault (1:1 backing)
         token::transfer(
@@ -207,19 +214,19 @@ pub fn deploy_pol(
             floor_amount,
         )?;
 
-        // pol_usdc_vault → market_vault (excess above floor)
-        if market_amount > 0 {
+        // pol_usdc_vault → market reserve (premium above floor)
+        if premium > 0 {
             token::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
                     Transfer {
                         from: ctx.accounts.pol_usdc_vault.to_account_info(),
-                        to: ctx.accounts.market_vault.to_account_info(),
+                        to: ctx.accounts.market_reserve.to_account_info(),
                         authority: ctx.accounts.pol_state.to_account_info(),
                     },
                     &[pol_seeds],
                 ),
-                market_amount,
+                premium,
             )?;
         }
 
@@ -240,14 +247,8 @@ pub fn deploy_pol(
         // Update bonding curve state (scoped borrow)
         {
             let s = &mut ctx.accounts.protocol_state;
-            s.virtual_usdc = s
-                .virtual_usdc
-                .checked_add(usdc_for_sola)
-                .ok_or(SoladromeError::Overflow)?;
-            s.virtual_sola = s
-                .virtual_sola
-                .checked_sub(sola_amount)
-                .ok_or(SoladromeError::Overflow)?;
+            s.virtual_usdc = q.new_vu;
+            s.virtual_sola = q.new_vs;
             s.total_sola = s
                 .total_sola
                 .checked_add(sola_amount)
@@ -257,10 +258,6 @@ pub fn deploy_pol(
             s.total_purchased_sola = s
                 .total_purchased_sola
                 .checked_add(sola_amount)
-                .ok_or(SoladromeError::Overflow)?;
-            s.accumulated_fees = s
-                .accumulated_fees
-                .checked_add(market_amount)
                 .ok_or(SoladromeError::Overflow)?;
         }
 
@@ -537,8 +534,9 @@ pub struct DeployPol<'info> {
     #[account(mut, address = protocol_state.floor_vault)]
     pub floor_vault: Box<Account<'info, TokenAccount>>,
 
-    #[account(mut, address = protocol_state.market_vault)]
-    pub market_vault: Box<Account<'info, TokenAccount>>,
+    /// Receives the premium of the POL's curve purchase, like `buy_sola`.
+    #[account(mut, seeds = [MARKET_RESERVE_SEED], bump)]
+    pub market_reserve: Box<Account<'info, TokenAccount>>,
 
     // ── AMM pool ──────────────────────────────────────────────────────────────
     #[account(

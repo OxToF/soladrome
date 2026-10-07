@@ -291,17 +291,19 @@ pub fn claim_founder_hi_sola(ctx: Context<ClaimFounderHiSola>) -> Result<()> {
     Ok(())
 }
 
-// Claim linearly-vested oSOLA (5M tranche).
+// Claim linearly-vested oSOLA (5M tranche): 12-month cliff, 48 months in all (2026-10-07).
 // Mints oSOLA directly to founder — no floor impact.
-// To realise USDC: exercise_o_sola (pay 1 USDC → floor_vault) → sell SOLA on AMM.
+// To realise USDC: exercise_o_sola (pay 1 USDC → floor_vault) → sell SOLA back down the curve.
 // Each exercise is net positive for the floor vault.
 pub fn claim_founder_vesting(ctx: Context<ClaimFounderVesting>) -> Result<()> {
     let clock = Clock::get()?;
     let vesting = &ctx.accounts.founder_vesting;
     let elapsed = ((clock.unix_timestamp - vesting.start_ts).max(0)) as u64;
 
+    // The oSOLA's own, slower schedule — see `FOUNDER_O_SOLA_CLIFF_SECS` for why it is not the
+    // hiSOLA tranche's `VESTING_CLIFF_SECS` / `VESTING_DURATION_SECS` any more.
     require!(
-        elapsed >= VESTING_CLIFF_SECS,
+        elapsed >= FOUNDER_O_SOLA_CLIFF_SECS,
         SoladromeError::VestingCliffNotReached
     );
     require!(
@@ -309,19 +311,19 @@ pub fn claim_founder_vesting(ctx: Context<ClaimFounderVesting>) -> Result<()> {
         SoladromeError::VestingFullyClaimed
     );
 
-    let vested_amount = if elapsed >= VESTING_DURATION_SECS {
+    let vested_amount = if elapsed >= FOUNDER_O_SOLA_VESTING_SECS {
         vesting.total_amount
     } else {
         (vesting.total_amount as u128)
             .checked_mul(elapsed as u128)
             .ok_or(SoladromeError::Overflow)?
-            .checked_div(VESTING_DURATION_SECS as u128)
+            .checked_div(FOUNDER_O_SOLA_VESTING_SECS as u128)
             .ok_or(SoladromeError::Overflow)? as u64
     };
 
-    let claimable = vested_amount
-        .checked_sub(vesting.claimed)
-        .ok_or(SoladromeError::Overflow)?;
+    // Saturating: a vesting started under the old, faster schedule may already have claimed more
+    // than the new one has vested. That is "nothing yet", not an arithmetic fault.
+    let claimable = vested_amount.saturating_sub(vesting.claimed);
     require!(claimable > 0, SoladromeError::NothingToClaim);
 
     // Mint oSOLA to founder — floor-neutral until exercised

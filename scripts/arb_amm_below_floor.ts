@@ -161,13 +161,14 @@ async function main() {
   const solaBal = Number((await connection.getTokenAccountBalance(userSola)).value.amount);
   console.log("      SOLA en main:", (solaBal / DEC).toFixed(6));
 
-  // ── 3. redeem at the floor ────────────────────────────────────────────────
+  // ── 3. sell back to the protocol: the curve's price, never less than the floor ──
+  // `min_usdc_out` = the floor for every SOLA, the least `sell_sola` may pay (2026-10-07).
   const usdcBefore = Number((await connection.getTokenAccountBalance(userUsdc)).value.amount);
   const sig3 = await (program.methods as any)
-    .sellSola(new anchor.BN(solaBal))
+    .sellSola(new anchor.BN(solaBal), new anchor.BN(solaBal))
     .accountsPartial({
       user: payer.publicKey, protocolState: statePda, solaMint,
-      userSola, floorVault: s.floorVault, userUsdc,
+      userSola, floorVault: s.floorVault, userUsdc, marketVault: s.marketVault,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
     .rpc();

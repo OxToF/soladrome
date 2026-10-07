@@ -82,8 +82,8 @@ pub mod soladrome {
         instructions::curve::buy_sola(ctx, usdc_in, min_sola_out)
     }
 
-    pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64) -> Result<()> {
-        instructions::curve::sell_sola(ctx, sola_amount)
+    pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64, min_usdc_out: u64) -> Result<()> {
+        instructions::curve::sell_sola(ctx, sola_amount, min_usdc_out)
     }
 
     pub fn stake_sola(ctx: Context<StakeSola>, sola_amount: u64) -> Result<()> {
@@ -484,6 +484,11 @@ pub mod soladrome {
     /// Permissionless: any signer may fire any position's voting strategy.
     pub fn crank_pool_strategy_vote(ctx: Context<CrankPoolStrategyVote>) -> Result<()> {
         instructions::strategy::crank_pool_strategy_vote(ctx)
+    }
+
+    /// Permissionless, inflow only: create the market reserve if needed and pay USDC into it.
+    pub fn fund_market_reserve(ctx: Context<FundMarketReserve>, amount: u64) -> Result<()> {
+        instructions::curve::fund_market_reserve(ctx, amount)
     }
 }
 

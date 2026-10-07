@@ -109,15 +109,20 @@ curve): a 2× price move requires ~414k USDC of cumulative buys, a 10× requires
 When a user sends `usdc_in` USDC:
 
 ```
-sola_out = V_sola - K / (V_usdc + usdc_in)
-floor_amount = sola_out          # 1 USDC per SOLA → floor_vault
-market_amount = usdc_in - floor_amount  # excess → market_vault (fees)
+fee      = usdc_in × 1%                 # CURVE_FEE_BPS → market_vault (stakers)
+net      = usdc_in - fee
+sola_out = V_sola - K / (V_usdc + net)
+floor_amount = sola_out                 # 1 USDC per SOLA → floor_vault
+premium      = net - sola_out           # above the floor → market_reserve
 ```
 
 - `floor_vault` receives exactly `sola_out` USDC (maintaining 1:1 backing)
-- `market_vault` receives the price premium above floor (the "market fee")
-- `virtual_usdc` increases by `usdc_in`; `virtual_sola` decreases by `sola_out`
+- `market_reserve` receives the premium above the floor. It is **not** a fee: it is what the curve owes back to sellers (§3.3)
+- `market_vault` receives the 1 % fee, distributed to hiSOLA stakers
+- `virtual_usdc` increases by `net`; `virtual_sola` decreases by `sola_out`
 - `total_purchased_sola` increments by `sola_out`
+
+⚠️ Until 2026-10-07 the whole premium went to `market_vault` and was distributed, so nothing held it and a seller could only ever get the floor back. That diverged from Beradrome, whose market reserves keep the premium and pay sellers the curve's price; the port now matches it.
 
 The split ensures the floor backing is always maintained regardless of curve position.
 
@@ -125,16 +130,28 @@ The split ensures the floor backing is always maintained regardless of curve pos
 
 ### 3.3 Sell Mechanics (`sell_sola`)
 
-Selling does **not** use the bonding curve. It redeems directly at floor price:
+Selling goes back **down** the curve, the exact mirror of a buy, and never pays less than the floor:
 
 ```
-usdc_out = sola_amount  # exactly 1:1
+on_curve = min(sola_amount, INIT_V_sola - V_sola)     # the part the curve can take back
+proceeds = V_usdc - ceil(K / (V_sola + on_curve))      # the curve's price for it
+premium  = proceeds - on_curve
+fee      = min(proceeds × 1%, premium)                 # never takes a sale below the floor
+usdc_out = sola_amount + premium - fee
 ```
 
 - `sola_amount` SOLA is burned
-- `sola_amount` USDC is transferred from `floor_vault` to the user
-- Virtual reserves are **not updated** (sell_sola does not affect the curve)
+- `sola_amount` USDC comes from `floor_vault` (1 per SOLA)
+- `premium - fee` comes from `market_reserve` to the seller, `fee` from `market_reserve` to `market_vault`
+- `virtual_usdc` / `virtual_sola` move back down the curve; once the curve is back at its start (price 1), the rest of a sale is redeemed at the floor, 1:1
 - `total_purchased_sola` decrements by `sola_amount`
+- `min_usdc_out` is the seller's slippage bound, as `min_sola_out` is the buyer's
+
+**Market reserve invariant**, checked on every sale: `market_reserve ≥ V_usdc + V_sola − (INIT_V_usdc + INIT_V_sola)`, every premium paid and not yet returned. Each trade moves the reserve and `V_usdc + V_sola` by exactly the same amount, so it holds by construction; the check turns a mistake in that arithmetic into a refused sale rather than the last sellers' money.
+
+**While the protocol is paused**, `sell_sola` stays open but redeems at the floor only, 1:1: the market reserve and the curve are not touched. The exit never closes, and the newest arithmetic in the program is the part a pause stops.
+
+**Exercise is priced at the curve as it stood before the slot's trades.** Because a sale now lowers the curve, a single transaction could otherwise sell down the curve, exercise oSOLA (or crank someone's strategy) at the lowered price, and buy back. `ProtocolState.curve_ref_slot` / `curve_ref_vu_usdc` record the curve before the first trade of each slot, and `exercise_gain` — hence the exercise fee, `max_exercisable` and the strategies' 70 % intrinsic bound — reads that reference within the slot.
 
 **Critical invariant enforced on every sell:**
 ```
@@ -151,7 +168,7 @@ At initialization, the spot price is:
 spot_price = V_usdc / V_sola = 1.0 USDC/SOLA
 ```
 
-As users buy, `V_usdc` increases and `V_sola` decreases, raising the spot price. The floor price remains 1.0 USDC/SOLA forever — the gap between spot and floor is the market premium that flows to stakers.
+As users buy, `V_usdc` increases and `V_sola` decreases, raising the spot price; as they sell, the price comes back down. The floor price remains 1.0 USDC/SOLA forever — the gap between spot and floor is held in `market_reserve` and paid back to sellers, less the 1 % fee each way that goes to stakers.
 
 ---
 
@@ -220,7 +237,7 @@ One-time instruction creating two progressive vesting schedules:
   2. **No fee capture** — escrowed hiSOLA is excluded from `total_hi_sola`, the fee-accumulator denominator. The reserve earns nothing; 100% of protocol fees go to real stakers.
   3. **No voting, on any path** — `vote_gauge`, `replay_vote` **and** `burn_o_sola_for_votes` all reject the founder wallet (`founder_voting_enabled = false` by default): the 7M is a dormant anti-capture reserve, not governance power. Authority may flip it via `set_founder_voting` only as a break-glass measure against a detected takeover.
   Liquidity path: `borrow_against_locked`, capped at **20% of claimed** — the same cap that applies to every unfinanced allocation (contributor, partner, team). The 75% floor buffer still bounds total drawdown.
-- **5M oSOLA:** same schedule via `claim_founder_vesting`. Each exercise adds 1 USDC to `floor_vault`.
+- **5M oSOLA:** via `claim_founder_vesting`, on a slower schedule than the hiSOLA tranche since 2026-10-07: 12-month cliff (25 % at the cliff), 48 months in all. A sale now pays the curve's price, so every oSOLA is a claim on the premium curve buyers left in `market_reserve`; the slower release bounds how fast the founder can draw on it. Each exercise adds 1 USDC to `floor_vault`.
 - **250k hiSOLA (team tranche):** delivered at launch to the team wallet as hiSOLA minted **directly into a lifetime ve-lock** (`permanent_amount` covers the full tranche — `unlock_hi_sola` can never release it) — never liquid SOLA. Compensates contributors who worked unpaid pre-launch. Votes as an ordinary user (distinct wallet from the founder reserve, by design), borrows up to 20% via `borrow_against_locked`, and **earns protocol fees** (`fee_shares`, since 2026-08-27 — locked for life meant a fee basis of zero that could never become anything else, so the tranche paid nobody). Does not affect `total_purchased_sola`.
 
 ### 7.2 Protocol Partner Allocations (`register_partner` / `fund_partner_bribe_stream` / `claim_partner_allocation` / `crank_partner_epoch`)
@@ -529,7 +546,7 @@ Because step 1 is an oSOLA exercise, `flash_arbitrage` honors the same `exercise
 |---|---|---|---|
 | User purchases | Unlimited (curve-bound) | `buy_sola` | ✅ 1:1 |
 | Founder hiSOLA | 7,000,000 | 6-month cliff, 24-month linear vest · **lifetime ve escrow** — no exit, no vote, no fee share | ❌ locked for life |
-| Founder oSOLA | 5,000,000 | 6-month cliff, 24-month linear vest | ✅ on exercise |
+| Founder oSOLA | 5,000,000 | 12-month cliff, 48-month linear vest | ✅ on exercise |
 | Team hiSOLA | 250,000 | Lifetime ve-lock at launch — votes, borrows 20%, never liquid SOLA | ❌ locked for life |
 | Protocol partners | bags 250K / 175K / 100K by tier + per-deal bribe caps | Welcome bag **locked for life** · bribe-earned streamed vs bribes, 4-year lock | ❌ locked |
 | Contributors | small, per-wallet | hiSOLA lifetime ve-lock + oSOLA, claimed at launch | ❌ hiSOLA locked for life |
@@ -549,7 +566,7 @@ There is no protocol-controlled inflation. oSOLA is the primary incentive token;
 ### 13.3 Revenue Model
 
 Protocol revenue flows to `market_vault`:
-- **Bonding curve premium** — spread between purchase price and floor price
+- **Bonding curve fee** — 1 % of every buy and every sale (`CURVE_FEE_BPS`). Until 2026-10-07 this line was the whole premium above the floor; that premium now stays in `market_reserve`, owed to sellers
 - **AMM protocol fees** — `protocol_fee_share_bps` of each swap
 - **Borrow origination fees** — 2% of each `borrow_usdc` / `borrow_against_locked`
 - **Flash arbitrage** — 90% of arb profit
@@ -761,7 +778,7 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 | Beneficiary | Token | Amount | Cliff | Vesting / Lock | Borrow rights | On-chain mechanism |
 |---|---|---|---|---|---|---|
 | Founder | hiSOLA | 7,000,000 | 6 months | Lifetime ve escrow (no exit, no vote, no fees) | 20% of claimed (`borrow_against_locked`) | `claim_founder_hi_sola` |
-| Founder | oSOLA | 5,000,000 | 6 months | 24 months linear | None | `claim_founder_vesting` |
+| Founder | oSOLA | 5,000,000 | 12 months | 48 months linear | None | `claim_founder_vesting` |
 | Team | hiSOLA | 250,000 | None | Lifetime ve-lock (votes as ordinary user) | 20% (`borrow_against_locked`) | `mint_ecosystem_allocation` |
 | Jito (Tier 1) | hiSOLA | 250,000 | None | Bag: locked for life · bribe-earned: 4-year lock | 20% (`borrow_against_locked`) | `claim_partner_allocation` |
 | Marinade (Tier 2) | hiSOLA | 175,000 | None | Bag: locked for life · bribe-earned: 4-year lock | 20% (`borrow_against_locked`) | `claim_partner_allocation` |

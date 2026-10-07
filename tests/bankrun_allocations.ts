@@ -614,6 +614,45 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     );
   });
 
+  it("[founder] the 5M oSOLA vest on their own schedule: 12-month cliff, 48 months in all", async () => {
+    // Since 2026-10-07 a sale pays the curve's price, so every oSOLA is a claim on the premium
+    // buyers left in the market reserve. The oSOLA no longer share the hiSOLA tranche's 6-month
+    // cliff and 24-month schedule. The clock here is already past that old cliff (~212 days).
+    const vesting: any = await program.account.founderVesting.fetch(founderVestingPda());
+    const start = Number(vesting.startTs);
+    const total = BigInt(vesting.totalAmount.toString());
+    const founderOSola = getAssociatedTokenAddressSync(oSolaM, founder.publicKey);
+    const claim = () =>
+      program.methods
+        .claimFounderVesting()
+        .accounts({
+          protocolState: statePda,
+          founder: founder.publicKey,
+          oSolaMint: oSolaM,
+          founderVesting: founderVestingPda(),
+          founderOSola,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([founder])
+        .rpc();
+
+    const YEAR = 365 * DAY;
+    assert.isAbove((await nowSeconds()) - start, VESTING_CLIFF_SECS, "past the OLD cliff");
+    await forwardSeconds(start + YEAR - DAY - (await nowSeconds()));
+    await expectFailure(claim, "VestingCliffNotReached");
+
+    await forwardSeconds(2 * DAY);
+    await claim();
+    const elapsed = BigInt((await nowSeconds()) - start);
+    const expected = (total * elapsed) / BigInt(4 * YEAR);
+    const got = await tokenBalance(founderOSola);
+    // `nowSeconds` reads the clock after the claim landed; the claim saw the same second.
+    assert.equal(got.toString(), expected.toString(), "a quarter, not the half the old schedule paid");
+    assert.isBelow(Number(got), Number(total / BigInt(4)) * 1.01);
+  });
+
   it("[founder] unlock_hi_sola refuses the founder, expired or not", async () => {
     // Well past any lock end. The refusal is identity-based, not time-based: this is the
     // single `require!` that keeps the 7M out of `hi_sola` forever, and the reason the

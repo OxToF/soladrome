@@ -16,6 +16,10 @@ pub const STATE_SEED: &[u8] = b"state";
 pub const POSITION_SEED: &[u8] = b"position";
 pub const FLOOR_VAULT_SEED: &[u8] = b"floor_vault";
 pub const MARKET_VAULT_SEED: &[u8] = b"market_vault";
+/// USDC the curve owes its sellers: the premium buyers paid above the floor, kept to pay it back
+/// when they sell (the Beradrome market reserve). Never distributed: `market_vault` is the fee
+/// pool, and the staker accumulator advances on ITS balance, so the two must never be one vault.
+pub const MARKET_RESERVE_SEED: &[u8] = b"market_reserve";
 pub const SOLA_VAULT_SEED: &[u8] = b"sola_vault";
 /// Standing compound order, one per user: [b"auto", user]. Holds no tokens — see `AutoCompound`.
 pub const AUTO_SEED: &[u8] = b"auto";
@@ -63,6 +67,13 @@ pub const MAX_LP_LEG_IMPACT_BPS: u128 = 100;
 // At N = 1M: ×2 needs 414k USDC, ×10 needs 2.16M. k = 1e24, set once at `initialize`.
 pub const INIT_VIRTUAL_USDC: u64 = 1_000_000_000_000; // 1 000 000 USDC (6 dec)
 pub const INIT_VIRTUAL_SOLA: u64 = 1_000_000_000_000; // 1 000 000 SOLA (6 dec)  – floor = 1:1
+
+/// Fee on every bonding-curve trade, buying and selling, paid to hiSOLA stakers through
+/// `market_vault` (so `pol_split` applies to it). 1 %, decided 2026-10-07 together with selling on
+/// the curve: until then the whole premium above the floor was distributed and a seller only ever
+/// got the floor back — 1 USDC for a SOLA bought at 5. On a sale the fee is capped at the premium,
+/// so a SOLA never fetches less than the floor.
+pub const CURVE_FEE_BPS: u64 = 100;
 
 // (LP_EMISSION_PER_EPOCH removed — a compile-time per-epoch emission was superseded by
 //  `ProtocolState.osola_emission_initial`, which `configure_emissions` sets at runtime. The
@@ -236,6 +247,19 @@ pub const VESTING_CLIFF_SECS: u64 = 180 * 24 * 3_600;
 
 /// Linear vesting window that starts after the cliff. 24 months.
 pub const VESTING_DURATION_SECS: u64 = 720 * 24 * 3_600;
+
+/// The founder's 5M oSOLA (`FOUNDER_LIQUID`) vest on their own, slower schedule: a 12-month cliff
+/// and 48 months in all, measured from `mint_founder_allocation` (25 % at the cliff, then linear).
+///
+/// ☢️ Decided 2026-10-07 with selling on the curve. Until then exercised SOLA could only be
+/// redeemed at the floor, so an oSOLA was worth something only to someone who wanted SOLA. Since a
+/// sale pays the curve's price, every oSOLA is a claim on the premium curve buyers left in the
+/// market reserve — exercise at ~1.1, sell down the curve — and 5M is enough to take the whole
+/// curve back to 1 at almost any price. The 2-year schedule shared with the hiSOLA tranche would
+/// have released 2.5M a year; this releases 1.25M. The hiSOLA tranche keeps its schedule: it is
+/// locked for life and never reaches a sale.
+pub const FOUNDER_O_SOLA_CLIFF_SECS: u64 = 365 * 24 * 3_600;
+pub const FOUNDER_O_SOLA_VESTING_SECS: u64 = 4 * 365 * 24 * 3_600;
 
 // (BASE_BAG_VEST_SECS removed 2026-08-27 with the streamed welcome bag. The bag is now
 //  delivered whole the moment the partner escrows their bribe schedule — it is the signature

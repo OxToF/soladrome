@@ -539,7 +539,7 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
     // which is strictly more than the AMM would have paid on the trade just refused.
     const usdcBefore = await tokenBalance(userUsdc);
     await program.methods
-      .sellSola(new BN(amt.toString()))
+      .sellSola(new BN(amt.toString()), new BN(0))
       .accounts({
         user: payer.publicKey,
         protocolState: statePda,
@@ -547,12 +547,14 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
         userSola,
         floorVault: floorV,
         userUsdc,
+        marketVault: marketV,
         tokenProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
 
+    // Since 2026-10-07 a sale to the protocol pays the curve's price, never less than the floor.
     const received = (await tokenBalance(userUsdc)) - usdcBefore;
-    assert.equal(received.toString(), amt.toString(), "sell_sola did not pay exactly 1.00");
+    assert.isTrue(received >= amt, `sell_sola paid ${received}, less than the floor`);
     assert.isTrue(
       received > after.out,
       `sell_sola paid ${received}, the refused AMM trade would have paid ${after.out}`

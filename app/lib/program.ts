@@ -34,6 +34,8 @@ export const hiSolaM        = PublicKey.findProgramAddressSync([Buffer.from("hi_
 export const oSolaM         = PublicKey.findProgramAddressSync([Buffer.from("o_sola_mint")],  PROGRAM_ID)[0];
 export const floorVault     = PublicKey.findProgramAddressSync([Buffer.from("floor_vault")],  PROGRAM_ID)[0];
 export const marketVault    = PublicKey.findProgramAddressSync([Buffer.from("market_vault")], PROGRAM_ID)[0];
+/** The premium buyers paid above the floor, owed back to sellers (`MARKET_RESERVE_SEED`, 2026-10-07). */
+export const marketReserve  = PublicKey.findProgramAddressSync([Buffer.from("market_reserve")], PROGRAM_ID)[0];
 export const solaVaultAddr  = PublicKey.findProgramAddressSync([Buffer.from("sola_vault")],   PROGRAM_ID)[0];
 
 export function positionPda(user: PublicKey) {
