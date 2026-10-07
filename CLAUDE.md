@@ -222,6 +222,7 @@ account structs under `state/`.
 - Single global `ProtocolState` PDA `[b"state"]`
 - `buy_sola`: USDC in → 1 % fee to `market_vault` (stakers), 1 per SOLA to `floor_vault` (backing), the premium above the floor to `market_reserve` (owed to sellers)
 - `sell_sola(amount, min_usdc_out)`: burn SOLA → back **down** the curve: 1 per SOLA from `floor_vault`, the premium from `market_reserve`, less 1 % capped at that premium (never below the floor). Floor 1:1 once the curve is back at its start
+- Paused, `sell_sola` redeems at the floor only (reserve and curve untouched). `exercise_gain` (exercise fee, `max_exercisable`, the strategies' intrinsic bound) is priced at the curve **as it stood before the slot's trades** (`ProtocolState::exercise_reserves`), so a sale cannot cheapen an exercise in the same transaction — `tests/bankrun_curve_sell.ts` C-6, proven by mutation. ⚠️ Bankrun stays in one slot: a test that buys then exercises must `warpToSlot` in between
 - ☢️ **Until 2026-10-07 the premium was distributed and `sell_sola` paid the floor only** — a SOLA bought at 5 sold back for 1. That was a divergence from Beradrome nobody had written down; the port now matches it. See `tests/bankrun_curve_sell.ts`
 - `stake_sola` / `unstake_hi_sola`: SOLA ↔ hiSOLA 1:1, SOLA locked in `sola_vault`. **hiSOLA is a non-transferable position (`UserPosition.hi_sola`), not an SPL token** — see the section below
 - `claim_fees`: pro-rata share of `market_vault` via reward-per-token accumulator (`PRECISION = 1e12`)

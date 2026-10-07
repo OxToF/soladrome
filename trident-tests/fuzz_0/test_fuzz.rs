@@ -10,6 +10,10 @@
 //!
 //!   I-3. virtual_sola > 0  (bonding curve never empties the virtual SOLA side)
 //!
+//!   I-4. market_reserve >= virtual_usdc + virtual_sola − 2N
+//!        Since 2026-10-07 a sale goes back down the curve and is paid its premium out of
+//!        `market_reserve`; the reserve must always cover the rest of the curve.
+//!
 //! Any violation triggers an assertion panic, which Trident records as a crash
 //! and saves the reproducing seed for debugging.
 
@@ -68,6 +72,7 @@ impl FuzzTest {
         let floor_vault    = derive(&[b"floor_vault"]);
         let market_vault   = derive(&[b"market_vault"]);
         let sola_vault     = derive(&[b"sola_vault"]);
+        let market_reserve = derive(&[b"market_reserve"]);
 
         // Create a fresh SPL USDC mint (6 decimals, authority as mint_authority).
         let usdc_keypair = self.trident.random_keypair();
@@ -78,7 +83,9 @@ impl FuzzTest {
         self.trident.process_transaction(&mint_ixs, Some("create_usdc_mint"));
 
         // Initialize the Soladrome protocol (creates all PDAs on-chain).
-        let init_ix = InitializeInstruction::data(InitializeInstructionData::new())
+        // A founder key that is not the actor, as in the bankrun suites.
+        let founder = self.trident.random_keypair().pubkey();
+        let init_ix = InitializeInstruction::data(InitializeInstructionData::new(founder))
             .accounts(InitializeInstructionAccounts::new(
                 authority,
                 protocol_state,
@@ -89,6 +96,7 @@ impl FuzzTest {
                 floor_vault,
                 market_vault,
                 sola_vault,
+                market_reserve,
             ))
             .instruction();
         let result = self.trident.process_transaction(&[init_ix], Some("initialize"));
@@ -96,6 +104,15 @@ impl FuzzTest {
             // Initialize failed — bail out gracefully so the fuzzer can retry.
             return;
         }
+
+        // Open the curve. `initialize` leaves it closed (launch phase gate), so without this every
+        // `buy_sola` is refused with FeatureDisabled and the fuzz exercises nothing.
+        let flags_ix = SetPhaseFlagsInstruction::data(SetPhaseFlagsInstructionData::new(
+            None, None, None, None, Some(true), None,
+        ))
+        .accounts(SetPhaseFlagsInstructionAccounts::new(authority, protocol_state))
+        .instruction();
+        self.trident.process_transaction(&[flags_ix], Some("set_phase_flags"));
 
         // Create user USDC ATA and fund with 1 000 000 USDC.
         let user_usdc = self.trident.get_associated_token_address(
@@ -122,6 +139,7 @@ impl FuzzTest {
         self.fuzz_accounts.sola_mint.insert_with_address(sola_mint);
         self.fuzz_accounts.floor_vault.insert_with_address(floor_vault);
         self.fuzz_accounts.market_vault.insert_with_address(market_vault);
+        self.fuzz_accounts.market_reserve.insert_with_address(market_reserve);
         self.fuzz_accounts.sola_vault.insert_with_address(sola_vault);
         self.fuzz_accounts.usdc_mint.insert_with_address(usdc_mint);
         self.fuzz_accounts.user_usdc.insert_with_address(user_usdc);
@@ -137,6 +155,7 @@ impl FuzzTest {
         let Some(sola_mint)      = self.fuzz_accounts.sola_mint.get(&mut self.trident)      else { return };
         let Some(floor_vault)    = self.fuzz_accounts.floor_vault.get(&mut self.trident)    else { return };
         let Some(market_vault)   = self.fuzz_accounts.market_vault.get(&mut self.trident)   else { return };
+        let Some(market_reserve) = self.fuzz_accounts.market_reserve.get(&mut self.trident) else { return };
         let Some(user_usdc)      = self.fuzz_accounts.user_usdc.get(&mut self.trident)      else { return };
         let Some(user_sola)      = self.fuzz_accounts.user_sola.get(&mut self.trident)      else { return };
 
@@ -150,6 +169,7 @@ impl FuzzTest {
         ))
         .accounts(BuySolaInstructionAccounts::new(
             authority, protocol_state, sola_mint, user_usdc, user_sola, floor_vault, market_vault,
+            market_reserve,
         ))
         .instruction();
 
@@ -166,16 +186,28 @@ impl FuzzTest {
         let Some(protocol_state) = self.fuzz_accounts.protocol_state.get(&mut self.trident) else { return };
         let Some(sola_mint)      = self.fuzz_accounts.sola_mint.get(&mut self.trident)      else { return };
         let Some(floor_vault)    = self.fuzz_accounts.floor_vault.get(&mut self.trident)    else { return };
+        let Some(market_vault)   = self.fuzz_accounts.market_vault.get(&mut self.trident)   else { return };
+        let Some(market_reserve) = self.fuzz_accounts.market_reserve.get(&mut self.trident) else { return };
         let Some(user_usdc)      = self.fuzz_accounts.user_usdc.get(&mut self.trident)      else { return };
         let Some(user_sola)      = self.fuzz_accounts.user_sola.get(&mut self.trident)      else { return };
 
-        // Sell between 1 and u64::MAX SOLA.
-        // Amounts exceeding the user's balance will be rejected by the program.
-        let sola_amount: u64 = self.trident.random_from_range(1..=u64::MAX);
+        // Sell between 1 and the whole balance. This drew from 1..=u64::MAX until 2026-10-07, so
+        // every sale exceeded the balance and was refused: 49 831 sells, 0 successes, and the
+        // fuzz had never exercised a sale at all.
+        let held = match self.trident.get_token_account(user_sola) {
+            Ok(acc) => acc.account.amount,
+            Err(_) => return,
+        };
+        if held == 0 {
+            return;
+        }
+        let sola_amount: u64 = self.trident.random_from_range(1..=held);
 
-        let ix = SellSolaInstruction::data(SellSolaInstructionData::new(sola_amount))
+        // min_usdc_out = 0: accept any price, the worst case for the reserve.
+        let ix = SellSolaInstruction::data(SellSolaInstructionData::new(sola_amount, 0))
             .accounts(SellSolaInstructionAccounts::new(
                 authority, protocol_state, sola_mint, user_sola, floor_vault, user_usdc,
+                market_reserve, market_vault,
             ))
             .instruction();
 
@@ -187,6 +219,7 @@ impl FuzzTest {
     fn end(&mut self) {
         let Some(protocol_state_key) = self.fuzz_accounts.protocol_state.get(&mut self.trident) else { return };
         let Some(floor_vault_key)    = self.fuzz_accounts.floor_vault.get(&mut self.trident)    else { return };
+        let Some(reserve_key)        = self.fuzz_accounts.market_reserve.get(&mut self.trident) else { return };
 
         // Deserialize the on-chain ProtocolState (Borsh, 8-byte discriminator skipped internally).
         let Some(state): Option<ProtocolState> =
@@ -223,6 +256,19 @@ impl FuzzTest {
             state.virtual_sola > 0,
             "INVARIANT VIOLATED [I-3]: virtual_sola == 0 — bonding curve collapsed \
              (no more SOLA can be minted via buy_sola).",
+        );
+
+        // I-4: the market reserve covers every premium the curve still owes its sellers.
+        let reserve = match self.trident.get_token_account(reserve_key) {
+            Ok(acc) => acc.account.amount as u128,
+            Err(_) => return,
+        };
+        let owed = (state.virtual_usdc as u128 + state.virtual_sola as u128)
+            .saturating_sub(2 * 1_000_000_000_000u128);
+        assert!(
+            reserve >= owed,
+            "INVARIANT VIOLATED [I-4]: market_reserve ({reserve}) < owed premium ({owed}) — \
+             the last sellers down the curve would not be paid.",
         );
     }
 }

@@ -5989,14 +5989,6 @@
           "writable": true
         },
         {
-          "name": "market_vault",
-          "docs": [
-            "No longer written by `deploy_pol` (the premium goes to `market_reserve` since 2026-10-07).",
-            "Kept so the account list callers build does not change shape for nothing."
-          ],
-          "writable": true
-        },
-        {
           "name": "market_reserve",
           "docs": [
             "Receives the premium of the POL's curve purchase, like `buy_sola`."
@@ -13410,6 +13402,31 @@
               "field fails every founder guard closed rather than open."
             ],
             "type": "pubkey"
+          },
+          {
+            "name": "curve_ref_slot",
+            "docs": [
+              "The slot of the first curve trade (`buy_sola`, `sell_sola`, `deploy_pol`) seen in it, and",
+              "`virtual_usdc` as it stood just before that trade, in whole USDC rounded UP. See",
+              "`exercise_reserves`.",
+              "",
+              "☢️ Added 2026-10-07, when `sell_sola` started moving the curve DOWN. Until then the curve",
+              "price could only rise, so a gain priced on it could not be lowered by the caller; now one",
+              "transaction can sell down the curve, exercise (or crank someone's strategy) at the lowered",
+              "price, and buy back. Pricing every exercise at the curve as it stood BEFORE the slot's",
+              "trades makes that round trip worthless: what one slot does to the curve is invisible to",
+              "exercises in the same slot.",
+              "",
+              "Two `u32` because only 9 bytes were spare (439 used of 448, discriminator included):",
+              "a slot fits a u32 for ~50 years at 400 ms, and `virtual_usdc` in whole USDC moves the",
+              "price by at most 2e-6 at the curve's 1M depth. Appended last, so an existing singleton",
+              "reads 0 — \"no trade recorded\" — and prices at the curve."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "curve_ref_vu_usdc",
+            "type": "u32"
           }
         ]
       }

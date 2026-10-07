@@ -180,6 +180,10 @@ pub fn deploy_pol(
     ];
 
     // ── Phase 1: Buy SOLA via bonding curve ───────────────────────────────────
+    if usdc_for_sola > 0 {
+        let slot = Clock::get()?.slot;
+        ctx.accounts.protocol_state.note_curve_trade(slot);
+    }
     let sola_minted: u64 = if usdc_for_sola > 0 {
         // No curve fee here: this USDC is already the stakers' (skimmed from `market_vault` by
         // `collect_to_pol`), and charging it would only send part of it back where it came from.
@@ -529,11 +533,6 @@ pub struct DeployPol<'info> {
 
     #[account(mut, address = protocol_state.floor_vault)]
     pub floor_vault: Box<Account<'info, TokenAccount>>,
-
-    /// No longer written by `deploy_pol` (the premium goes to `market_reserve` since 2026-10-07).
-    /// Kept so the account list callers build does not change shape for nothing.
-    #[account(mut, address = protocol_state.market_vault)]
-    pub market_vault: Box<Account<'info, TokenAccount>>,
 
     /// Receives the premium of the POL's curve purchase, like `buy_sola`.
     #[account(mut, seeds = [MARKET_RESERVE_SEED], bump)]

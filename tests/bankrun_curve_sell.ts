@@ -17,6 +17,9 @@
 //   C-4. `min_usdc_out` binds.
 //   C-5. A reserve short of what the curve owes refuses the sale; paying the shortfall in through
 //        `fund_market_reserve` (permissionless, inflow only) reopens it.
+//   C-6. Selling down the curve and exercising in the same transaction does not lower the
+//        exercise fee: an exercise is priced at the curve as it stood before the slot's trades.
+//   C-7. Paused, a sale is redeemed at the floor only: the reserve and the curve are untouched.
 //
 // The expected figures are recomputed here from the curve formula, never read back from the
 // program: a test that asks the program what it should have done proves nothing.
@@ -316,5 +319,120 @@ describe("soladrome — bankrun (curve sell)", () => {
     assert.equal(await bal(reserveV), held);
 
     await sell(USDC(1));
+  });
+
+  it("C-6 selling down the curve in the same transaction does not cheapen an exercise", async () => {
+    const oSolaM = pda([Buffer.from("o_sola_mint")]);
+    const userOSola = getAssociatedTokenAddressSync(oSolaM, payer.publicKey);
+    await program.methods
+      .setPhaseFlags(null, null, null, true, null, null) // exercise
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+    const X = USDC(10_000);
+    await program.methods
+      .distributeOSola(new BN(X.toString()))
+      .accounts({
+        authority: payer.publicKey,
+        recipient: payer.publicKey,
+        protocolState: statePda,
+        oSolaMint: oSolaM,
+        recipientOSola: userOSola,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .rpc();
+    context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
+
+    // exercise_fee = ⌊⌊X·(vu − vs)/vs⌋ · 10 % ⌋, priced at the slot's reference curve.
+    const feeAt = (vu: bigint, vs: bigint) =>
+      vu <= vs ? BigInt(0) : (((X * (vu - vs)) / vs) * BigInt(1_000)) / BigInt(10_000);
+    const c0 = await curve();
+    const refVu = ((c0.vu + BigInt(999_999)) / BigInt(1_000_000)) * BigInt(1_000_000);
+    const honestFee = feeAt(refVu, K / refVu);
+
+    // The attack: dump SOLA down the curve, then exercise, in one transaction.
+    const dump = (await bal(userSola)) / BigInt(2);
+    const qs = quoteSell(c0.vu, c0.vs, dump);
+    const cheapFee = feeAt(qs.newVu, qs.newVs);
+    assert.isTrue(cheapFee < honestFee, "precondition: the dump does lower the live price");
+
+    const sellIx = await program.methods
+      .sellSola(new BN(dump.toString()), new BN(0))
+      .accounts({
+        user: payer.publicKey,
+        protocolState: statePda,
+        solaMint: solaM,
+        userSola,
+        floorVault: floorV,
+        userUsdc,
+        marketReserve: reserveV,
+        marketVault: marketV,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .instruction();
+    const exerciseIx = await program.methods
+      .exerciseOSola(new BN(X.toString()))
+      .accounts({
+        user: payer.publicKey,
+        protocolState: statePda,
+        solaMint: solaM,
+        oSolaMint: oSolaM,
+        userOSola,
+        userSola,
+        floorVault: floorV,
+        marketVault: marketV,
+        userUsdc,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    const market0 = await bal(marketV);
+    await send([sellIx, exerciseIx]);
+    const exerciseFee = (await bal(marketV)) - market0 - qs.fee;
+    assert.equal(exerciseFee, honestFee, "priced at the curve before the slot's trades");
+
+    // A slot later the dump is the curve, and an exercise pays on it — the reference covers the
+    // slot it was taken in, and nothing more.
+    context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
+    const c1 = await curve();
+    await program.methods
+      .distributeOSola(new BN(X.toString()))
+      .accounts({
+        authority: payer.publicKey,
+        recipient: payer.publicKey,
+        protocolState: statePda,
+        oSolaMint: oSolaM,
+        recipientOSola: userOSola,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .rpc();
+    const market1 = await bal(marketV);
+    await send([exerciseIx]);
+    assert.equal((await bal(marketV)) - market1, feeAt(c1.vu, c1.vs));
+  });
+
+  it("C-7 paused, a sale is redeemed at the floor and the reserve is not touched", async () => {
+    await program.methods
+      .pause()
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+    const c0 = await curve();
+    assert.isTrue(c0.vu > N, "precondition: the curve is above the floor");
+    const [usdc0, reserve0] = [await bal(userUsdc), await bal(reserveV)];
+    const sola = USDC(1_000);
+    await sell(sola);
+    assert.equal((await bal(userUsdc)) - usdc0, sola, "1 USDC per SOLA, from the floor");
+    assert.equal(await bal(reserveV), reserve0, "the reserve did not move");
+    const c1 = await curve();
+    assert.equal(c1.vu, c0.vu, "the curve did not move");
+    await program.methods
+      .unpause()
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
   });
 });

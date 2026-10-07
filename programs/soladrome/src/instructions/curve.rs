@@ -33,6 +33,8 @@ pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Resul
     );
     require!(usdc_in > 0, SoladromeError::InvalidAmount);
     let bump = ctx.accounts.protocol_state.bump;
+    let slot = Clock::get()?.slot;
+    ctx.accounts.protocol_state.note_curve_trade(slot);
 
     let q = math::curve_buy(
         ctx.accounts.protocol_state.virtual_usdc,
@@ -109,12 +111,24 @@ pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Resul
 pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64, min_usdc_out: u64) -> Result<()> {
     require!(sola_amount > 0, SoladromeError::InvalidAmount);
     let bump = ctx.accounts.protocol_state.bump;
+    let slot = Clock::get()?.slot;
+    ctx.accounts.protocol_state.note_curve_trade(slot);
 
+    // ☢️ Paused: the exit stays open, but only through the floor, 1:1 — the market reserve and the
+    // curve are not touched. A pause is what the authority reaches for when something is wrong,
+    // and the reserve path is the newest arithmetic in the program; a pause that left it running
+    // would protect everything except the part most likely to need it. Passing the current `vs`
+    // as the curve's start leaves no room on the curve, so `curve_sell` redeems it all at 1.
+    let paused = ctx.accounts.protocol_state.paused;
     let q = math::curve_sell(
         ctx.accounts.protocol_state.virtual_usdc,
         ctx.accounts.protocol_state.virtual_sola,
         ctx.accounts.protocol_state.k,
-        INIT_VIRTUAL_SOLA,
+        if paused {
+            ctx.accounts.protocol_state.virtual_sola
+        } else {
+            INIT_VIRTUAL_SOLA
+        },
         sola_amount,
         CURVE_FEE_BPS,
     )?;
@@ -293,8 +307,8 @@ pub fn exercise_fee(state: &ProtocolState, o_sola_amount: u64) -> Result<u64> {
 /// below is the floor of that bound: it may leave a unit or two of budget unspent to the floors
 /// in the fee, and it can never overspend.
 pub fn max_exercisable(state: &ProtocolState, budget: u64) -> Result<u64> {
-    let vu = state.virtual_usdc as u128;
-    let vs = state.virtual_sola as u128;
+    let (vu, vs) = state.exercise_reserves(Clock::get()?.slot);
+    let (vu, vs) = (vu as u128, vs as u128);
     let bps = state.exercise_fee_bps as u128;
     if vu <= vs || vs == 0 || bps == 0 {
         // No gain, no fee: one USDC exercises one oSOLA.
@@ -318,8 +332,11 @@ pub fn max_exercisable(state: &ProtocolState, budget: u64) -> Result<u64> {
 /// Its bound is "sell for at least a share of what exercising would net", and a second copy of
 /// this arithmetic is how that bound and the fee would drift apart.
 pub fn exercise_gain(state: &ProtocolState, o_sola_amount: u64) -> Result<u64> {
-    let vu = state.virtual_usdc as u128;
-    let vs = state.virtual_sola as u128;
+    // ☢️ Priced at the curve as it stood before this slot's trades — see
+    // `ProtocolState::exercise_reserves`. Since `sell_sola` moves the curve down, the live price is
+    // one a single transaction can lower (sell, exercise or crank, buy back); this one is not.
+    let (vu, vs) = state.exercise_reserves(Clock::get()?.slot);
+    let (vu, vs) = (vu as u128, vs as u128);
     // Out of the money (or exactly at the floor) => no gain => no fee. vs is never 0 while
     // k > 0, but guard anyway rather than divide blindly.
     if vu <= vs || vs == 0 {

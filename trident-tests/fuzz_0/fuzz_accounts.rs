@@ -32,6 +32,8 @@ pub struct AccountAddresses {
 
     pub protocol_state: AddressStorage,
 
+    pub market_reserve: AddressStorage,
+
     pub o_sola_mint: AddressStorage,
 
     pub user_o_sola: AddressStorage,

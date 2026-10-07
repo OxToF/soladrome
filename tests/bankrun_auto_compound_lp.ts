@@ -521,8 +521,8 @@ describe("soladrome — bankrun (standing LP orders)", () => {
       createSyncNativeInstruction(payerWsol),
     ]);
 
-    // Put the curve in the money: 200k USDC through it takes P from 1.00 to 1.44, so an oSOLA's
-    // exercise value is (1.44 − 1) × (1 − 10 %) = 0.396 USDC.
+    // Put the curve in the money: 200k USDC through it (198k after the 1 % curve fee) takes P from
+    // 1.00 to ≈ 1.435, so an oSOLA's exercise value is ≈ (1.435 − 1) × (1 − 10 %) ≈ 0.39 USDC.
     await program.methods
       .buySola(new BN(200_000 * UNIT), new BN(1))
       .accounts({
@@ -539,6 +539,10 @@ describe("soladrome — bankrun (standing LP orders)", () => {
         rent: SYSVAR_RENT_PUBKEY,
       } as any)
       .rpc();
+    // ☢️ Exercise is priced at the curve as it stood before the slot's trades (2026-10-07, see
+    // `ProtocolState::exercise_reserves`), and bankrun stays in one slot until told otherwise —
+    // without this the whole file would price oSOLA at the pre-buy curve, i.e. at nothing.
+    context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
 
     await distributeOSola(payer.publicKey, 500_000 * UNIT);
 

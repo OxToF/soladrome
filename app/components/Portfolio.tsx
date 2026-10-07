@@ -11,7 +11,7 @@ import {
 } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
 import { ammPriceVsUsdc, FLOOR_PRICE } from "@/lib/prices";
-import { marginalSellPrice } from "@/lib/curve";
+import { marginalSellPrice, quoteSell } from "@/lib/curve";
 import { currentEpoch } from "@/lib/epoch";
 import { PublicKey } from "@solana/web3.js";
 import { unpackAccount } from "@solana/spl-token";
@@ -148,9 +148,22 @@ export function Portfolio() {
         k:           BigInt(protocolState.k.toString()),
       })
     : FLOOR_PRICE;
-  const solaPrice = ammPriceVsUsdc(ammPools, solaM.toString(), usdcStr) ?? curveSell;
+  // ☢️ The marginal price is the price of an infinitesimal sale. Selling a whole balance walks the
+  // curve down, so without a pool the balance is valued at what `sell_sola` would pay for ALL of
+  // it (`quoteSell`), averaged back to a per-SOLA figure — never the marginal price times the size.
+  const reserves = protocolState
+    ? {
+        virtualUsdc: BigInt(protocolState.virtualUsdc.toString()),
+        virtualSola: BigInt(protocolState.virtualSola.toString()),
+        k:           BigInt(protocolState.k.toString()),
+      }
+    : null;
+  const held = data ? data.solaBalance + data.hiSolaBalance : 0;
+  const wholeSale = reserves && held > 0 ? quoteSell(reserves, BigInt(Math.floor(held * 1e6))) : null;
+  const curveAvg = wholeSale ? Number(wholeSale.usdcOut) / 1e6 / held : curveSell;
+  const solaPrice = ammPriceVsUsdc(ammPools, solaM.toString(), usdcStr) ?? curveAvg;
   const oSolaPrice = ammPriceVsUsdc(ammPools, oSolaM.toString(), usdcStr)
-    ?? Math.max(0, solaPrice - FLOOR_PRICE);
+    ?? Math.max(0, (ammPriceVsUsdc(ammPools, solaM.toString(), usdcStr) ?? curveSell) - FLOOR_PRICE);
   const totalValue = data
     ? data.solaBalance * solaPrice
       + data.hiSolaBalance * solaPrice

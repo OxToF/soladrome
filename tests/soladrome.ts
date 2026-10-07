@@ -2311,9 +2311,12 @@ describe("soladrome", () => {
       assert.fail("Expected InsufficientFloorReserve error");
     } catch (e: any) {
       const msg: string = e?.message ?? String(e);
+      // The exact error, not any message containing "insufficient": the wallet does not hold
+      // this many SOLA either, and an SPL burn failing for that reason would have kept this test
+      // green with the floor guard gone. `sell_sola` checks the floor before it burns.
       assert.isTrue(
-        msg.includes("InsufficientFloorReserve") || msg.includes("insufficient"),
-        `Expected floor reserve error, got: ${msg}`
+        msg.includes("InsufficientFloorReserve"),
+        `Expected InsufficientFloorReserve, got: ${msg}`
       );
       console.log("✅ [invariant] sell correctly rejected: floor reserve exhausted");
     }

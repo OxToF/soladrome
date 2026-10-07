@@ -13,10 +13,13 @@ import {
 } from "@solana/spl-token";
 import { getProgram, statePda, poolPda, solaM, oSolaM, toUi, fromUi, PROGRAM_ID, sendTx, marketReserve } from "@/lib/program";
 import { useSoladrome } from "@/lib/SoladromeContext";
+import { quoteSell } from "@/lib/curve";
 
 const CALLER_SHARE = 0.10; // 10% to caller, flash-arb direction only
 const FEE_RATE     = 30;   // 0.30% default pool fee
-const FLOOR        = 1;    // sell_sola pays exactly 1 USDC per SOLA, unconditionally
+// The least sell_sola pays per SOLA. Since 2026-10-07 it pays the curve price less 1 % when the
+// curve is above 1 — see `redeemValue`, which quotes the real sale.
+const FLOOR        = 1;
 // Below this gap the profit is dust and not worth a transaction fee.
 const MIN_GAP      = 0.0005;
 
@@ -77,7 +80,7 @@ function amountToRestoreFloor(reserveUsdc: number, reserveSola: number, feeRate:
 export function FlashArb() {
   const { connection } = useConnection();
   const wallet         = useAnchorWallet();
-  const { usdcMint }   = useSoladrome();
+  const { usdcMint, protocolState } = useSoladrome();
 
   const [arb,     setArb]     = useState<ArbState | null>(null);
   const [amount,  setAmount]  = useState("");
@@ -145,7 +148,19 @@ export function FlashArb() {
   // ── Direction BELOW: buy SOLA cheap → redeem at the floor ────────────────
   const suggested   = arb ? amountToRestoreFloor(arb.reserveUsdc, arb.reserveSola, FEE_RATE) : 0;
   const solaBought  = arb ? estimateOutput(amt, arb.reserveUsdc, arb.reserveSola, FEE_RATE) : 0;
-  const redeemValue = solaBought * FLOOR;
+  // What `sell_sola` pays for these SOLA: the curve's price less 1 % (2026-10-07), never less than
+  // the floor. Quoted like the transaction will be priced, not at a flat 1.00.
+  const sellQuote   = protocolState && solaBought > 0
+    ? quoteSell(
+        {
+          virtualUsdc: BigInt(protocolState.virtualUsdc.toString()),
+          virtualSola: BigInt(protocolState.virtualSola.toString()),
+          k:           BigInt(protocolState.k.toString()),
+        },
+        BigInt(Math.floor(solaBought * 1e6)),
+      )
+    : null;
+  const redeemValue = sellQuote ? Number(sellQuote.usdcOut) / 1e6 : solaBought * FLOOR;
   const buyProfit   = redeemValue - amt;
   const priceAfter  = arb && amt > 0
     ? (arb.reserveUsdc + amt * (1 - FEE_RATE / 10_000)) / (arb.reserveSola - solaBought)
@@ -296,7 +311,7 @@ export function FlashArb() {
           </h2>
           <p className="text-xs text-gray-500 mt-0.5">
             {direction === "below"
-              ? "Buy SOLA below the floor on the AMM → redeem at 1.00 USDC. One transaction."
+              ? "Buy SOLA below the floor on the AMM → sell it back to the protocol (≥ 1.00 USDC). One transaction."
               : "Burn oSOLA → mint SOLA → sell on AMM → split profit. Zero USDC upfront."}
           </p>
         </div>

@@ -218,7 +218,14 @@ export function BuySell() {
       // The bound now actually binds, so this is a real outcome rather than an impossible
       // one: someone bought ahead and moved the curve. Say that, instead of showing a raw
       // Anchor code — "SlippageExceeded" reads as a broken app to a first-time tester.
-      if (msg.includes("SlippageExceeded") || msg.includes("6000")) {
+      if (msg.includes("InsufficientMarketReserve")) {
+        // The reserve that pays a sale its premium is short of what the curve owes. The program
+        // refuses rather than pay one seller out of the next ones' share. Nothing was sold.
+        setStatus(
+          "❌ Sales are on hold: the market reserve does not yet cover what the curve owes its " +
+          "sellers. Nothing was sold. Retry later.",
+        );
+      } else if (msg.includes("SlippageExceeded") || msg.includes("6000")) {
         setStatus(
           `❌ The curve moved while you were signing — the ${tab === "buy" ? "buy" : "sale"} was ` +
           `rejected rather than filled beyond your ${slippageBps / 100}% tolerance. Nothing ` +

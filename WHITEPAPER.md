@@ -149,6 +149,10 @@ usdc_out = sola_amount + premium - fee
 
 **Market reserve invariant**, checked on every sale: `market_reserve ≥ V_usdc + V_sola − (INIT_V_usdc + INIT_V_sola)`, every premium paid and not yet returned. Each trade moves the reserve and `V_usdc + V_sola` by exactly the same amount, so it holds by construction; the check turns a mistake in that arithmetic into a refused sale rather than the last sellers' money.
 
+**While the protocol is paused**, `sell_sola` stays open but redeems at the floor only, 1:1: the market reserve and the curve are not touched. The exit never closes, and the newest arithmetic in the program is the part a pause stops.
+
+**Exercise is priced at the curve as it stood before the slot's trades.** Because a sale now lowers the curve, a single transaction could otherwise sell down the curve, exercise oSOLA (or crank someone's strategy) at the lowered price, and buy back. `ProtocolState.curve_ref_slot` / `curve_ref_vu_usdc` record the curve before the first trade of each slot, and `exercise_gain` — hence the exercise fee, `max_exercisable` and the strategies' 70 % intrinsic bound — reads that reference within the slot.
+
 **Critical invariant enforced on every sell:**
 ```
 total_purchased_sola >= sola_amount           // sell guard
