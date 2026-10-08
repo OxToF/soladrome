@@ -29,7 +29,7 @@ use crate::instructions::curve::{exercise_fee, max_exercisable};
 use crate::state::*;
 
 /// The address of the pool pairing `x` and `y`, as `create_pool` derives it.
-fn pool_address(x: Pubkey, y: Pubkey) -> Pubkey {
+pub(crate) fn pool_address(x: Pubkey, y: Pubkey) -> Pubkey {
     let (a, b) = sort_mints(x, y);
     Pubkey::find_program_address(&[AMM_POOL_SEED, a.as_ref(), b.as_ref()], &crate::ID).0
 }

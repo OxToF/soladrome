@@ -5954,6 +5954,10 @@ pub mod soladrome {
 
         pub pol_sola_ata: AccountMeta,
 
+        pub counter_mint: AccountMeta,
+
+        pub pol_counter: AccountMeta,
+
         pub pol_lp_vault: AccountMeta,
 
         pub sola_mint: AccountMeta,
@@ -5969,6 +5973,10 @@ pub mod soladrome {
         pub pool_token_a_vault: AccountMeta,
 
         pub pool_token_b_vault: AccountMeta,
+
+        pub sol_usdc_pool: AccountMeta,
+
+        pub lst_sol_pool: AccountMeta,
 
         pub lp_dead_ata: AccountMeta,
 
@@ -5994,6 +6002,10 @@ pub mod soladrome {
 
         pub pol_sola_ata: Pubkey,
 
+        pub counter_mint: Pubkey,
+
+        pub pol_counter: Pubkey,
+
         pub pol_lp_vault: Pubkey,
 
         pub sola_mint: Pubkey,
@@ -6010,6 +6022,10 @@ pub mod soladrome {
 
         pub pool_token_b_vault: Pubkey,
 
+        pub sol_usdc_pool: Pubkey,
+
+        pub lst_sol_pool: Pubkey,
+
         pub lp_dead_ata: Pubkey,
     }
 
@@ -6024,6 +6040,10 @@ pub mod soladrome {
             pol_usdc_vault: Pubkey,
 
             pol_sola_ata: Pubkey,
+
+            counter_mint: Pubkey,
+
+            pol_counter: Pubkey,
 
             pol_lp_vault: Pubkey,
 
@@ -6041,6 +6061,10 @@ pub mod soladrome {
 
             pool_token_b_vault: Pubkey,
 
+            sol_usdc_pool: Pubkey,
+
+            lst_sol_pool: Pubkey,
+
             lp_dead_ata: Pubkey,
         ) -> Self {
             Self {
@@ -6053,6 +6077,10 @@ pub mod soladrome {
                 pol_usdc_vault,
 
                 pol_sola_ata,
+
+                counter_mint,
+
+                pol_counter,
 
                 pol_lp_vault,
 
@@ -6070,6 +6098,10 @@ pub mod soladrome {
 
                 pool_token_b_vault,
 
+                sol_usdc_pool,
+
+                lst_sol_pool,
+
                 lp_dead_ata,
             }
         }
@@ -6084,9 +6116,13 @@ pub mod soladrome {
 
         pub sola_for_lp: u64,
 
-        pub usdc_for_lp: u64,
+        pub counter_for_lp: u64,
 
         pub min_lp: u64,
+
+        pub max_price_dev_bps: u16,
+
+        pub counter_usdc_ref: u64,
     }
 
     impl DeployPolInstructionData {
@@ -6097,9 +6133,13 @@ pub mod soladrome {
 
             sola_for_lp: u64,
 
-            usdc_for_lp: u64,
+            counter_for_lp: u64,
 
             min_lp: u64,
+
+            max_price_dev_bps: u16,
+
+            counter_usdc_ref: u64,
         ) -> Self {
             Self {
                 usdc_for_sola,
@@ -6108,9 +6148,13 @@ pub mod soladrome {
 
                 sola_for_lp,
 
-                usdc_for_lp,
+                counter_for_lp,
 
                 min_lp,
+
+                max_price_dev_bps,
+
+                counter_usdc_ref,
             }
         }
     }
@@ -6140,6 +6184,10 @@ pub mod soladrome {
 
             self.accounts.pol_sola_ata = AccountMeta::new(accounts.pol_sola_ata, false);
 
+            self.accounts.counter_mint = AccountMeta::new_readonly(accounts.counter_mint, false);
+
+            self.accounts.pol_counter = AccountMeta::new(accounts.pol_counter, false);
+
             self.accounts.pol_lp_vault = AccountMeta::new(accounts.pol_lp_vault, false);
 
             self.accounts.sola_mint = AccountMeta::new(accounts.sola_mint, false);
@@ -6155,6 +6203,10 @@ pub mod soladrome {
             self.accounts.pool_token_a_vault = AccountMeta::new(accounts.pool_token_a_vault, false);
 
             self.accounts.pool_token_b_vault = AccountMeta::new(accounts.pool_token_b_vault, false);
+
+            self.accounts.sol_usdc_pool = AccountMeta::new_readonly(accounts.sol_usdc_pool, false);
+
+            self.accounts.lst_sol_pool = AccountMeta::new_readonly(accounts.lst_sol_pool, false);
 
             self.accounts.lp_dead_ata = AccountMeta::new(accounts.lp_dead_ata, false);
 
@@ -6195,6 +6247,10 @@ pub mod soladrome {
 
             metas.push(self.accounts.pol_sola_ata.clone());
 
+            metas.push(self.accounts.counter_mint.clone());
+
+            metas.push(self.accounts.pol_counter.clone());
+
             metas.push(self.accounts.pol_lp_vault.clone());
 
             metas.push(self.accounts.sola_mint.clone());
@@ -6210,6 +6266,10 @@ pub mod soladrome {
             metas.push(self.accounts.pool_token_a_vault.clone());
 
             metas.push(self.accounts.pool_token_b_vault.clone());
+
+            metas.push(self.accounts.sol_usdc_pool.clone());
+
+            metas.push(self.accounts.lst_sol_pool.clone());
 
             metas.push(self.accounts.lp_dead_ata.clone());
 
@@ -7935,17 +7995,11 @@ pub mod soladrome {
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
     pub struct InitializePolInstructionData {
         pub pol_split_bps: u16,
-
-        pub target_pool: Pubkey,
     }
 
     impl InitializePolInstructionData {
-        pub fn new(pol_split_bps: u16, target_pool: Pubkey) -> Self {
-            Self {
-                pol_split_bps,
-
-                target_pool,
-            }
+        pub fn new(pol_split_bps: u16) -> Self {
+            Self { pol_split_bps }
         }
     }
 
@@ -8636,6 +8690,211 @@ pub mod soladrome {
             metas.push(self.accounts.authority.clone());
 
             metas.push(self.accounts.protocol_state.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: PolSwap
+    // ....................................................................
+
+    /// Main instruction struct for PolSwap
+    pub struct PolSwapInstruction {
+        pub accounts: PolSwapInstructionAccountMetas,
+        pub data: PolSwapInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for PolSwap instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct PolSwapInstructionAccountMetas {
+        pub authority: AccountMeta,
+
+        pub protocol_state: AccountMeta,
+
+        pub pol_state: AccountMeta,
+
+        pub pool: AccountMeta,
+
+        pub pool_vault_in: AccountMeta,
+
+        pub pool_vault_out: AccountMeta,
+
+        pub pol_in: AccountMeta,
+
+        pub out_mint: AccountMeta,
+
+        pub pol_out: AccountMeta,
+
+        pub token_program: AccountMeta,
+
+        pub system_program: AccountMeta,
+    }
+
+    /// Account pubkeys for PolSwap instruction
+    #[derive(Debug, Clone)]
+    pub struct PolSwapInstructionAccounts {
+        pub authority: Pubkey,
+
+        pub protocol_state: Pubkey,
+
+        pub pol_state: Pubkey,
+
+        pub pool: Pubkey,
+
+        pub pool_vault_in: Pubkey,
+
+        pub pool_vault_out: Pubkey,
+
+        pub pol_in: Pubkey,
+
+        pub out_mint: Pubkey,
+
+        pub pol_out: Pubkey,
+    }
+
+    impl PolSwapInstructionAccounts {
+        pub fn new(
+            authority: Pubkey,
+
+            protocol_state: Pubkey,
+
+            pol_state: Pubkey,
+
+            pool: Pubkey,
+
+            pool_vault_in: Pubkey,
+
+            pool_vault_out: Pubkey,
+
+            pol_in: Pubkey,
+
+            out_mint: Pubkey,
+
+            pol_out: Pubkey,
+        ) -> Self {
+            Self {
+                authority,
+
+                protocol_state,
+
+                pol_state,
+
+                pool,
+
+                pool_vault_in,
+
+                pool_vault_out,
+
+                pol_in,
+
+                out_mint,
+
+                pol_out,
+            }
+        }
+    }
+
+    /// Instruction data for PolSwap
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct PolSwapInstructionData {
+        pub amount_in: u64,
+
+        pub min_out: u64,
+    }
+
+    impl PolSwapInstructionData {
+        pub fn new(amount_in: u64, min_out: u64) -> Self {
+            Self { amount_in, min_out }
+        }
+    }
+
+    /// Implementation for PolSwapInstruction
+    impl PolSwapInstruction {
+        fn discriminator() -> [u8; 8] {
+            [31u8, 117u8, 83u8, 152u8, 134u8, 69u8, 162u8, 165u8]
+        }
+
+        pub fn data(data: PolSwapInstructionData) -> Self {
+            Self {
+                accounts: PolSwapInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: PolSwapInstructionAccounts) -> Self {
+            self.accounts.authority = AccountMeta::new(accounts.authority, true);
+
+            self.accounts.protocol_state =
+                AccountMeta::new_readonly(accounts.protocol_state, false);
+
+            self.accounts.pol_state = AccountMeta::new_readonly(accounts.pol_state, false);
+
+            self.accounts.pool = AccountMeta::new(accounts.pool, false);
+
+            self.accounts.pool_vault_in = AccountMeta::new(accounts.pool_vault_in, false);
+
+            self.accounts.pool_vault_out = AccountMeta::new(accounts.pool_vault_out, false);
+
+            self.accounts.pol_in = AccountMeta::new(accounts.pol_in, false);
+
+            self.accounts.out_mint = AccountMeta::new_readonly(accounts.out_mint, false);
+
+            self.accounts.pol_out = AccountMeta::new(accounts.pol_out, false);
+
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.authority.clone());
+
+            metas.push(self.accounts.protocol_state.clone());
+
+            metas.push(self.accounts.pol_state.clone());
+
+            metas.push(self.accounts.pool.clone());
+
+            metas.push(self.accounts.pool_vault_in.clone());
+
+            metas.push(self.accounts.pool_vault_out.clone());
+
+            metas.push(self.accounts.pol_in.clone());
+
+            metas.push(self.accounts.out_mint.clone());
+
+            metas.push(self.accounts.pol_out.clone());
+
+            metas.push(self.accounts.token_program.clone());
+
+            metas.push(self.accounts.system_program.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -13154,19 +13413,15 @@ impl PartnerBribeStream {
 pub struct PolState {
     pub pol_split_bps: u16,
 
-    pub target_pool: Pubkey,
-
     pub usdc_accumulated: u64,
 
     pub bump: u8,
 }
 
 impl PolState {
-    pub fn new(pol_split_bps: u16, target_pool: Pubkey, usdc_accumulated: u64, bump: u8) -> Self {
+    pub fn new(pol_split_bps: u16, usdc_accumulated: u64, bump: u8) -> Self {
         Self {
             pol_split_bps,
-
-            target_pool,
 
             usdc_accumulated,
 

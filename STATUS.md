@@ -24,8 +24,11 @@ price every exercise at the curve as it stood before the slot's trades, so a sal
 to cheapen an exercise in the same transaction. **The audit scope changes on `curve.rs`.**
 ✅ Deployed to devnet 2026-10-08 (slot `508610037`, dump = build) and merged (PR #55). Founder oSOLA
 vesting: 12-month cliff, 48 months. Launch pools (MAINNET_RUNBOOK §4a): oSOLA/USDC + SOLA/SOL (SOLA/LST if an LST
-partnership is signed), emissions on from the first epoch; `deploy_pol` to be retargeted from
-SOLA/USDC. Audit: **Hacken is not retained**
+partnership is signed), emissions on from the first epoch. `deploy_pol` retargeted on branch
+`feat/pol-sol-lst` (2026-10-08): any SOLA pool paired with USDC, SOL or an approved LST
+(SOLA/SOL, SOLA/mSOL, SOLA/jitoSOL), a new `pol_swap` to buy the counter-asset, a price check
+against the curve on every deposit, and the counter-asset's USDC price stated by the multisig
+(`counter_usdc_ref`) bounding the on-chain reference. Not deployed. Audit: **Hacken is not retained**
 (2026-10-08, $6K paid entry fee); Accretion's $50K quote predates the curve change.
 
 ---
@@ -39,9 +42,9 @@ SOLA/USDC. Audit: **Hacken is not retained**
 | Branch | `main` — one trunk, and the deployed tree |
 | Program id (devnet) | `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe` |
 | Devnet binary | sha256 `fa483503…`, 1 921 288 bytes, SBPFv3, deployed 2026-09-24 at slot `503048080` from commit `832a775` (branch `feat/pool-strategies`), verified byte-for-byte by dump |
-| Instructions | **66** on branch `fix/curve-sell` (65 on `main`: 54 at the audit tag, plus four standing-order, three LP-order and four per-position strategy instructions; + `fund_market_reserve`, 2026-10-07) |
+| Instructions | **67** on branch `feat/pol-sol-lst` (66 on `main`: 54 at the audit tag, plus four standing-order, three LP-order and four per-position strategy instructions; + `fund_market_reserve`, 2026-10-07; + `pol_swap`, 2026-10-08) |
 | Account parameters | 503 at the audit tag; the four new instructions add their own |
-| Error variants | **70** on `fix/curve-sell` (69 on `main`; + `InsufficientMarketReserve`, 2026-10-07) |
+| Error variants | **72** on `feat/pol-sol-lst` (70 on `main`; + `InsufficientMarketReserve`, 2026-10-07; + `PolInvalidRoute`, `PolPriceDeviation`, 2026-10-08) |
 | On-chain account types | **24** (22 at the audit tag, plus `AutoCompound` and `PoolStrategy`) |
 | Tests | **114 bankrun cases passing, 0 failing** — 13 per-position strategy (incl. the duplicate-pool regression), 9 LP order, 8 standing order, 4 permissionless claim; mutations on every guard · 80 cargo unit tests · 48 frontend unit tests |
 

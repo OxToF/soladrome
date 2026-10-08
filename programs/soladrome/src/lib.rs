@@ -324,12 +324,8 @@ pub mod soladrome {
     }
 
     /// One-time setup: create PolState and its token vaults. Authority-only.
-    pub fn initialize_pol(
-        ctx: Context<InitializePol>,
-        pol_split_bps: u16,
-        target_pool: Pubkey,
-    ) -> Result<()> {
-        pol::initialize_pol(ctx, pol_split_bps, target_pool)
+    pub fn initialize_pol(ctx: Context<InitializePol>, pol_split_bps: u16) -> Result<()> {
+        pol::initialize_pol(ctx, pol_split_bps)
     }
 
     /// Redirect a portion of market_vault fees to pol_usdc_vault. Authority-only.
@@ -337,22 +333,29 @@ pub mod soladrome {
         pol::collect_to_pol(ctx, amount)
     }
 
-    /// Buy SOLA via bonding curve and/or add LP to the target pool. Authority-only.
+    /// Buy SOLA via bonding curve and/or add it to a SOLA pool paired with USDC, SOL or a token
+    /// whose X/SOL pool is approved. Authority-only. `counter_usdc_ref`: the multisig's price of
+    /// one whole counter token, in USDC base units (ignored for USDC).
+    #[allow(clippy::too_many_arguments)]
     pub fn deploy_pol(
         ctx: Context<DeployPol>,
         usdc_for_sola: u64,
         min_sola_out: u64,
         sola_for_lp: u64,
-        usdc_for_lp: u64,
+        counter_for_lp: u64,
         min_lp: u64,
+        max_price_dev_bps: u16,
+        counter_usdc_ref: u64,
     ) -> Result<()> {
         pol::deploy_pol(
             ctx,
             usdc_for_sola,
             min_sola_out,
             sola_for_lp,
-            usdc_for_lp,
+            counter_for_lp,
             min_lp,
+            max_price_dev_bps,
+            counter_usdc_ref,
         )
     }
 
@@ -484,6 +487,12 @@ pub mod soladrome {
     /// Permissionless: any signer may fire any position's voting strategy.
     pub fn crank_pool_strategy_vote(ctx: Context<CrankPoolStrategyVote>) -> Result<()> {
         instructions::strategy::crank_pool_strategy_vote(ctx)
+    }
+
+    /// Buy a counter-asset for protocol-owned liquidity: USDC → SOL, or SOL → an approved LST, on
+    /// the canonical pools. Authority-only.
+    pub fn pol_swap(ctx: Context<PolSwap>, amount_in: u64, min_out: u64) -> Result<()> {
+        pol::pol_swap(ctx, amount_in, min_out)
     }
 
     /// Permissionless, inflow only: create the market reserve if needed and pay USDC into it.

@@ -5843,7 +5843,9 @@
     {
       "name": "deploy_pol",
       "docs": [
-        "Buy SOLA via bonding curve and/or add LP to the target pool. Authority-only."
+        "Buy SOLA via bonding curve and/or add it to a SOLA pool paired with USDC, SOL or a token",
+        "whose X/SOL pool is approved. Authority-only. `counter_usdc_ref`: the multisig's price of",
+        "one whole counter token, in USDC base units (ignored for USDC)."
       ],
       "discriminator": [
         110,
@@ -5953,9 +5955,23 @@
           }
         },
         {
+          "name": "counter_mint",
+          "docs": [
+            "The pool's other side."
+          ]
+        },
+        {
+          "name": "pol_counter",
+          "docs": [
+            "Where the counter-asset comes from: `pol_usdc_vault` itself for USDC, `[POL_TOKEN_SEED,",
+            "mint]` otherwise — checked in the handler."
+          ],
+          "writable": true
+        },
+        {
           "name": "pol_lp_vault",
           "docs": [
-            "Created on first deploy_pol call; LP tokens are held here permanently."
+            "One LP vault per pool, created on the first deposit there. Held permanently."
           ],
           "writable": true,
           "pda": {
@@ -5976,6 +5992,10 @@
                   108,
                   116
                 ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
               }
             ]
           }
@@ -6060,6 +6080,20 @@
         {
           "name": "pool_token_b_vault",
           "writable": true
+        },
+        {
+          "name": "sol_usdc_pool",
+          "docs": [
+            "THE SOL/USDC pool. Required unless the counter-asset is USDC."
+          ],
+          "optional": true
+        },
+        {
+          "name": "lst_sol_pool",
+          "docs": [
+            "THE LST/SOL pool, approved. Required when the counter-asset is an LST."
+          ],
+          "optional": true
         },
         {
           "name": "lp_dead_ata",
@@ -6182,11 +6216,19 @@
           "type": "u64"
         },
         {
-          "name": "usdc_for_lp",
+          "name": "counter_for_lp",
           "type": "u64"
         },
         {
           "name": "min_lp",
+          "type": "u64"
+        },
+        {
+          "name": "max_price_dev_bps",
+          "type": "u16"
+        },
+        {
+          "name": "counter_usdc_ref",
           "type": "u64"
         }
       ]
@@ -7798,10 +7840,6 @@
         {
           "name": "pol_split_bps",
           "type": "u16"
-        },
-        {
-          "name": "target_pool",
-          "type": "pubkey"
         }
       ]
     },
@@ -8223,6 +8261,161 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "pol_swap",
+      "docs": [
+        "Buy a counter-asset for protocol-owned liquidity: USDC → SOL, or SOL → an approved LST, on",
+        "the canonical pools. Authority-only."
+      ],
+      "discriminator": [
+        31,
+        117,
+        83,
+        152,
+        134,
+        69,
+        162,
+        165
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "docs": [
+            "THE SOL/USDC pool or an approved LST/SOL pool — checked against `pool_address`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_vault_in",
+          "writable": true
+        },
+        {
+          "name": "pool_vault_out",
+          "writable": true
+        },
+        {
+          "name": "pol_in",
+          "docs": [
+            "`pol_usdc_vault` for USDC → SOL, `[POL_TOKEN_SEED, wSOL]` for SOL → LST."
+          ],
+          "writable": true
+        },
+        {
+          "name": "out_mint"
+        },
+        {
+          "name": "pol_out",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  108,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "out_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_in",
+          "type": "u64"
+        },
+        {
+          "name": "min_out",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "recycle_lp_emissions",
@@ -12048,6 +12241,16 @@
       "code": 6069,
       "name": "InsufficientMarketReserve",
       "msg": "The market reserve does not hold what the rest of the curve owes its sellers: this sale is refused rather than paid from their share"
+    },
+    {
+      "code": 6070,
+      "name": "PolInvalidRoute",
+      "msg": "Protocol-owned liquidity goes only into a SOLA pool paired with USDC, SOL or an approved LST, through the canonical SOL/USDC and LST/SOL pools"
+    },
+    {
+      "code": 6071,
+      "name": "PolPriceDeviation",
+      "msg": "This deposit would price SOLA too far from the curve: protocol-owned liquidity is never added at a price an arbitrageur could take from"
     }
   ],
   "types": [
@@ -12982,13 +13185,6 @@
               "Suggested % of market_vault fees to divert (informational, enforced off-chain)."
             ],
             "type": "u16"
-          },
-          {
-            "name": "target_pool",
-            "docs": [
-              "AmmPool PDA that receives POL liquidity deposits."
-            ],
-            "type": "pubkey"
           },
           {
             "name": "usdc_accumulated",

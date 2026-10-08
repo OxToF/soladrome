@@ -11,7 +11,7 @@
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 1 | **Security audit — FULL SCOPE** | ⏳ Open — **scope decided 2026-08-04** | Quotes in hand from more than one firm; vendor selection and pricing are tracked off-repo. Blocks: mainnet deploy, Jupiter routing/listing, any external volume. **DECISION 2026-08-04: do ONE full-scope audit — the split gated/delta packaging is abandoned.** Rationale: splitting *raised* the total (~+10-20%, a delta re-audit carries a fixed re-familiarization cost) while complicating the mainnet deploy, and the reduced package left `emissions_enabled = false`, i.e. **no LP incentive at launch → empty pools → nothing for Jupiter to route → no fees**. The full audit is the *enabling* purchase, not the expensive option: it is what lets emissions be on at launch. Scope reasoning kept in `docs/archive/AUDIT_PACKAGES.md` / `docs/archive/AUDIT_SCOPE.md` (both historical, and both deliberately outside this public repository). **Phase flags stay — but for launch sequencing only (§3b), never again as an audit-scope-reduction device.** See [[project-soladrome-funding-gtm]]. |
-| 2 | **`deploy_pol` rewrite for jitoSOL leg** | ⏳ Open | Currently hardcoded to SOLA/USDC (`pol.rs`). Needed before the SOLA/jitoSOL house pool can be POL-funded. Blocks: house pool liquidity, Jupiter routing (nothing worth routing to without it). |
+| 2 | **`deploy_pol` rewrite for SOL / LST legs** | ✅ Coded 2026-10-08 (branch `feat/pol-sol-lst`), in the audit scope | `deploy_pol` takes any SOLA pool paired with USDC, SOL or an approved LST; `pol_swap` buys the counter-asset (USDC→SOL on THE SOL/USDC pool, SOL→LST on THE approved LST/SOL pool); every deposit is refused more than `max_price_dev_bps` (≤ 10 %) away from the curve, and the on-chain SOL/LST price must match the one stated in the proposal (`counter_usdc_ref`). See §4a. |
 | 3 | **Jupiter `Amm` adapter** | ⏳ Design only — **priority raised 2026-08-04** | See [JUPITER_ADAPTER_DESIGN.md](JUPITER_ADAPTER_DESIGN.md). Depends on #1 and #2. Not started in code. **Founder decision: move this EARLIER in the roadmap** — indexing the ecosystem AMM pools on Jupiter from day one routes external swap volume through them, and every routed swap pays the protocol fee into `market_vault` → hiSOLA stakers. Maximizing fees from launch is the goal. ⚠️ Scope note to settle when we resume: this is about the **ecosystem pools (LST/stable/partner)**, NOT SOLA — SOLA stays out of Jupiter routing (no SOLA pool, §4). Open question kept from §4: these pools are shallow vs incumbent Raydium/Orca LST pools, so weigh expected routed volume before spending the adapter effort. Decision is to prioritize; the volume question is to be answered, not ignored. |
 
 ---
@@ -148,7 +148,7 @@ which cannot be seeded without SOLA from the curve; exercise funds the floor its
 emission cycle is inside the full-scope audit. **Everything opens at launch, as one event.**
 
 **Prerequisites, done and audited before the launch event:**
-- `deploy_pol` retargeted from SOLA/USDC to the SOLA/SOL (or SOLA/LST) pool (§4a).
+- `deploy_pol` retargeted from SOLA/USDC to the SOLA/SOL (or SOLA/LST) pool (§4a) — coded 2026-10-08.
 - The xStock pools (xStock/USDC) ready to open, with their `rewards_enabled` decided.
 - Partner registrations (`register_partner`) for every signed founding partner.
 
@@ -217,9 +217,33 @@ in the pool was bought on it — 1 USDC into the floor, the premium into the mar
 stakers. ⚠️ **Do not add pool TVL and floor TVL into one figure**: the pool's SOLA is already backed
 by USDC counted in the floor. New money is the SOL side plus the curve purchases.
 
-**Seeding — `deploy_pol`, a launch prerequisite:** it is hardcoded to SOLA/USDC today (it buys
-SOLA on the curve and pairs it with USDC). It is retargeted to the SOLA/SOL (or SOLA/LST) pool
-before the launch — a program change, so it belongs to the audited scope.
+**Seeding — `deploy_pol`, a launch prerequisite: ✅ retargeted 2026-10-08** (branch
+`feat/pol-sol-lst`, a program change, so in the audited scope). Until then it was hardcoded to one
+SOLA/USDC pool. It now takes any SOLA pool whose other side is USDC, SOL or a token whose X/SOL
+pool is **approved** (`rewards_enabled`), so SOLA/SOL, SOLA/mSOL and SOLA/jitoSOL are all ready
+without a second program change. ⚠️ The program does not know what an LST is: it accepts any token
+whose X/SOL pool is approved. **Pairing SOLA only with LSTs is the multisig's rule, not an on-chain
+check** — approving a memecoin/SOL pool would make SOLA/memecoin seedable too (see "Still
+excluded"). The seeding, per pool:
+1. `collect_to_pol` — fees into `pol_usdc_vault`.
+2. `pol_swap` — USDC → SOL on THE SOL/USDC pool; for an LST pair, then SOL → LST on THE approved
+   LST/SOL pool. Pools are recomputed from the mints, so no lookalike can be passed. The output
+   waits in `[pol_token, mint]`.
+3. `deploy_pol` — buys SOLA on the curve from `pol_usdc_vault`, then deposits SOLA + the counter
+   asset. **The deposit is refused if it prices SOLA more than `max_price_dev_bps` (≤ 1 000) away
+   from the curve**, the counter-asset valued through THE SOL/USDC pool (and THE LST/SOL pool): a
+   first deposit sets the pool's price, so a wrong ratio or a pool skewed just before the call would
+   otherwise hand the POL's value to the first arbitrageur. LP tokens are held forever, one vault
+   per pool (`[pol_lp_vault, pool]`).
+   ☢️ **`counter_usdc_ref` — the proposal states the price.** Those references are this AMM's own
+   pools at spot, thin at launch, and a Squads proposal is public with its arguments before it
+   executes: someone could move the SOLA pool and SOL/USDC in compensating directions just before
+   it. So the proposal carries the price of one whole SOL (or LST) in USDC base units, read from a
+   market outside this AMM (e.g. $150.25 → `150250000`); the on-chain reference must sit within
+   `max_price_dev_bps` of it, otherwise `PolPriceDeviation`. Ignored (pass 0) for SOLA/USDC. If
+   the proposal waits long enough for SOL to move past the tolerance, it fails: re-propose with a
+   fresh price.
+Prerequisite for an LST pair: its LST/SOL pool exists and is approved (`rewards_enabled`).
 
 **Still excluded:** SOLA paired with a thin or volatile token (e.g. a partner small-cap like fBOMB)
 for protocol incentives — a slow, wide arbitrage there imports that token's crashes into the curve
@@ -287,7 +311,8 @@ founder's 5M oSOLA vesting (12-month cliff, 48 months) since 2026-10-08.
      SOLA, which by decision goes into no pool. This is an impossibility, not a
      pending decision.
    - **The protocol has no mechanism.** The only protocol-funded seeding path is
-     `deploy_pol`, hardcoded SOLA/USDC.
+     `deploy_pol`, hardcoded SOLA/USDC (retargeted 2026-10-08: SOLA pools only, still no
+     ecosystem pool funding).
    - **The market has no reason.** An LP earns exactly two things: the LP share of
      swap fees (stays in reserves) and **oSOLA emissions** (`osola_reward_per_lp`).
      With emissions off, only swap fees remain — ≈ 0 on a shallow pool that loses
