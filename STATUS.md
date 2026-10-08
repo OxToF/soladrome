@@ -22,6 +22,11 @@ the curve, 1 % fee each way to stakers. It changes `buy_sola` / `sell_sola` (new
 `ProtocolState` fields (`curve_ref_slot` / `curve_ref_vu_usdc`, carved from spare bytes) that
 price every exercise at the curve as it stood before the slot's trades, so a sale cannot be used
 to cheapen an exercise in the same transaction. **The audit scope changes on `curve.rs`.**
+✅ Deployed to devnet 2026-10-08 (slot `508610037`, dump = build) and merged (PR #55). Founder oSOLA
+vesting: 12-month cliff, 48 months. Launch pools (MAINNET_RUNBOOK §4a): oSOLA/USDC + SOLA/SOL (SOLA/LST if an LST
+partnership is signed), emissions on from the first epoch; `deploy_pol` to be retargeted from
+SOLA/USDC. Audit: **Hacken is not retained**
+(2026-10-08, $6K paid entry fee); Accretion's $50K quote predates the curve change.
 
 ---
 

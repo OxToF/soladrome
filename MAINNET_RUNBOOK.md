@@ -30,7 +30,7 @@ Consolidated from prior session notes; already-shipped items kept for the record
 - [x] **Phase gating flags** (`lp_enabled` / `bribes_enabled` / `voting_enabled` / `exercise_enabled` / `curve_enabled` / `emissions_enabled` + `set_phase_flags`) — flags 1–5 coded 2026-07-08; **`emissions_enabled` added 2026-07-24** (6th flag, master switch for ALL oSOLA emission — gates `emit_pool_rewards` AND the continuous stream via `continuous_active`; makes "emission dormant" explicit rather than inferred from the transitive no-votes coupling, so the untested per-epoch cycle stays descoped from the launch audit → reviewed pre-Genesis). Local only (not built/deployed/pushed by explicit founder decision). All default `false`; `curve_enabled` gates `buy_sola`; `flash_arbitrage` honors `exercise_enabled`; `voting_enabled` gates `vote_gauge` **and** `replay_vote` + `burn_o_sola_for_votes`. **IDL rebuilt + copied to `app/lib/soladrome.json` 2026-07-24** (`set_phase_flags` signature grew to 6 args; `ProtocolState::LEN` stays 416 — bool carved from spare bytes, `cargo check` clean, no realloc/migration).
   - ⚠️ **Post-upgrade flag-flip is MANDATORY — the upgrade bricks entry paths otherwise.** The six flags are written only in `initialize` (one-time, already ran on the live devnet `ProtocolState`). After `solana program deploy` the existing account's spare bytes read `false`, so `buy_sola` / `create_pool` / `exercise_o_sola` / `deposit_bribe` / `vote_gauge` / `replay_vote` / `burn_o_sola_for_votes` / `flash_arbitrage` all revert `FeatureDisabled` **and both emission paths (`emit_pool_rewards` + the continuous stream) stay dormant** until the authority calls `set_phase_flags`. There is no migration in `initialize` for the already-initialized singleton.
     - **Devnet (keep tester flow alive):** immediately after deploy run `yarn ts-node scripts/set_phase_flags.ts` (enables all six, emission included — otherwise devnet oSOLA emission dies after the upgrade). Verify the printed `post-state` shows all `true`.
-    - **Mainnet (two-stage, deliberate):** at stage-1 go-live run `scripts/set_phase_flags.ts lp bribes voting` (curve + exercise + **emissions** stay `false`); at stage-2 public open flip curve/exercise as one event with TGE + airdrop (`scripts/set_phase_flags.ts curve exercise`). **`emissions` stays `false` until the per-epoch emission cycle (Finding A) is audited pre-Genesis + the bankrun harness is written** — never flip it at launch. Never run the enable-all form on mainnet.
+    - **Mainnet (re-decided 2026-10-08, see §3b — one launch, no stages):** at go-live, **after** `scripts/set_exercise_fee.ts 1000`, run `scripts/set_phase_flags.ts lp bribes voting curve exercise emissions` — the curve, exercise and emissions all open at launch, as one event with TGE + airdrop. ~~`emissions` stays `false` until the per-epoch emission cycle (Finding A) is audited pre-Genesis~~ — superseded: the launch follows the single full-scope audit, which covers that cycle (bankrun harness written since, 11 cases). Never run the enable-all form on mainnet without the fee armed first.
 - [ ] **`OSOLA_EMISSION_PER_SEC` / continuous emission rate** — calibrate at mainnet deploy time (devnet value is a high test rate, not a mainnet number)
 - [x] **Founder unstake lock** — ✅ **solved structurally 2026-07-17, no vesting-aware check needed.** `claim_founder_hi_sola` now mints the 7M straight into the founder's `ve_lock_vault` (the `claim_partner_allocation` pattern), so the hiSOLA never reaches a wallet: `unstake_hi_sola` has nothing to act on and the unstake→SOLA→sell bypass is unreachable rather than merely checked. `unlock_hi_sola` additionally rejects `FOUNDER_WALLET` outright (locked for life). Two further consequences fall out for free: the 7M stay out of `total_hi_sola`, so the reserve **captures no protocol fees** (it was on track for ~89% of them), and the wallet balance stays 0, so `borrow_usdc` is blind to it and the 20% `founder_borrow_usdc` cap **stops being bypassable via the uncapped sibling instruction**. Liquidity remains available through `borrow_against_locked` (20%, open to any ve-locker). Covered by tests — see §2c.
 - [x] **`collect_to_pol` over-credits stakers — fee-accounting solvency bug** — ✅ **FIXED 2026-07-18 in commit `3b32b03`** (shipped alongside the ve escrow work; this line said "NOT fixed" until 2026-08-05, which was simply stale — the code had been correct for two and a half weeks). The bug: the accumulator advanced on the **full** `market_balance` and only then transferred `amount` out, so `fees_per_hi_sola` promised more than `market_vault` held and `claim_fees` / `stake_sola` reverted with a raw SPL "insufficient funds" once cumulative POL collections exceeded the unclaimed remainder. **The fix** ([pol.rs:66](programs/soladrome/src/pol.rs)) advances on `market_balance - amount`, plus a solvency guard the original analysis did not propose: `require!(market_balance - amount >= last_market_vault_balance)`. That guard settles the economic question that was left open here — **POL is junior to fees already credited and senior only within the fresh, uncredited growth**. It can never skim a USDC a staker has been promised. Operational consequence: `collect_to_pol` **reverts** when there is no uncredited growth (e.g. right after a `stake_sola` or `claim_fees` advanced the accumulator to the full balance), so POL collection is opportunistic, not schedulable. Test hardened to collect **100% of the uncredited growth** — the worst case — instead of the ~10% that used to mask it.
@@ -41,7 +41,7 @@ Consolidated from prior session notes; already-shipped items kept for the record
 - [x] **oSOLA exercise fee** — ✅ **IMPLEMENTED 2026-08-05.** See [OSOLA_EXERCISE_FEE_DESIGN.md](OSOLA_EXERCISE_FEE_DESIGN.md). Fee proportional to the gain (never flat), priced off the curve (`virtual_usdc / virtual_sola`, oracle-free and manipulation-resistant), charged **on top of** the strike and never carved out of it, routed to `market_vault`. Supersedes the 2026-06-21 "hybrid exercise" — **the locked-hiSOLA branch is dropped**, because `unstake_hi_sola` already enforces borrow-as-lock (`usdc_borrowed <= remaining`) and a time-lock only defers the dump.
   - **Rate: `DEFAULT_EXERCISE_FEE_BPS = 1_000` — 10% OF THE GAIN**, hard-capped at 50% by `MAX_EXERCISE_FEE_BPS`. ⚠️ Do **not** restate this as "2% like the borrow fee": `BORROW_FEE_BPS` is a share of the *notional borrowed*, this is a share of `(curve_price − 1) × amount`. 2% on the gain would be ~0.02 USDC/SOLA at a curve price of 2 and would leave the oBERO cannibalisation problem essentially unaddressed. At 10% the exerciser still pays 1.10 for an asset worth 2 (+82%).
   - New field `ProtocolState.exercise_fee_bps` (u16) — **carved from spare bytes, `LEN` stays 416, no realloc, no migration** (static assert verified by `cargo check`). Live singletons read **0** → today's zero-fee behaviour persists until the authority calls `set_exercise_fee`. Unlike the phase flags, **forgetting this flip breaks nothing** — it only forgoes revenue, irreversibly, for everything exercised in the gap.
-  - ⚠️ **That is exactly why it is dangerous, and why the order is now written into §7 Stage 2 rather than only here.** A missing phase flag reverts every call and gets fixed within minutes; a missing fee lets the protocol run perfectly while collecting nothing, and nobody files a bug. This entry stated the fact from 2026-08-05 and the launch sequence still said "flip `exercise_enabled`" with no mention of it — a fact documented in a checklist but absent from the procedure is a fact that will be missed. Tooling: **`scripts/set_exercise_fee.ts`** (added 2026-08-13; `--check` dry-runs it and warns if the flag is already on).
+  - ⚠️ **That is exactly why it is dangerous, and why the order is now written into §3b, launch step 3, rather than only here.** A missing phase flag reverts every call and gets fixed within minutes; a missing fee lets the protocol run perfectly while collecting nothing, and nobody files a bug. This entry stated the fact from 2026-08-05 and the launch sequence still said "flip `exercise_enabled`" with no mention of it — a fact documented in a checklist but absent from the procedure is a fact that will be missed. Tooling: **`scripts/set_exercise_fee.ts`** (added 2026-08-13; `--check` dry-runs it and warns if the flag is already on).
   - New authority-only instruction `set_exercise_fee(bps)`. `ExerciseOSola` gained a `market_vault` account.
   - Accumulator handling: `exercise_o_sola` deliberately does **not** advance `fees_per_hi_sola` nor touch `last_market_vault_balance` — same lazy pattern as `buy_sola`. The fee is credited by the next staker interaction, from the real vault balance. Covered by a dedicated test.
   - Tests: 3 new (`35 passing` on localnet), including the load-bearing assertion that `floor_vault` receives the **full** strike and `total_purchased_sola` increments only by the financed amount.
@@ -137,30 +137,43 @@ verify a transaction actually lands on-chain before concluding anything is broke
 - `NEXT_PUBLIC_RPC_URL` → mainnet RPC (MWA cluster derivation follows automatically, see [[project-soladrome]])
 - IDL rebuild + copy to `app/lib/soladrome.json` after any contract change before deploy (see [[feedback-anchor-idl-rebuild]])
 
-## 3b. Launch sequence — two-stage gated launch (decided 2026-07-08)
+## 3b. Launch sequence — ONE launch, everything on (decided 2026-10-08)
 
-Mainnet opens in two stages, enforced on-chain by the phase flags (§2). Rationale:
-partners seed depth and start accumulating locked hiSOLA before the public arrives;
-the public lands on a protocol that already has liquidity and active incentives.
+**Re-decided 2026-10-08: no stages.** The July plan (2026-07-08) opened mainnet in two stages — a
+partner-only window with the curve, exercise and emissions closed, then a public open. That split
+existed to **reduce the audit scope**: the gated code could be reviewed later. It stopped serving
+that purpose once the audit became a single full-scope review (2026-08-04), and the reasons behind
+each closed gate are gone: the curve sells both ways and the launch includes a SOLA/SOL pool (§4a),
+which cannot be seeded without SOLA from the curve; exercise funds the floor itself; the per-epoch
+emission cycle is inside the full-scope audit. **Everything opens at launch, as one event.**
 
-**Stage 1 — partner-only window (all flags `false` at `initialize`, then per-partner enables):**
+**Prerequisites, done and audited before the launch event:**
+- `deploy_pol` retargeted from SOLA/USDC to the SOLA/SOL (or SOLA/LST) pool (§4a).
+- The xStock pools (xStock/USDC) ready to open, with their `rewards_enabled` decided.
+- Partner registrations (`register_partner`) for every signed founding partner.
+
+**The launch (one event, TGE):**
 1. `initialize` → `transfer_authority` to Squads vault.
-2. `register_partner` for each signed founding partner (tier cap, bribe mint, 1:1 rate).
-3. `set_phase_flags(lp_enabled = true)` — partners create/seed their pools (non-SOLA pairs only, per §4).
-4. `set_phase_flags(bribes_enabled = true, voting_enabled = true)` — partner bribes start converting 1:1 into locked hiSOLA up to tier caps; partners vote their gauges.
-5. **Curve stays CLOSED** (`curve_enabled = false`): the curve price is monotonically increasing, so an open curve would let snipers buy the cheapest SOLA ahead of the community airdrop. Partners don't need it (hiSOLA via partner program, LP on non-SOLA pools).
-6. `exercise_enabled` stays `false` — exercise is meaningless while the floor vault is unfunded, and `flash_arbitrage` is gated with it.
+2. `register_partner` for each signed founding partner.
+3. ☢️ **`scripts/set_exercise_fee.ts 1000` FIRST — before any exercise flip, never after.**
+   `exercise_fee_bps` is written only by `initialize`, so a singleton that predates the field reads
+   it as **0**: no fee, silently. Verify with `--check` before and read back `exerciseFeeBps` after.
+4. `set_phase_flags(lp, bribes, voting, curve, exercise, emissions = true)` — **in the same window
+   as the Genesis Airdrop distribution (§2)**: curve opening = TGE = airdrop. That simultaneity is
+   what replaces the July anti-sniper reason for keeping the curve closed: nobody gets a window to
+   buy the cheapest SOLA before the community receives its allocation.
+5. Seed the launch pools (§4a): **oSOLA/USDC**, **SOLA/SOL** (SOLA/LST if a partnership is signed)
+   through the retargeted `deploy_pol`, and the **xStock/USDC** pools.
+6. `rewards_enabled = true` on those pools — **emissions from the first epoch**.
 
-**Stage 2 — public open (one event):**
-1. `set_phase_flags(curve_enabled = true)` + Genesis Airdrop on-chain distribution (§2) in the same window → curve opening = TGE = airdrop.
-2. ☢️ **`scripts/set_exercise_fee.ts 1000` FIRST — before the flip, never after.** `exercise_fee_bps` is written only by `initialize`, and the field was added 2026-08-05, after every live singleton was initialized. A live `ProtocolState` therefore reads it out of spare bytes as **0**, meaning NO FEE. This is the same migration artefact as the phase flags themselves (§2), with one difference that makes it worse: forgetting the flags **bricks** entry paths, which is loud and immediate. Forgetting this one is **silent** — exercise works perfectly and simply charges nothing. Every oSOLA exercised in the gap keeps 100% of its gain, and there is no retroactive charge. Verify with `--check` before and read back `exerciseFeeBps` after.
-3. `set_phase_flags(exercise_enabled = true)` once the floor vault has real backing from curve buys — and only once step 2 has confirmed on-chain.
+Exercise at launch is sound: every exercise pays 1 USDC into the floor, so it funds the floor itself
+rather than waiting on curve buys. While the curve sits at 1.00 the gain, and the fee, are zero.
 
 > **Why the order cannot be reversed, in one line:** the flip is what makes the fee collectable, so a fee armed after the flip is a fee that was never charged on everything exercised in between. On mainnet that gap sits next to the curve opening, the TGE and the airdrop, i.e. the busiest window of the launch and the one with the most oSOLA in circulation.
 
 **Hard rules:**
-- **Fix the stage-1 duration in advance** (recommendation: 3-4 epochs), announce it publicly, and hold it even if a partner isn't ready — the window must not depend on partner velocity (fBOMB lesson), and a dated window is negotiation leverage.
-- Sanity-check the 30% vote cap behavior with only 2-3 voters before stage 1 (partners voting their own gauges is expected during the window).
+- **Fix the launch date in advance**, announce it publicly, and hold it even if a partner isn't ready — the date must not depend on partner velocity (fBOMB lesson). A partner who misses it joins after.
+- Sanity-check the 30% vote cap behavior with only 2-3 voters before the launch: in the first epochs, few voters is the expected state.
 - Exit paths (`sell_sola`, unstake, repay, remove_liquidity, claims, unlock) are never gated by any flag.
 
 ## 4. Liquidity / pools
@@ -169,15 +182,57 @@ the public lands on a protocol that already has liquidity and active incentives.
 "1 external SOLA/jitoSOL pool" plan below. Reasoning: the bonding curve
 (System 1) has no on-chain rebase — its virtual-reserve price only ever moves
 up (only `buy_sola`/`deploy_pol` touch it, `sell_sola` never does, see
-[JUPITER_ADAPTER_DESIGN.md §6](JUPITER_ADAPTER_DESIGN.md)). ⚠️ **No longer true since
-2026-10-07**: `sell_sola` sells back down the curve, so the curve price now moves both ways and
-a SOLA-paired pool would arbitrage against it rather than decorrelate. The decision below was
-taken on the old premise and deserves a second look before launch. Any AMM pool priced
+[JUPITER_ADAPTER_DESIGN.md §6](JUPITER_ADAPTER_DESIGN.md)). ⚠️ That premise is **no longer true
+since 2026-10-07** (`sell_sola` sells back down the curve), and the decision was re-taken on
+2026-10-08 with a SOLA/SOL pool at launch — see **4a** below. July reasoning, kept as history: any
+AMM pool priced
 in SOLA creates a second, independent market price for the protocol's core
 mechanism that can permanently decorrelate from the curve, with no way to
 correct it after the fact. Judged too risky to introduce at launch.
 
-1. **Launch pools — ecosystem-only, no SOLA in any pair:**
+**4a. ✅ 2026-10-08 — launch pools, re-decided after the curve change.**
+
+Since 2026-10-07 `sell_sola` sells back down the curve (its price less 1 %, never below the floor —
+the Beradrome model). The curve now quotes both ways, so arbitrage pins any SOLA pool to it: a pool
+above the curve's buy price is sold into from the curve, a pool below its sell price is bought and
+sold back to the curve. The July premise ("a SOLA pool decorrelates from a curve that only goes
+up") is gone, and with it the reason for having no SOLA pool. **The floor is not at stake either
+way**: no pool ever touches `floor_vault`.
+
+**Launch pools:**
+- **oSOLA/USDC** — the minimum. oSOLA trades against anything (USDC, SOL, BTC, ETH), like oBERO;
+  this supersedes the oSOLA part of 4b.
+- **SOLA/SOL** — **replaced by SOLA/LST if an LST partnership is signed by then** (the issuer then
+  brings bribes or liquidity; see the LST thesis: a second-tier LST, more likely than Jito or
+  Marinade to pay for votes). SOL/USDC is the deepest market on Solana, so the arbitrage that pins
+  the pool to the curve is near-instant.
+- **xStock/USDC pools** — tokenized equities quoted in USDC (Token-2022 support, 2026-09-01). Not
+  SOLA/xStock: see "Still excluded".
+- **Emissions on these pools from the first epoch** (`rewards_enabled` is authority-only and false
+  by default — set it at launch). Without oSOLA nobody supplies a pair that carries both the curve
+  and SOL price risk. The 30 % vote cap per pool applies.
+
+**Why SOLA/SOL brings real capital:** an LP cannot get SOLA anywhere but the curve, so every SOLA
+in the pool was bought on it — 1 USDC into the floor, the premium into the market reserve, 1 % to
+stakers. ⚠️ **Do not add pool TVL and floor TVL into one figure**: the pool's SOLA is already backed
+by USDC counted in the floor. New money is the SOL side plus the curve purchases.
+
+**Seeding — `deploy_pol`, a launch prerequisite:** it is hardcoded to SOLA/USDC today (it buys
+SOLA on the curve and pairs it with USDC). It is retargeted to the SOLA/SOL (or SOLA/LST) pool
+before the launch — a program change, so it belongs to the audited scope.
+
+**Still excluded:** SOLA paired with a thin or volatile token (e.g. a partner small-cap like fBOMB)
+for protocol incentives — a slow, wide arbitrage there imports that token's crashes into the curve
+price and leaves the pool's LPs as the losers. SOLA/xStock pairs wait until market hours are handled
+(the pool is picked off at every reopening); xStock/USDC pools carry that risk for their own LPs only.
+
+**Cannot be prevented, and need not be:** the AMM is permissionless and SOLA is a plain SPL token,
+so anyone can open other SOLA pools, here or on Raydium/Orca. Arbitrage pins them to the curve; the
+protocol only decides which pools it seeds and emits to. The 4b "exercise-and-dump" argument now
+runs through the curve itself, bounded by the exercise fee (10 % of the gain, max 50 %) and the
+founder's 5M oSOLA vesting (12-month cliff, 48 months) since 2026-10-08.
+
+1. **(July plan, superseded by 4a) Launch pools — ecosystem-only, no SOLA in any pair:**
    `jitoSOL-SOL`, `mSOL-SOL`, `bSOL-SOL`, `jupSOL-SOL` (LST/SOL),
    `USDC-USDG`, `USDMS-USDC` (stable/stable),
    `renzoETH-ETH` (LST/ETH), `fBOMB-SOL` (partner token — see [[project-mlcb-bridge]]).

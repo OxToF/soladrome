@@ -19,8 +19,9 @@
 //     yarn ts-node scripts/set_phase_flags.ts            # enable ALL (devnet)
 //     yarn ts-node scripts/set_phase_flags.ts lp voting  # enable only these
 //
-// For MAINNET do NOT run the enable-all form: follow the two-stage plan in
-// MAINNET_RUNBOOK.md (stage 1 enables lp/bribes/voting only; curve stays false).
+// For MAINNET follow MAINNET_RUNBOOK.md §3b. Since 2026-10-08 stage 1 opens lp, bribes, voting,
+// curve, exercise and emissions together — but ONLY after `set_exercise_fee.ts 1000`: a singleton
+// that predates the fee field reads it as 0, and exercise would then charge nothing, silently.
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import fs from "fs";
