@@ -28,7 +28,8 @@ partnership is signed), emissions on from the first epoch. `deploy_pol` retarget
 `feat/pol-sol-lst` (2026-10-08): any SOLA pool paired with USDC, SOL or an approved LST
 (SOLA/SOL, SOLA/mSOL, SOLA/jitoSOL), a new `pol_swap` to buy the counter-asset, a price check
 against the curve on every deposit, and the counter-asset's USDC price stated by the multisig
-(`counter_usdc_ref`) bounding the on-chain reference. Not deployed. Audit: **Hacken is not retained**
+(`counter_usdc_ref`) bounding the on-chain reference. ✅ Deployed to devnet 2026-10-09 (slot
+`508969322`, dump = build, 2 005 384 bytes, program account extended to 2 010 240), PR #57. Audit: **Hacken is not retained**
 (2026-10-08, $6K paid entry fee); Accretion's $50K quote predates the curve change.
 
 ---
