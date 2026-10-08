@@ -23,10 +23,10 @@ pub fn buy_sola(ctx: Context<BuySola>, usdc_in: u64, min_sola_out: u64) -> Resul
         !ctx.accounts.protocol_state.paused,
         SoladromeError::ProtocolPaused
     );
-    // Phase gate: the curve is closed during the partner-only launch window.
-    // The curve price is monotonically increasing, so an open curve before
-    // the public event would let snipers buy the cheapest SOLA ahead of the
-    // community airdrop. sell_sola stays open (exit path).
+    // Phase gate: the curve stays closed until the launch (MAINNET_RUNBOOK §3b),
+    // which opens it in the same window as the TGE and the community airdrop,
+    // so nobody can buy the cheapest SOLA ahead of that allocation.
+    // sell_sola stays open (exit path).
     require!(
         ctx.accounts.protocol_state.curve_enabled,
         SoladromeError::FeatureDisabled

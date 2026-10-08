@@ -126,7 +126,7 @@ premium      = net - sola_out           # above the floor → market_reserve
 
 The split ensures the floor backing is always maintained regardless of curve position.
 
-`buy_sola` is additionally gated by the `curve_enabled` phase flag: the curve stays closed during the partner-only launch window and opens at the public event, together with the TGE and airdrop (see §14.3). `sell_sola` is never gated.
+`buy_sola` is additionally gated by the `curve_enabled` phase flag: the curve stays closed until the launch and opens with it, together with the TGE and airdrop (see §14.3). `sell_sola` is never gated.
 
 ### 3.3 Sell Mechanics (`sell_sola`)
 
@@ -593,7 +593,7 @@ Users can never be trapped. The worst case in a pause scenario is that entry is 
 
 ### 14.3 Launch Phase Gating (`set_phase_flags`)
 
-Mainnet launches in two stages, enforced on-chain by six independent feature flags on `ProtocolState` (all `false` at `initialize`, each toggled individually by the authority via `set_phase_flags`):
+Mainnet launches as one event, with six independent feature flags on `ProtocolState` (all `false` at `initialize`, each toggled individually by the authority via `set_phase_flags`):
 
 | Flag | Gates |
 |---|---|
@@ -604,13 +604,11 @@ Mainnet launches in two stages, enforced on-chain by six independent feature fla
 | `curve_enabled` | `buy_sola` |
 | `emissions_enabled` | `emit_pool_rewards` (epoch/gauge emission) **and** the continuous oSOLA stream (`continuous_active`) — master switch for all emission |
 
-**Stage 1 — partner-only window.** Founding partners are onboarded via `register_partner`, seed their pools, configure gauges, and begin accumulating locked hiSOLA before public access. The bonding curve stays closed (`curve_enabled = false`): the curve price is monotonically increasing, so an open curve before the public event would let snipers buy the cheapest SOLA ahead of the community airdrop. Partners do not need the curve — their hiSOLA is credited through the partner program and their liquidity sits in non-SOLA pools.
+**One launch (decided 2026-10-08).** Every flag is armed in the same event: the curve opens, oSOLA exercise opens, emissions start, and the TGE and on-chain airdrop happen in the same window — so nobody gets a window to buy the cheapest SOLA ahead of the community allocation. The exercise fee is armed before the exercise flag, never after. Launch pools: oSOLA/USDC, SOLA/SOL (SOLA/LST with an LST partner) seeded through protocol-owned liquidity, and xStock/USDC pools, all emitting from the first epoch.
 
-**Stage 2 — public open.** The authority flips `curve_enabled`; curve opening, TGE, and the on-chain airdrop distribution happen as a single event, on a protocol that already has liquidity depth and active incentives.
+An earlier plan (2026-07) opened mainnet in two stages, a partner-only window with the curve, exercise and emissions closed, then a public open. It existed to shrink the audit scope; with a single full-scope audit covering every flag, including the per-epoch emission cycle (§10.3), there is nothing left to stage.
 
-**Emissions stay off across both stages.** `emissions_enabled` is armed only at Genesis, once the per-epoch emission cycle has been independently audited. Until then the protocol runs a points phase: the community deposits liquidity and earns off-chain points toward the airdrop, while no oSOLA is emitted on-chain. Keeping emission behind an explicit flag lets the launch audit scope the live surface (AMM, curve, staking) and defer the emission-cycle review to Genesis, when it is actually armed. The cycle already carries its own clock-warping test coverage in the meantime (§10.3), including the mint ceiling under several gauges and several LPs — coverage that informs the review, but does not replace it.
-
-As with the emergency pause, gating applies to entry paths only. `sell_sola` (floor redemption) and every other exit path are never gated by any phase flag.
+As with the emergency pause, gating applies to entry paths only. `sell_sola` (selling back to the protocol, never below the floor) and every other exit path are never gated by any phase flag.
 
 ### 14.4 Floor Invariant
 
@@ -724,8 +722,7 @@ Complete list of on-chain instructions (program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SE
 | Strategic allocations | ✅ Complete | Founder vesting, contributor system, partner auto-lock system |
 | In-app bridge (SODAX) | ✅ Live (mainnet) | USDC, USDT, SODA between Solana and 9 EVM chains incl. Robinhood Chain (USDG ↔ USDC); wAERO / wVELO remain accepted as bribes (Wormhole Portal) |
 | MLCB DAO partnership | In progress | MLCB building an SPL OFT of fBOMB — their entry path to Solana, with Soladrome as the venue; terms finalized around mainnet (§8.3) |
-| Mainnet stage 1 — partner-only window | Upcoming | Founding partners seed pools, configure gauges, and accumulate locked hiSOLA; bonding curve closed (`curve_enabled = false`, §14.3) |
-| Mainnet stage 2 — public open | Upcoming | `curve_enabled` flipped: curve opening + TGE + on-chain airdrop as one event, a fixed number of epochs after stage 1 |
+| Mainnet launch | Upcoming | One event: curve, exercise and emissions open together with the TGE and the on-chain airdrop; oSOLA/USDC, SOLA/SOL and xStock/USDC pools seeded and emitting (§14.3) |
 | Cross-chain bribe bridge | In development | LayerZero V2 EVM→Solana bribe routing; testnet contracts deployed, endpoint-level DVN verification in progress (soladrome-bridge repo) |
 | wSOLA outbound | Roadmap | SOLA → EVM (floor-backed) → wSOLA pairs on Aerodrome / Velodrome (§8.4) |
 | Partner onboarding | Upcoming | Signature bag + per-epoch retainer against maintained liquidity, escrowed bribe schedule, everything locked for life (§7.2) |
