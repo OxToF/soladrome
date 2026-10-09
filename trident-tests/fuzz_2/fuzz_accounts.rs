@@ -64,6 +64,8 @@ pub struct AccountAddresses {
 
     pub hi_sola_mint: AddressStorage,
 
+    pub market_reserve: AddressStorage,
+
     pub user_hi_sola: AddressStorage,
 
     pub user_usdc: AddressStorage,

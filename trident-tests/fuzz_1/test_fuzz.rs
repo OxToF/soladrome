@@ -75,6 +75,7 @@ impl FuzzTest {
         let floor_vault    = derive(&[b"floor_vault"]);
         let market_vault   = derive(&[b"market_vault"]);
         let sola_vault     = derive(&[b"sola_vault"]);
+        let market_reserve = derive(&[b"market_reserve"]);
 
         // USDC mint
         let usdc_keypair = self.trident.random_keypair();
@@ -82,16 +83,26 @@ impl FuzzTest {
         let ixs = self.trident.initialize_mint(&authority, &usdc_mint, 6, &authority, None);
         self.trident.process_transaction(&ixs, Some("create_usdc_mint"));
 
-        // Initialize protocol
-        let init_ix = InitializeInstruction::data(InitializeInstructionData::new())
+        // Initialize protocol (a founder key that is not the actor, as in the bankrun suites)
+        let founder = self.trident.random_keypair().pubkey();
+        let init_ix = InitializeInstruction::data(InitializeInstructionData::new(founder))
             .accounts(InitializeInstructionAccounts::new(
                 authority, protocol_state, usdc_mint,
                 sola_mint, hi_sola_mint, o_sola_mint,
-                floor_vault, market_vault, sola_vault,
+                floor_vault, market_vault, sola_vault, market_reserve,
             ))
             .instruction();
         let r = self.trident.process_transaction(&[init_ix], Some("initialize"));
         if !r.is_success() { return; }
+
+        // Everything opens at launch: without the curve, LP and exercise flags every seeding step
+        // and every flash_arbitrage is refused with FeatureDisabled and the fuzz exercises nothing.
+        let flags_ix = SetPhaseFlagsInstruction::data(SetPhaseFlagsInstructionData::new(
+            Some(true), None, None, Some(true), Some(true), None,
+        ))
+        .accounts(SetPhaseFlagsInstructionAccounts::new(authority, protocol_state))
+        .instruction();
+        self.trident.process_transaction(&[flags_ix], Some("set_phase_flags"));
 
         // Fund caller with 10M USDC.
         let caller_usdc = self.trident.get_associated_token_address(&usdc_mint, &authority, &TOKEN_PROGRAM_ID);
@@ -115,7 +126,7 @@ impl FuzzTest {
         let buy_ix = BuySolaInstruction::data(BuySolaInstructionData::new(50_000_000, 0))
             .accounts(BuySolaInstructionAccounts::new(
                 authority, protocol_state, sola_mint,
-                caller_usdc, caller_sola, floor_vault, market_vault,
+                caller_usdc, caller_sola, floor_vault, market_vault, market_reserve,
             ))
             .instruction();
         self.trident.process_transaction(&[buy_ix], Some("seed_buy_sola"));
@@ -143,6 +154,7 @@ impl FuzzTest {
             .accounts(CreatePoolInstructionAccounts::new(
                 authority, protocol_state,
                 mint_a, mint_b, pool_pda, lp_mint_pda, vault_a_pda, vault_b_pda,
+                TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID,
             ))
             .instruction();
         let r = self.trident.process_transaction(&[create_pool_ix], Some("create_pool"));
@@ -172,11 +184,12 @@ impl FuzzTest {
             0, // min_lp = 0
         ))
         .accounts(AddLiquidityInstructionAccounts::new(
-            authority, pool_pda, lp_mint_pda, vault_a_pda, vault_b_pda,
+            authority, pool_pda, lp_mint_pda, mint_a, mint_b, vault_a_pda, vault_b_pda,
             if mint_a == sola_mint { caller_sola } else { caller_usdc },
             if mint_b == usdc_mint { caller_usdc } else { caller_sola },
             user_lp_ata, lp_dead_ata, lp_user_info_pda,
             protocol_state, o_sola_mint, caller_o_sola,
+            TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID,
         ))
         .instruction();
         self.trident.process_transaction(&[add_liq_ix], Some("add_liquidity"));
@@ -242,7 +255,14 @@ impl FuzzTest {
         // Random oSOLA amount to exercise (1 to 10 000 oSOLA).
         // Very large amounts are likely to hit NothingToClaim or InsufficientFloorReserve,
         // which are both safe error paths — we only care about invariants.
-        let amount_osola: u64 = self.trident.random_from_range(1..=10_000_000_000_u64);
+        // The seeded pool holds 1 SOLA, so a draw over the whole range almost never fits: four
+        // draws in five stay under 1 oSOLA, where an arbitrage can actually land; the fifth
+        // keeps the oversized path exercised.
+        let amount_osola: u64 = if self.trident.random_from_range(0..=4_u8) == 0 {
+            self.trident.random_from_range(1..=10_000_000_000_u64)
+        } else {
+            self.trident.random_from_range(1..=1_000_000_u64)
+        };
 
         let ix = FlashArbitrageInstruction::data(FlashArbitrageInstructionData::new(
             amount_osola,
