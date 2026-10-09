@@ -1,38 +1,36 @@
 //! # Soladrome Fuzz Test — Vote / Borrow / Fee-accounting Invariants
 //!
 //! Covers the surface the other two targets do not: staking, borrowing, voting and fee
-//! claims — and, critically, the one move that is NOT an instruction of this program: a
-//! **plain SPL transfer of hiSOLA between two wallets**.
+//! claims.
 //!
-//! That transfer is the attack primitive behind every bug found in this subsystem. hiSOLA
-//! is an ordinary SPL token with no freeze authority, so the program is never invoked on a
-//! transfer and cannot block one. Any rule the protocol enforces by reading a token
-//! *balance* is only as strong as the holder's willingness to keep holding — which is to
-//! say, not enforced. Two real bugs of exactly this shape were fixed on 2026-08-12
-//! (`vote_gauge` opening a `UserPosition` without stamping `fees_debt`, and `borrow_usdc`
-//! capping on the ATA balance).
+//! ## History — what this target was written against, and what replaced it
+//!
+//! It was written (2026-08-12) around one move that is NOT an instruction of this program: a
+//! **plain SPL transfer of hiSOLA between two wallets**. hiSOLA was then an ordinary SPL token
+//! with no freeze authority, so any rule read off a token *balance* was only as strong as the
+//! holder's willingness to keep holding. Two real bugs of exactly that shape were fixed on
+//! 2026-08-12 (`vote_gauge` opening a `UserPosition` without stamping `fees_debt`, and
+//! `borrow_usdc` capping on the ATA balance).
+//!
+//! Since 2026-08-21 **hiSOLA is a position, not a token** (`UserPosition.hi_sola`): there is no
+//! hiSOLA account to transfer from, so the attack primitive is gone by construction rather than
+//! contained. The transfer flows were removed with it (2026-10-09). What remains of that
+//! threat is a wallet that financed nothing trying to borrow, vote and claim — kept below as
+//! `flow_stranger_borrows_votes_claims`.
 //!
 //! ## Why the flows are guided rather than uniformly random
 //!
-//! The first version of this target picked each instruction independently with random
-//! amounts. It ran clean — and was worthless: a mutation test (borrow fix removed, program
-//! rebuilt) did **not** reproduce the bug. Instruction success rates explained why — buy
-//! succeeded 199 times in 12 553, vote 43 in 12 510, repay 0 in 12 464 — so the state
-//! machine never advanced past "wallet holds USDC". The sequence that breaks the protocol
-//! (finance a stake, borrow against it, move the collateral, borrow again from the
-//! recipient) has four ordered steps and essentially never occurred.
-//!
-//! So each flow here establishes its own preconditions before acting: it buys if it needs
-//! SOLA, stakes if it needs hiSOLA, and sizes every amount against live balances. Actors,
-//! amounts and flow order stay random — what is fixed is only the *shape* of each scenario,
-//! which is what lets the fuzzer reach deep states at all. A deliberate fraction of draws
-//! is still out of range, so the guards keep being exercised and not just the happy path.
-//!
-//! **Acceptance criterion for this target: with either fix reverted, it must panic.**
+//! The first version picked each instruction independently with random amounts. It ran clean
+//! — and was worthless: a mutation test (borrow fix removed, program rebuilt) did **not**
+//! reproduce the bug, because the state machine never advanced past "wallet holds USDC".
+//! So each flow establishes its own preconditions before acting: it buys if it needs SOLA,
+//! stakes if it needs hiSOLA, and sizes every amount against live balances. Actors, amounts
+//! and flow order stay random. A deliberate fraction of draws is still out of range, so the
+//! guards keep being exercised and not just the happy path.
 //!
 //! Invariants:
-//!   I-1. usdc_borrowed <= staked_amount, per user. Credit follows the wallet that financed
-//!        the floor, never whichever wallet currently holds transferable collateral.
+//!   I-1. A borrow never takes debt past `staked_amount.min(hi_sola)` as it stood before the
+//!        draw. Credit follows the USDC that financed the floor.
 //!   I-2. floor_vault + total_usdc_borrowed >= total_purchased_sola.
 //!   I-3. SUM(pending_fees) <= market_vault — the fee accumulator is a promise to pay, and
 //!        it must stay solvent. This is the invariant the `vote_gauge` bug broke.
@@ -44,7 +42,6 @@ mod types;
 use types::soladrome::*;
 use types::*;
 
-use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
 
@@ -59,22 +56,6 @@ fn program_id() -> Pubkey {
 
 fn derive(seeds: &[&[u8]]) -> Pubkey {
     Pubkey::find_program_address(seeds, &program_id()).0
-}
-
-/// Raw SPL Token `Transfer` (tag 3), built by hand: the point is that this path does not
-/// touch the Soladrome program at all, exactly as a user's wallet would do it.
-fn spl_transfer(source: Pubkey, dest: Pubkey, authority: Pubkey, amount: u64) -> Instruction {
-    let mut data = vec![3u8];
-    data.extend_from_slice(&amount.to_le_bytes());
-    Instruction {
-        program_id: TOKEN_PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(source, false),
-            AccountMeta::new(dest, false),
-            AccountMeta::new_readonly(authority, true),
-        ],
-        data,
-    }
 }
 
 /// Mirror of `math::advance_accumulator` — the invariant must price a claim exactly as
@@ -100,7 +81,6 @@ struct FuzzTest {
     users: Vec<Pubkey>,
     usdc: Vec<Pubkey>,
     sola: Vec<Pubkey>,
-    hi_sola: Vec<Pubkey>,
     positions: Vec<Pubkey>,
     /// Trident exposes `warp_to_slot` but no slot getter, and the flash-borrow guard
     /// compares slots, so the target drives the slot itself.
@@ -116,7 +96,6 @@ impl FuzzTest {
             users: Vec::new(),
             usdc: Vec::new(),
             sola: Vec::new(),
-            hi_sola: Vec::new(),
             positions: Vec::new(),
             slot_cursor: 10_000,
         }
@@ -133,7 +112,7 @@ impl FuzzTest {
         let floor_vault = derive(&[b"floor_vault"]);
         let market_vault = derive(&[b"market_vault"]);
         let sola_vault = derive(&[b"sola_vault"]);
-        let vote_escrow_vault = derive(&[b"vote_escrow"]);
+        let market_reserve = derive(&[b"market_reserve"]);
 
         let usdc_mint = self.trident.random_keypair().pubkey();
         let mint_ixs = self
@@ -142,7 +121,9 @@ impl FuzzTest {
         self.trident
             .process_transaction(&mint_ixs, Some("create_usdc_mint"));
 
-        let init_ix = InitializeInstruction::data(InitializeInstructionData::new())
+        // A founder key that is not an actor, as in the bankrun suites.
+        let founder = self.trident.random_keypair().pubkey();
+        let init_ix = InitializeInstruction::data(InitializeInstructionData::new(founder))
             .accounts(InitializeInstructionAccounts::new(
                 authority,
                 protocol_state,
@@ -153,6 +134,7 @@ impl FuzzTest {
                 floor_vault,
                 market_vault,
                 sola_vault,
+                market_reserve,
             ))
             .instruction();
         if !self
@@ -191,15 +173,8 @@ impl FuzzTest {
             let s = self
                 .trident
                 .get_associated_token_address(&sola_mint, &owner, &TOKEN_PROGRAM_ID);
-            let h =
-                self.trident
-                    .get_associated_token_address(&hi_sola_mint, &owner, &TOKEN_PROGRAM_ID);
 
-            for (mint, label) in [
-                (usdc_mint, "usdc_ata"),
-                (sola_mint, "sola_ata"),
-                (hi_sola_mint, "hi_sola_ata"),
-            ] {
+            for (mint, label) in [(usdc_mint, "usdc_ata"), (sola_mint, "sola_ata")] {
                 let ix = self
                     .trident
                     .initialize_associated_token_account(&authority, &mint, &owner);
@@ -214,7 +189,6 @@ impl FuzzTest {
             self.users.push(owner);
             self.usdc.push(u);
             self.sola.push(s);
-            self.hi_sola.push(h);
             self.positions.push(derive(&[b"position", owner.as_ref()]));
         }
 
@@ -236,8 +210,8 @@ impl FuzzTest {
             .insert_with_address(sola_vault);
         self.fuzz_accounts.usdc_mint.insert_with_address(usdc_mint);
         self.fuzz_accounts
-            .vote_escrow_vault
-            .insert_with_address(vote_escrow_vault);
+            .market_reserve
+            .insert_with_address(market_reserve);
     }
 
     // ── Primitives ────────────────────────────────────────────────────────
@@ -269,6 +243,11 @@ impl FuzzTest {
             .get_account_with_type::<UserPosition>(&self.positions[i], 8)
     }
 
+    /// The hiSOLA a position holds — the balance itself since 2026-08-21.
+    fn hi_sola_of(&mut self, i: usize) -> u64 {
+        self.position_of(i).map(|p| p.hi_sola).unwrap_or(0)
+    }
+
     /// One draw in five is deliberately out of range so the guards keep being tested.
     fn wild(&mut self) -> bool {
         self.trident.random_from_range(0..=4_u8) == 0
@@ -290,11 +269,18 @@ impl FuzzTest {
     // ── Building blocks used by the guided scenarios ──────────────────────
 
     fn do_buy(&mut self, i: usize, amount: u64) -> bool {
-        let (Some(protocol_state), Some(sola_mint), Some(floor_vault), Some(market_vault)) = (
+        let (
+            Some(protocol_state),
+            Some(sola_mint),
+            Some(floor_vault),
+            Some(market_vault),
+            Some(market_reserve),
+        ) = (
             self.fuzz_accounts.protocol_state.get(&mut self.trident),
             self.fuzz_accounts.sola_mint.get(&mut self.trident),
             self.fuzz_accounts.floor_vault.get(&mut self.trident),
             self.fuzz_accounts.market_vault.get(&mut self.trident),
+            self.fuzz_accounts.market_reserve.get(&mut self.trident),
         ) else {
             return false;
         };
@@ -307,6 +293,7 @@ impl FuzzTest {
                 self.sola[i],
                 floor_vault,
                 market_vault,
+                market_reserve,
             ))
             .instruction();
         self.trident
@@ -318,14 +305,12 @@ impl FuzzTest {
         let (
             Some(protocol_state),
             Some(sola_mint),
-            Some(hi_sola_mint),
             Some(sola_vault),
             Some(market_vault),
             Some(usdc_mint),
         ) = (
             self.fuzz_accounts.protocol_state.get(&mut self.trident),
             self.fuzz_accounts.sola_mint.get(&mut self.trident),
-            self.fuzz_accounts.hi_sola_mint.get(&mut self.trident),
             self.fuzz_accounts.sola_vault.get(&mut self.trident),
             self.fuzz_accounts.market_vault.get(&mut self.trident),
             self.fuzz_accounts.usdc_mint.get(&mut self.trident),
@@ -337,9 +322,7 @@ impl FuzzTest {
                 self.users[i],
                 protocol_state,
                 sola_mint,
-                hi_sola_mint,
                 self.sola[i],
-                self.hi_sola[i],
                 sola_vault,
                 market_vault,
                 usdc_mint,
@@ -353,9 +336,8 @@ impl FuzzTest {
     }
 
     fn do_borrow(&mut self, i: usize, amount: u64) -> bool {
-        let (Some(protocol_state), Some(hi_sola_mint), Some(floor_vault), Some(market_vault)) = (
+        let (Some(protocol_state), Some(floor_vault), Some(market_vault)) = (
             self.fuzz_accounts.protocol_state.get(&mut self.trident),
-            self.fuzz_accounts.hi_sola_mint.get(&mut self.trident),
             self.fuzz_accounts.floor_vault.get(&mut self.trident),
             self.fuzz_accounts.market_vault.get(&mut self.trident),
         ) else {
@@ -365,23 +347,17 @@ impl FuzzTest {
         // I-1 is a BORROW-TIME property, not a state invariant. A first version asserted
         // `usdc_borrowed <= staked_amount` globally in the `end` hook and produced false
         // positives on correct code: `staked_amount` is a cap input, not a conserved
-        // quantity — unstaking tokens that arrived by transfer legitimately drives it to 0
-        // while the debt stays covered by the tokens still held. The real rule is the one
-        // the cap enforces at the moment of the draw, so it is checked here.
-        let cap_before = {
-            let held = self.balance_of(self.hi_sola[i]);
-            match self.position_of(i) {
-                Some(p) => p.staked_amount.min(held.saturating_add(p.vote_escrowed)),
-                None => 0,
-            }
+        // quantity. The real rule is the one the cap enforces at the moment of the draw, so
+        // it is checked here.
+        let cap_before = match self.position_of(i) {
+            Some(p) => p.staked_amount.min(p.hi_sola),
+            None => 0,
         };
         let owed_before = self.position_of(i).map(|p| p.usdc_borrowed).unwrap_or(0);
         let ix = BorrowUsdcInstruction::data(BorrowUsdcInstructionData::new(amount))
             .accounts(BorrowUsdcInstructionAccounts::new(
                 self.users[i],
                 protocol_state,
-                hi_sola_mint,
-                self.hi_sola[i],
                 floor_vault,
                 market_vault,
                 self.usdc[i],
@@ -407,16 +383,9 @@ impl FuzzTest {
     }
 
     fn do_vote(&mut self, i: usize, votes: u64) -> bool {
-        let (
-            Some(protocol_state),
-            Some(hi_sola_mint),
-            Some(market_vault),
-            Some(vote_escrow_vault),
-        ) = (
+        let (Some(protocol_state), Some(market_vault)) = (
             self.fuzz_accounts.protocol_state.get(&mut self.trident),
-            self.fuzz_accounts.hi_sola_mint.get(&mut self.trident),
             self.fuzz_accounts.market_vault.get(&mut self.trident),
-            self.fuzz_accounts.vote_escrow_vault.get(&mut self.trident),
         ) else {
             return false;
         };
@@ -431,12 +400,9 @@ impl FuzzTest {
                 user,
                 pool_id,
                 protocol_state,
-                hi_sola_mint,
                 market_vault,
-                self.hi_sola[i],
-                vote_escrow_vault,
                 self.positions[i],
-                solana_sdk::system_program::ID,
+                solana_sdk::system_program::ID, // no ve lock
                 derive(&[b"gauge", pool_id.as_ref(), &epoch_le]),
                 derive(&[b"vote", user.as_ref(), pool_id.as_ref(), &epoch_le]),
                 derive(&[b"uev", user.as_ref(), &epoch_le]),
@@ -449,9 +415,8 @@ impl FuzzTest {
     }
 
     fn do_claim_fees(&mut self, i: usize) -> bool {
-        let (Some(protocol_state), Some(hi_sola_mint), Some(market_vault)) = (
+        let (Some(protocol_state), Some(market_vault)) = (
             self.fuzz_accounts.protocol_state.get(&mut self.trident),
-            self.fuzz_accounts.hi_sola_mint.get(&mut self.trident),
             self.fuzz_accounts.market_vault.get(&mut self.trident),
         ) else {
             return false;
@@ -460,8 +425,6 @@ impl FuzzTest {
             .accounts(ClaimFeesInstructionAccounts::new(
                 self.users[i],
                 protocol_state,
-                hi_sola_mint,
-                self.hi_sola[i],
                 market_vault,
                 self.usdc[i],
                 self.positions[i],
@@ -472,21 +435,9 @@ impl FuzzTest {
             .is_success()
     }
 
-    fn do_move_hi_sola(&mut self, from: usize, to: usize, amount: u64) -> bool {
-        let ix = spl_transfer(
-            self.hi_sola[from],
-            self.hi_sola[to],
-            self.users[from],
-            amount,
-        );
-        self.trident
-            .process_transaction(&[ix], Some("spl_transfer_hi_sola"))
-            .is_success()
-    }
-
     /// Make sure actor `i` holds hiSOLA, financing it through the curve if needed.
     fn ensure_hi_sola(&mut self, i: usize) -> u64 {
-        let held = self.balance_of(self.hi_sola[i]);
+        let held = self.hi_sola_of(i);
         if held > 0 {
             return held;
         }
@@ -503,7 +454,7 @@ impl FuzzTest {
         if sola > 0 {
             self.do_stake(i, sola);
         }
-        self.balance_of(self.hi_sola[i])
+        self.hi_sola_of(i)
     }
 
     /// A draw small enough that the 75% floor buffer — which binds long before the
@@ -556,11 +507,13 @@ impl FuzzTest {
         self.do_borrow(i, amount);
     }
 
-    /// ☢️ The recycling scenario: finance, borrow, hand the collateral to a wallet that
-    /// financed nothing, and let it borrow against it. I-1 fires if the cap ever reads a
-    /// bare token balance again.
+    /// ☢️ What is left of the transfer threat: actor `a` finances and borrows, while actor `b`
+    /// — who may have financed nothing — borrows, votes and claims anyway. With hiSOLA a
+    /// position there is nothing `b` can receive, so every one of these must either fail or
+    /// stay inside `b`'s own financed stake. I-1 fires on a borrow past it, I-3 on a fee claim
+    /// born without its history.
     #[flow]
-    fn flow_borrow_then_move_collateral(&mut self) {
+    fn flow_stranger_borrows_votes_claims(&mut self) {
         if !self.ready() {
             return;
         }
@@ -568,65 +521,16 @@ impl FuzzTest {
         let b = 1 - a;
 
         let held = self.ensure_hi_sola(a);
-        if held == 0 {
-            return;
-        }
-        let cap = self.borrowable(held);
-        let draw = self.trident.random_from_range(1..=cap.max(1));
-        self.do_borrow(a, draw);
-
-        // Move all of it, or a slice — the sender keeps the debt either way.
-        let balance = self.balance_of(self.hi_sola[a]);
-        if balance == 0 {
-            return;
-        }
-        let moved = if self.trident.random_bool() {
-            balance
-        } else {
-            self.trident.random_from_range(1..=balance)
-        };
-        if !self.do_move_hi_sola(a, b, moved) {
-            return;
+        if held > 0 {
+            let cap = self.borrowable(held);
+            let draw = self.trident.random_from_range(1..=cap.max(1));
+            self.do_borrow(a, draw);
         }
 
-        // The recipient now holds collateral it never paid for.
-        let recipient = self.balance_of(self.hi_sola[b]);
-        if recipient > 0 {
-            let cap_b = self.borrowable(recipient);
-            let amount = self.trident.random_from_range(1..=cap_b.max(1));
-            self.do_borrow(b, amount);
-        }
-    }
-
-    /// ☢️ The fee-history scenario: move a stake to a wallet the protocol has never seen,
-    /// let it open its position through `vote_gauge`, then claim. I-3 fires if that
-    /// position is ever born unstamped.
-    #[flow]
-    fn flow_move_then_vote_then_claim(&mut self) {
-        if !self.ready() {
-            return;
-        }
-        let a = self.actor();
-        let b = 1 - a;
-
-        let held = self.ensure_hi_sola(a);
-        if held == 0 {
-            return;
-        }
-        let moved = if self.trident.random_bool() {
-            held
-        } else {
-            self.trident.random_from_range(1..=held)
-        };
-        if !self.do_move_hi_sola(a, b, moved) {
-            return;
-        }
-
-        let recipient = self.balance_of(self.hi_sola[b]);
-        if recipient == 0 {
-            return;
-        }
-        let votes = self.sized(recipient);
+        let mirrored = held.max(1);
+        let amount = self.sized(mirrored);
+        self.do_borrow(b, amount);
+        let votes = self.sized(mirrored);
         self.do_vote(b, votes);
         self.do_claim_fees(b);
     }
@@ -685,21 +589,19 @@ impl FuzzTest {
         let (
             Some(protocol_state),
             Some(sola_mint),
-            Some(hi_sola_mint),
             Some(sola_vault),
             Some(market_vault),
             Some(usdc_mint),
         ) = (
             self.fuzz_accounts.protocol_state.get(&mut self.trident),
             self.fuzz_accounts.sola_mint.get(&mut self.trident),
-            self.fuzz_accounts.hi_sola_mint.get(&mut self.trident),
             self.fuzz_accounts.sola_vault.get(&mut self.trident),
             self.fuzz_accounts.market_vault.get(&mut self.trident),
             self.fuzz_accounts.usdc_mint.get(&mut self.trident),
         ) else {
             return;
         };
-        let held = self.balance_of(self.hi_sola[i]);
+        let held = self.hi_sola_of(i);
         let amount = self.sized(held);
 
         let ix = UnstakeHiSolaInstruction::data(UnstakeHiSolaInstructionData::new(amount))
@@ -707,36 +609,18 @@ impl FuzzTest {
                 self.users[i],
                 protocol_state,
                 sola_mint,
-                hi_sola_mint,
-                self.hi_sola[i],
                 self.sola[i],
                 sola_vault,
                 market_vault,
                 usdc_mint,
                 self.usdc[i],
                 self.positions[i],
-                solana_sdk::system_program::ID,
+                derive(&[b"founder_hi_vesting"]), // canonical PDA, absent for ordinary stakers
             ))
             .instruction();
         let _ = self
             .trident
             .process_transaction(&[ix], Some("unstake_hi_sola"));
-    }
-
-    /// A bare transfer with no scenario around it, to keep unplanned orderings reachable.
-    #[flow]
-    fn flow_move_hi_sola(&mut self) {
-        if !self.ready() {
-            return;
-        }
-        let from = self.actor();
-        let to = 1 - from;
-        let balance = self.balance_of(self.hi_sola[from]);
-        if balance == 0 {
-            return;
-        }
-        let amount = self.trident.random_from_range(1..=balance);
-        self.do_move_hi_sola(from, to, amount);
     }
 
     /// Report an invariant violation.
@@ -797,14 +681,15 @@ impl FuzzTest {
                 continue;
             };
 
-            // I-1: credit follows the financed deposit, never a transferable balance.
-            let basis = self
-                .balance_of(self.hi_sola[i])
-                .saturating_add(pos.vote_escrowed);
+            // Mirror of `math::fee_basis`: financed stake only, plus lifetime fee shares.
+            let basis = pos
+                .staked_amount
+                .min(pos.hi_sola)
+                .saturating_add(pos.fee_shares);
             let p = pending_fees(live_acc, pos.fees_debt, basis);
             detail.push(format!(
-                "user{i}: debt={} basis={} escrowed={} staked={} pending={p}",
-                pos.fees_debt, basis, pos.vote_escrowed, pos.staked_amount
+                "user{i}: debt={} basis={} hi_sola={} staked={} pending={p}",
+                pos.fees_debt, basis, pos.hi_sola, pos.staked_amount
             ));
             total_claimable += p as u128;
         }

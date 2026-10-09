@@ -32,6 +32,14 @@ against the curve on every deposit, and the counter-asset's USDC price stated by
 `508969322`, dump = build, 2 005 384 bytes, program account extended to 2 010 240), PR #57. Audit: **Hacken is not retained**
 (2026-10-08, $6K paid entry fee); Accretion's $50K quote predates the curve change.
 
+☢️ **2026-10-09 — a new audit target is being cut.** `audit-2026-09-01` no longer describes the
+program: 22 commits and 13 instructions have landed on `programs/` since (standing orders, LP
+orders, per-position strategies, the curve sale and its market reserve, the founder oSOLA vesting,
+the POL retarget), ~6 700 → ~9 800 non-blank, non-comment lines. The next tag, **`audit-2026-10-09`**,
+is cut from `main` once the fuzz targets are back in step with the program (all three had drifted;
+fuzz_2 was rewritten for the position model). The handoff package (`soladrome-audit`) is revised
+against it before it is handed over.
+
 ---
 
 ## The artefact
@@ -42,12 +50,12 @@ against the curve on every deposit, and the counter-asset's USDC price stated by
 | Previous tag | `audit-2026-08-30b`, a verified **ancestor** of the audit tag |
 | Branch | `main` — one trunk, and the deployed tree |
 | Program id (devnet) | `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe` |
-| Devnet binary | sha256 `fa483503…`, 1 921 288 bytes, SBPFv3, deployed 2026-09-24 at slot `503048080` from commit `832a775` (branch `feat/pool-strategies`), verified byte-for-byte by dump |
-| Instructions | **67** on branch `feat/pol-sol-lst` (66 on `main`: 54 at the audit tag, plus four standing-order, three LP-order and four per-position strategy instructions; + `fund_market_reserve`, 2026-10-07; + `pol_swap`, 2026-10-08) |
-| Account parameters | 503 at the audit tag; the four new instructions add their own |
-| Error variants | **72** on `feat/pol-sol-lst` (70 on `main`; + `InsufficientMarketReserve`, 2026-10-07; + `PolInvalidRoute`, `PolPriceDeviation`, 2026-10-08) |
+| Devnet binary | sha256 `eabd443a…`, 2 005 384 bytes, SBPFv3, deployed 2026-10-09 at slot `508969322` from commit `a2541c1` (PR #57), verified byte-for-byte by dump |
+| Instructions | **67** on `main` (54 at the audit tag, plus four standing-order, three LP-order and four per-position strategy instructions; + `fund_market_reserve`, 2026-10-07; + `pol_swap`, 2026-10-08) — measured from the IDL, 2026-10-09 |
+| Account parameters | **639** on `main` (503 at the audit tag) — sum of every instruction's accounts in the IDL |
+| Error variants | **72** on `main` (58 at the audit tag) |
 | On-chain account types | **24** (22 at the audit tag, plus `AutoCompound` and `PoolStrategy`) |
-| Tests | **114 bankrun cases passing, 0 failing** — 13 per-position strategy (incl. the duplicate-pool regression), 9 LP order, 8 standing order, 4 permissionless claim; mutations on every guard · 80 cargo unit tests · 48 frontend unit tests |
+| Tests (2026-10-09) | **135 bankrun** · **36 validator** (`tests/soladrome.ts`) · **89 cargo unit** · **65 frontend unit** — all passing · 3 Trident targets compiling and running clean (fuzz_0 curve, fuzz_1 flash arbitrage, fuzz_2 stake/borrow/vote/fees; fuzz_2's I-1 re-proven by mutation 2026-10-09) |
 
 **☢️ FOUND AND FIXED IN REVIEW (2026-09-24): a pool passed twice reverted a route's reserves.**
 `AmmPool` is owned by this program, so Anchor writes every mutable copy back at exit, in field
