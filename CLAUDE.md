@@ -574,6 +574,11 @@ GaugeState       → [b"gauge", pool_id, epoch_le8]
 UserVoteReceipt  → [b"vote", user, pool_id, epoch_le8]
 UserEpochVotes   → [b"uev", user, epoch_le8]
 UserBribeClaim   → [b"bribe_claim", user, pool_id, reward_mint, epoch_le8]
+PolState         → [b"pol"]
+pol_usdc_vault   → [b"pol_usdc_vault"]
+pol_sola_ata     → [b"pol_sola_ata"]
+pol_token        → [b"pol_token", mint]        (SOL / LST bought by pol_swap)
+pol_lp_vault     → [b"pol_lp_vault", pool]     (one per pool since 2026-10-08)
 ```
 
 ### Frontend (`app/`)

@@ -181,4 +181,8 @@ pub enum SoladromeError {
     StrategyNoBudget,
     #[msg("The market reserve does not hold what the rest of the curve owes its sellers: this sale is refused rather than paid from their share")]
     InsufficientMarketReserve,
+    #[msg("Protocol-owned liquidity goes only into a SOLA pool paired with USDC, SOL or an approved LST, through the canonical SOL/USDC and LST/SOL pools")]
+    PolInvalidRoute,
+    #[msg("This deposit would price SOLA too far from the curve: protocol-owned liquidity is never added at a price an arbitrageur could take from")]
+    PolPriceDeviation,
 }

@@ -101,7 +101,8 @@ require(market_reserve_post >= virtual_usdc + virtual_sola - 2N)
 | `[b"market_vault"]` | USDC | Fee revenue — distributed to hiSOLA stakers |
 | `[b"sola_vault"]` | SOLA | Locked SOLA from stakers |
 | `[b"pol_usdc_vault"]` | USDC | POL accumulation before deployment |
-| `[b"pol_lp_vault"]` | LP | Permanent POL LP position |
+| `[b"pol_token", mint]` | SOL / LST | POL counter-asset bought by `pol_swap`, waiting for `deploy_pol` |
+| `[b"pol_lp_vault", pool]` | LP | Permanent POL LP position, one per pool |
 
 All vaults are **PDA token accounts** signed by `ProtocolState`. No admin keypair touches funds.
 

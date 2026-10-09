@@ -510,9 +510,13 @@ A configurable fraction (`pol_split_bps`, max 50%) of `market_vault` fees is div
 
 ### 11.2 Deployment (`deploy_pol`)
 
-Two-phase atomic operation:
+Two-phase atomic operation, on any SOLA pool whose other side is USDC, SOL or an approved LST (SOLA/SOL at launch; SOLA/mSOL or SOLA/jitoSOL with an LST partner):
 1. Buy SOLA via bonding curve using POL USDC → SOLA lands in `pol_sola_ata`
-2. Add SOLA + remaining USDC as liquidity to `target_pool` → LP tokens held permanently in `pol_lp_vault`
+2. Add SOLA + the counter-asset as liquidity to that pool → LP tokens held permanently in that pool's `pol_lp_vault`
+
+The counter-asset is bought beforehand by `pol_swap`: USDC → SOL on the canonical SOL/USDC pool, then SOL → LST on the canonical, approved LST/SOL pool. No other route exists. The program checks the approval, not what the token is: keeping these pairs to LSTs is the multisig's rule.
+
+The deposit is refused if it prices SOLA more than `max_price_dev_bps` (at most 10 %) away from the bonding curve, the counter-asset valued through the SOL/USDC (and LST/SOL) pool. A first deposit sets a pool's price; this check is what keeps a wrong ratio, or a pool skewed just before the call, from handing the POL's value to the first arbitrageur. Because those reference pools could be moved too, the multisig also states the counter-asset's USDC price in the proposal (`counter_usdc_ref`), and the on-chain reference must agree with it within the same tolerance.
 
 POL LP tokens are never redeemable — they are protocol-owned forever, providing permanent baseline liquidity and ongoing fee income.
 
@@ -702,7 +706,7 @@ Complete list of on-chain instructions (program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SE
 
 **AMM:** `create_pool` · `add_liquidity` · `remove_liquidity` · `amm_swap`
 
-**Protocol-Owned Liquidity:** `initialize_pol` · `collect_to_pol` · `deploy_pol`
+**Protocol-Owned Liquidity:** `initialize_pol` · `collect_to_pol` · `pol_swap` · `deploy_pol`
 
 **veSOLA:** `lock_hi_sola` · `unlock_hi_sola`
 

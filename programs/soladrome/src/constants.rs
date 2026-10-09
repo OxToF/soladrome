@@ -309,6 +309,12 @@ pub const POL_SEED: &[u8] = b"pol";
 pub const POL_USDC_VAULT_SEED: &[u8] = b"pol_usdc_vault";
 pub const POL_SOLA_ATA_SEED: &[u8] = b"pol_sola_ata";
 pub const POL_LP_VAULT_SEED: &[u8] = b"pol_lp_vault";
+/// The POL's holding account for a counter-asset bought by `pol_swap` (wSOL, an approved LST):
+/// `[POL_TOKEN_SEED, mint]`. USDC stays in `pol_usdc_vault`.
+pub const POL_TOKEN_SEED: &[u8] = b"pol_token";
+/// The most a POL deposit's implied SOLA price may stray from the curve's, in bps. The authority
+/// picks a tolerance per call, never above this.
+pub const POL_MAX_PRICE_DEV_BPS: u16 = 1_000;
 
 // ── AMM ───────────────────────────────────────────────────────────────────────
 pub const AMM_POOL_SEED: &[u8] = b"amm_pool";

@@ -134,6 +134,30 @@ pub fn curve_sell(
     })
 }
 
+/// Fixed-point scale of the POL price checks (`deploy_pol`).
+pub const POL_PRICE_SCALE: u128 = 1_000_000_000_000;
+
+/// `num / den` in `POL_PRICE_SCALE` units. Raw base units on both sides, so decimals cancel along
+/// a chain of ratios (SOL has 9, USDC and SOLA 6): USDC-per-SOL × SOL-per-SOLA = USDC-per-SOLA.
+pub fn ratio_fp(num: u64, den: u64) -> Result<u128> {
+    require!(den > 0, SoladromeError::InsufficientLiquidity);
+    Ok((num as u128)
+        .checked_mul(POL_PRICE_SCALE)
+        .ok_or(SoladromeError::Overflow)?
+        / den as u128)
+}
+
+/// `a × b` for two `POL_PRICE_SCALE` figures.
+pub fn mul_fp(a: u128, b: u128) -> Result<u128> {
+    Ok(a.checked_mul(b).ok_or(SoladromeError::Overflow)? / POL_PRICE_SCALE)
+}
+
+/// Whether `implied` lies within `max_dev_bps` of `reference`, either side.
+pub fn within_bps(implied: u128, reference: u128, max_dev_bps: u16) -> bool {
+    let diff = implied.abs_diff(reference);
+    diff.saturating_mul(10_000) <= reference.saturating_mul(max_dev_bps as u128)
+}
+
 /// What the market reserve must hold for the curve to be sold all the way back to its start:
 /// `vu + vs − (init_vu + init_vs)`, every premium paid and not yet returned. Never negative in
 /// practice; floored at 0 against the unit of rounding at the bottom.
@@ -649,5 +673,34 @@ mod tests {
                 "short at round {i}"
             );
         }
+    }
+
+    // ── POL price check (2026-10-08) ─────────────────────────────────────────
+
+    #[test]
+    fn a_price_chain_cancels_decimals() {
+        // SOL at 150 USDC (SOL 9 dec, USDC 6), SOLA at 1.05: 7 raw SOL per raw SOLA.
+        let sol_px = ratio_fp(150_000_000, 1_000_000_000).unwrap(); // raw USDC per raw SOL
+        let sola_in_sol = ratio_fp(7_000_000_000, 1_000_000_000).unwrap(); // 7 SOL-raw per SOLA-raw
+        let implied = mul_fp(sola_in_sol, sol_px).unwrap();
+        assert_eq!(
+            implied,
+            ratio_fp(1_050_000, 1_000_000).unwrap(),
+            "1.05 USDC per SOLA"
+        );
+    }
+
+    #[test]
+    fn within_bps_is_symmetric_and_inclusive() {
+        let r = POL_PRICE_SCALE;
+        assert!(within_bps(r + r / 100, r, 100), "+1 % at a 1 % bound");
+        assert!(within_bps(r - r / 100, r, 100), "−1 % at a 1 % bound");
+        assert!(!within_bps(r + r / 100 + 1, r, 100));
+        assert!(!within_bps(r / 2, r, 1_000));
+    }
+
+    #[test]
+    fn ratio_fp_refuses_an_empty_side() {
+        assert!(ratio_fp(1, 0).is_err());
     }
 }

@@ -1919,7 +1919,7 @@ describe("soladrome", () => {
     const existingPol = await program.account.polState.fetchNullable(polStatePda);
     if (!existingPol) {
       await program.methods
-        .initializePol(1000, poolPda)
+        .initializePol(1000)
         .accounts({
           authority:     wallet.publicKey,
           protocolState: statePda,
@@ -1937,7 +1937,6 @@ describe("soladrome", () => {
 
     const pol = await program.account.polState.fetch(polStatePda);
     assert.equal(pol.polSplitBps, 1000, "split bps stored");
-    assert.equal(pol.targetPool.toBase58(), poolPda.toBase58(), "target pool set");
 
     // ── collect_to_pol: redirect uncredited fees from market_vault ──────────────
     // Buy first so market_vault holds fresh, uncredited fees — a prior stake/claim may
@@ -2069,8 +2068,9 @@ describe("soladrome", () => {
     const [polSolaAta]   = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("pol_sola_ata")], program.programId
     );
+    // One LP vault per pool since 2026-10-08.
     const [polLpVault]   = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("pol_lp_vault")], program.programId
+      [Buffer.from("pol_lp_vault"), poolPda.toBuffer()], program.programId
     );
 
     const lpDeadKey   = anchor.web3.SystemProgram.programId;
@@ -2092,8 +2092,10 @@ describe("soladrome", () => {
         USDC_FOR_SOLA, // usdc_for_sola
         new BN(1),     // min_sola_out (accept any)
         new BN(0),     // sola_for_lp  (skip Phase 2)
-        new BN(0),     // usdc_for_lp
+        new BN(0),     // counter_for_lp
         new BN(0),     // min_lp
+        100,           // max_price_dev_bps (unused without a deposit)
+        new BN(0),     // counter_usdc_ref (ignored for a USDC pair)
       )
       .accounts({
         authority:      wallet.publicKey,
@@ -2101,11 +2103,14 @@ describe("soladrome", () => {
         polState:       polStatePda,
         polUsdcVault,
         polSolaAta,
+        counterMint:    usdcMint,
+        polCounter:     polUsdcVault,
         polLpVault,
         solaMint:       solaM,
         floorVault:     floorV,
-        marketVault:    marketV,
         pool:           poolPda,
+        solUsdcPool:    null,
+        lstSolPool:     null,
         lpMint:         lpMintPda,
         poolTokenAVault: vaultA,
         poolTokenBVault: vaultB,

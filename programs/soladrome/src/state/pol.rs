@@ -11,8 +11,6 @@ use anchor_lang::prelude::*;
 pub struct PolState {
     /// Suggested % of market_vault fees to divert (informational, enforced off-chain).
     pub pol_split_bps: u16,
-    /// AmmPool PDA that receives POL liquidity deposits.
-    pub target_pool: Pubkey,
     /// Lifetime USDC routed through collect_to_pol.
     pub usdc_accumulated: u64,
     pub bump: u8,
