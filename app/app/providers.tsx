@@ -12,6 +12,7 @@ import {
   createDefaultWalletNotFoundHandler,
 } from "@solana-mobile/wallet-adapter-mobile";
 import { SoladromeProvider } from "@/lib/SoladromeContext";
+import { isSolanaWebShell } from "@/lib/inAppBrowser";
 import { resolveRpcUrl, FALLBACK_RPC_URL, fetchWithFallback } from "@/lib/rpc";
 
 // A malformed NEXT_PUBLIC_RPC_URL is inlined at build time, so it would break
@@ -105,7 +106,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
   // injected wallet rather than on the UA alone.
   const wallets = useMemo(() => {
     const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
-    const isAndroidExternalBrowser = /android/i.test(ua) && !/\bwv\b|; wv\)/i.test(ua);
+    // Our dApp Store app (Solana Mobile Web Shell) is a WebView, but nothing
+    // injects there either and the shell forwards MWA intents: MWA only, as in
+    // an external browser.
+    const isAndroidExternalBrowser =
+      (/android/i.test(ua) && !/\bwv\b|; wv\)/i.test(ua)) || isSolanaWebShell(ua);
 
     const mwa = new SolanaMobileWalletAdapter({
       addressSelector: createDefaultAddressSelector(),

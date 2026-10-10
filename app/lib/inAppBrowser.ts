@@ -26,12 +26,23 @@
 export type InAppBrowser = "ios" | "android" | null;
 
 /**
+ * Our own Android app (Solana dApp Store) is a Solana Mobile Web Shell: an
+ * Android WebView, so it carries `wv` like X's, but the shell appends this
+ * marker to the UA and hands `solana-wallet:` intents to the wallet app, so the
+ * Mobile Wallet Adapter DOES work there. It is not a stranded in-app browser.
+ */
+export function isSolanaWebShell(ua: string): boolean {
+  return ua.includes("Solana Mobile Web Shell");
+}
+
+/**
  * Returns which flavour of in-app WebView we're in, or null for a real browser.
  * Pure and UA-only — always pair it with a capability check (see ConnectButton:
  * a wallet's own in-app browser is also a WebView, but there a wallet IS
  * injected and the normal flow works).
  */
 export function detectInAppBrowser(ua: string): InAppBrowser {
+  if (isSolanaWebShell(ua)) return null;
   const u = ua.toLowerCase();
 
   // Every genuine iOS browser (Safari, Chrome/CriOS, Firefox/FxiOS, Edge/EdgiOS)
