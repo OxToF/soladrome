@@ -12,14 +12,16 @@ const supabase = createClient(
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// GET ?wallet=… → { signedUp, whitelisted, email, completed[] }
+// GET ?wallet=… → { signedUp, whitelisted, hasEmail, completed[] }
+// Unauthenticated read: anyone can pass any wallet, and wallets are public
+// on-chain. Never return the email itself, only whether one is on file.
 // `completed` mirrors /api/track-quest's shape so the frontend can reuse the
 // same quest-catalog logic to render the tasks checklist without a second fetch shape.
 export async function GET(req: NextRequest) {
   try {
     const wallet = req.nextUrl.searchParams.get("wallet");
     if (!wallet) {
-      return NextResponse.json({ signedUp: false, whitelisted: false, email: null, completed: [] });
+      return NextResponse.json({ signedUp: false, whitelisted: false, hasEmail: false, completed: [] });
     }
 
     const [{ data: signup }, { data: eligible }, { data: completions }] = await Promise.all([
@@ -31,12 +33,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       signedUp:    !!signup,
       whitelisted: !!eligible,
-      email:       signup?.email ?? null,
+      hasEmail:    !!signup?.email,
       completed:   (completions ?? []).map((r) => r.quest_id),
     });
   } catch (e: any) {
     return NextResponse.json(
-      { signedUp: false, whitelisted: false, email: null, completed: [], error: e?.message ?? String(e) },
+      { signedUp: false, whitelisted: false, hasEmail: false, completed: [], error: e?.message ?? String(e) },
       { status: 500 },
     );
   }
