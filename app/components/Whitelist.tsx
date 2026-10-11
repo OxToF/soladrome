@@ -13,7 +13,7 @@ const WHITELIST_CAP = 500;
 interface Status {
   signedUp:    boolean;
   whitelisted: boolean;
-  email:       string | null;
+  hasEmail:    boolean;
   completed:   string[];
 }
 
@@ -36,7 +36,6 @@ export function Whitelist() {
       const res  = await fetch(`/api/whitelist/status?wallet=${wallet}`);
       const data = await res.json();
       setStatus(data);
-      setEmail(data.email ?? "");
     } catch { /* keep previous state */ }
   }, [wallet]);
 
@@ -134,14 +133,14 @@ export function Whitelist() {
             )}
           </StepRow>
 
-          <StepRow n={2} title="Email (optional)" done={!!status?.email} active={!!status?.signedUp}>
+          <StepRow n={2} title="Email (optional)" done={!!status?.hasEmail} active={!!status?.signedUp}>
             {status?.signedUp ? (
               <div className="flex gap-2 w-full max-w-sm">
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
+                  placeholder={status?.hasEmail ? "Email on file (enter a new one to replace)" : "you@example.com"}
                   className="input flex-1"
                 />
                 <button onClick={handleSaveEmail} disabled={savingEmail} className="btn-secondary shrink-0">
