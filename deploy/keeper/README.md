@@ -29,7 +29,7 @@ Either way, the SOL the keeper spends on fees is separate: ~10 000 lamports per 
    **CX23**, location Falkenstein, Nuremberg or Helsinki. Paste `~/.ssh/id_ed25519.pub` under
    SSH keys. Note the IPv4 address.
 3. **Optional, free alerting.** At healthchecks.io, create a check with period 5 min and grace
-   5 min, then copy its ping URL. If a pass has not pinged it in 10 minutes (process dead,
+   10 min, then copy its ping URL. If a pass has not pinged it in 15 minutes (process dead,
    machine down, network cut), you get an email.
 4. **Deploy**, from your machine:
    ```bash
@@ -38,7 +38,7 @@ Either way, the SOL the keeper spends on fees is separate: ~10 000 lamports per 
    The first run bootstraps the server with `setup.sh`: firewall (SSH only), key-only SSH,
    automatic security updates, Node 22 verified against nodejs.org's checksum, and a `keeper`
    user with no shell. Every run then rebuilds the bundle, installs it with the fee-payer
-   keypair and `RPC_URL` (sent over SSH on stdin, mode 640), restarts the service and prints
+   keypair and `KEEPER_RPC_URL` (sent over SSH on stdin, mode 640), restarts the service and prints
    its first log lines.
 5. **Stop any other keeper** you run locally. Two keepers are harmless, since the chain refuses
    the second crank, but they pay for two simulations each.
@@ -57,4 +57,4 @@ ssh root@<ipv4> systemctl stop soladrome-keeper
 To update after a change to the keeper or `app/lib/`, run `deploy.sh` again.
 
 Keep the fee payer funded: `solana balance <pubkey>`. On devnet, airdrop to it. On mainnet,
-top it up from the treasury, and use a mainnet throwaway key and a mainnet server `RPC_URL`.
+top it up from the treasury, and use a mainnet throwaway key and a mainnet `KEEPER_RPC_URL`.

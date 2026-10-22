@@ -15,7 +15,7 @@
 //   KEEPER_KEYPAIR=~/.config/solana/id.json \
 //   ~/.nvm/versions/node/v24.19.0/bin/node --import ./scripts/json-loader.mjs \
 //       scripts/keeper.mts            # one pass, then exit
-//   ... scripts/keeper.mts --watch    # keep going, one pass a minute
+//   ... scripts/keeper.mts --watch    # keep going, one pass every five minutes
 //   ... scripts/keeper.mts --dry-run  # look, decide, send nothing
 //   KEEPER_ONLY=<owner> ...            # serve one owner's order only (a rehearsal on devnet)
 //   KEEPER_HEARTBEAT_URL=<url> ...     # ping after every pass, so a silence can alert
@@ -42,7 +42,11 @@ import { CU_SIM_LIMIT, computeBudget, cuLimitFor, feeLamports } from "../lib/cub
 
 const WATCH = process.argv.includes("--watch");
 const DRY_RUN = process.argv.includes("--dry-run");
-const PASS_INTERVAL_MS = 60_000;
+// Five minutes, not one: every pass reads every order and simulates the due ones, and at one a
+// minute that alone emptied a shared Helius quota in two weeks (2026-10-21). The app arms
+// strategies at one hour (`STRATEGY_DEFAULTS.minInterval`); the chain allows down to
+// `MIN_CRANK_INTERVAL` (60 s), and an order that short now fires every five minutes instead.
+const PASS_INTERVAL_MS = 300_000;
 
 // `KEEPER_RPC_URL` wins, so the same keeper serves a localnet rehearsal and the live cluster
 // without editing the app's own secret config to point somewhere else and forgetting to undo it.
@@ -120,7 +124,7 @@ async function pass(): Promise<void> {
   // rather than a verdict: claim first, and ask again.
   //
   // That costs four reads per candidate, which is why it only runs for orders the cheap pass
-  // already rejected on the oSOLA count — never for every order, every minute.
+  // already rejected on the oSOLA count — never for every order, every pass.
   const ready = orders.filter((o) => o.ready);
   const shortOfOSola = orders.filter((o) => o.why === "below threshold" || o.why === "not a full chunk");
 
@@ -188,7 +192,7 @@ async function pass(): Promise<void> {
       // this process only holds a mirror of that judgement (`listCrankableOrders`). A mirror
       // goes stale between the read and the send — another keeper fires first, the curve moves
       // past the user's ceiling, an allowance runs out. Sending anyway would burn a fee to
-      // watch the chain say no, once per order, once a minute, forever.
+      // watch the chain say no, once per order, once a pass, forever.
       const tx = new Transaction().add(...budget, ...claims, crank);
       tx.feePayer = keeper.publicKey;
       tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
