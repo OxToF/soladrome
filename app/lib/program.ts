@@ -3,7 +3,7 @@
 import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
 import {
   Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY,
-  Transaction, TransactionInstruction, ComputeBudgetProgram,
+  Transaction, TransactionInstruction, ComputeBudgetProgram, VersionedTransaction,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -358,18 +358,27 @@ export function explainTxError(err: unknown, ixs?: TransactionInstruction[]): st
   );
 }
 
-/// ☢️ On the Mobile Wallet Adapter, sign-then-send does not work with every wallet.
+/// ☢️ The Mobile Wallet Adapter can never be handed an unsigned LEGACY `Transaction`.
 ///
-/// MWA 2.0 makes `sign_and_send_transactions` the one mandatory method; `sign_transactions` is
-/// optional. The Seeker's built-in wallet (Seed Vault) advertises the latter and, on 2026-10-23,
-/// handed swaps back UNSIGNED and without ever showing a prompt — web3.js then refused to
-/// serialize them ("Missing signature for public key"), on the user's own address. So when the
-/// connected wallet is MWA, `sendTx` asks it to sign AND broadcast, and only confirms here.
+/// `@solana-mobile/wallet-adapter-mobile` (2.2.9) encodes the payload for the wallet with a plain
+/// `transaction.serialize()`, and on a legacy `Transaction` that call first VERIFIES signatures,
+/// so an unsigned one throws "Signature verification failed. Missing signature for public key
+/// [<fee payer>]" in the page — before the wallet is ever reached. On the Seeker that read as
+/// "the wallet refused" with no prompt shown, on the user's own address (2026-10-23). It was
+/// first blamed on the wallet; PR #62 changed the method and kept the failure, which is how the
+/// real cause surfaced. A `VersionedTransaction` serializes without that check, so the MWA path
+/// gets the same message wrapped in one (`toWalletPayload`).
 ///
-/// `providers.tsx` registers this for the MWA adapter only. Desktop and in-app wallets keep
-/// sign-then-send: their own `sendTransaction` routes through the extension's RPC, which is what
-/// returned bare -32603 errors under load.
-type WalletSender = (owner: PublicKey, tx: Transaction, connection: Connection) => Promise<string>;
+/// The MWA path also asks the wallet to sign AND broadcast: `sign_and_send_transactions` is the
+/// one method MWA 2.0 makes mandatory. `providers.tsx` registers this for the MWA adapter only.
+/// Desktop and in-app wallets keep sign-then-send: their own `sendTransaction` routes through the
+/// extension's RPC, which is what returned bare -32603 errors under load.
+type WalletSender = (owner: PublicKey, tx: VersionedTransaction, connection: Connection) => Promise<string>;
+
+/// Same message, same "legacy" message version, but serializable without signatures.
+export function toWalletPayload(tx: Transaction): VersionedTransaction {
+  return new VersionedTransaction(tx.compileMessage());
+}
 let walletSender: WalletSender | null = null;
 export function setWalletSender(sender: WalletSender | null): void {
   walletSender = sender;
@@ -478,7 +487,7 @@ export async function sendTx(
     let raw: Buffer | null = null;
     let sig: string;
     if (walletSender) {
-      sig = await walletSender(wallet.publicKey, tx, txConn);
+      sig = await walletSender(wallet.publicKey, toWalletPayload(tx), txConn);
     } else {
       const signed = await wallet.signTransaction(tx);
       raw = signed.serialize();

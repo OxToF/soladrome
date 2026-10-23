@@ -84,9 +84,10 @@ function throttledFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
   }).then(() => withFallback(input as any, init));
 }
 
-// On the Mobile Wallet Adapter, `sendTx` must let the wallet sign AND send: the Seeker's wallet
-// returned sign-only requests unsigned (see `setWalletSender` in lib/program.ts). Registered
-// only while the connected adapter is MWA, and only for the key it is connected with.
+// On the Mobile Wallet Adapter, `sendTx` hands the wallet a VersionedTransaction to sign AND
+// send: the adapter cannot serialize an unsigned legacy one (see `setWalletSender` in
+// lib/program.ts). Registered only while the connected adapter is MWA, and only for the key it
+// is connected with.
 function MwaSendBridge() {
   const { wallet, publicKey } = useWallet();
   const adapter = wallet?.adapter;

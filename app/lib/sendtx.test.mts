@@ -14,8 +14,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { Connection, Keypair, Transaction, SystemProgram } from "@solana/web3.js";
-import { sendTx } from "./program.ts";
+import { Connection, Keypair, Transaction, SystemProgram, VersionedTransaction } from "@solana/web3.js";
+import { sendTx, setWalletSender, toWalletPayload } from "./program.ts";
 
 const BLOCKHASH = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 
@@ -173,6 +173,50 @@ test("two expired attempts fail with the reason, and it is not congestion", asyn
       },
     );
   } finally {
+    await rpc.close();
+  }
+});
+
+// ☢️ THE SEEKER BUG (2026-10-23). The MWA adapter encodes the payload for the wallet with a plain
+// `transaction.serialize()`; on an unsigned LEGACY transaction that throws the exact message the
+// user saw, in the page, before the wallet is reached. The payload must be a VersionedTransaction.
+test("an unsigned legacy transaction cannot be serialized; its wallet payload can", () => {
+  const { wallet, ixs } = walletAndIx();
+  const tx = new Transaction().add(...ixs);
+  tx.recentBlockhash = BLOCKHASH;
+  tx.feePayer = wallet.publicKey;
+  assert.throws(() => tx.serialize(), /Missing signature for public key/);
+
+  const payload = toWalletPayload(tx);
+  assert.ok(payload.serialize().length > 0, "the MWA adapter calls serialize() on it, unsigned");
+  assert.equal(payload.version, "legacy", "same message format, nothing for the wallet to upgrade");
+  assert.deepEqual(
+    Buffer.from(payload.message.serialize()),
+    tx.serializeMessage(),
+    "the wallet signs exactly the message sign-then-send would have signed",
+  );
+});
+
+test("with a wallet sender registered, it gets a serializable payload and sendTx confirms", async () => {
+  const rpc = await fakeRpc({
+    heights: [1, 1],
+    statuses: [{ err: null, confirmationStatus: "confirmed", slot: 1, confirmations: null }],
+  });
+  const { wallet, ixs } = walletAndIx();
+  let handed: VersionedTransaction | null = null;
+  setWalletSender(async (owner, tx) => {
+    assert.ok(owner.equals(wallet.publicKey));
+    tx.serialize(); // what the MWA adapter does first, unsigned: must not throw
+    handed = tx;
+    return "WALLETSIG" + "1".repeat(60);
+  });
+  try {
+    const sig = await sendTx(new Connection(rpc.url), { ...wallet, signTransaction: () => { throw new Error("must not sign-only on MWA"); } } as any, ixs);
+    assert.match(sig, /^WALLETSIG/);
+    assert.ok(handed, "the sender was used");
+    assert.equal(rpc.sent.length, 0, "the wallet broadcasts; the dApp must not send it too");
+  } finally {
+    setWalletSender(null);
     await rpc.close();
   }
 });
