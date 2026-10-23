@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Soladrome Labs
 "use client";
-import { useMemo } from "react";
-import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
+import { useEffect, useMemo } from "react";
+import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter, SolflareWalletAdapter } from "@solana/wallet-adapter-wallets";
 import {
@@ -10,8 +10,10 @@ import {
   createDefaultAddressSelector,
   createDefaultAuthorizationResultCache,
   createDefaultWalletNotFoundHandler,
+  SolanaMobileWalletAdapterWalletName,
 } from "@solana-mobile/wallet-adapter-mobile";
 import { SoladromeProvider } from "@/lib/SoladromeContext";
+import { setWalletSender } from "@/lib/program";
 import { isSolanaWebShell } from "@/lib/inAppBrowser";
 import { resolveRpcUrl, FALLBACK_RPC_URL, fetchWithFallback } from "@/lib/rpc";
 
@@ -82,6 +84,26 @@ function throttledFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
   }).then(() => withFallback(input as any, init));
 }
 
+// On the Mobile Wallet Adapter, `sendTx` must let the wallet sign AND send: the Seeker's wallet
+// returned sign-only requests unsigned (see `setWalletSender` in lib/program.ts). Registered
+// only while the connected adapter is MWA, and only for the key it is connected with.
+function MwaSendBridge() {
+  const { wallet, publicKey } = useWallet();
+  const adapter = wallet?.adapter;
+  useEffect(() => {
+    if (adapter?.name !== SolanaMobileWalletAdapterWalletName || !publicKey) {
+      setWalletSender(null);
+      return;
+    }
+    setWalletSender((owner, tx, connection) => {
+      if (!owner.equals(publicKey)) throw new Error("The connected wallet changed. Reconnect it and try again.");
+      return adapter.sendTransaction(tx, connection, { skipPreflight: true, maxRetries: 5 });
+    });
+    return () => setWalletSender(null);
+  }, [adapter, publicKey]);
+  return null;
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
   // Wallet list. The Mobile Wallet Adapter (MWA) connects natively to the installed
   // wallet app on Android; supplying our own instance lets us brand the authorize
@@ -131,6 +153,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ConnectionProvider endpoint={ENDPOINT} config={{ commitment: "confirmed", fetch: throttledFetch }}>
       <WalletProvider wallets={wallets} autoConnect>
+        <MwaSendBridge />
         <WalletModalProvider>
           <SoladromeProvider>
             {children}
