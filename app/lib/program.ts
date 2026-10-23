@@ -14,6 +14,7 @@ import {
   createSyncNativeInstruction,
   createCloseAccountInstruction,
 } from "@solana/spl-token";
+import bs58 from "bs58";
 import idl from "./soladrome.json";
 import { explainInstructionError, explainRpcRefusal, type IdlErrorEntry } from "./txerror";
 import { fetchWithFallback } from "./rpc";
@@ -379,6 +380,19 @@ type WalletSender = (owner: PublicKey, tx: VersionedTransaction, connection: Con
 export function toWalletPayload(tx: Transaction): VersionedTransaction {
   return new VersionedTransaction(tx.compileMessage());
 }
+
+/// ☢️ The MWA adapter (2.2.9) returns the signature of a sign-and-send in BASE64, not the base58
+/// every RPC expects. Polled as-is, `getSignatureStatus` answered "Invalid param" and the screen
+/// reported a failure for a transaction that had landed (2026-10-23, stake/unstake on the Seeker).
+/// A 64-byte signature in base64 always ends in "=", which base58 cannot contain, so the two
+/// encodings never collide: base58 passes through, base64 is converted.
+export function toBase58Signature(sig: string): string {
+  try {
+    if (bs58.decode(sig).length === 64) return sig;
+  } catch {}
+  const bytes = Buffer.from(sig, "base64");
+  return bytes.length === 64 ? bs58.encode(bytes) : sig;
+}
 let walletSender: WalletSender | null = null;
 export function setWalletSender(sender: WalletSender | null): void {
   walletSender = sender;
@@ -487,7 +501,7 @@ export async function sendTx(
     let raw: Buffer | null = null;
     let sig: string;
     if (walletSender) {
-      sig = await walletSender(wallet.publicKey, toWalletPayload(tx), txConn);
+      sig = toBase58Signature(await walletSender(wallet.publicKey, toWalletPayload(tx), txConn));
     } else {
       const signed = await wallet.signTransaction(tx);
       raw = signed.serialize();

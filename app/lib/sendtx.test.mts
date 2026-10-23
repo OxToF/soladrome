@@ -15,7 +15,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { Connection, Keypair, Transaction, SystemProgram, VersionedTransaction } from "@solana/web3.js";
-import { sendTx, setWalletSender, toWalletPayload } from "./program.ts";
+import bs58 from "bs58";
+import { sendTx, setWalletSender, toWalletPayload, toBase58Signature } from "./program.ts";
 
 const BLOCKHASH = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 
@@ -215,6 +216,32 @@ test("with a wallet sender registered, it gets a serializable payload and sendTx
     assert.match(sig, /^WALLETSIG/);
     assert.ok(handed, "the sender was used");
     assert.equal(rpc.sent.length, 0, "the wallet broadcasts; the dApp must not send it too");
+  } finally {
+    setWalletSender(null);
+    await rpc.close();
+  }
+});
+
+// ☢️ The MWA adapter returns a sign-and-send signature in base64. Polled as-is, the RPC answered
+// "Invalid param" and the screen reported a failure for a transaction that had landed.
+test("a base64 signature from the MWA adapter is turned into base58; base58 passes through", () => {
+  const bytes = Uint8Array.from({ length: 64 }, (_, i) => (i * 37 + 11) % 256);
+  const b58 = bs58.encode(bytes);
+  assert.equal(toBase58Signature(Buffer.from(bytes).toString("base64")), b58);
+  assert.equal(toBase58Signature(b58), b58);
+});
+
+test("sendTx returns and polls the base58 form of a base64 wallet signature", async () => {
+  const rpc = await fakeRpc({
+    heights: [1, 1],
+    statuses: [{ err: null, confirmationStatus: "confirmed", slot: 1, confirmations: null }],
+  });
+  const { wallet, ixs } = walletAndIx();
+  const bytes = Uint8Array.from({ length: 64 }, (_, i) => 255 - i);
+  setWalletSender(async () => Buffer.from(bytes).toString("base64"));
+  try {
+    const sig = await sendTx(new Connection(rpc.url), wallet as any, ixs);
+    assert.equal(sig, bs58.encode(bytes));
   } finally {
     setWalletSender(null);
     await rpc.close();
