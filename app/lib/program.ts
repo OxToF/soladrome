@@ -358,9 +358,26 @@ export function explainTxError(err: unknown, ixs?: TransactionInstruction[]): st
   );
 }
 
+/// ☢️ On the Mobile Wallet Adapter, sign-then-send does not work with every wallet.
+///
+/// MWA 2.0 makes `sign_and_send_transactions` the one mandatory method; `sign_transactions` is
+/// optional. The Seeker's built-in wallet (Seed Vault) advertises the latter and, on 2026-10-23,
+/// handed swaps back UNSIGNED and without ever showing a prompt — web3.js then refused to
+/// serialize them ("Missing signature for public key"), on the user's own address. So when the
+/// connected wallet is MWA, `sendTx` asks it to sign AND broadcast, and only confirms here.
+///
+/// `providers.tsx` registers this for the MWA adapter only. Desktop and in-app wallets keep
+/// sign-then-send: their own `sendTransaction` routes through the extension's RPC, which is what
+/// returned bare -32603 errors under load.
+type WalletSender = (owner: PublicKey, tx: Transaction, connection: Connection) => Promise<string>;
+let walletSender: WalletSender | null = null;
+export function setWalletSender(sender: WalletSender | null): void {
+  walletSender = sender;
+}
+
 /**
- * Send and confirm a transaction via the wallet adapter's sendTransaction,
- * which routes through Phantom's transaction preview system.
+ * Sign with the wallet, then send and confirm through the dApp's own connection — or, on the
+ * Mobile Wallet Adapter, let the wallet sign and send (see `setWalletSender`).
  */
 export async function sendTx(
   connection: Connection,
@@ -456,21 +473,30 @@ export async function sendTx(
     // NOT wallet.sendTransaction, which routes via the wallet extension's own RPC
     // and was returning a bare -32603 "Internal error" (WalletSendTransactionError)
     // on devnet under load. skipPreflight: these txs are pre-validated.
-    const signed = await wallet.signTransaction(tx);
-    const raw = signed.serialize();
+    // On MWA the wallet broadcasts, so there are no bytes here to rebroadcast; the polling loop
+    // below still confirms, and an expired blockhash still ends in the same retry.
+    let raw: Buffer | null = null;
+    let sig: string;
+    if (walletSender) {
+      sig = await walletSender(wallet.publicKey, tx, txConn);
+    } else {
+      const signed = await wallet.signTransaction(tx);
+      raw = signed.serialize();
 
-    // One read, before spending the window on a corpse. `skipPreflight` means the RPC accepts
-    // the bytes and hands back a signature without ever looking at the blockhash, so without
-    // this the only symptom of a late signature is a 25-second wait ending in the wrong reason.
-    const heightNow = await txConn.getBlockHeight("confirmed").catch(() => 0);
-    if (heightNow > lastValidBlockHeight) {
-      expired = "signing";
-      continue;
+      // One read, before spending the window on a corpse. `skipPreflight` means the RPC accepts
+      // the bytes and hands back a signature without ever looking at the blockhash, so without
+      // this the only symptom of a late signature is a 25-second wait ending in the wrong reason.
+      const heightNow = await txConn.getBlockHeight("confirmed").catch(() => 0);
+      if (heightNow > lastValidBlockHeight) {
+        expired = "signing";
+        continue;
+      }
+
+      const bytes = raw;
+      sig = await rpcRetry(() =>
+        txConn.sendRawTransaction(bytes, { skipPreflight: true, maxRetries: 5 }),
+      );
     }
-
-    const sig = await rpcRetry(() =>
-      txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }),
-    );
 
     // Robust confirm: poll signature status and periodically REBROADCAST the same
     // signed tx until it confirms or the blockhash truly expires. Rebroadcasting
@@ -497,7 +523,7 @@ export async function sendTx(
       }
       const height = await txConn.getBlockHeight("confirmed").catch(() => 0);
       if (height > lastValidBlockHeight) break;
-      await txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }).catch(() => {});
+      if (raw) await txConn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }).catch(() => {});
       await new Promise((r) => setTimeout(r, 1500));
     }
     if (outcome === "confirmed") return sig;
