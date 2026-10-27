@@ -19,7 +19,7 @@ const supabase = createClient(
 );
 
 // Soladrome Discord server — kept in sync with DISCORD_URL in app/app/page.tsx
-// and DISCORD_INVITE in app/lib/quests.ts (same guild, different link shapes).
+// and DISCORD_INVITE in app/lib/quests.ts (same guild: the ID here, the invite there).
 const DISCORD_GUILD_ID = "1506249630218715218";
 
 function fail(req: NextRequest, reason: string) {

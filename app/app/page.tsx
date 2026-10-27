@@ -69,7 +69,7 @@ const HOME_ALIASES = new Set(["swap", "stake", "borrow", "osola", "liquidity"]);
 const MOVED: Record<string, Page> = { farm: "pools", strategies: "pools" };
 
 const DOCS_URL = "/about.html";
-const DISCORD_URL = "https://discord.com/channels/1506249630218715218/1506249803451994132";
+const DISCORD_URL = "https://discord.gg/fNxBgJ4tPb";
 const X_URL = "https://x.com/soladrome";
 const TELEGRAM_URL = "https://t.me/+SW4sVvoypbRkZTQ0";
 const EMAIL = "info@soladrome.finance";
