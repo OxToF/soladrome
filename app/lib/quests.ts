@@ -78,12 +78,10 @@ export interface QuestGroup {
   gate?: QuestId[];
 }
 
-// Discord server (general community). Kept in sync with DISCORD_URL in app/page.tsx.
-const DISCORD_URL = "https://discord.com/channels/1506249630218715218/1506249803451994132";
-// Public invite link for the "Register on our Discord" quest — unlike DISCORD_URL
-// (a channel deep-link that only works once you're already a member), this lets a
-// new user actually join the server.
-const DISCORD_INVITE = "https://discord.gg/37r97aY6B";
+// Permanent public invite (never expires, unlimited uses). Kept in sync with
+// DISCORD_URL in app/app/page.tsx. A channel deep-link (discord.com/channels/…)
+// only opens for existing members, so new users must get the invite.
+const DISCORD_INVITE = "https://discord.gg/fNxBgJ4tPb";
 // Telegram thread where verified bug reports are posted.
 const BUG_REPORT_URL = "https://t.me/Soladrome_Labs/773";
 

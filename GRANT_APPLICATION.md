@@ -322,7 +322,7 @@ The codebase is **fully open source** and publicly available at https://github.c
 - **Program ID (devnet):** `DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe`
 - **Telegram:** https://t.me/+SW4sVvoypbRkZTQ0
 - **Twitter/X:** https://x.com/soladrome
-- **Discord:** https://discord.com/channels/1506249630218715218/1506249803451994132
+- **Discord:** https://discord.gg/fNxBgJ4tPb
 
 ---
 
