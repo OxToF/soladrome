@@ -7697,6 +7697,10 @@ pub mod soladrome {
     pub struct InitializeInstructionAccountMetas {
         pub authority: AccountMeta,
 
+        pub program: AccountMeta,
+
+        pub program_data: AccountMeta,
+
         pub protocol_state: AccountMeta,
 
         pub usdc_mint: AccountMeta,
@@ -7821,6 +7825,17 @@ pub mod soladrome {
         pub fn accounts(mut self, accounts: InitializeInstructionAccounts) -> Self {
             self.accounts.authority = AccountMeta::new(accounts.authority, true);
 
+            // Hand-added 2026-10-29 with `require_upgrade_authority`: both are fixed addresses.
+            self.accounts.program = AccountMeta::new_readonly(
+                pubkey!("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe"),
+                false,
+            );
+
+            self.accounts.program_data = AccountMeta::new_readonly(
+                pubkey!("6mttQqnYxP8vAndYgXruiShnxwmsuXXzL6R1DP3C8fK8"),
+                false,
+            );
+
             self.accounts.protocol_state = AccountMeta::new(accounts.protocol_state, false);
 
             self.accounts.usdc_mint = AccountMeta::new_readonly(accounts.usdc_mint, false);
@@ -7864,6 +7879,10 @@ pub mod soladrome {
             let mut metas = Vec::new();
 
             metas.push(self.accounts.authority.clone());
+
+            metas.push(self.accounts.program.clone());
+
+            metas.push(self.accounts.program_data.clone());
 
             metas.push(self.accounts.protocol_state.clone());
 

@@ -96,6 +96,32 @@ describe("soladrome", () => {
         null,
         DECIMALS
       );
+
+      // ☢️ A stranger racing the deploy may not initialise the program first (2026-10-29). Only
+      // reachable here: this validator loads the binary upgradeable, bankrun does not.
+      const stranger = anchor.web3.Keypair.generate();
+      await connection.confirmTransaction(
+        await connection.requestAirdrop(stranger.publicKey, 1_000_000_000),
+        "confirmed"
+      );
+      try {
+        await program.methods
+          .initialize(stranger.publicKey)
+          .accounts({
+            authority:     stranger.publicKey,
+            protocolState: statePda,
+            usdcMint,
+            tokenProgram:  TOKEN_PROGRAM_ID,
+            systemProgram: anchor.web3.SystemProgram.programId,
+            rent:          anchor.web3.SYSVAR_RENT_PUBKEY,
+          } as any)
+          .signers([stranger])
+          .rpc();
+        assert.fail("a signer other than the upgrade authority initialised the program");
+      } catch (e: any) {
+        assert.include(e.toString(), "Unauthorized");
+      }
+
       await program.methods
         .initialize(founderKp.publicKey)
         .accounts({

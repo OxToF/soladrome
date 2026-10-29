@@ -7488,6 +7488,97 @@
           "signer": true
         },
         {
+          "name": "program",
+          "docs": [
+            "upgradeable deployment from one that is not."
+          ],
+          "address": "DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe"
+        },
+        {
+          "name": "program_data",
+          "docs": [
+            "only when `program` is upgradeable — see `require_upgrade_authority`."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  188,
+                  87,
+                  129,
+                  24,
+                  234,
+                  184,
+                  57,
+                  195,
+                  250,
+                  60,
+                  200,
+                  82,
+                  26,
+                  141,
+                  143,
+                  82,
+                  185,
+                  36,
+                  215,
+                  189,
+                  161,
+                  200,
+                  235,
+                  226,
+                  243,
+                  84,
+                  18,
+                  210,
+                  43,
+                  23,
+                  166,
+                  107
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                2,
+                168,
+                246,
+                145,
+                78,
+                136,
+                161,
+                176,
+                226,
+                16,
+                21,
+                62,
+                247,
+                99,
+                174,
+                43,
+                0,
+                194,
+                185,
+                61,
+                22,
+                193,
+                36,
+                210,
+                192,
+                83,
+                122,
+                16,
+                4,
+                128,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        {
           "name": "protocol_state",
           "writable": true,
           "pda": {

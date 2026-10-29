@@ -172,8 +172,11 @@ jobs:
         run: |
           PROGRAM_ID=$(awk '/\[programs.localnet\]/{f=1;next} f&&/soladrome/{print $3;exit}' Anchor.toml | tr -d '"')
           echo "Preloading $PROGRAM_ID"
+          # Upgradeable, with the test wallet as upgrade authority: since 2026-10-29 `initialize`
+          # refuses any signer but the program's upgrade authority, and `--bpf-program` loads the
+          # binary with none at all.
           solana-test-validator --reset --quiet --ledger /tmp/test-ledger \
-            --bpf-program "$PROGRAM_ID" target/deploy/soladrome.so &
+            --upgradeable-program "$PROGRAM_ID" target/deploy/soladrome.so "$(solana address)" &
           for i in $(seq 1 60); do
             solana --url http://127.0.0.1:8899 cluster-version >/dev/null 2>&1 && break
             sleep 2

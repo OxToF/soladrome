@@ -52,11 +52,17 @@ on `PATH` by default; it ships with the Agave install:
 ```bash
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 solana-test-validator --reset --quiet --ledger /tmp/test-ledger \
-  --bpf-program DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe target/deploy/soladrome.so &
+  --upgradeable-program DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe target/deploy/soladrome.so \
+  ~/.config/solana/id.json &
 solana --url http://127.0.0.1:8899 airdrop 500 2BhwbPGjRcoYv98jLJpkk6khjZX1oW97kSixUge2xTfB
 ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/id.json \
   npx ts-mocha -p ./tsconfig.json -t 1000000 "tests/**/*.ts"
 ```
+⚠️ **`--upgradeable-program` with the test wallet as authority, never `--bpf-program`.** Since
+2026-10-29 `initialize` only accepts the program's upgrade authority as signer, and
+`--bpf-program` loads the binary with none — the `before` hook then dies on `Unauthorized`.
+(Bankrun loads the program non-upgradeable, where the check does not apply.)
+
 ⚠️ **Always `--reset`.** Without a fresh ledger, state left by a previous run makes tests pass that
 fail from cold — seen on `[founder] burn_o_sola_for_votes`, green only on the second run.
 
