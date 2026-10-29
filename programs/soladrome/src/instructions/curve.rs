@@ -144,17 +144,25 @@ pub fn sell_sola(ctx: Context<SellSola>, sola_amount: u64, min_usdc_out: u64) ->
     // ☢️ The market reserve must still cover the rest of the curve after this sale. It moves by
     // exactly the premium on every trade, so this holds by construction — the check is what makes
     // a mistake in that arithmetic a refused sale instead of the last sellers' money.
-    let reserve_after = ctx
-        .accounts
-        .market_reserve
-        .amount
-        .checked_sub(q.reserve_out())
-        .ok_or(SoladromeError::InsufficientMarketReserve)?;
-    require!(
-        reserve_after
-            >= math::reserve_required(q.new_vu, q.new_vs, INIT_VIRTUAL_USDC, INIT_VIRTUAL_SOLA),
-        SoladromeError::InsufficientMarketReserve
-    );
+    //
+    // ☢️ Only a sale that goes down the curve is checked. A floor redemption (paused, or the curve
+    // already at its start) takes nothing from the reserve, and until 2026-10-29 it was refused
+    // all the same whenever the reserve was short of `reserve_required` — so the one moment the
+    // check fired, a shortfall found during a pause, was also the moment it shut the 1:1 exit the
+    // pause promises to keep open.
+    if q.on_curve > 0 {
+        let reserve_after = ctx
+            .accounts
+            .market_reserve
+            .amount
+            .checked_sub(q.reserve_out())
+            .ok_or(SoladromeError::InsufficientMarketReserve)?;
+        require!(
+            reserve_after
+                >= math::reserve_required(q.new_vu, q.new_vs, INIT_VIRTUAL_USDC, INIT_VIRTUAL_SOLA),
+            SoladromeError::InsufficientMarketReserve
+        );
+    }
 
     token::burn(
         CpiContext::new(
@@ -280,12 +288,12 @@ pub fn fund_market_reserve(ctx: Context<FundMarketReserve>, amount: u64) -> Resu
 /// source of truth for the number the user set a ceiling against, which is the one number in
 /// that feature that must not drift.
 ///
-/// Reference price = virtual_usdc / virtual_sola. This needs no oracle and is structurally
-/// manipulation-resistant in the direction that matters: to inflate it an attacker must buy
-/// through the curve with real USDC (expensive, and it moves the price against their own
-/// position), and to DEFLATE it — the direction that would cut their own fee — there is no
-/// lever at all, because `sell_sola` never touches the virtual reserves. Only `buy_sola` and
-/// `deploy_pol` do.
+/// Reference price = virtual_usdc / virtual_sola, as it stood before the current slot's trades
+/// (`ProtocolState::exercise_reserves`). No oracle. Since 2026-10-07 `sell_sola` moves the curve
+/// DOWN, so the reserves are no longer deflation-proof on their own: a sale lowers the price an
+/// exerciser pays a fee on. The slot reference is what keeps that lever out of a single
+/// transaction (sell, exercise, buy back). Across slots it remains, at the cost of the 1 % curve
+/// fee each way and an open position between the two — disclosed, not closed.
 ///
 /// fee = fee_bps × (vu/vs − 1) × amount, evaluated as
 ///       (amount × (vu − vs) / vs) × fee_bps / 10_000.
@@ -882,6 +890,10 @@ pub struct FlashArbitrage<'info> {
     )]
     pub caller_usdc: Box<Account<'info, TokenAccount>>,
 
+    // Pinned so `caller_usdc` can only be the caller's USDC account. An arbitrary mint already
+    // failed at the first transfer (SPL refuses a mint mismatch), but only after creating a
+    // useless associated account at the caller's expense.
+    #[account(address = protocol_state.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
     /// AMM pool — must pair SOLA with USDC.

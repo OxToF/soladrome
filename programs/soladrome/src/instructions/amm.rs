@@ -568,9 +568,32 @@ pub fn add_liquidity(
         .ok_or(SoladromeError::Overflow)?;
     pool.total_lp = pool
         .total_lp
-        .checked_add(lp_out)
+        .checked_add(minted_lp_supply(pool.total_lp, lp_out)?)
         .ok_or(SoladromeError::Overflow)?;
     Ok(())
+}
+
+/// What a deposit adds to `total_lp`: `lp_out`, plus the `MINIMUM_LIQUIDITY` minted to the dead
+/// address when the pool is empty.
+///
+/// ☢️ The dead shares MUST be counted. Until 2026-10-29 they were minted but left out of
+/// `total_lp`, so `tokens_for_lp` never priced them: the first depositor owned 100 % of the
+/// reserves with as little as 1 LP, and the dead mint protected nothing. Reserves here are booked,
+/// not read from the vault, so a donation cannot inflate them — but swaps can. A sole LP holding
+/// `total_lp = 1` recycles the LP half of every swap fee into its own share at the cost of the
+/// protocol half only, and once one LP unit is worth more than a later deposit, that deposit
+/// rounds down to the attacker (Uniswap V2's first-depositor attack). Counted, the 1 000 dead
+/// units take 1 000/1 001 of anything the attacker inflates, and the reserves can never be
+/// emptied — which also keeps a Token-2022 mint's supply from returning to zero while the pool
+/// holds it.
+pub fn minted_lp_supply(total_lp_before: u64, lp_out: u64) -> Result<u64> {
+    if total_lp_before == 0 {
+        lp_out
+            .checked_add(MINIMUM_LIQUIDITY)
+            .ok_or(error!(SoladromeError::Overflow))
+    } else {
+        Ok(lp_out)
+    }
 }
 
 /// Burn LP tokens, receive proportional token_a and token_b back.
@@ -1489,6 +1512,36 @@ mod tests {
             credit_lp_deposit(&mut info, P, u64::MAX, 1, 1, 7, true),
             SoladromeError::Overflow
         );
+    }
+
+    #[test]
+    fn the_dead_shares_count_on_a_first_deposit_and_only_then() {
+        assert_eq!(minted_lp_supply(0, 1).unwrap(), 1 + MINIMUM_LIQUIDITY);
+        assert_eq!(minted_lp_supply(5_000, 1).unwrap(), 1);
+        assert_err!(minted_lp_supply(0, u64::MAX), SoladromeError::Overflow);
+    }
+
+    #[test]
+    fn a_sole_lp_holding_one_unit_no_longer_owns_the_pool() {
+        // ☢️ The first-depositor attack, in numbers. sqrt(1 001 × 1 001) = 1 001 → 1 LP to the
+        // attacker. Swap fees then inflate the reserves to 1 000 000 a side while the supply
+        // stays put; a victim deposits 1 999 999 a side.
+        let (r, victim) = (1_000_000u64, 1_999_999u64);
+        let (first_lp, _, _) = amm_math::lp_for_deposit(0, 0, 0, 1_001, 1_001).unwrap();
+        assert_eq!(first_lp, 1);
+
+        // Before: total_lp = 1, so the victim's deposit floors to 1 LP — half the pool, for
+        // two-thirds of its value. A third of what they paid went to the attacker.
+        let (v_lp, _, _) = amm_math::lp_for_deposit(r, r, 1, victim, victim).unwrap();
+        assert_eq!(v_lp, 1);
+
+        // After: the dead shares are in the supply, the attacker owns 1/1 001 of what they
+        // inflated, and the victim's rounding loss is under one part in 1 000.
+        let total = minted_lp_supply(0, first_lp).unwrap();
+        let (v_lp, _, _) = amm_math::lp_for_deposit(r, r, total, victim, victim).unwrap();
+        let (back, _) =
+            amm_math::tokens_for_lp(r + victim, r + victim, total + v_lp, v_lp).unwrap();
+        assert!(victim - back < victim / 1_000, "lost {}", victim - back);
     }
 
     #[test]

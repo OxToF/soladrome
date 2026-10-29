@@ -4,12 +4,42 @@
 //! Authority-only lifecycle: initialization, pausing, phase flags and fee configuration.
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::bpf_loader_upgradeable;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::constants::*;
 use crate::errors::SoladromeError;
 use crate::math::*;
 use crate::state::*;
+
+/// ☢️ `initialize` may only be called by the key that can upgrade the program.
+///
+/// It is a one-shot `init` on `[b"state"]`, and until 2026-10-29 it took any signer: between
+/// `solana program deploy` and our own `initialize`, anyone watching the deploy could call it first
+/// and become `authority`, choose `founder_wallet` and — worst — pick the quote mint, all for
+/// life (none has a setter, and the seeds can never be re-initialised). The only recovery would
+/// have been a new program id.
+///
+/// Enforced whenever the program is owned by the upgradeable loader, which is every real
+/// deployment. A program loaded any other way (bankrun's test harness) has no ProgramData and no
+/// upgrade authority to compare with; nothing about that path is reachable on a cluster, because
+/// a deployed program cannot change its owner.
+fn require_upgrade_authority(
+    program: &AccountInfo,
+    program_data: &AccountInfo,
+    signer: &Pubkey,
+) -> Result<()> {
+    if program.owner != &bpf_loader_upgradeable::ID {
+        return Ok(());
+    }
+    let data = program_data.try_borrow_data()?;
+    let pd = ProgramData::try_deserialize(&mut &data[..])?;
+    require!(
+        pd.upgrade_authority_address == Some(*signer),
+        SoladromeError::Unauthorized
+    );
+    Ok(())
+}
 
 /// `founder_wallet` is write-once and has no setter — see the note at the head of this
 /// file. On mainnet it must be the Ledger `46AqfBuHfgae9s5FK9RSHFExK5mJGiaPJhA9TFXc2Nw4`;
@@ -25,6 +55,11 @@ pub fn initialize(ctx: Context<Initialize>, founder_wallet: Pubkey) -> Result<()
         Pubkey::default(),
         SoladromeError::InvalidAmount
     );
+    require_upgrade_authority(
+        &ctx.accounts.program,
+        &ctx.accounts.program_data,
+        &ctx.accounts.authority.key(),
+    )?;
     let clock = Clock::get()?;
     let s = &mut ctx.accounts.protocol_state;
     s.authority = ctx.accounts.authority.key();
@@ -243,6 +278,16 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
+    /// CHECK: this program's own account, pinned by address. Only its owner is read, to tell an
+    /// upgradeable deployment from one that is not.
+    #[account(address = crate::ID)]
+    pub program: UncheckedAccount<'info>,
+
+    /// CHECK: the program's ProgramData, pinned by its seeds under the upgradeable loader. Read
+    /// only when `program` is upgradeable — see `require_upgrade_authority`.
+    #[account(seeds = [crate::ID.as_ref()], bump, seeds::program = bpf_loader_upgradeable::ID)]
+    pub program_data: UncheckedAccount<'info>,
+
     #[account(
         init,
         payer = authority,
@@ -252,6 +297,11 @@ pub struct Initialize<'info> {
     )]
     pub protocol_state: Box<Account<'info, ProtocolState>>,
 
+    // ☢️ 6 decimals, or the floor is not 1 USDC: every 1:1 in this program (`sola_out` paid into
+    // the floor, the strike, `sell_sola`'s `from_floor`) is in BASE units, and SOLA is minted with
+    // 6. A quote mint with any other decimals would set the floor at 10^(d−6) USDC per SOLA, for
+    // life — `usdc_mint` has no setter.
+    #[account(mint::decimals = 6)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
     #[account(

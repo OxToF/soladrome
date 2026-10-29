@@ -59,6 +59,7 @@ import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   AccountLayout,
+  MintLayout,
   createInitializeMint2Instruction,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
@@ -433,6 +434,15 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
         tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
+
+    // ☢️ The 1 000 dead LP units count in `total_lp` (2026-10-29). Before, they were minted but
+    // left out of it, so the first depositor owned the whole pool with as little as 1 LP and the
+    // dead mint protected nothing against an inflated share price. `total_lp` is now the mint's
+    // whole supply, dead units included, from the first deposit on.
+    const p: any = await program.account.ammPool.fetch(pool);
+    const rawMint = await context.banksClient.getAccount(lpMint);
+    const supply = MintLayout.decode(Buffer.from(rawMint!.data)).supply;
+    assert.equal(BigInt(p.totalLp.toString()), supply, "total_lp = LP supply incl. the dead units");
   }
 
   // ── F-1 ────────────────────────────────────────────────────────────────────

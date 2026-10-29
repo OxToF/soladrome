@@ -154,6 +154,12 @@ emission cycle is inside the full-scope audit. **Everything opens at launch, as 
 
 **The launch (one event, TGE):**
 1. `initialize` → `transfer_authority` to Squads vault.
+   ☢️ **Since 2026-10-29 `initialize` must be signed by the program's UPGRADE AUTHORITY**
+   (`require_upgrade_authority`, admin.rs), which closes the window in which anyone could
+   initialise a freshly deployed program first and pick the authority, founder wallet and quote
+   mint for life. So the order is: deploy → `initialize` signed by the deployer key → only THEN
+   hand the upgrade authority to Squads. Moving it first makes `initialize` fail `Unauthorized`.
+   The quote mint must have 6 decimals (`mint::decimals = 6`) — mainnet USDC does.
 2. `register_partner` for each signed founding partner.
 3. ☢️ **`scripts/set_exercise_fee.ts 1000` FIRST — before any exercise flip, never after.**
    `exercise_fee_bps` is written only by `initialize`, so a singleton that predates the field reads
