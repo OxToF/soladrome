@@ -32,6 +32,17 @@ against the curve on every deposit, and the counter-asset's USDC price stated by
 `508969322`, dump = build, 2 005 384 bytes, program account extended to 2 010 240), PR #57. Audit: **Hacken is not retained**
 (2026-10-08, $6K paid entry fee); Accretion's $50K quote predates the curve change.
 
+☢️ **2026-10-29 — pre-audit review of everything since `audit-2026-09-01`, and the new target.**
+`audit-2026-10-09` was never cut. The review (branch `fix/review-2026-10-29`) found and fixed one
+medium and two lows: the 1 000 dead LP units were not counted in `total_lp`, so `MINIMUM_LIQUIDITY`
+protected nothing against first-depositor share inflation (`amm::minted_lp_supply`); `sell_sola`
+let a short market reserve refuse the floor exit during a pause; `initialize` took any signer (now
+the upgrade authority, and a 6-decimal quote mint). Tests: 91 unit, 136 bankrun, 36 validator, 3
+Trident targets. ⚠️ The validator must now load the program with `--upgradeable-program` (CI and
+CLAUDE.md updated). The next tag is **`audit-2026-10-29`**, cut from `main` after merge; the handoff
+package (`soladrome-audit`, branch `scope/audit-2026-10-29`) is revised against it: 67
+instructions, 641 account parameters, 72 errors, 24 account types, 9 903 code lines.
+
 ☢️ **2026-10-09 — a new audit target is being cut.** `audit-2026-09-01` no longer describes the
 program: 22 commits and 13 instructions have landed on `programs/` since (standing orders, LP
 orders, per-position strategies, the curve sale and its market reserve, the founder oSOLA vesting,
