@@ -211,6 +211,12 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       .rpc();
   }
 
+  /// A fresh slot before every close: bankrun records refused transactions too, so a close
+  /// retried after a refusal would otherwise be rejected as "already processed".
+  async function freshSlot() {
+    context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
+  }
+
   function closePartner(wallet: PublicKey, authority: PublicKey) {
     return program.methods
       .closePartnerAllocation()
@@ -219,8 +225,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
         protocolState: statePda,
         partnerWallet: wallet,
         partnerAllocation: partnerPda(wallet),
-        lpMint,
-        partnerLpToken: getAssociatedTokenAddressSync(lpMint, wallet),
+        partnerLpVault: lpVaultPda(wallet),
         bribeStream: streamPda(wallet),
       } as any);
   }
@@ -391,8 +396,6 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
           usdcMint.toBuffer(),
           le8(epoch),
         ]),
-        lpMint,
-        partnerLpToken: getAssociatedTokenAddressSync(lpMint, partner),
         solaMint: solaM,
         solaVault,
         marketVault: marketV,
@@ -405,6 +408,60 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       } as any)
       .signers(caller ? [caller] : [])
       .rpc();
+  }
+
+  /// The partner's LP escrow — `[b"partner_lp", partner]`, owned by protocol_state.
+  const lpVaultPda = (o: PublicKey) => pda([Buffer.from("partner_lp"), o.toBuffer()]);
+
+  function depositLp(partner: Keypair, amount: BN) {
+    return program.methods
+      .depositPartnerLp(amount)
+      .accounts({
+        partner: partner.publicKey,
+        protocolState: statePda,
+        partnerAllocation: partnerPda(partner.publicKey),
+        lpMint,
+        partnerLpToken: getAssociatedTokenAddressSync(lpMint, partner.publicKey),
+        partnerLpVault: lpVaultPda(partner.publicKey),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .signers([partner]);
+  }
+
+  function withdrawLp(partner: Keypair) {
+    return program.methods
+      .withdrawPartnerLp()
+      .accounts({
+        partner: partner.publicKey,
+        protocolState: statePda,
+        partnerAllocation: partnerPda(partner.publicKey),
+        lpMint,
+        partnerLpToken: getAssociatedTokenAddressSync(lpMint, partner.publicKey),
+        partnerLpVault: lpVaultPda(partner.publicKey),
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .signers([partner]);
+  }
+
+  /// Mirror of `partners.rs::retainer_epochs_earned`.
+  function earnedAt(pa: any, nowEpoch: number): number {
+    const since = Number(pa.lpQualifiedSinceTs.toString());
+    if (since <= 0) return 0;
+    const firstFull = Math.ceil(since / EPOCH_DURATION);
+    const w = Number(pa.lpWithdrawnEpoch.toString());
+    const end = w !== 0 ? Math.min(w, nowEpoch) : nowEpoch;
+    return Math.min(Math.max(end - firstFull, 0), Number(pa.scheduleEpochs.toString()));
+  }
+
+  /// Warp to just after the n-th full epoch the escrow has covered has ended.
+  async function warpToEarned(partner: PublicKey, n: number) {
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner));
+    const firstFull = Math.ceil(Number(pa.lpQualifiedSinceTs.toString()) / EPOCH_DURATION);
+    const target = (firstFull + n) * EPOCH_DURATION + 60;
+    const now = await nowSeconds();
+    if (target > now) await forwardSeconds(target - now);
   }
 
   const bribeTokenVaultAt = (epoch: number) =>
@@ -683,7 +740,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       "the refused unlock took nothing"
     );
   });
-  // ── Partner: a signature bag, then a retainer ─────────────────────────────
+  // ── Partner: a closed deal, earned against LP held in escrow (2026-11-09) ──
   //
   // The 1:1 bribe match is gone (2026-08-27) and with it every case that measured a promised
   // total. What replaces it is not a smaller vesting, it is a different instrument: each epoch
@@ -709,6 +766,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     );
     await mintLp(partner.publicKey, opts.lp ?? LP_THRESHOLD);
     await fundStream(partner, opts.epochs ?? 4, ONE.divn(4));
+    await depositLp(partner, opts.lp ?? LP_THRESHOLD).rpc();
     return partner;
   }
 
@@ -786,161 +844,71 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     assert.equal(lock.amountLocked.toString(), ONE.toString());
   });
 
-  it("[crank] one call runs the whole epoch: the bribe tranche and the retainer", async () => {
+  it("[crank] the bribe tranche pays at once; the bag waits for a whole epoch of LP", async () => {
     const partner = await livePartner();
     const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    const moved = await bribeVaultDelta(epoch, () => crankEpoch(partner.publicKey));
+    assert.equal(moved.toString(), "250000", "the voters' tranche is unconditional");
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    assert.equal(pa.epochsQualified, 0, "the LP has covered no full epoch yet, so nothing is earned");
+    assert.equal(pa.hiSolaClaimed.toString(), "0");
+    assert.equal(
+      (await tokenBalance(lpVaultPda(partner.publicKey))).toString(),
+      LP_THRESHOLD.toString(),
+      "the LP sits in the protocol's escrow, not in the partner's wallet"
+    );
+  });
+
+  it("☢️ [crank] add, crank, remove earns nothing — the LP cannot leave before the term", async () => {
+    // The manoeuvre the old instant attestation could not see: hold the LP for exactly the
+    // crank. Now the LP is in an escrow, credits need a whole epoch to have elapsed, and the
+    // exit is shut until the term is over.
+    const partner = await livePartner();
+    await crankEpoch(partner.publicKey);
+    await expectFailure(() => withdrawLp(partner).rpc(), "PartnerLpLocked");
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    assert.equal(pa.epochsQualified, 0);
+  });
+
+  it("[crank] every covered epoch pays, and a late crank pays the backlog", async () => {
+    const partner = await livePartner();
     const before: any = await program.account.protocolState.fetch(statePda);
+    await warpToEarned(partner.publicKey, 3);
+    await crankEpoch(partner.publicKey);
 
-    const moved = await bribeVaultDelta(epoch, () =>
-      crankEpoch(partner.publicKey)
-    );
-    assert.equal(
-      moved.toString(),
-      "250000",
-      "the bribe reaches the vault this epoch's voters claim from"
-    );
-    const pa: any = await program.account.partnerAllocation.fetch(
-      partnerPda(partner.publicKey)
-    );
-    assert.equal(pa.epochsQualified, 1, "and the epoch is bought");
-    assert.equal(pa.lastCreditedEpoch.toNumber(), epoch);
-    assert.equal(pa.hiSolaClaimed.toString(), RETAINER.toString());
-
-    const pos: any = await program.account.userPosition.fetch(
-      positionPda(partner.publicKey)
-    );
-    assert.equal(
-      pos.feeShares.toString(),
-      RETAINER.toString(),
-      "the retainer earns fees the same way the bag does"
-    );
-    const lock: any = await program.account.veLockPosition.fetch(
-      velockPda(partner.publicKey)
-    );
-    assert.equal(
-      lock.permanentAmount.toString(),
-      RETAINER.toString(),
-      "and it is permanent too — nobody financed it through the curve"
-    );
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    assert.equal(pa.epochsQualified, 3, "three full epochs covered, three credited — none lost");
+    assert.equal(pa.hiSolaClaimed.toString(), RETAINER.muln(3).toString());
+    const pos: any = await program.account.userPosition.fetch(positionPda(partner.publicKey));
+    assert.equal(pos.feeShares.toString(), RETAINER.muln(3).toString(), "credits earn fees");
+    const lock: any = await program.account.veLockPosition.fetch(velockPda(partner.publicKey));
+    assert.equal(lock.permanentAmount.toString(), RETAINER.muln(3).toString(), "and are permanent");
     const after: any = await program.account.protocolState.fetch(statePda);
-    assert.equal(
-      after.totalHiSola.sub(before.totalHiSola).toString(),
-      RETAINER.toString()
-    );
+    assert.equal(after.totalHiSola.sub(before.totalHiSola).toString(), RETAINER.muln(3).toString());
+  });
+
+  it("[crank] the bag is closed: never more than the term", async () => {
+    // The retainer had no end. The deal now stops at schedule_epochs, whatever the LP does.
+    const partner = await livePartner({ epochs: 4 });
+    await warpToEarned(partner.publicKey, 9);
+    await crankEpoch(partner.publicKey);
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    assert.equal(pa.epochsQualified, 4);
+    assert.equal(pa.hiSolaClaimed.toString(), RETAINER.muln(4).toString(), "4 × rate, the whole bag");
   });
 
   it("[crank] the same epoch twice does nothing at all", async () => {
     const partner = await livePartner();
     const stranger = await fundedWallet();
+    await warpToEarned(partner.publicKey, 1);
     await crankEpoch(partner.publicKey);
-
-    // Both halves are spent for this epoch: the tranche is released and the retainer credited.
-    // A different caller makes this a genuinely distinct transaction, so the refusal is the
-    // program's and not the status cache's.
-    await expectFailure(
-      () => crankEpoch(partner.publicKey, stranger),
-      "NothingToCrank"
-    );
-    const pa: any = await program.account.partnerAllocation.fetch(
-      partnerPda(partner.publicKey)
-    );
+    await expectFailure(() => crankEpoch(partner.publicKey, stranger), "NothingToCrank");
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
     assert.equal(pa.epochsQualified, 1, "the refused crank credited nothing");
-  });
-
-  it("☢️ [crank] liquidity gone: the escrowed bribe still pays, the retainer does not", async () => {
-    // The asymmetry that decides the design. The bribe is money already escrowed and owed to
-    // the epoch's voters — a partner who withdraws their LP does not get it back. The retainer
-    // is bought fresh each epoch and simply stops.
-    const partner = await livePartner();
-    await burnLp(partner, new BN(1)); // one unit under the threshold is enough
-
-    const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
-    const moved = await bribeVaultDelta(epoch, () =>
-      crankEpoch(partner.publicKey)
-    );
-    assert.equal(
-      moved.toString(),
-      "250000",
-      "the voters are paid regardless — the escrow was never conditional"
-    );
-    const pa: any = await program.account.partnerAllocation.fetch(
-      partnerPda(partner.publicKey)
-    );
-    assert.equal(pa.epochsQualified, 0, "but the epoch bought nothing");
-    assert.equal(pa.hiSolaClaimed.toString(), "0");
-    // The position PDA is opened by `init_if_needed` whatever happens — the account model
-    // creates it before the program decides anything — but it is granted nothing.
-    const pos: any = await program.account.userPosition.fetch(
-      positionPda(partner.publicKey)
-    );
-    assert.equal(
-      pos.feeShares.toString(),
-      "0",
-      "an epoch that did not qualify buys no share of the fee stream"
-    );
-  });
-
-  it("[crank] liquidity restored, the retainer resumes — and the lost epoch stays lost", async () => {
-    const partner = await livePartner();
-    await burnLp(partner, new BN(1));
-    await crankEpoch(partner.publicKey); // epoch 1: bribe only
-
-    await forwardSeconds(EPOCH_DURATION);
-    await mintLp(partner.publicKey, new BN(1)); // back at the threshold
-    await crankEpoch(partner.publicKey); // epoch 2: both halves
-
-    const pa: any = await program.account.partnerAllocation.fetch(
-      partnerPda(partner.publicKey)
-    );
-    assert.equal(
-      pa.epochsQualified,
-      1,
-      "☢️ the skipped epoch is not made up later — the crank IS the attestation, and the " +
-        "chain keeps no history of an SPL balance to establish it after the fact"
-    );
-    assert.equal(pa.hiSolaClaimed.toString(), RETAINER.toString());
-  });
-
-  it("[crank] the retainer outlives the bribe schedule — a retainer has no cap", async () => {
-    // The gain over the 1:1 deal, which died at `cap_hi_sola`. Four epochs of schedule, five
-    // epochs of liquidity: the fifth pays the retainer with no tranche left to release.
-    const partner = await livePartner({ epochs: 4 });
-    for (let i = 0; i < 4; i++) {
-      await crankEpoch(partner.publicKey);
-      await forwardSeconds(EPOCH_DURATION);
-    }
-    const spent: any = await program.account.partnerBribeStream.fetch(
-      streamPda(partner.publicKey)
-    );
-    assert.equal(spent.epochsReleased.toString(), "4", "the escrow is empty");
-
-    await crankEpoch(partner.publicKey);
-    const pa: any = await program.account.partnerAllocation.fetch(
-      partnerPda(partner.publicKey)
-    );
-    assert.equal(
-      pa.epochsQualified,
-      5,
-      "the fifth epoch pays: they are still providing liquidity, so they are still paid"
-    );
-    assert.equal(pa.hiSolaClaimed.toString(), RETAINER.muln(5).toString());
-  });
-
-  it("[crank] and stops entirely once neither half has anything to do", async () => {
-    const partner = await livePartner({ epochs: 4 });
-    for (let i = 0; i < 4; i++) {
-      await crankEpoch(partner.publicKey);
-      await forwardSeconds(EPOCH_DURATION);
-    }
-    await burnLp(partner, LP_THRESHOLD); // withdraw everything
-    await expectFailure(() => crankEpoch(partner.publicKey), "NothingToCrank");
   });
 
   it("[crank] the escrow cannot be redirected to another gauge", async () => {
     const partner = await livePartner();
-
-    // A permissionless crank means an attacker can call it. The pool is pinned at funding time
-    // precisely so they cannot aim someone else's escrowed bribes at a pool of their own.
     const otherPool = Keypair.generate().publicKey;
     await expectFailure(
       () => crankEpoch(partner.publicKey, undefined, otherPool),
@@ -948,128 +916,91 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     );
   });
 
-  it("[crank] and cannot be pointed at some other token the partner happens to hold", async () => {
-    const partner = await livePartner();
-    const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
-    const poolId = bribePool.publicKey;
-    const usdcAta = getAssociatedTokenAddressSync(usdcMint, partner.publicKey);
+  // ── The LP escrow ─────────────────────────────────────────────────────────
 
-    // The partner's USDC balance is large (they just funded a schedule from it). Passing it as
-    // the liquidity proof must fail on the mint, not quietly qualify the epoch.
-    await expectFailure(
-      () =>
-        program.methods
-          .crankPartnerEpoch(new BN(epoch))
-          .accounts({
-            caller: payer.publicKey,
-            protocolState: statePda,
-            partner: partner.publicKey,
-            bribeStream: streamPda(partner.publicKey),
-            partnerAllocation: partnerPda(partner.publicKey),
-            streamVault: streamVaultPda(partner.publicKey),
-            poolId,
-            rewardMint: usdcMint,
-            bribeVault: pda([
-              Buffer.from("bribe_vault"),
-              poolId.toBuffer(),
-              usdcMint.toBuffer(),
-              le8(epoch),
-            ]),
-            bribeTokenVault: pda([
-              Buffer.from("bribe_tokens"),
-              poolId.toBuffer(),
-              usdcMint.toBuffer(),
-              le8(epoch),
-            ]),
-            lpMint: usdcMint,
-            partnerLpToken: usdcAta,
-            solaMint: solaM,
-            solaVault,
-            marketVault: marketV,
-            lockPosition: velockPda(partner.publicKey),
-            partnerPosition: positionPda(partner.publicKey),
-            tokenProgram: TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-            rent: SYSVAR_RENT_PUBKEY,
-            bribeTokenProgram: TOKEN_PROGRAM_ID,
-          } as any)
-          .rpc(),
-      "LpMintMismatch"
-    );
+  it("[lp] no LP before the bribes: the deal starts with the schedule", async () => {
+    const partner = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, RETAINER);
+    await mintLp(partner.publicKey, LP_THRESHOLD);
+    await expectFailure(() => depositLp(partner, LP_THRESHOLD).rpc(), "PartnerStreamNotFunded");
+  });
+
+  it("[lp] below the threshold nothing starts, and the LP may come back out", async () => {
+    const partner = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, RETAINER);
+    await mintLp(partner.publicKey, LP_THRESHOLD);
+    await fundStream(partner, 4, ONE.divn(4));
+    await depositLp(partner, LP_THRESHOLD.subn(1)).rpc();
+    let pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    assert.equal(pa.lpQualifiedSinceTs.toString(), "0", "one unit short: the clock has not started");
+    await withdrawLp(partner).rpc();
+    pa = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    assert.equal(pa.lpWithdrawnEpoch.toString(), "0", "never qualified, so the deal is still open");
+    assert.isFalse(await accountExists(lpVaultPda(partner.publicKey)), "escrow closed, rent back");
+  });
+
+  it("[lp] the term over, the LP comes back and the deal takes no more", async () => {
+    const partner = await livePartner({ epochs: 4 });
+    await warpToEarned(partner.publicKey, 3);
+    await expectFailure(() => withdrawLp(partner).rpc(), "PartnerLpLocked");
+
+    await warpToEarned(partner.publicKey, 4);
+    const lpAta = getAssociatedTokenAddressSync(lpMint, partner.publicKey);
+    await withdrawLp(partner).rpc();
+    assert.equal((await tokenBalance(lpAta)).toString(), LP_THRESHOLD.toString(), "all of it, to the partner");
+
+    await mintLp(partner.publicKey, new BN(1));
+    await expectFailure(() => depositLp(partner, new BN(1)).rpc(), "PartnerDealOver");
+
+    // Cranked after the exit: the epochs the LP covered are still paid, and no more.
+    await forwardSeconds(3 * EPOCH_DURATION);
+    await crankEpoch(partner.publicKey);
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    assert.equal(pa.epochsQualified, 4);
+  });
+
+  it("☢️ [lp] paused, the partner can leave early — keeping only the epochs covered", async () => {
+    const partner = await livePartner({ epochs: 4 });
+    await warpToEarned(partner.publicKey, 2);
+    await program.methods.pause()
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any).rpc();
+    try {
+      await withdrawLp(partner).rpc();
+    } finally {
+      await program.methods.unpause()
+        .accounts({ authority: payer.publicKey, protocolState: statePda } as any).rpc();
+    }
+    await forwardSeconds(5 * EPOCH_DURATION);
+    await crankEpoch(partner.publicKey);
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    assert.equal(pa.epochsQualified, 2, "the rest of the term is forfeit, not paid");
   });
 
   // ── close_partner_allocation ──────────────────────────────────────────────
-  //
-  // Under a vesting, "terminal" meant a promised total was reached. A retainer has no total, so
-  // the test had to change shape: what must be protected is not a remainder — there is none —
-  // but an epoch the partner could still be credited for right now. These cases pin that line
-  // from both sides.
 
   it("☢️ [close] a registration nobody ever activated is correctable", async () => {
-    // Found on devnet, 2026-08-28, by registering a deal whose LP threshold was larger than the
-    // pool's entire supply. Without this clause such an allocation can never be claimed (the bag
-    // needs an escrowed schedule) and never be closed (an unclaimed bag reads as a debt), so the
-    // authority cannot fix its own typo — ever. A bag is only owed once a schedule stands
-    // against it, and here `stream_start_ts` is 0.
     const partner = await fundedWallet();
     await registerPartnerFor(partner.publicKey, ONE, RETAINER, {
       lpThreshold: LP_THRESHOLD.muln(1_000_000), // more LP than could ever exist
     });
-
-    const pa: any = await program.account.partnerAllocation.fetch(
-      partnerPda(partner.publicKey)
-    );
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
     assert.equal(pa.streamStartTs.toString(), "0");
-    assert.isFalse(pa.bagClaimed, "and the bag is sitting there unclaimed");
-
-    // No LP account, no stream account: both are absent, and both must read as "nothing owed"
-    // rather than failing the instruction at the account level.
-    assert.isFalse(
-      await accountExists(getAssociatedTokenAddressSync(lpMint, partner.publicKey))
-    );
     await closePartner(partner.publicKey, payer.publicKey).rpc();
     assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
 
-    // And the seeds are free, so the corrected terms can be registered straight away.
     await registerPartnerFor(partner.publicKey, ONE, RETAINER);
-    const fixed: any = await program.account.partnerAllocation.fetch(
-      partnerPda(partner.publicKey)
-    );
+    const fixed: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
     assert.equal(fixed.lpThreshold.toString(), LP_THRESHOLD.toString());
   });
 
-  it("☢️ [close] a live escrow blocks the close — the voters' money must not be stranded", async () => {
-    // `crank_partner_epoch` needs the allocation, so closing while tranches remain would lock
-    // them in the escrow forever: the gauge never receives money the partner already paid in,
-    // and the partner cannot recover it either. Withdrawing LP stops the retainer; it does not
-    // cancel a bribe commitment that is already funded.
-    const partner = await livePartner();
-    await claimPartner(partner).rpc();
-    await crankEpoch(partner.publicKey);
-    await burnLp(partner, LP_THRESHOLD); // they have left, and still owe three tranches
+  /// A partner who escrowed bribes but never locked LP.
+  async function bribeOnlyPartner(): Promise<Keypair> {
+    const partner = await fundedWallet();
+    await registerPartnerFor(partner.publicKey, ONE, RETAINER);
+    await fundStream(partner, 4, ONE.divn(4));
+    return partner;
+  }
 
-    await expectFailure(
-      () => closePartner(partner.publicKey, payer.publicKey).rpc(),
-      "PartnerAllocationNotSettled"
-    );
-
-    // Drain the schedule they committed to, and the account closes.
-    for (let i = 0; i < 3; i++) {
-      await forwardSeconds(EPOCH_DURATION);
-      await crankEpoch(partner.publicKey);
-    }
-    assert.equal(
-      (await tokenBalance(streamVaultPda(partner.publicKey))).toString(),
-      "0",
-      "every funded tranche reached the voters"
-    );
-    await closePartner(partner.publicKey, payer.publicKey).rpc();
-    assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
-  });
-
-  /// Run out whatever the partner escrowed, so the close is not blocked by tranches the gauge
-  /// is still owed. A test that wants to close has to do this now — that is the point of the
-  /// case above, and everything below assumes it.
   async function drainEscrow(partner: Keypair) {
     for (let i = 0; i < 8; i++) {
       const s: any = await program.account.partnerBribeStream.fetchNullable(
@@ -1082,132 +1013,99 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     assert.fail("the escrow should have drained within its funded tranches");
   }
 
-  it("[close] a partner still providing liquidity cannot be closed out mid-epoch", async () => {
-    const partner = await livePartner();
+  it("☢️ [close] a live bribe escrow blocks the close — the voters' money must not be stranded", async () => {
+    const partner = await bribeOnlyPartner();
     await claimPartner(partner).rpc();
-    await forwardSeconds(EPOCH_DURATION);
-
-    // Nothing has been cranked this epoch and the LP is in place, so this epoch is still
-    // theirs to earn. Closing here would take it from them.
+    await crankEpoch(partner.publicKey);
     await expectFailure(
       () => closePartner(partner.publicKey, payer.publicKey).rpc(),
       "PartnerAllocationNotSettled"
     );
-    assert.isTrue(await accountExists(partnerPda(partner.publicKey)));
-  });
-
-  it("[close] an unclaimed bag blocks the close outright", async () => {
-    const partner = await livePartner();
-    await burnLp(partner, LP_THRESHOLD); // no epoch can be earned any more
-    await drainEscrow(partner); // and nothing is owed to the gauge either
-    await expectFailure(
-      () => closePartner(partner.publicKey, payer.publicKey).rpc(),
-      "PartnerAllocationNotSettled"
-    );
-
-    // Claim it, and the same call now succeeds — the bag was the only thing outstanding.
-    await claimPartner(partner).rpc();
+    await drainEscrow(partner);
+    await freshSlot();
     await closePartner(partner.publicKey, payer.publicKey).rpc();
     assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
   });
 
-  it("[close] a partner who has withdrawn closes immediately, rent back to the authority", async () => {
-    // The other side of the retainer: a deal that stops owes nothing, so the account does not
-    // have to sit open forever the way an unmet bribe commitment used to force it to.
-    const partner = await livePartner();
+  it("☢️ [close] LP still in escrow blocks the close", async () => {
+    const partner = await livePartner({ epochs: 4 });
     await claimPartner(partner).rpc();
+    await warpToEarned(partner.publicKey, 4);
     await crankEpoch(partner.publicKey);
-    await burnLp(partner, LP_THRESHOLD);
     await drainEscrow(partner);
-
-    const alloc = partnerPda(partner.publicKey);
-    const rentHeld = await lamportsOf(alloc);
-    const authorityBefore = await lamportsOf(payer.publicKey);
+    await expectFailure(
+      () => closePartner(partner.publicKey, payer.publicKey).rpc(),
+      "PartnerLpNotReturned"
+    );
+    await withdrawLp(partner).rpc();
+    await freshSlot();
     await closePartner(partner.publicKey, payer.publicKey).rpc();
+    assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
 
-    assert.isFalse(await accountExists(alloc), "the allocation is gone");
-    const gained = (await lamportsOf(payer.publicKey)) - authorityBefore;
-    assert.isTrue(
-      gained > rentHeld - BigInt(100_000) && gained <= rentHeld,
-      `authority should recover ~${rentHeld} lamports, got ${gained}`
-    );
-
-    // Closing is bookkeeping: everything already credited stays exactly where it was.
-    const lock: any = await program.account.veLockPosition.fetch(
-      velockPda(partner.publicKey)
-    );
-    assert.equal(
-      lock.amountLocked.toString(),
-      ONE.add(RETAINER).toString(),
-      "the ve lock is a separate PDA — closing the allocation burns nothing"
-    );
+    const lock: any = await program.account.veLockPosition.fetch(velockPda(partner.publicKey));
     assert.equal(
       lock.permanentAmount.toString(),
-      ONE.add(RETAINER).toString(),
-      "and all of it is still permanent, still unsellable"
+      ONE.add(RETAINER.muln(4)).toString(),
+      "closing burns nothing: bag and every credited epoch stay locked for life"
     );
   });
 
-  it("[close] an epoch already credited is closable without waiting for the next", async () => {
-    const partner = await livePartner({ epochs: 1 });
+  it("[close] covered epochs not yet credited block the close", async () => {
+    const partner = await livePartner({ epochs: 4 });
     await claimPartner(partner).rpc();
-    await crankEpoch(partner.publicKey);
-    // Same epoch, LP still in place. The retainer cannot pay again before the epoch turns and
-    // the one-epoch schedule is spent, so there is nothing left to protect.
+    await drainEscrow(partner); // credits as it goes
+    await warpToEarned(partner.publicKey, 4);
+    await withdrawLp(partner).rpc(); // the last epochs are covered but not credited
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    if (pa.epochsQualified < 4) {
+      await expectFailure(
+        () => closePartner(partner.publicKey, payer.publicKey).rpc(),
+        "PartnerAllocationNotSettled"
+      );
+      await crankEpoch(partner.publicKey);
+    }
+    await freshSlot();
+    await closePartner(partner.publicKey, payer.publicKey).rpc();
+  });
+
+  it("[close] an unclaimed bag blocks the close outright", async () => {
+    const partner = await bribeOnlyPartner();
+    await drainEscrow(partner);
+    await expectFailure(
+      () => closePartner(partner.publicKey, payer.publicKey).rpc(),
+      "PartnerAllocationNotSettled"
+    );
+    await claimPartner(partner).rpc();
+    await freshSlot();
     await closePartner(partner.publicKey, payer.publicKey).rpc();
     assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
   });
 
   it("[close] the authority signature is the whole gate", async () => {
-    const partner = await livePartner();
-    await burnLp(partner, LP_THRESHOLD);
+    const partner = await bribeOnlyPartner();
     await claimPartner(partner).rpc();
     await drainEscrow(partner);
-
-    // This allocation IS closable. The only thing wrong with the call below is who signs it.
     await expectFailure(
-      () =>
-        closePartner(partner.publicKey, partner.publicKey)
-          .signers([partner])
-          .rpc(),
+      () => closePartner(partner.publicKey, partner.publicKey).signers([partner]).rpc(),
       "Unauthorized"
     );
-    assert.isTrue(await accountExists(partnerPda(partner.publicKey)));
-
+    await freshSlot();
     await closePartner(partner.publicKey, payer.publicKey).rpc();
-    assert.isFalse(
-      await accountExists(partnerPda(partner.publicKey)),
-      "same account, same state, authority signature — now it closes"
-    );
+    assert.isFalse(await accountExists(partnerPda(partner.publicKey)));
   });
 
-  it("[close] re-registering a closed wallet is a FRESH deal, bag and all", async () => {
-    // The documented consequence of freeing the seeds, asserted rather than assumed: this is
-    // the one path that hands the same wallet a second bag, and it is also the migration path
-    // for allocations written at the old 160-byte layout. It costs a second authority signature
-    // and both instructions are on-chain.
-    const partner = await livePartner({ epochs: 1 });
+  it("[close] re-registering a closed wallet is a FRESH deal", async () => {
+    const partner = await bribeOnlyPartner();
     await claimPartner(partner).rpc();
-    await crankEpoch(partner.publicKey);
+    await drainEscrow(partner);
     await closePartner(partner.publicKey, payer.publicKey).rpc();
 
-    const alloc = partnerPda(partner.publicKey);
     await registerPartnerFor(partner.publicKey, ONE, RETAINER.muln(2));
-    const pa: any = await program.account.partnerAllocation.fetch(alloc);
-    assert.equal(
-      pa.hiSolaClaimed.toString(),
-      "0",
-      "counters are zeroed — what the first term credited is invisible to the new deal"
-    );
+    const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));
+    assert.equal(pa.hiSolaClaimed.toString(), "0");
     assert.equal(pa.epochsQualified, 0);
-    assert.isFalse(pa.bagClaimed, "including the bag, which is why this is a second one");
-    assert.equal(pa.retainerPerEpoch.toString(), RETAINER.muln(2).toString());
-
-    // The hiSOLA from the first term is untouched by any of it.
-    const lock: any = await program.account.veLockPosition.fetch(
-      velockPda(partner.publicKey)
-    );
-    assert.equal(lock.amountLocked.toString(), ONE.add(RETAINER).toString());
+    assert.equal(pa.lpQualifiedSinceTs.toString(), "0");
+    assert.isFalse(pa.bagClaimed);
   });
 
   // ── The escrowed schedule ─────────────────────────────────────────────────
@@ -1262,12 +1160,13 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       "4",
       "nothing is lost either — the stream simply runs three epochs longer"
     );
-    // The retainer half is the opposite, and this is the asymmetry to keep in mind: three
-    // epochs of liquidity went unattested and unpaid.
+    // The bag half is the opposite since 2026-11-09: the escrow proves the LP was there, so
+    // the whole backlog is credited at once.
     const pa: any = await program.account.partnerAllocation.fetch(
       partnerPda(partner.publicKey)
     );
-    assert.equal(pa.epochsQualified, 1);
+    assert.equal(pa.epochsQualified, earnedAt(pa, epoch));
+    assert.isAtLeast(pa.epochsQualified, 2);
   });
 
   it("[stream] runs dry after its funded tranches, and only then may be replaced", async () => {
@@ -1321,7 +1220,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
       "the term runs from the commitment, not from the claim"
     );
 
-    await forwardSeconds(EPOCH_DURATION);
+    await warpToEarned(partner.publicKey, 1);
     await crankEpoch(partner.publicKey);
     const second: any = await program.account.veLockPosition.fetch(
       velockPda(partner.publicKey)
@@ -1341,6 +1240,7 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
   it("[partner] the permanent lock survives its own expiry, bag and retainer alike", async () => {
     const partner = await livePartner();
     await claimPartner(partner).rpc();
+    await warpToEarned(partner.publicKey, 1);
     await crankEpoch(partner.publicKey);
 
     // Wait out the lock so the ONLY thing between the position and a wallet is

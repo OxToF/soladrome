@@ -2764,7 +2764,7 @@ describe("soladrome", () => {
 
     // Locked for LIFE: the whole tranche is permanent, so even after lock_end_ts passes,
     // unlock_hi_sola releases amount_locked − permanent_amount = 0. The 4-year deferred
-    // drain (unlock → unstake → sell_sola) is closed; only the 20% borrow channel remains.
+    // drain (unlock → unstake → sell_sola) is closed, and since 2026-11-09 it never borrows.
     const lock = teamLockAcc;
     assert.equal(lock.permanentAmount.toString(), TEAM_AMOUNT.toString(),
       "the entire team tranche must be permanent — never releasable");

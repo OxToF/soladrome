@@ -122,7 +122,7 @@ pub fn lock_hi_sola(ctx: Context<LockHiSola>, amount: u64, lock_duration_secs: u
         // emptied ATA used to do — and restores the original cap on unlock, without a second
         // counter that could drift from the first. Allocations that were never financed still
         // read `staked_amount = 0` after unlocking, so the 100% channel stays shut for them and
-        // `borrow_against_locked` (20%) remains their only valve.
+        // `borrow_against_locked` lends them nothing either (financed stake only).
     };
 
     // Update lock position.

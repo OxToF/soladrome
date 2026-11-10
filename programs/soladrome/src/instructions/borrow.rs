@@ -45,7 +45,7 @@ pub fn borrow_usdc(ctx: Context<BorrowUsdc>, usdc_amount: u64) -> Result<()> {
     // curve; `hi_sola` is the whole balance, which also carries the unfinanced hiSOLA an
     // expired ve lock releases. The minimum is what confines the 100% channel to
     // collateral whose USDC is actually sitting in the floor vault — everything else goes
-    // through `borrow_against_locked` at 20%.
+    // through nothing at all: `borrow_against_locked` lends financed stake only.
     let borrow_cap = ctx
         .accounts
         .user_position
@@ -181,15 +181,29 @@ pub fn repay_usdc(ctx: Context<RepayUsdc>, usdc_amount: u64) -> Result<()> {
     Ok(())
 }
 
-/// Borrow USDC against a vote-locked hiSOLA position (the partner liquidity valve).
+/// Borrow USDC against a vote-locked hiSOLA position — **financed collateral only**.
 ///
-/// A partner's hiSOLA sits in their `VeLockPosition`, so `UserPosition.hi_sola` reads 0 for
-/// them and the normal `borrow_usdc` path finds nothing to lend against. (No vault is
-/// involved: both are ledger figures.) This draws USDC from the floor reserve using
-/// the LOCKED position (`VeLockPosition.amount_locked`) as collateral, capped at
-/// `PARTNER_BORROW_CAP_BPS` (20%). Repay via the standard `repay_usdc` (same
-/// UserPosition PDA). 2% origination fee → market_vault, 75% floor buffer, no
-/// interest, no liquidation. Available to any ve-locker, not just partners.
+/// A ve lock moves hiSOLA out of `UserPosition.hi_sola`, so `borrow_usdc` sees nothing to lend
+/// against once a holder locks. This is the same channel for locked balances, under the same
+/// rule: a wallet may only borrow back USDC it put into the floor itself.
+///
+/// ☢️ **No unfinanced allocation borrows, at any rate (2026-11-09).** Until then this
+/// instruction lent 20 % of `amount_locked`, which covered the founder's 7M, the team's 250K,
+/// contributor and partner bags — supply no USDC ever backed. Every such loan was a permanent
+/// hole in the floor (a borrow is never repaid in practice), and the last holders to redeem
+/// would have met `InsufficientFloorReserve`. The cap is now
+///
+/// > `usdc_borrowed ≤ min(staked_amount, hi_sola + amount_locked)`
+///
+/// `staked_amount` is what this wallet financed through the curve or an exercise (locking does
+/// not decrement it, unstaking does). It reads 0 for every allocation, so they borrow nothing,
+/// while a partner who bought and locked their own hiSOLA borrows it back at 100 %, exactly as
+/// through `borrow_usdc`. The `min` keeps the collateral real: a wallet cannot borrow against
+/// a financed figure it has already unstaked and sold. Both channels share `usdc_borrowed`, so
+/// the cap is one budget, not two.
+///
+/// Repay via the standard `repay_usdc` (same UserPosition PDA). 2 % origination fee →
+/// market_vault, 75 % floor buffer, no interest, no liquidation.
 pub fn borrow_against_locked(ctx: Context<BorrowAgainstLocked>, usdc_amount: u64) -> Result<()> {
     require!(
         !ctx.accounts.protocol_state.paused,
@@ -203,13 +217,13 @@ pub fn borrow_against_locked(ctx: Context<BorrowAgainstLocked>, usdc_amount: u64
         ctx.accounts.partner_position.bump = ctx.bumps.partner_position;
     }
 
-    // ── Cap: 20% of the locked hiSOLA position ──────────────────────────
-    let locked = ctx.accounts.lock_position.amount_locked;
-    let max_borrow = (locked as u128)
-        .checked_mul(PARTNER_BORROW_CAP_BPS as u128)
-        .ok_or(SoladromeError::Overflow)?
-        .checked_div(10_000)
-        .ok_or(SoladromeError::Overflow)? as u64;
+    // ── Cap: the financed part of the wallet's hiSOLA, locked or not ────────
+    let pos = &ctx.accounts.partner_position;
+    let max_borrow = pos.staked_amount.min(
+        pos.hi_sola
+            .checked_add(ctx.accounts.lock_position.amount_locked)
+            .ok_or(SoladromeError::Overflow)?,
+    );
 
     let new_borrowed = ctx
         .accounts

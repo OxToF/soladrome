@@ -201,6 +201,10 @@ describe("soladrome — bankrun (protocol-owned liquidity)", () => {
   }
 
   async function polSwap(pool: Pool, polIn: PublicKey, inMint: PublicKey, outMint: PublicKey, amountIn: bigint) {
+    // A fresh slot per call: bankrun keeps one blockhash per slot and records FAILED transactions
+    // too, so retrying an identical call after a refusal (expectError, then the same call once the
+    // condition is met) was rejected as "already processed" before the program ever ran.
+    context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
     return program.methods
       .polSwap(new BN(amountIn.toString()), new BN(1))
       .accounts({
@@ -225,6 +229,10 @@ describe("soladrome — bankrun (protocol-owned liquidity)", () => {
     args: { usdcForSola?: bigint; solaForLp?: bigint; counterForLp?: bigint; maxDevBps?: number; counterRef?: bigint },
     refs: { solUsdc?: PublicKey | null; lstSol?: PublicKey | null } = {}
   ) {
+    // A fresh slot per call: bankrun keeps one blockhash per slot and records FAILED transactions
+    // too, so retrying an identical call after a refusal (expectError, then the same call once the
+    // condition is met) was rejected as "already processed" before the program ever ran.
+    context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
     return program.methods
       .deployPol(
         new BN((args.usdcForSola ?? BigInt(0)).toString()),

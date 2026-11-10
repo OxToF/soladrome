@@ -441,6 +441,9 @@ describe("soladrome — bankrun (curve sell)", () => {
     // of what the curve owes is the likeliest "something". Until 2026-10-29 that very shortfall
     // refused the floor redemption the pause exists to keep open, though it never touches the
     // reserve. Proven by mutation: wrapping the reserve check back around every sale fails here.
+    // A fresh slot first: C-7 sent the byte-identical pause/unpause, and bankrun rejects a
+    // repeat in the same slot as "already processed" (an intermittent failure until 2026-11-10).
+    context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
     const raw = await context.banksClient.getAccount(reserveV);
     const decoded = AccountLayout.decode(Buffer.from(raw!.data));
     const held = decoded.amount;

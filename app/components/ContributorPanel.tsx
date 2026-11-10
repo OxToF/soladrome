@@ -98,7 +98,8 @@ export function ContributorPanel() {
   // Then the protocol-wide 75% floor buffer, which `borrow_against_locked` enforces with the
   // same block as `borrow_usdc`. The caption under this field has always named that buffer
   // while the figure above it ignored it, so Max could offer more than the chain would take.
-  const borrowCap        = Math.floor(locked * 0.20);
+  // ☢️ 2026-11-09: allocated hiSOLA is not borrowable (unfinanced). Repay only.
+  const borrowCap        = 0;
   const capHeadroom      = Math.max(0, borrowCap - debt);
   const floorHeadroomRaw = useFloorHeadroom();
   const borrowAvailRaw   =
@@ -250,7 +251,7 @@ export function ContributorPanel() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-bold text-white">
             hiSOLA Bag
-            <span className="ml-2 text-xs font-normal text-gray-500">(locked for life · votes · 20% borrow)</span>
+            <span className="ml-2 text-xs font-normal text-gray-500">(locked for life · votes · fees)</span>
           </h3>
           <span className="text-xs text-gray-400 font-mono">
             {fmt(alloc.hiSolaClaimed)} / {fmt(alloc.hiSolaAmount)}
@@ -259,7 +260,7 @@ export function ContributorPanel() {
 
         <p className="text-xs text-gray-500 mt-1">
           Minted straight into a lifetime ve-lock — your wallet never holds it. It votes (up to 4×) and
-          borrows up to 20%, but can never be sold. Currently locked: <span className="text-white font-mono">{fmt(locked)} hiSOLA</span>.
+          earns protocol fees, but can never be sold or borrowed against. Currently locked: <span className="text-white font-mono">{fmt(locked)} hiSOLA</span>.
         </p>
 
         <div className="flex items-center justify-between gap-3 mt-3">
@@ -305,14 +306,14 @@ export function ContributorPanel() {
       <div className="card">
         <h3 className="text-base font-bold text-white mb-1">
           Borrow USDC
-          <span className="ml-2 text-xs font-normal text-gray-500">(20% of your locked bag)</span>
+          <span className="ml-2 text-xs font-normal text-gray-500">(repay only — allocations are not borrowable)</span>
         </h3>
 
         <div className="flex items-start gap-2 text-xs text-gray-500 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 mb-4">
           <span className="text-brand-green text-base leading-none shrink-0">ℹ</span>
           <span>
             Locked: <span className="text-white font-mono">{fmt(locked)} hiSOLA</span> ·{" "}
-            Cap (20%): <span className="text-white font-mono font-semibold">{fmt(borrowCap)} USDC</span> ·{" "}
+            Cap: <span className="text-white font-mono font-semibold">{fmt(borrowCap)} USDC</span> ·{" "}
             Debt: <span className="text-yellow-400 font-mono">{fmt(debt)} USDC</span> ·{" "}
             Available: <span className="text-brand-green font-mono font-semibold">{borrowAvail.toFixed(4)} USDC</span>
           </span>

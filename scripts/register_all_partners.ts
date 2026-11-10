@@ -2,14 +2,11 @@
  * register_all_partners.ts
  * Authority-only: register Jito, Marinade and Solayer as Soladrome protocol partners.
  *
- * Each partner gets a signature bag and then a RETAINER (2026-08-27):
- *   - a one-off `base_hi_sola` bag, delivered whole once they escrow their bribe schedule
- *   - then `retainer_per_epoch` hiSOLA for every epoch they still hold `lp_threshold` of
- *     `lp_mint`, cranked by anyone through crank_partner_epoch — no total, no cap, no end date
- *   - the bribe schedule is escrowed once (fund_partner_bribe_stream) and pays one tranche
- *     per epoch to the gauge; it is the commitment the bag is released against
- *   - everything credited is permanent: it votes, earns fees and borrows at 20%, and can
- *     never be unlocked, unstaked or sold at a floor it never financed
+ * ⚠️ 2026-11-09: partner deals are now CLOSED deals — bribes escrowed, LP locked in the
+ *   protocol escrow for the term (deposit_partner_lp), a fixed bag credited per covered epoch
+ *   (retainer_per_epoch × schedule_epochs), base_hi_sola 0 by default, no borrowing. The
+ *   figures in PARTNERS below predate that and the published tiers ($100K → 10 000 … $1M →
+ *   70 000 hiSOLA). Prefer the Founder panel form, which derives every field from three figures.
  *
  * The partner then escrows their schedule and claims the bag from the Partner tab.
  *

@@ -10,17 +10,14 @@ import {
   getProgram, statePda, solaM,
   solaVaultAddr, marketVault, positionPda, PROGRAM_ID, sendTx,
 } from "@/lib/program";
-import { useFloorHeadroom } from "@/lib/SoladromeContext";
 import { PartnerStream } from "@/components/PartnerStream";
 
 const PARTNER_SEED  = Buffer.from("partner");
 const VELOCK_SEED   = Buffer.from("velock");
 
 const EPOCH_DURATION = 604_800; // state.rs
-// lib.rs — borrow_against_locked, PARTNER_BORROW_CAP_BPS. This panel used to publish 10%
-// "after the lock expires", which was wrong twice over: the cap is 20%, and the valve is
-// open DURING the lock — it exists precisely because locked hiSOLA cannot reach a wallet.
-const PARTNER_BORROW_CAP_BPS = 2_000;
+// (PARTNER_BORROW_CAP_BPS removed 2026-11-09: allocated hiSOLA no longer borrows. A partner
+//  borrows only what they financed themselves, through the Borrow tab.)
 
 export function partnerAllocationPda(wallet: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
@@ -60,7 +57,8 @@ interface AllocData {
   lpThreshold:       bigint;
   retainerPerEpoch:  bigint;
   minBribePerEpoch:  bigint;
-  lastCreditedEpoch: number;
+  lpWithdrawnEpoch: number;
+  lpQualifiedSinceTs: number;
   epochsQualified:   number;
   streamStartTs:     number;
   scheduleEpochs:    number;
@@ -95,7 +93,6 @@ export function PartnerPanel() {
   // not the first — React counts more hooks than before and throws #310, taking the whole
   // app down. It only ever fired for a wallet that HAS an allocation, which is why it
   // survived until the first partner was registered.
-  const floorHeadroomRaw = useFloorHeadroom();
 
   const fetchData = useCallback(async () => {
     if (!wallet) return;
@@ -122,7 +119,8 @@ export function PartnerPanel() {
           lpThreshold:       BigInt(d.lpThreshold.toString()),
           retainerPerEpoch:  BigInt(d.retainerPerEpoch.toString()),
           minBribePerEpoch:  BigInt(d.minBribePerEpoch.toString()),
-          lastCreditedEpoch: Number(d.lastCreditedEpoch.toString()),
+          lpWithdrawnEpoch:  Number(d.lpWithdrawnEpoch.toString()),
+          lpQualifiedSinceTs: Number(d.lpQualifiedSinceTs.toString()),
           epochsQualified:   Number(d.epochsQualified.toString()),
           streamStartTs:     Number(d.streamStartTs?.toString() ?? "0"),
           scheduleEpochs:    Number(d.scheduleEpochs?.toString() ?? "0"),
@@ -216,7 +214,6 @@ export function PartnerPanel() {
   const claimable = alloc.streamStartTs !== 0 && !alloc.bagClaimed
     ? alloc.baseHiSola
     : BigInt(0);
-  const currentEpoch = Math.floor(nowSecs / EPOCH_DURATION);
 
   const isLocked   = lock && lock.lockEndTs > nowSecs;
   const lockEndsIn = lock ? timeLeft(lock.lockEndTs, nowSecs) : null;
@@ -224,15 +221,6 @@ export function PartnerPanel() {
     day: "2-digit", month: "short", year: "numeric",
   }) : null;
 
-  // 20% of the locked position, then the protocol's 75% floor buffer. `borrow_against_locked`
-  // enforces both, and at low buy volume the buffer is the one that binds — publishing the cap
-  // alone promises a partner USDC the chain would refuse.
-  const capBorrowable = lock
-    ? (lock.amountLocked * BigInt(PARTNER_BORROW_CAP_BPS)) / BigInt(10_000)
-    : BigInt(0);
-  const floorCap   = floorHeadroomRaw === null ? null : BigInt(Math.floor(floorHeadroomRaw));
-  const floorBinds = floorCap !== null && floorCap < capBorrowable;
-  const borrowable = floorBinds ? (floorCap as bigint) : capBorrowable;
   const releasable = lock && lock.amountLocked > lock.permanentAmount
     ? lock.amountLocked - lock.permanentAmount
     : BigInt(0);
@@ -247,7 +235,7 @@ export function PartnerPanel() {
           <h2 className="text-xl font-black text-white">Partner Allocation</h2>
         </div>
         <p className="text-xs text-gray-500">
-          Vote-locked hiSOLA · a signature bag, then a retainer on your liquidity
+          Vote-locked hiSOLA · a fixed bag, earned epoch by epoch while your LP is locked
         </p>
       </div>
 
@@ -262,7 +250,8 @@ export function PartnerPanel() {
           baseHiSola:        alloc.baseHiSola,
           streamStartTs:     alloc.streamStartTs,
           scheduleEpochs:    alloc.scheduleEpochs,
-          lastCreditedEpoch: alloc.lastCreditedEpoch,
+          lpWithdrawnEpoch:  alloc.lpWithdrawnEpoch,
+          lpQualifiedSinceTs: alloc.lpQualifiedSinceTs,
           epochsQualified:   alloc.epochsQualified,
         }}
         bribeDec={bribeDec}
@@ -290,10 +279,7 @@ export function PartnerPanel() {
               <span className="text-brand-green text-base leading-none shrink-0">ℹ</span>
               <span>
                 Claiming mints straight into your vote-locked position — your wallet balance
-                stays 0, and voting power is live immediately. It earns protocol fees for life,
-                and you can draw{" "}
-                <span className="text-white font-mono">20%</span> of it as USDC through
-                borrow_against_locked, without interest or liquidation.
+                stays 0, and voting power is live immediately. It earns protocol fees for life.
               </span>
             </div>
             <button
@@ -313,30 +299,23 @@ export function PartnerPanel() {
       {/* ── The retainer ── */}
       <div className="card">
         <div className="flex justify-between items-baseline mb-1">
-          <h3 className="text-base font-bold text-white">Retainer</h3>
+          <h3 className="text-base font-bold text-white">Your bag</h3>
           <span className="text-xs text-gray-400 font-mono">
             {fmt(alloc.retainerPerEpoch)} hiSOLA / epoch
           </span>
         </div>
         <p className="text-[11px] text-gray-500 mb-3">
-          Bought one epoch at a time against liquidity that is still there. No total, no cap and
-          no end date: stay three years and it pays for three years.
+          {fmt(alloc.retainerPerEpoch * BigInt(alloc.scheduleEpochs))} hiSOLA in all, credited
+          1/{alloc.scheduleEpochs} for every full epoch your LP sits in the escrow. Then the deal ends.
         </p>
         <div className="flex flex-col gap-1 text-[11px]">
           <div className="flex justify-between">
-            <span className="text-gray-500">Epochs earned</span>
-            <span className="text-gray-300 font-mono">{alloc.epochsQualified}</span>
+            <span className="text-gray-500">Epochs credited</span>
+            <span className="text-gray-300 font-mono">{alloc.epochsQualified} / {alloc.scheduleEpochs}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-500">Credited in total</span>
             <span className="text-gray-300 font-mono">{fmt(alloc.claimed)} hiSOLA</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Last epoch credited</span>
-            <span className="text-gray-300 font-mono">
-              {alloc.lastCreditedEpoch === 0 ? "—" : alloc.lastCreditedEpoch}
-              {alloc.lastCreditedEpoch === currentEpoch && " (this one)"}
-            </span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-500">Committed bribe mint</span>
@@ -345,8 +324,8 @@ export function PartnerPanel() {
         </div>
         <p className="text-[11px] text-gray-500 mt-3 leading-relaxed">
           Every epoch credited is <span className="text-white">permanent</span> hiSOLA: it votes
-          for life, earns protocol fees for life, and borrows at 20% — and it can never be
-          unlocked or sold, because nobody bought it through the curve.
+          for life (relock to keep the 4× power) and earns protocol fees for life — and it can
+          never be unlocked, sold or borrowed against, because nobody bought it through the curve.
         </p>
       </div>
 
@@ -366,12 +345,6 @@ export function PartnerPanel() {
             <div className="flex justify-between">
               <span className="text-gray-500">Releasable at expiry</span>
               <span className="text-gray-300 font-mono">{fmt(releasable)} hiSOLA</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">
-                Borrowable now {floorBinds ? "(floor buffer)" : "(20%)"}
-              </span>
-              <span className="text-gray-300 font-mono">{fmt(borrowable)} USDC</span>
             </div>
           </div>
 

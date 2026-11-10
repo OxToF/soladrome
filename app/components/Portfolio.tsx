@@ -25,7 +25,15 @@ interface PortfolioData {
   debt:          number;
   claimableFees: number;   // live USDC fee share, same computation as ClaimFees.tsx
   allocated:     number;   // hiSOLA already voted with this epoch (0 = no vote yet)
+  locked:        number;   // VeLockPosition.amount_locked — partner bag, team, contributor, own locks
+  permanent:     number;   // the part of `locked` that can never be released (unfinanced grants)
+  lockEndTs:     number;
+  vePower:       number;   // ve power now: locked x time left x 4 / 4 years
+  credit:        number;   // what borrow could still lend: min(staked, hi + locked) - debt
 }
+
+// state/ve.rs: owner(32) · amount_locked(8) · lock_end_ts(8) · bump(1) · permanent_amount(8)
+const MAX_LOCK_SECS = 208 * 604_800;
 
 export function Portfolio() {
   const { connection } = useConnection();
@@ -53,12 +61,18 @@ export function Portfolio() {
       [Buffer.from("uev"), wallet.publicKey.toBuffer(), eb], PROGRAM_ID
     );
 
+    // The ve lock: where every locked-for-life grant lives (partner bag, team, contributor).
+    // Until 2026-11-10 this panel never read it, so a partner saw no hiSOLA at all.
+    const [velockPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("velock"), wallet.publicKey.toBuffer()], PROGRAM_ID
+    );
+
     const [multiRes, posRes] = await Promise.allSettled([
-      connection.getMultipleAccountsInfo([solaAta, oSolaAta, uevPda]),
+      connection.getMultipleAccountsInfo([solaAta, oSolaAta, uevPda, velockPda]),
       (program.account as any).userPosition.fetch(positionPda(wallet.publicKey)),
     ]);
 
-    const multi = multiRes.status === "fulfilled" ? multiRes.value : [null, null, null];
+    const multi = multiRes.status === "fulfilled" ? multiRes.value : [null, null, null, null];
     const balOf = (info: any, ata: PublicKey) =>
       info ? Number(unpackAccount(ata, info).amount) / 1e6 : 0;
     const solaBalance   = balOf(multi[0], solaAta);
@@ -71,7 +85,9 @@ export function Portfolio() {
     let debt = 0;
     let feesDebt: BN | null = null;
     let stakedAmount = 0;
+    let feeShares = 0;
     if (posRes.status === "fulfilled" && posRes.value) {
+      feeShares = toUi((posRes.value.feeShares ?? new BN(0)) as BN);
       if (posRes.value.usdcBorrowed) debt = toUi(posRes.value.usdcBorrowed as BN);
       feesDebt = posRes.value.feesDebt as BN;
       hiSolaBalance = toUi(posRes.value.hiSola as BN);
@@ -93,7 +109,8 @@ export function Portfolio() {
       // The on-chain basis is `min(staked_amount, hi_sola)` (math::fee_basis), not the raw
       // balance: hiSOLA released by an expired ve lock was never financed and earns nothing.
       // Showing the balance here would quote a claimable figure the program will not pay.
-      const basis = Math.min(stakedAmount, hiSolaBalance);
+      // Plus `fee_shares`: locked-for-life grants earn fees without being a balance.
+      const basis = Math.min(stakedAmount, hiSolaBalance) + feeShares;
       const raw = jsPendingFees(acc, BigInt(feesDebt.toString()), BigInt(Math.round(basis * 1e6)));
       claimableFees = Number(raw) / 1e6;
     }
@@ -108,7 +125,21 @@ export function Portfolio() {
       oSolaBonus = Number(uevInfo.data.readBigUInt64LE(32)) / 1e6;
     }
 
-    setData({ solaBalance, hiSolaBalance, oSolaBalance, oSolaBonus, debt, claimableFees, allocated });
+    let locked = 0, permanent = 0, lockEndTs = 0;
+    const lockInfo = multi[3];
+    if (lockInfo && lockInfo.data.length >= 8 + 57) {
+      locked    = Number(lockInfo.data.readBigUInt64LE(8 + 32)) / 1e6;
+      lockEndTs = Number(lockInfo.data.readBigInt64LE(8 + 40));
+      permanent = Number(lockInfo.data.readBigUInt64LE(8 + 49)) / 1e6;
+    }
+    const left = Math.max(0, lockEndTs - Math.floor(Date.now() / 1000));
+    const vePower = (locked * left * 4) / MAX_LOCK_SECS;
+    const credit = Math.max(0, Math.min(stakedAmount, hiSolaBalance + locked) - debt);
+
+    setData({
+      solaBalance, hiSolaBalance, oSolaBalance, oSolaBonus, debt, claimableFees, allocated,
+      locked, permanent, lockEndTs, vePower, credit,
+    });
   }, [connection, wallet, usdcMint, protocolState, vaultInfos]);
 
   useEffect(() => {
@@ -167,6 +198,8 @@ export function Portfolio() {
   const totalValue = data
     ? data.solaBalance * solaPrice
       + data.hiSolaBalance * solaPrice
+      // Only the releasable part of a lock is worth SOLA; a permanent grant can never be sold.
+      + Math.max(0, data.locked - data.permanent) * solaPrice
       + data.oSolaBalance * oSolaPrice
       - data.debt
     : null;
@@ -191,7 +224,7 @@ export function Portfolio() {
             Voting Power{" "}
             <span className="text-gray-300 font-mono">
               {data
-                ? (data.hiSolaBalance + data.oSolaBonus).toLocaleString(undefined, { maximumFractionDigits: 2 })
+                ? (data.hiSolaBalance + data.vePower + data.oSolaBonus).toLocaleString(undefined, { maximumFractionDigits: 2 })
                 : "—"}
             </span>
             {(data?.oSolaBonus ?? 0) > 0 && (
@@ -204,7 +237,7 @@ export function Portfolio() {
             Available credit{" "}
             <span className="text-gray-300">
               {data
-                ? `${Math.max(0, data.hiSolaBalance - data.debt).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC`
+                ? `${data.credit.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC`
                 : "—"}
             </span>
           </p>
@@ -225,6 +258,45 @@ export function Portfolio() {
           </p>
         </div>
       </div>
+
+      {/* Locked hiSOLA — partner bag, team tranche, contributor bag, or the holder's own lock */}
+      {data && data.locked > 0 && (
+        <div className="flex items-start justify-between py-3 border-b border-brand-border/60">
+          <div className="space-y-0.5">
+            <p className="text-sm font-semibold text-white">hiSOLA locked</p>
+            <p className="text-xs text-gray-500">
+              Vote power now{" "}
+              <span className="text-gray-300 font-mono">
+                {data.vePower.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </span>
+              {data.lockEndTs > 0 && (
+                <span className="text-gray-600">
+                  {" "}· lock {data.lockEndTs * 1000 > Date.now() ? "until" : "expired"}{" "}
+                  {new Date(data.lockEndTs * 1000).toLocaleDateString()}
+                </span>
+              )}
+            </p>
+            {data.permanent > 0 && (
+              <p className="text-xs text-gray-500">
+                <span className="text-gray-300 font-mono">
+                  {data.permanent.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                </span>{" "}
+                locked for life — earns fees, votes, never sold or borrowed
+              </p>
+            )}
+          </div>
+          <div className="text-right">
+            <p className="font-bold text-white text-sm">
+              {data.locked.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+            </p>
+            <p className="text-xs text-gray-600">
+              {data.permanent >= data.locked
+                ? "not sellable"
+                : `≈ $${((data.locked - data.permanent) * solaPrice).toLocaleString(undefined, { maximumFractionDigits: 2 })} releasable`}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* oSOLA row */}
       <div className="flex items-start justify-between py-3 border-b border-brand-border/60">
@@ -285,12 +357,12 @@ export function Portfolio() {
             Claim bribes — {bribeSummary.claimableCount} available across {bribeSummary.poolCount} pool{bribeSummary.poolCount === 1 ? "" : "s"} →
           </button>
         )}
-        {data && data.allocated === 0 && data.hiSolaBalance > 0 && (
+        {data && data.allocated === 0 && (data.hiSolaBalance > 0 || data.vePower > 0) && (
           <button
             className="w-full text-sm py-2.5 rounded-xl border border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10 transition-colors"
             onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "vote" }))}
           >
-            No vote this epoch — {data.hiSolaBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} hiSOLA unused →
+            No vote this epoch — {(data.hiSolaBalance + data.vePower).toLocaleString(undefined, { maximumFractionDigits: 2 })} voting power unused →
           </button>
         )}
       </div>

@@ -169,6 +169,28 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
     return send([ix], user.publicKey.equals(payer.publicKey) ? [] : [user]);
   }
 
+  /// `borrow_against_locked`: since 2026-11-09 it lends financed stake only,
+  /// `min(staked_amount, hi_sola + amount_locked)`, never an allocation.
+  async function borrowLocked(user: Keypair, amount: number) {
+    const ix = await program.methods
+      .borrowAgainstLocked(new BN(amount))
+      .accounts({
+        partner: user.publicKey,
+        protocolState: statePda,
+        lockPosition: pda([Buffer.from("velock"), user.publicKey.toBuffer()]),
+        floorVault: floorV,
+        marketVault: marketV,
+        usdcMint,
+        partnerUsdc: getAssociatedTokenAddressSync(usdcMint, user.publicKey),
+        partnerPosition: positionOf(user.publicKey),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+    return send([ix], user.publicKey.equals(payer.publicKey) ? [] : [user]);
+  }
+
   before(async () => {
     context = await startAnchor(".", [], []);
     provider = new BankrunProvider(context);
@@ -434,6 +456,21 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
       "A borrowed at 100% against a locked position — `staked_amount` is being " +
         "trusted on its own"
     );
+
+    // The locked channel lends A's own financed stake back at 100% — and not a unit more.
+    await borrowLocked(payer, 1_000_000);
+    const after: any = await program.account.userPosition.fetch(positionOf(payer.publicKey));
+    assert.equal(after.usdcBorrowed.toString(), "1000000");
+    const code2 = errorCode("BorrowLimitExceeded");
+    let over = false;
+    try {
+      await borrowLocked(payer, Number(staked) - 1_000_000 + 1);
+      over = true;
+    } catch (e: any) {
+      assert.include(e.toString(), `0x${code2.toString(16)}`);
+    }
+    assert.isFalse(over, "the cap is what A financed, locked or not");
+    await repayAll();
   });
 
   it("[security] an unfinanced allocation cannot reach the 100% borrow channel", async () => {
@@ -603,8 +640,16 @@ describe("soladrome — bankrun (borrow collateral recycling)", () => {
         "straight to the ve vault"
     );
 
-    // What remains open to them is the 20% valve, `borrow_against_locked`, which reads
-    // `amount_locked` rather than `staked_amount`. Not exercised here — it has its own
-    // coverage — but this is the channel the docs point at.
+    // ☢️ And since 2026-11-09 the locked channel is shut too. It used to lend 20 % of
+    // `amount_locked`, unfinanced or not — the floor deficit Ben Whittle's review found.
+    let viaLock = false;
+    try {
+      await borrowLocked(contributor, 1);
+      viaLock = true;
+    } catch (e: any) {
+      assert.include(e.toString(), `0x${code.toString(16)}`);
+    }
+    assert.isFalse(viaLock, "an unfinanced allocation must not borrow a single unit");
+    assert.equal((await tokenBalance(floorV)).toString(), floorBefore.toString());
   });
 });

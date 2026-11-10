@@ -355,7 +355,7 @@ a holder sees their balance.
 |---|---|---|---|
 | hiSOLA governance | 7,000,000 | `FOUNDER_STAKE` | ve escrow, **locked for life**, no vote, no fees |
 | oSOLA vesting | 5,000,000 | `FOUNDER_LIQUID` | vesting vault: **12-month cliff, 48 months in all** (`FOUNDER_O_SOLA_CLIFF_SECS` / `FOUNDER_O_SOLA_VESTING_SECS`, 2026-10-07 — was the hiSOLA 6/24: since a sale pays the curve, oSOLA are a claim on the market reserve) |
-| team tranche | 250,000 | `FOUNDER_IMMEDIATE_SOLA` | → `TEAM_WALLET`, hiSOLA in a **lifetime** ve lock (`permanent_amount` covers the full tranche — decision 2026-07-17, upgraded from 4 years). **Votes** (up to 4×) — a distinct wallet from FOUNDER_WALLET by design, since the vote guard keys on the latter. Borrows 20% via `borrow_against_locked`. Pays contributors who worked unpaid pre-launch. |
+| team tranche | 250,000 | `FOUNDER_IMMEDIATE_SOLA` | → `TEAM_WALLET`, hiSOLA in a **lifetime** ve lock (`permanent_amount` covers the full tranche — decision 2026-07-17, upgraded from 4 years). **Votes** (up to 4×) — a distinct wallet from FOUNDER_WALLET by design, since the vote guard keys on the latter. **Earns fees for life** (`fee_shares`), vote kept at 4× by relocking a dust amount. **Never borrows** (unfinanced, 2026-11-09). Pays contributors who worked unpaid pre-launch. |
 
 The **1.75M ecosystem budget is no longer minted as SOLA** (changed 2026-07-17). It is issued as
 oSOLA through `distribute_o_sola`, capped by `ProtocolState.ecosystem_o_sola_minted` — see the
@@ -408,27 +408,25 @@ the constant.**
 practice, so every borrowed USDC leaves the floor vault permanently. The cap is therefore not a
 risk limit, it is **the drain limit**.
 
-**The rule (settled 2026-07-17): 100% if the collateral is financed, 20% if it is not.**
+**The rule (2026-11-09, replaces the 100 %/20 % rule of 2026-07-17): only financed hiSOLA
+borrows, at 100 %. No unfinanced allocation borrows at all** — founder 7M, team 250K,
+contributors, partners. The 20 % channel was a real floor deficit (Ben Whittle's review, 04/11):
+the 75 % buffer is tested only at borrow time and `sell_sola`'s invariant counts debt as backing,
+so if allocations borrowed and holders then exited, the last quarter met
+`InsufficientFloorReserve`. With financed-only borrowing, a borrower's own SOLA is stuck behind
+their debt (`unstake_hi_sola` / `lock_hi_sola` refuse) and every other holder is covered 1:1.
 
-| Instruction | Cap | Why |
-|---|---|---|
-| `borrow_usdc` | **100%** of `staked_amount.min(hi_sola)` | An ordinary user bought their SOLA — their USDC *is* in the floor vault. They borrow their own deposit back and drain nobody. Same as Beradrome. The minimum now separates **financed** stake (bought through the curve) from **unfinanced** hiSOLA released by an expired ve lock, which must stay on the 20% channel. Its original job — stopping the same balance being walked wallet to wallet — was made moot by non-transferability, but the split is a distinct rule and the minimum stays (proven in `tests/bankrun_borrow_recycle.ts`). |
-| ~~`founder_borrow_usdc`~~ | — | **Removed 2026-07-18** with `FOUNDER_BORROW_CAP_BPS`: the 7M are ve-escrowed → wallet balance 0 → its `new_borrowed <= hi_sola_balance` check could never pass. Use `borrow_against_locked`. |
-| ~~`contributor_borrow_usdc`~~ | — | **Removed 2026-07-18** with `CONTRIBUTOR_BORROW_CAP_BPS`, same reason. Use `borrow_against_locked`. |
-| `borrow_against_locked` | `PARTNER_BORROW_CAP_BPS` (**20%**) | Unfinanced. Open to **any** ve-locker, so it also serves the founder's 7M and the team's 250K. |
+| Instruction | Cap |
+|---|---|
+| `borrow_usdc` | `staked_amount.min(hi_sola)` — unchanged |
+| `borrow_against_locked` | `staked_amount.min(hi_sola + amount_locked)` — a locked **financed** position borrows back what it paid in; every allocation reads `staked_amount = 0` and borrows nothing. Both channels share `usdc_borrowed`, so it is one budget |
 
-**Consequence worth publishing:** for any allocation that never paid into the floor, locking it does
-not stop the drain — it switches the channel from `sell_sola` (100%) to `borrow_against_locked`
-(20%). So the protocol's total exposure to unfinanced supply is
-
-> **20% × Σ(unfinanced allocations)** ≈ 1.4M (founder 7M) + 50K (team 250K) + 20% of partner bags.
-
-Publish that single number, not the individual caps.
+☢️ Never write the cap with `amount_locked - permanent_amount`: the founder's 7M have
+`permanent_amount = 0` and would become borrowable. `staked_amount` is the only financed measure.
+`PARTNER_BORROW_CAP_BPS` is deleted. Covered in `tests/bankrun_borrow_recycle.ts`.
 
 All paths are additionally bounded by `floor_vault.amount >= usdc_amount` and the 75% buffer
-(`FLOOR_RESERVE_MIN_BPS = 7_500`), making **borrowable ≈ 25% of `total_purchased_sola`** — gated on
-real buy volume, not on allocation size. Below ~5.6M of purchased SOLA the buffer binds before the
-20% cap ever does. `BORROW_FEE_BPS = 200` (2%, one-time, → `market_vault`).
+(`FLOOR_RESERVE_MIN_BPS = 7_500`). `BORROW_FEE_BPS = 200` (2%, one-time, → `market_vault`).
 
 ### Economic constants — curve depth `N` (set 2026-07-16)
 
@@ -473,46 +471,44 @@ unfinanced burn decremented a counter it never incremented. Exposure was ~2M (25
 
 | Tranche | Before | Now |
 |---|---|---|
-| Team 250K | liquid SOLA → wallet, sellable at floor day 1 | hiSOLA in a **lifetime** ve lock (`permanent_amount` = full tranche) — **closed**: `unlock_hi_sola` can never release it, only the 20% borrow channel remains. |
+| Team 250K | liquid SOLA → wallet, sellable at floor day 1 | hiSOLA in a **lifetime** ve lock (`permanent_amount` = full tranche) — **closed**: `unlock_hi_sola` can never release it, and since 2026-11-09 it borrows nothing either. |
 | Ecosystem 1.75M | liquid SOLA → authority ATA (the largest vector) | **eliminated** — issued as oSOLA via `distribute_o_sola`, capped by `ecosystem_o_sola_minted`. The holder pays 1 USDC into the floor to exercise, so every SOLA reaching circulation is financed. Same as Beradrome, which airdropped oBERO and never BERO. |
 
 Ve-locking the ecosystem was considered and rejected: it would make the airdrop impossible while
 only deferring the drain. **Only financing removes it.**
 
-**Partner allocations (reshaped 2026-08-27): a signature bag, then a retainer.**
-The 1:1 bribe match is gone — it priced hiSOLA at a base-unit ratio frozen for life with no
-oracle, `total_bribed_credited` was a lifetime counter with no clock, and a bad rate was
-irrevocable once any claim had happened. What a partner gets now:
+**Partner allocations (reshaped 2026-11-09): a closed deal, earned against LP in escrow.**
+The open-ended retainer (2026-08-27) is gone. It had no total and no end, and its liquidity
+condition was the partner's own LP balance read at the instant of the crank — so a partner could
+add liquidity, crank and remove it in one transaction and earn every epoch for zero seconds of
+liquidity. Now:
 
-- **`base_hi_sola`** — a small signature bag, delivered whole by `claim_partner_allocation` the
-  moment they escrow a bribe schedule (`stream_start_ts != 0` is the gate on the whole deal).
-- **`retainer_per_epoch`** — hiSOLA credited by `crank_partner_epoch` for every epoch they still
-  hold `lp_threshold` of `lp_mint`. No total, no cap, no end date. Tiers: 1M LP → 20K + 3 450/epoch
-  · 500K → 7 500 + 1 300 · 200K → 2 000 + 350.
+1. `register_partner` writes the terms. The Founder panel derives them from **three figures**
+   (`app/components/PartnerDealForm.tsx`): liquidity in dollars → bag by degressive tiers
+   ($100K → 10 000 · $250K → 22 000 · $500K → 40 000 · $1M → 70 000 hiSOLA) and `lp_threshold`
+   (dollars ÷ LP price, from pool reserves + Jupiter/USDC); bribe per epoch → `min_bribe_per_epoch`;
+   term (13/26/52 epochs) → `schedule_epochs`. `retainer_per_epoch = bag / term`, `base_hi_sola = 0`,
+   lock 208 epochs.
+2. `fund_partner_bribe_stream` — bribes escrowed up front (unchanged). Gate on everything.
+3. `deposit_partner_lp` — LP into `[b"partner_lp", partner]`, a vault owned by `protocol_state`.
+   The first time it holds `lp_threshold`, `lp_qualified_since_ts` is stamped.
+4. `crank_partner_epoch` — releases the bribe tranche (unchanged) and credits
+   `retainer_epochs_earned − epochs_qualified` epochs: full epochs that STARTED after
+   `lp_qualified_since_ts` and have ENDED, capped at `schedule_epochs`. A function of time, not an
+   attestation, so a late crank pays the backlog and nothing can be gamed at crank time.
+5. `withdraw_partner_lp` — only once the term is covered, or the escrow never reached the
+   threshold, or the protocol is **paused** (incident exit: covered epochs stay earned, the rest is
+   forfeit). Freezes `lp_withdrawn_epoch` (renamed from `last_credited_epoch`, same slot) and closes
+   the vault.
 
-**Both are `permanent_amount`**, so `unlock_hi_sola` releases nothing at any date and the
-`sell_sola` drain from partner allocations is **zero**. The releasable bribe-earned tranche that
-used to expire into a wallet after 4 years no longer exists. Both also earn protocol fees
-(`fee_shares` + a matching `total_hi_sola` increment) — the exposure moved from the floor to the
-fee stream, deliberately.
+Everything credited is `permanent_amount`, earns `fee_shares`, votes, and never borrows. The
+partner keeps the swap fees (they accrue to the pool reserves, so escrowed LP grows) but loses the
+oSOLA LP emissions on the escrowed part — the bag replaces them; claim LP rewards before depositing.
+`PartnerAllocation` stays 192 bytes (`lp_qualified_since_ts` took 8 of the 10 spare).
 
-☢️ **`crank_partner_epoch` is one instruction doing two independently-gated things.** The escrowed
-bribe tranche is released whether or not the LP condition holds (it is already the voters' money,
-and it *slips* if an epoch is missed); the retainer is bought fresh each epoch and **a missed epoch
-is lost, not deferred** — the chain keeps no history of an SPL balance, so the crank IS the
-attestation. Which also means it only proves the balance existed at that instant: a partner can
-add liquidity, crank, and remove it in one transaction. Closing that would need custody of the LP,
-which the deal promises not to take — disclosed as reputational, not cryptographic.
-
-**`close_partner_allocation` (2026-08-25, gates rewritten 2026-08-27) is not a revoke.** A retainer
-has no promised total to compare against, so the test changed shape: it closes when the bag is
-settled (claimed, or `base_hi_sola == 0`) **and** the current epoch is already decided (credited
-this epoch, or the LP is now below `lp_threshold`). The guarantee that matters is intact — the
-authority cannot take away an epoch the partner is still earning — and the account of a partner who
-simply stopped no longer has to stay open forever, because nothing is owed. ⚠️ Closing frees
-`[b"partner", wallet]`, so `register_partner` reopens it with zeroed counters and a fresh bag: the
-renewal path, the migration path for the old 160-byte layout, and the only way one wallet gets a
-second bag.
+**`close_partner_allocation`** requires the LP escrow empty (`PartnerLpNotReturned`) and either
+never-activated, or bag settled + bribe escrow spent + every covered epoch credited. Closing frees
+`[b"partner", wallet]` for a fresh deal; the ve lock and fee position are untouched.
 
 **`partner_deposit_bribe` was deleted** — without the match it was `deposit_bribe` renamed.
 **57 instructions at the time** (−1 for that deletion, +1 for `close_legacy_partner_allocation`).
@@ -551,7 +547,7 @@ must hold at every one of them:
    and `contributor_borrow_usdc` were deleted with their constants, so there is no 10%-vs-20%
    discrepancy left to fix. `grep -rn "29k" programs/` is empty; the figure now survives only in
    the audit-prep docs, which were corrected 2026-08-13. The single remaining valve is
-   `borrow_against_locked` at `PARTNER_BORROW_CAP_BPS` (20%), which about.html already publishes.
+   `borrow_against_locked`, which since 2026-11-09 lends financed stake only — no allocation borrows.
 2. ~~**`collect_to_pol` over-credits stakers**~~ — **resolved 2026-07-18** (commit `3b32b03`); this entry stayed stale until 2026-08-05. The accumulator now advances on `market_balance - amount` and a solvency guard refuses to skim anything at or below `last_market_vault_balance`, so POL is junior to already-credited fees and senior only within fresh growth. See MAINNET_RUNBOOK §2.
 3. ~~The team lock expiry~~ — **resolved 2026-07-17**: the team tranche is permanently locked (`permanent_amount`), so no expiry ever reopens the drain. Remaining scheduled exposure: partner **bribe-earned** hiSOLA at 4-year expiry, capped per deal.
 4. ~~**`PolState.pol_split_bps` is dead state**~~ — **resolved 2026-08-12**: `collect_to_pol` now enforces `amount <= growth × pol_split_bps / 10_000`, the base being uncredited growth (`market_balance − last_market_vault_balance`), not the whole vault. Proven by mutation. The solvency guard is kept alongside it deliberately: the cap is only tighter while `pol_split_bps <= 5_000`, a bound validated in a *different* instruction, whereas the solvency guard depends on nothing else.

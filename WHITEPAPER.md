@@ -197,7 +197,8 @@ Requires `hi_sola_balance - debt >= unstake_amount` (cannot unstake collateral b
 
 hiSOLA holders can borrow USDC from `floor_vault` using their hiSOLA as collateral:
 
-- **Max borrow** = `staked_amount.min(hi_sola)` — the **financed** part of the position, not the whole balance. `staked_amount` is written only by `stake_sola`, so it counts exactly the hiSOLA bought through the curve; the balance also carries unfinanced hiSOLA released from an expired ve lock, for which nobody ever paid USDC into the floor. That part borrows on the separate 20% channel (`borrow_against_locked`) and never at 1:1. This line read "= hiSOLA balance (1:1 collateral ratio)" until 2026-09-14, which overstated the cap for every unfinanced allocation.
+- **Max borrow** = `staked_amount.min(hi_sola)` — the **financed** part of the position, not the whole balance. `staked_amount` is written only by `stake_sola`, so it counts exactly the hiSOLA bought through the curve; the balance also carries unfinanced hiSOLA released from an expired ve lock, for which nobody ever paid USDC into the floor. That part does not borrow at all.
+- **Locked positions** borrow through `borrow_against_locked` under the same rule: `staked_amount.min(hi_sola + amount_locked)`. A holder who locks hiSOLA they bought borrows it back at 100%; an allocation (founder, team, contributor, partner) reads `staked_amount = 0` and borrows nothing. **Only financed hiSOLA borrows** (since 2026-11-09). A borrower's own SOLA stays behind their debt, so every other holder remains redeemable 1:1.
 - **Interest** = 0%
 - **Liquidation** = none (floor vault is always solvent at 1:1)
 - **Origination fee** = 2% of borrowed amount → `market_vault` (rewards stakers)
@@ -236,41 +237,33 @@ One-time instruction creating two progressive vesting schedules:
   1. **No exit, ever** — `unlock_hi_sola` categorically rejects the founder wallet (`FounderVestingLocked`). The reserve can never return to a wallet, so the unstake → `sell_sola` path is unreachable rather than merely guarded.
   2. **No fee capture** — escrowed hiSOLA is excluded from `total_hi_sola`, the fee-accumulator denominator. The reserve earns nothing; 100% of protocol fees go to real stakers.
   3. **No voting, on any path** — `vote_gauge`, `replay_vote` **and** `burn_o_sola_for_votes` all reject the founder wallet (`founder_voting_enabled = false` by default): the 7M is a dormant anti-capture reserve, not governance power. Authority may flip it via `set_founder_voting` only as a break-glass measure against a detected takeover.
-  Liquidity path: `borrow_against_locked`, capped at **20% of claimed** — the same cap that applies to every unfinanced allocation (contributor, partner, team). The 75% floor buffer still bounds total drawdown.
+  4. **No borrowing** — the tranche was never financed through the curve, so `borrow_against_locked` (financed stake only, since 2026-11-09) lends nothing against it.
 - **5M oSOLA:** via `claim_founder_vesting`, on a slower schedule than the hiSOLA tranche since 2026-10-07: 12-month cliff (25 % at the cliff), 48 months in all. A sale now pays the curve's price, so every oSOLA is a claim on the premium curve buyers left in `market_reserve`; the slower release bounds how fast the founder can draw on it. Each exercise adds 1 USDC to `floor_vault`.
-- **250k hiSOLA (team tranche):** delivered at launch to the team wallet as hiSOLA minted **directly into a lifetime ve-lock** (`permanent_amount` covers the full tranche — `unlock_hi_sola` can never release it) — never liquid SOLA. Compensates contributors who worked unpaid pre-launch. Votes as an ordinary user (distinct wallet from the founder reserve, by design), borrows up to 20% via `borrow_against_locked`, and **earns protocol fees** (`fee_shares`, since 2026-08-27 — locked for life meant a fee basis of zero that could never become anything else, so the tranche paid nobody). Does not affect `total_purchased_sola`.
+- **250k hiSOLA (team tranche):** delivered at launch to the team wallet as hiSOLA minted **directly into a lifetime ve-lock** (`permanent_amount` covers the full tranche — `unlock_hi_sola` can never release it) — never liquid SOLA. Compensates contributors who worked unpaid pre-launch. Votes as an ordinary user (distinct wallet from the founder reserve, by design), never borrows (unfinanced), and **earns protocol fees** (`fee_shares`, since 2026-08-27 — locked for life meant a fee basis of zero that could never become anything else, so the tranche paid nobody). Does not affect `total_purchased_sola`.
 
-### 7.2 Protocol Partner Allocations (`register_partner` / `fund_partner_bribe_stream` / `claim_partner_allocation` / `crank_partner_epoch`)
+### 7.2 Protocol Partner Allocations (`register_partner` / `fund_partner_bribe_stream` / `deposit_partner_lp` / `crank_partner_epoch` / `withdraw_partner_lp`)
 
-A dedicated allocation system for ecosystem protocols. A partner brings **liquidity** to their pool and escrows a **bribe schedule**; in exchange they receive a small **signature bag** of hiSOLA, delivered whole the moment the schedule is escrowed, and then a **retainer** — hiSOLA every epoch, for as long as that liquidity is still there.
+A dedicated deal for ecosystem protocols, in the spirit of Beradrome's Real Deal — a fixed amount of voting power against committed bribes — with liquidity as the second condition. The partner **escrows a bribe schedule** and **locks liquidity for the whole term**; in exchange they earn a **hiSOLA bag known at signature**, credited one full epoch at a time, and then the deal ends. (It replaced, on 2026-11-09, an open-ended per-epoch retainer with no total and no end date.)
 
-**It is not a vesting, and the distinction is the design.** A vesting promises a total on day one and releases it in slices: the amount exists from the start, the only condition is that time passes, and the beneficiary is a creditor for the remainder. A retainer has no total, only a rate; each epoch is bought separately against something verified at that moment. Three consequences follow — a partner who leaves after ten epochs has forfeited nothing (there never was a remainder), the account can be closed as soon as they stop (nothing is owed), and there is no cap (three years of maintained liquidity is three years of retainer).
+| Liquidity locked | hiSOLA bag | Ratio | Minimum bribes over the term |
+|---|---|---|---|
+| $100K | 10,000 | 10% | $10K |
+| $250K | 22,000 | 8.8% | $22K |
+| $500K | 40,000 | 8% | $40K |
+| $1M | 70,000 | 7% | $70K |
 
-⚠️ **This replaced a 1:1 bribe match on 2026-08-27.** That instrument priced hiSOLA against the partner's token at a base-unit ratio **frozen for life** at registration — no oracle to correct it if their token halved — and `total_bribed_credited` was a lifetime counter with no time dimension, so a year of committed bribes could all land in week one. Since `close_partner_allocation` rightly cannot revoke once a claim has happened, a bad rate was permanent and irrevocable.
-
-| Tier | LP committed | Signature bag | Retainer / epoch | At 52 epochs | Ratio |
-|---|---|---|---|---|---|
-| 1 | $1M | 20,000 | 3,450 | 199,400 | 19.9% |
-| 2 | $500K | 7,500 | 1,300 | 75,100 | 15.0% |
-| 3 | $200K | 2,000 | 350 | 20,200 | 10.1% |
-
-Amounts in hiSOLA. The "at 52 epochs" column is an illustration at one year, **not a promised total**.
+Degressive, linear between points, 7% beyond $1M: one partner cannot take a disproportionate share of fees and votes. Rule of thumb: **one hiSOLA per dollar of bribes committed, within the limit of the liquidity tier.** Default term 26 epochs (~6 months); 13 and 52 are offered.
 
 **Mechanism:**
-1. `register_partner` (authority-only) writes the deal: `bribe_mint`, `lp_mint`, `lp_threshold`, `retainer_per_epoch`, `base_hi_sola`, `lock_duration_secs`, `schedule_epochs`, `min_bribe_per_epoch`. No tokens are minted at this step. The tier is negotiated in dollars, the chain sees only LP units and there is no oracle, so `lp_threshold` is frozen as the token count that matched the agreed size on the day — imprecise on value, exact on "did they withdraw".
-2. `fund_partner_bribe_stream` (partner) escrows `schedule_epochs × amount_per_epoch` of the committed mint in one signature. Length and minimum tranche size are terms fixed at registration. **This is the gate on the whole deal:** until it runs, `stream_start_ts` is 0 and neither the bag nor a single epoch of retainer accrues.
-3. `claim_partner_allocation` (partner) delivers the bag — once, whole, into the ve lock as `permanent_amount`.
-4. `crank_partner_epoch` (**permissionless**, once per epoch) runs the deal, and its two halves are gated independently on purpose:
-   - the escrowed **bribe tranche** goes to that epoch's gauge voters **whether or not** the liquidity condition holds — it is money that already belongs to them, and a partner who pulls their LP does not get it back;
-   - the **retainer** is credited only if the partner still holds `lp_threshold` of `lp_mint`, read from their own token account. **The protocol takes no custody of the LP.** It stops paying if the balance drops and resumes the epoch it comes back.
+1. `register_partner` (authority-only) writes the deal: `bribe_mint`, `lp_mint`, `lp_threshold`, `retainer_per_epoch` (= bag / term), `base_hi_sola` (optional signature bag, 0 by default), `lock_duration_secs`, `schedule_epochs` (the term), `min_bribe_per_epoch`. The operator enters three figures — liquidity in dollars, bribe per epoch, term — and the rest is derived; the dollar tier is converted to LP units at signature (no oracle on-chain).
+2. `fund_partner_bribe_stream` (partner) escrows `schedule_epochs × amount_per_epoch` in one signature. **This is the gate on the whole deal.** The bribes are already in escrow, so they cannot stop.
+3. `deposit_partner_lp` (partner) moves at least `lp_threshold` of the agreed pool's LP into a vault only the program moves (`[b"partner_lp", partner]`). The liquidity stays in the pool and keeps earning swap fees.
+4. `crank_partner_epoch` (**permissionless**) releases the epoch's bribe tranche to the gauge voters and credits every full epoch the escrow has covered and not yet been credited, capped at the term. Credits are a function of time — an epoch counts once it has started after the deposit and ended — so a late crank pays the backlog and holding liquidity for a single transaction earns nothing.
+5. `withdraw_partner_lp` (partner) returns the LP **once the term is covered**, or if the escrow never reached the threshold, or while the protocol is **paused** — an incident exit that keeps the epochs already covered and forfeits the rest.
 
-**What the partner gets:** permanent voting power from day one (up to 4× at max lock), a real share of protocol fees for life (`fee_shares`, matched by an increment to `total_hi_sola` — the share is taken from existing holders, not printed alongside them), working capital at 20% through `borrow_against_locked` (2% fee, 75% floor buffer, repayable, no liquidation), and no cap of any kind.
+**What the partner gets:** permanent voting power (up to 4×, maintained by relocking), a real share of protocol fees for life (`fee_shares`, matched by an increment to `total_hi_sola` — taken from existing holders, not printed alongside them), and their swap fees. They give up the oSOLA LP emissions on the escrowed LP — the bag replaces them. Credited hiSOLA can never be unlocked, sold or borrowed against. hiSOLA a partner buys on their own is an ordinary position: borrowable at 100%, unstakeable, voting and earning like anyone's. A partner voting for their own pool recovers part of their own bribes — that is the game.
 
-**What the protocol gets:** liquidity it does not have to hold, bribes escrowed in advance rather than promised, and no unfinanced supply that can ever be sold — bag and retainer are both `permanent_amount`, so `unlock_hi_sola` releases nothing at any date and the exposure stays on the 20% borrow channel.
-
-☢️ **A missed epoch is lost, not deferred.** The bribe side slips (the schedule simply runs one epoch longer) but the retainer cannot: the chain keeps no history of an SPL balance, so it is impossible to establish afterwards that the LP was present five epochs ago. The crank *is* the attestation. This is a real cost of the design, and the reason the front-end fires the crank rather than waiting to be asked.
-
-⚠️ **What the attestation proves.** It proves the balance existed at the instant of the crank, and nothing more. A partner cranking their own epoch can hold the LP for exactly that transaction — add liquidity, crank, remove liquidity — and the program cannot tell. Closing that would require custody of the LP, which is the one thing the deal promises not to take. What remains is a counterparty the authority registered by hand, a manoeuvre legible on-chain to anyone reading the pool, and a renewal the authority can decline: **a reputational guarantee, not a cryptographic one.**
+**What the protocol gets:** liquidity locked for a known term, bribes escrowed in advance rather than promised, a known total cost per deal, and no unfinanced supply that can ever be sold or borrowed against.
 
 **Voting power growth flywheel:**
 Protocol partners earn oSOLA via LP emissions on their native pools (JitoSOL/SOLA, mSOL/SOLA, etc.). This oSOLA can be burned during `vote_gauge` calls, adding `o_sola_bonus` — uncapped extra voting power for that epoch. Each burn is permanent and floor-positive. Partners who actively participate in the ecosystem progressively increase their governance influence without any additional allocation from the protocol.
@@ -278,7 +271,7 @@ Protocol partners earn oSOLA via LP emissions on their native pools (JitoSOL/SOL
 ### 7.3 Contributor / Service Provider Allocation (`register_contributor`)
 
 For the people who worked unpaid until launch and keep contributing — first-class members of the project. Each contributor gets a dual allocation, claimed **all at once at launch** (no cliff, no vesting):
-- **hiSOLA:** minted directly into a **lifetime ve-lock** (`permanent_amount` = full tranche — `unlock_hi_sola` can never release it). Never liquid SOLA and never sellable; it votes (up to 4×), borrows up to 20% via `borrow_against_locked`, and **earns a real share of protocol fees** (`fee_shares`) — which is the actual compensation, since the bag itself can never be sold. Same pattern as the team tranche and the partner allocation.
+- **hiSOLA:** minted directly into a **lifetime ve-lock** (`permanent_amount` = full tranche — `unlock_hi_sola` can never release it). Never liquid SOLA and never sellable; it votes (up to 4×), never borrows, and **earns a real share of protocol fees** (`fee_shares`) — which is the actual compensation, since the bag itself can never be sold. Same pattern as the team tranche and the partner allocation.
 - **oSOLA:** minted to the wallet, exercisable at the floor price (each exercise pays 1 USDC into the floor — self-financing).
 
 Used sparingly — a handful of individuals, small amounts. Amounts are set per wallet at `register_contributor` by the authority, bounded since 2026-08-27 by a **50/50 split** and a **cumulative on-chain cap of 100,000 of each** across every contributor ever registered (`contributor_registry`). There was no bound before: the only limit was what the authority typed. Small one-time rewards (KOLs, contest winners) are paid in **oSOLA** via `distribute_o_sola`, drawing on the capped ecosystem budget below.
@@ -295,7 +288,7 @@ The 1,750,000-token ecosystem budget is **not minted as SOLA**. It is issued exc
 would have needed the constant raised by 700K, a redeploy, and a full republication.
 
 There is **no separate operations fund** (a 175K "Operations & Management Fund" was considered
-2026-07-14 and dropped 2026-07-18): operational costs ride the team tranche's 20% borrow line and,
+2026-07-14 and dropped 2026-07-18): operational costs are paid from the team tranche's fee income and,
 post-launch, oSOLA-denominated payments from the marketing/reserve slices above.
 
 Why oSOLA: an airdropped SOLA would be unbacked supply, redeemable 1:1 against a floor vault funded entirely by real buyers — a structural drain. An oSOLA is an option: the recipient pays 1 USDC into `floor_vault` to exercise, so **every SOLA that reaches circulation through this budget is fully floor-backed the moment it exists**. The drain is eliminated by construction, not deferred by a lock. (This mirrors Beradrome, which airdropped oBERO to its community — never BERO.)
@@ -551,12 +544,12 @@ Because step 1 is an oSOLA exercise, `flash_arbitrage` honors the same `exercise
 | User purchases | Unlimited (curve-bound) | `buy_sola` | ✅ 1:1 |
 | Founder hiSOLA | 7,000,000 | 6-month cliff, 24-month linear vest · **lifetime ve escrow** — no exit, no vote, no fee share | ❌ locked for life |
 | Founder oSOLA | 5,000,000 | 12-month cliff, 48-month linear vest | ✅ on exercise |
-| Team hiSOLA | 250,000 | Lifetime ve-lock at launch — votes, borrows 20%, never liquid SOLA | ❌ locked for life |
+| Team hiSOLA | 250,000 | Lifetime ve-lock at launch — votes, earns fees, never borrows, never liquid SOLA | ❌ locked for life |
 | Protocol partners | bags 250K / 175K / 100K by tier + per-deal bribe caps | Welcome bag **locked for life** · bribe-earned streamed vs bribes, 4-year lock | ❌ locked |
 | Contributors | small, per-wallet | hiSOLA lifetime ve-lock + oSOLA, claimed at launch | ❌ hiSOLA locked for life |
 | Ecosystem / airdrop | 1,750,000 **oSOLA** | `distribute_o_sola`, hard-capped on-chain | ✅ on exercise |
 
-**All SOLA purchased by users is individually floor-backed at 1:1.** Unfinanced allocations never reach a wallet as liquid SOLA: the founder reserve, the team tranche and every partner credit are permanently escrowed, and the ecosystem budget only enters circulation through oSOLA exercise (which pays the floor). The single liquidity valve on all of them is `borrow_against_locked`, capped at **20%** — so the protocol's maximum exposure to unfinanced supply is 20% of the sum of those allocations, and the 75% floor buffer bounds it further, to 25% of SOLA actually purchased through the curve. **There is no longer any scheduled exception:** the partner bribe-earned tranche that used to become releasable at its 4-year expiry was removed with the 1:1 match on 2026-08-27, and both the signature bag and every retainer epoch are `permanent_amount`.
+**All SOLA purchased by users is individually floor-backed at 1:1.** Unfinanced allocations never reach a wallet as liquid SOLA: the founder reserve, the team tranche and every partner credit are permanently escrowed, and the ecosystem budget only enters circulation through oSOLA exercise (which pays the floor). None of them borrows either: since 2026-11-09 `borrow_usdc` and `borrow_against_locked` lend only financed stake (`staked_amount`), which is the borrower's own USDC, and a borrower's SOLA stays behind their debt. **Every holder other than a borrower is redeemable 1:1, and the borrower is borrowing their own deposit.** Every partner credit is `permanent_amount`, so nothing unfinanced ever becomes releasable.
 
 ### 13.2 Inflation
 
@@ -684,7 +677,7 @@ Complete list of on-chain instructions (program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SE
 
 **Staking & fees:** `stake_sola` · `unstake_hi_sola` · `claim_fees`
 
-**Borrowing:** `borrow_usdc` · `repay_usdc` · `borrow_against_locked` (the sole path for ve-locked, unfinanced allocations — founder, team, contributor, partner — capped at 20%)
+**Borrowing:** `borrow_usdc` · `repay_usdc` · `borrow_against_locked` (locked positions, financed stake only — allocations borrow nothing)
 
 **oSOLA:** `exercise_o_sola` · `distribute_o_sola`
 
@@ -729,7 +722,7 @@ Complete list of on-chain instructions (program ID: `DgD37Vjs8ozzBwZnfsNEDQNw1SE
 | Mainnet launch | Upcoming | One event: curve, exercise and emissions open together with the TGE and the on-chain airdrop; oSOLA/USDC, SOLA/SOL and xStock/USDC pools seeded and emitting (§14.3) |
 | Cross-chain bribe bridge | In development | LayerZero V2 EVM→Solana bribe routing; testnet contracts deployed, endpoint-level DVN verification in progress (soladrome-bridge repo) |
 | wSOLA outbound | Roadmap | SOLA → EVM (floor-backed) → wSOLA pairs on Aerodrome / Velodrome (§8.4) |
-| Partner onboarding | Upcoming | Signature bag + per-epoch retainer against maintained liquidity, escrowed bribe schedule, everything locked for life (§7.2) |
+| Partner onboarding | Upcoming | Closed deal: escrowed bribes + LP locked for the term → fixed hiSOLA bag, credited per covered epoch, locked for life (§7.2) |
 | Community airdrop | Upcoming | 200k SOLA Genesis Airdrop, distributed on-chain at TGE (no manual claim), sybil-filtered devnet testers |
 | Audit | Pre-mainnet | Independent security audit — blocking prerequisite before mainnet deploy; quotes in hand |
 | Jito partnership | In discussion | jitoSOL-SOL pool + gauge integration |
@@ -764,7 +757,6 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 | `FLOOR_RESERVE_MIN_BPS` | 7,500 | 75% floor reserve buffer |
 | `CALLER_ARB_SHARE_BPS` | 1,000 | 10% flash arb caller reward |
 | `BORROW_FEE_BPS` | 200 | 2% origination fee |
-| `PARTNER_BORROW_CAP_BPS` | 2,000 | 20% borrow cap on locked (unfinanced) allocations |
 | `ROLLOVER_DELAY_EPOCHS` | 2 | 14-day rollover grace period |
 | `osola_emission_initial` | 20,000 oSOLA | Starting epoch LP rewards — a support yield, ~4-20% APR at the $2-5M TVL a gated launch opens with |
 | `osola_emission_decay_bps` | 9,900 | −1 % per epoch (≈ −40 %/year) |
@@ -778,17 +770,14 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 
 | Beneficiary | Token | Amount | Cliff | Vesting / Lock | Borrow rights | On-chain mechanism |
 |---|---|---|---|---|---|---|
-| Founder | hiSOLA | 7,000,000 | 6 months | Lifetime ve escrow (no exit, no vote, no fees) | 20% of claimed (`borrow_against_locked`) | `claim_founder_hi_sola` |
+| Founder | hiSOLA | 7,000,000 | 6 months | Lifetime ve escrow (no exit, no vote, no fees) | None | `claim_founder_hi_sola` |
 | Founder | oSOLA | 5,000,000 | 12 months | 48 months linear | None | `claim_founder_vesting` |
-| Team | hiSOLA | 250,000 | None | Lifetime ve-lock (votes as ordinary user) | 20% (`borrow_against_locked`) | `mint_ecosystem_allocation` |
-| Jito (Tier 1) | hiSOLA | 250,000 | None | Bag: locked for life · bribe-earned: 4-year lock | 20% (`borrow_against_locked`) | `claim_partner_allocation` |
-| Marinade (Tier 2) | hiSOLA | 175,000 | None | Bag: locked for life · bribe-earned: 4-year lock | 20% (`borrow_against_locked`) | `claim_partner_allocation` |
-| Solayer (Tier 3) | hiSOLA | 100,000 | None | Bag: locked for life · bribe-earned: 4-year lock | 20% (`borrow_against_locked`) | `claim_partner_allocation` |
-| Contributors | hiSOLA + oSOLA | small, per-wallet | None | hiSOLA lifetime ve-lock + oSOLA, claimed at launch | 20% (`borrow_against_locked`) | `claim_contributor_hi_sola` |
-| Community airdrop | oSOLA | 875,000 | None | Claim at TGE — exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
-| Marketing reserve | oSOLA | 437,500 | None | Exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
-| Contests / community | oSOLA | 218,750 | None | Exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
-| Reserve | oSOLA | 218,750 | None | Exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
+| Team | hiSOLA | 250,000 | None | Lifetime ve-lock (votes as ordinary user, earns fees) | None | `mint_ecosystem_allocation` |
+| Protocol partners | hiSOLA | fixed per deal ($100K → 10,000 … $1M → 70,000) | None | Credited per epoch of LP locked in escrow, then locked for life | None | `crank_partner_epoch` |
+| Contributors | hiSOLA + oSOLA | small, per-wallet (≤ 100,000 each, cumulative) | None | hiSOLA lifetime ve-lock + oSOLA, claimed at launch | None | `claim_contributor_hi_sola` |
+| Genesis airdrop | oSOLA | 200,000 | None | Claim at TGE — exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
+| Farm points | oSOLA | 750,000 | None | Pre-TGE LP — exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
+| Reserve | oSOLA | 800,000 | None | Unallocated — exercise pays 1 USDC to floor | None | `distribute_o_sola` (capped) |
 
 *All hiSOLA allocations mint SOLA to `sola_vault` as 1:1 backing. None enter `total_purchased_sola` — the floor vault is exclusively funded by user `buy_sola` and oSOLA exercise activity.*
 
