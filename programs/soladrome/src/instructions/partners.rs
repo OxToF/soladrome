@@ -633,7 +633,8 @@ pub fn crank_partner_epoch(ctx: Context<CrankPartnerEpoch>, epoch: u64) -> Resul
             .ok_or(SoladromeError::Overflow)?;
 
         let pa = &mut ctx.accounts.partner_allocation;
-        pa.epochs_qualified = u32::try_from(earned).map_err(|_| error!(SoladromeError::Overflow))?;
+        pa.epochs_qualified =
+            u32::try_from(earned).map_err(|_| error!(SoladromeError::Overflow))?;
         pa.hi_sola_claimed = pa
             .hi_sola_claimed
             .checked_add(amount)
@@ -741,7 +742,10 @@ pub fn deposit_partner_lp(ctx: Context<DepositPartnerLp>, amount: u64) -> Result
     let pa = &ctx.accounts.partner_allocation;
     // The deal starts with the bribes. Locking liquidity for a schedule that does not exist
     // would earn nothing and only strand the LP.
-    require!(pa.stream_start_ts != 0, SoladromeError::PartnerStreamNotFunded);
+    require!(
+        pa.stream_start_ts != 0,
+        SoladromeError::PartnerStreamNotFunded
+    );
     require!(pa.lp_withdrawn_epoch == 0, SoladromeError::PartnerDealOver);
 
     token::transfer(
