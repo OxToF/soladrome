@@ -435,4 +435,38 @@ describe("soladrome — bankrun (curve sell)", () => {
       .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
       .rpc();
   });
+
+  it("C-8 ☢️ paused, a shortfall in the reserve does not close the floor exit", async () => {
+    // The pause is what the authority reaches for when something is wrong, and a reserve short
+    // of what the curve owes is the likeliest "something". Until 2026-10-29 that very shortfall
+    // refused the floor redemption the pause exists to keep open, though it never touches the
+    // reserve. Proven by mutation: wrapping the reserve check back around every sale fails here.
+    // A fresh slot first: C-7 sent the byte-identical pause/unpause, and bankrun rejects a
+    // repeat in the same slot as "already processed" (an intermittent failure until 2026-11-10).
+    context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
+    const raw = await context.banksClient.getAccount(reserveV);
+    const decoded = AccountLayout.decode(Buffer.from(raw!.data));
+    const held = decoded.amount;
+    decoded.amount = held - USDC(500);
+    const short = Buffer.alloc(raw!.data.length);
+    AccountLayout.encode(decoded, short);
+    context.setAccount(reserveV, { ...raw!, data: short });
+
+    await program.methods
+      .pause()
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+    const usdc0 = await bal(userUsdc);
+    await sell(USDC(10));
+    assert.equal((await bal(userUsdc)) - usdc0, USDC(10), "1:1 from the floor, shortfall or not");
+
+    // Unpaused, the same shortfall still refuses a sale down the curve: the guard is narrowed,
+    // not removed.
+    await program.methods
+      .unpause()
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+    await expectFailure(() => sell(USDC(1)), "InsufficientMarketReserve");
+    context.setAccount(reserveV, { ...raw!, data: Buffer.from(raw!.data) });
+  });
 });

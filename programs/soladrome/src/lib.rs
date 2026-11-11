@@ -187,6 +187,14 @@ pub mod soladrome {
         instructions::partners::close_partner_allocation(ctx)
     }
 
+    pub fn deposit_partner_lp(ctx: Context<DepositPartnerLp>, amount: u64) -> Result<()> {
+        instructions::partners::deposit_partner_lp(ctx, amount)
+    }
+
+    pub fn withdraw_partner_lp(ctx: Context<WithdrawPartnerLp>) -> Result<()> {
+        instructions::partners::withdraw_partner_lp(ctx)
+    }
+
     pub fn borrow_against_locked(
         ctx: Context<BorrowAgainstLocked>,
         usdc_amount: u64,
@@ -376,7 +384,7 @@ pub mod soladrome {
     /// The 7M are minted straight into a ve lock by `claim_founder_hi_sola` and must
     /// never return to a wallet. Unlocking would undo all three guarantees at once:
     /// the hiSOLA re-enters `total_hi_sola` (fee accrual resumes), `borrow_usdc`
-    /// regains sight of it (the 20% cap becomes bypassable), and unstake → sell_sola
+    /// regains sight of it (unfinanced hiSOLA would borrow), and unstake → sell_sola
     /// turns the reserve into a floor drain. The guard is on FOUNDER_WALLET only —
     /// TEAM_WALLET and partners release their non-permanent portions normally.
     pub fn unlock_hi_sola(ctx: Context<UnlockHiSola>) -> Result<()> {

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (C) 2026 Soladrome Labs
 
-//! Protocol-partner deals: the signature bag, the escrowed bribe schedule, and the
-//! per-epoch retainer crank.
+//! Protocol-partner deals: the signature bag, the escrowed bribe schedule, the LP escrow,
+//! and the crank that credits each epoch the escrow covered.
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
+use anchor_spl::token::{self, CloseAccount, Mint, MintTo, Token, TokenAccount, Transfer};
 use anchor_spl::token_interface::{
     self, Mint as MintInterface, TokenAccount as TokenAccountInterface, TokenInterface,
     TransferChecked,
@@ -25,18 +25,17 @@ use crate::math::*;
 use crate::state::*;
 use crate::token_ext::require_supported_mint;
 
-/// Authority-only: register a protocol partner — a signature bag plus a liquidity retainer.
+/// Authority-only: register a protocol partner — a closed deal (2026-11-09).
 ///
-/// The deal has exactly two money terms. `base_hi_sola` is the bag: delivered whole by
-/// `claim_partner_allocation` the moment the partner escrows their bribe schedule, and
-/// small because it is the only unconditional part. `retainer_per_epoch` is the rate:
-/// credited one epoch at a time by `crank_partner_epoch`, and only for an epoch in which
-/// the partner still holds `lp_threshold` of `lp_mint`.
+/// Two money terms, and a total known at signature: `base_hi_sola` (optional signature bag,
+/// delivered whole once the bribe schedule is escrowed; 0 by default since every hiSOLA should
+/// be earned) plus `retainer_per_epoch × schedule_epochs`, credited one full epoch at a time
+/// while at least `lp_threshold` of `lp_mint` sits in the partner's LP escrow. After
+/// `schedule_epochs` covered epochs the deal pays nothing more and the LP can leave.
 ///
-/// ⚠️ No total is written down anywhere, and that is deliberate — see `PartnerAllocation`.
-/// The tiers of 2026-08-26 read 10 / 15 / 20 % of the committed LP over a year of
-/// maintained liquidity: 1 M LP → 20 000 bag + 3 450/epoch, 500 K → 7 500 + 1 300,
-/// 200 K → 2 000 + 350. A partner who stays longer simply earns longer.
+/// Published tiers (in dollars of LP, degressive so one partner cannot take a disproportionate
+/// share of fees and votes), the bag also bounded by the dollars of bribes escrowed:
+/// $100K → 10 000 hiSOLA · $250K → 22 000 · $500K → 40 000 · $1M → 70 000, over 26 epochs.
 ///
 /// `lp_threshold` is in LP base units. The tier is negotiated in dollars, the chain sees
 /// only LP units and there is no oracle, so this is the unit count that matched the agreed
@@ -97,7 +96,8 @@ pub fn register_partner(
     pa.lp_mint = lp_mint;
     pa.lp_threshold = lp_threshold;
     pa.retainer_per_epoch = retainer_per_epoch;
-    pa.last_credited_epoch = 0;
+    pa.lp_withdrawn_epoch = 0;
+    pa.lp_qualified_since_ts = 0;
     pa.epochs_qualified = 0;
     pa.base_hi_sola = base_hi_sola;
     pa.hi_sola_claimed = 0;
@@ -437,39 +437,20 @@ pub fn fund_partner_bribe_stream(
     Ok(())
 }
 
-/// Permissionless: run a partner's epoch — release their bribe tranche, and buy this epoch
-/// of their retainer if their liquidity is still there.
-///
-/// **Why the two are one instruction.** The bribe stream already had to be cranked every
-/// epoch by somebody. Making the retainer a second weekly crank would have doubled the
-/// operational load and left the two able to drift apart; merged, one transaction per epoch
-/// per partner runs the whole deal, and the bribe — which someone always has an incentive
-/// to trigger, since it is the epoch's voters who are owed it — is what keeps the retainer's
-/// attestation from being forgotten.
+/// Permissionless: run a partner's epoch — release their bribe tranche, and credit every
+/// epoch their escrowed LP has covered and that has not been credited yet.
 ///
 /// **The two halves are independently gated, on purpose.**
 /// - The bribe tranche is escrowed money that already belongs to the gauge. It is released
-///   whether or not the liquidity condition holds: a partner who pulls their LP still owes
-///   the voters what they escrowed.
-/// - The retainer is bought fresh each epoch against `lp_threshold` of `lp_mint`, still
-///   held. It keeps paying after the bribe schedule is exhausted — a partner who stays for
-///   three years earns for three years — and stops the epoch their liquidity leaves.
+///   whether or not the liquidity condition holds, one tranche per epoch, and it slips if an
+///   epoch is missed.
+/// - The bag half is a function of time since 2026-11-09 (`retainer_epochs_earned`): full
+///   epochs covered by the LP escrow, capped at `schedule_epochs`. Nothing is attested at the
+///   instant of the crank, so nothing can be gamed at that instant either — the old
+///   add-liquidity / crank / remove-liquidity transaction earns nothing, because the LP cannot
+///   leave the escrow and an epoch counts only once it has fully elapsed.
 ///
 /// If neither half can do anything, the call fails rather than burning a fee for nothing.
-///
-/// ☢️ **A missed epoch is lost, not deferred.** The bribe side slips (the stream simply runs
-/// one epoch longer), but the retainer cannot: the chain keeps no history of an SPL balance,
-/// so there is no way to establish afterwards that the LP was present five epochs ago. The
-/// crank *is* the attestation. This is why the front-end fires it automatically.
-///
-/// ⚠️ **What the attestation does and does not prove.** It proves the balance existed at the
-/// instant of the crank. A partner cranking their own epoch can hold the LP for exactly that
-/// transaction — add liquidity, crank, remove liquidity — and the program cannot tell.
-/// Closing that would require custody of the LP, which is the one thing the deal promises
-/// not to take. What is left is: the counterparty is a named protocol the authority
-/// registered by hand, the manoeuvre is legible on-chain to anyone reading the pool, and the
-/// remedy is the renewal — the authority simply does not re-register them. That is a
-/// reputational guarantee, not a cryptographic one, and it should be described as such.
 pub fn crank_partner_epoch(ctx: Context<CrankPartnerEpoch>, epoch: u64) -> Result<()> {
     require!(
         !ctx.accounts.protocol_state.paused,
@@ -558,18 +539,23 @@ pub fn crank_partner_epoch(ctx: Context<CrankPartnerEpoch>, epoch: u64) -> Resul
         );
     }
 
-    // ── Half two: this epoch of the retainer ────────────────────────────────
+    // ── Half two: every epoch the LP escrow has covered, not yet credited ────
+    // Computed from time, not attested: the LP sits in a vault the partner cannot draw before
+    // the term is over, so an epoch that started after `lp_qualified_since_ts` and ended
+    // before now (or before the LP left) WAS covered, whoever cranks and whenever. That is why
+    // a late crank pays the whole backlog at once instead of losing it.
     let pa = &ctx.accounts.partner_allocation;
-    let lp_ok = ctx.accounts.partner_lp_token.amount >= pa.lp_threshold;
-    // `<` and not `!=`: an epoch is credited once and never retroactively, so a crank that
-    // arrives late in the week is fine and a second one in the same week does nothing.
-    let epoch_open = pa.last_credited_epoch < epoch;
-    let retainer_due = lp_ok && epoch_open && pa.retainer_per_epoch > 0;
+    let earned = retainer_epochs_earned(pa, epoch);
+    let due_epochs = earned.saturating_sub(pa.epochs_qualified as u64);
+    let retainer_due = due_epochs > 0 && pa.retainer_per_epoch > 0;
 
     require!(bribe_due || retainer_due, SoladromeError::NothingToCrank);
 
     if retainer_due {
-        let amount = pa.retainer_per_epoch;
+        let amount = pa
+            .retainer_per_epoch
+            .checked_mul(due_epochs)
+            .ok_or(SoladromeError::Overflow)?;
         let lock_end_ts = (pa.stream_start_ts as u64)
             .checked_add(pa.lock_duration_secs)
             .ok_or(SoladromeError::Overflow)? as i64;
@@ -602,7 +588,7 @@ pub fn crank_partner_epoch(ctx: Context<CrankPartnerEpoch>, epoch: u64) -> Resul
 
         // Permanent, like the bag: this epoch was never financed through the curve, so it
         // must never become a spendable balance that `sell_sola` could redeem against a
-        // floor it did not fund. It votes, it earns fees, it borrows at 20 %.
+        // floor it did not fund. It votes and earns fees; it never borrows (unfinanced).
         {
             let lock = &mut ctx.accounts.lock_position;
             if lock.owner == Pubkey::default() {
@@ -647,31 +633,21 @@ pub fn crank_partner_epoch(ctx: Context<CrankPartnerEpoch>, epoch: u64) -> Resul
             .ok_or(SoladromeError::Overflow)?;
 
         let pa = &mut ctx.accounts.partner_allocation;
-        pa.last_credited_epoch = epoch;
-        pa.epochs_qualified = pa
-            .epochs_qualified
-            .checked_add(1)
-            .ok_or(SoladromeError::Overflow)?;
+        pa.epochs_qualified =
+            u32::try_from(earned).map_err(|_| error!(SoladromeError::Overflow))?;
         pa.hi_sola_claimed = pa
             .hi_sola_claimed
             .checked_add(amount)
             .ok_or(SoladromeError::Overflow)?;
 
         msg!(
-            "Retainer epoch {}: {} | +{} hiSOLA permanent | {} epochs qualified | total {}",
-            epoch,
+            "Partner {}: +{} hiSOLA permanent for {} epoch(s) | {}/{} epochs | total {}",
             pa.partner,
             amount,
+            due_epochs,
             pa.epochs_qualified,
+            pa.schedule_epochs,
             pa.hi_sola_claimed,
-        );
-    } else if epoch_open {
-        // Said out loud, because this is the epoch the partner just lost.
-        msg!(
-            "Retainer epoch {} NOT credited: LP {} < threshold {}",
-            epoch,
-            ctx.accounts.partner_lp_token.amount,
-            ctx.accounts.partner_allocation.lp_threshold,
         );
     }
 
@@ -681,73 +657,36 @@ pub fn crank_partner_epoch(ctx: Context<CrankPartnerEpoch>, epoch: u64) -> Resul
 /// Authority-only: close a `PartnerAllocation` PDA and return its rent to the authority
 /// that paid for it at `register_partner`.
 ///
-/// ☢️ **A retainer has no total, which changes what "terminal" can mean.** The old test read
-/// `hi_sola_claimed >= base_hi_sola + cap_hi_sola` — a promised total, reached or not. There
-/// is no promised total now: each epoch is bought separately, so the moment a partner stops
-/// qualifying there is nothing outstanding to protect. What has to be protected is narrower
-/// and sharper: **an epoch the partner could still be credited for.**
+/// Closable when the deal owes nothing and holds nothing:
 ///
-/// So the account is closable when the deal cannot pay anything more *right now*:
-///
-/// 1. The bag is settled — claimed, or there never was one (`base_hi_sola == 0`). An
-///    unclaimed bag is a live entitlement and blocks the close outright.
-/// 2. The current epoch's retainer is already decided — either it was credited
-///    (`last_credited_epoch == current_epoch`), or the partner no longer holds the
-///    liquidity that would qualify them (`lp_balance < lp_threshold`).
-///
-/// The second condition is why this instruction now reads the partner's LP account. Without
-/// it, the authority could close the account mid-week and take away an epoch the partner had
-/// already earned by keeping their liquidity in place; with it, a partner who is still
-/// performing cannot be cut off, and one who has withdrawn can be tidied away immediately
-/// instead of leaving a dead PDA open forever.
-///
-/// The guarantee that mattered before still holds, in its proper form: **the authority
-/// cannot delete a claim the partner has already earned.** What it can now do — and could
-/// not before — is close the account of a partner who simply stopped, which under a retainer
-/// costs that partner nothing, because there never was a remainder.
+/// 1. **Never activated** (`stream_start_ts == 0`) — no schedule, no bag, and no LP (the
+///    escrow only opens after the schedule is funded). This is what keeps a mistyped
+///    registration correctable.
+/// 2. Or **settled**: the bag claimed (or none), the bribe escrow spent, the LP escrow empty,
+///    and every epoch it covered credited. The last two are what stop the authority deleting
+///    a deal that still holds a partner's liquidity or owes them an epoch.
 ///
 /// ⚠️ Closing frees the `[b"partner", partner_wallet]` seeds, so `register_partner` can open
-/// the same PDA again with every counter at zero — a **fresh deal**, including a fresh
-/// `base_hi_sola` bag. That is the renewal path (and the migration path for allocations
-/// written at the old 160-byte layout), but it means close-then-re-register is the one way
-/// to hand the same wallet a second bag. It takes the authority signature twice and is
-/// visible on-chain in both instructions.
-///
-/// The partner's `VeLockPosition` and `UserPosition` are separate PDAs and are untouched:
-/// everything already credited stays locked, keeps voting, keeps earning fees, and keeps
-/// borrowing at 20 %. Nothing is burned here.
+/// the same PDA again with every counter at zero — a fresh deal, including a fresh bag. That
+/// is the renewal path. The partner's `VeLockPosition` and `UserPosition` are untouched:
+/// everything already credited stays locked, keeps voting, keeps earning fees.
 ///
 /// Not pause-gated, matching `register_partner`: this is admin cleanup that moves no tokens.
 pub fn close_partner_allocation(ctx: Context<ClosePartnerAllocation>) -> Result<()> {
     let pa = &ctx.accounts.partner_allocation;
     let epoch = current_epoch(Clock::get()?.unix_timestamp);
 
-    // ☢️ **Never activated.** No schedule was ever escrowed, so nothing has accrued and
-    // nothing is owed: the bag is the consideration for a commitment that does not exist,
-    // `claim_partner_allocation` refuses it, and `crank_partner_epoch` refuses too. This
-    // clause is the whole reason a mistyped registration is correctable at all. Without it —
-    // and it was missing until 2026-08-28 — an allocation registered with, say, an LP
-    // threshold larger than the pool's entire supply could never be claimed (no stream), and
-    // never be closed (unclaimed bag), and the authority could not fix its own typo for the
-    // life of the protocol. It was found by registering exactly that on devnet.
     let never_activated = pa.stream_start_ts == 0;
-
-    // An unclaimed bag IS a debt once a schedule has been escrowed against it.
     let bag_settled = pa.bag_claimed || pa.base_hi_sola == 0;
-    // Nothing further can be credited for the epoch in progress: either it already was, or
-    // the liquidity that would have qualified it is gone. A partner with no LP account at
-    // all reads 0 here, which is exactly right — see `ClosePartnerAllocation`.
-    let epoch_decided = pa.last_credited_epoch == epoch
-        || lp_balance_of(&ctx.accounts.partner_lp_token)? < pa.lp_threshold;
-    // ☢️ And the escrow must be spent. `crank_partner_epoch` needs this allocation to run,
-    // so closing while tranches remain would strand them: the gauge's voters never receive
-    // money the partner has already paid in, and the partner cannot recover it either.
-    // Withdrawing their LP stops the retainer; it does not cancel a bribe commitment they
-    // have already funded.
+    // ☢️ Read whether or not the deal was activated: an LP left in an escrow whose allocation
+    // is gone could never be withdrawn — `withdraw_partner_lp` needs the allocation.
+    let lp_returned = lp_balance_of(&ctx.accounts.partner_lp_vault)? == 0;
+    let credits_settled = retainer_epochs_earned(pa, epoch) <= pa.epochs_qualified as u64;
     let escrow_spent = stream_is_spent(&ctx.accounts.bribe_stream)?;
 
+    require!(lp_returned, SoladromeError::PartnerLpNotReturned);
     require!(
-        never_activated || (bag_settled && epoch_decided && escrow_spent),
+        never_activated || (bag_settled && credits_settled && escrow_spent),
         SoladromeError::PartnerAllocationNotSettled
     );
 
@@ -762,6 +701,141 @@ pub fn close_partner_allocation(ctx: Context<ClosePartnerAllocation>) -> Result<
         } else {
             "settled"
         },
+    );
+    Ok(())
+}
+
+/// How many epochs of the deal the LP escrow has paid for so far, capped at the term.
+///
+/// An epoch counts when it STARTED at or after `lp_qualified_since_ts` (so the liquidity was
+/// there all seven days) and has ENDED — before `now_epoch`, or before the epoch the LP left
+/// in, whichever comes first. 0 for a deal whose escrow never reached the threshold, and for a
+/// legacy deal with no term (`schedule_epochs == 0`): fail closed, never open.
+pub fn retainer_epochs_earned(pa: &PartnerAllocation, now_epoch: u64) -> u64 {
+    if pa.lp_qualified_since_ts <= 0 {
+        return 0;
+    }
+    let since = pa.lp_qualified_since_ts as u64;
+    // ceil(since / D): the first epoch that starts at or after the deposit.
+    let first_full = since.saturating_add(EPOCH_DURATION - 1) / EPOCH_DURATION;
+    let end = if pa.lp_withdrawn_epoch != 0 {
+        pa.lp_withdrawn_epoch.min(now_epoch)
+    } else {
+        now_epoch
+    };
+    end.saturating_sub(first_full).min(pa.schedule_epochs)
+}
+
+/// Partner locks LP of the deal's pool in the protocol's escrow. Top-ups allowed until the deal
+/// is over. The clock starts the first time the escrow holds `lp_threshold`, and the first
+/// epoch that counts is the next one to start.
+///
+/// ⚠️ The partner should `claim_lp_rewards` first: LP emissions are paid on the wallet balance,
+/// so LP moved into the escrow stops earning them, and an unclaimed accrual is lost at the next
+/// harvest. The bag is what replaces them.
+pub fn deposit_partner_lp(ctx: Context<DepositPartnerLp>, amount: u64) -> Result<()> {
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        SoladromeError::ProtocolPaused
+    );
+    require!(amount > 0, SoladromeError::InvalidAmount);
+    let pa = &ctx.accounts.partner_allocation;
+    // The deal starts with the bribes. Locking liquidity for a schedule that does not exist
+    // would earn nothing and only strand the LP.
+    require!(
+        pa.stream_start_ts != 0,
+        SoladromeError::PartnerStreamNotFunded
+    );
+    require!(pa.lp_withdrawn_epoch == 0, SoladromeError::PartnerDealOver);
+
+    token::transfer(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.partner_lp_token.to_account_info(),
+                to: ctx.accounts.partner_lp_vault.to_account_info(),
+                authority: ctx.accounts.partner.to_account_info(),
+            },
+        ),
+        amount,
+    )?;
+    ctx.accounts.partner_lp_vault.reload()?;
+
+    let escrowed = ctx.accounts.partner_lp_vault.amount;
+    let pa = &mut ctx.accounts.partner_allocation;
+    if pa.lp_qualified_since_ts == 0 && escrowed >= pa.lp_threshold {
+        pa.lp_qualified_since_ts = Clock::get()?.unix_timestamp;
+    }
+    msg!(
+        "Partner LP escrowed: {} | +{} | {} / {} | qualified since {}",
+        pa.partner,
+        amount,
+        escrowed,
+        pa.lp_threshold,
+        pa.lp_qualified_since_ts,
+    );
+    Ok(())
+}
+
+/// Partner takes their whole LP back out of the escrow and the deal stops earning.
+///
+/// Allowed only when nothing more can be earned by staying, or the partner was never in:
+/// - the term is over — `schedule_epochs` full epochs covered;
+/// - or the escrow never reached `lp_threshold` (nothing started);
+/// - or the protocol is paused — the one exit that does not wait, so an incident never traps a
+///   partner's liquidity. Epochs already covered stay earned; the rest of the term is forfeit.
+///
+/// The epoch it leaves in is frozen into `lp_withdrawn_epoch`, so a crank afterwards still
+/// pays exactly the epochs that were covered, and the deal cannot take liquidity again.
+pub fn withdraw_partner_lp(ctx: Context<WithdrawPartnerLp>) -> Result<()> {
+    let now_epoch = current_epoch(Clock::get()?.unix_timestamp);
+    let pa = &ctx.accounts.partner_allocation;
+    let never_qualified = pa.lp_qualified_since_ts == 0;
+    let term_over = retainer_epochs_earned(pa, now_epoch) >= pa.schedule_epochs;
+    require!(
+        never_qualified || term_over || ctx.accounts.protocol_state.paused,
+        SoladromeError::PartnerLpLocked
+    );
+
+    let amount = ctx.accounts.partner_lp_vault.amount;
+    let bump = ctx.accounts.protocol_state.bump;
+    let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+    if amount > 0 {
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.partner_lp_vault.to_account_info(),
+                    to: ctx.accounts.partner_lp_token.to_account_info(),
+                    authority: ctx.accounts.protocol_state.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )?;
+    }
+    // Rent back to the partner, who paid it at the first deposit.
+    token::close_account(CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        CloseAccount {
+            account: ctx.accounts.partner_lp_vault.to_account_info(),
+            destination: ctx.accounts.partner.to_account_info(),
+            authority: ctx.accounts.protocol_state.to_account_info(),
+        },
+        &[seeds],
+    ))?;
+
+    let pa = &mut ctx.accounts.partner_allocation;
+    if !never_qualified {
+        // `max(1)`: epoch 0 is the sentinel for "still escrowed", and is 1970 anyway.
+        pa.lp_withdrawn_epoch = now_epoch.max(1);
+    }
+    msg!(
+        "Partner LP returned: {} | {} LP | {} epochs earned of {}",
+        pa.partner,
+        amount,
+        retainer_epochs_earned(pa, now_epoch),
+        pa.schedule_epochs,
     );
     Ok(())
 }
@@ -958,8 +1032,8 @@ pub struct FundPartnerBribeStream<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
-/// Anyone runs a partner's epoch: one bribe tranche into this epoch's vault, and one epoch of
-/// retainer if the liquidity condition still holds.
+/// Anyone runs a partner's epoch: one bribe tranche into this epoch's vault, and every epoch
+/// the LP escrow has covered that is not yet credited.
 #[derive(Accounts)]
 #[instruction(epoch: u64)]
 pub struct CrankPartnerEpoch<'info> {
@@ -1027,17 +1101,7 @@ pub struct CrankPartnerEpoch<'info> {
     )]
     pub bribe_token_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    // ── The retainer half ───────────────────────────────────────────────────────
-    /// The LP token named in the deal. Pinned to the allocation so the caller cannot swap in a
-    /// mint the partner happens to hold a lot of.
-    #[account(address = partner_allocation.lp_mint @ SoladromeError::LpMintMismatch)]
-    pub lp_mint: Box<Account<'info, Mint>>,
-
-    /// The partner's own LP account, and the whole of the liquidity condition. Read-only: the
-    /// protocol never takes custody of it, it only looks.
-    #[account(token::mint = lp_mint, token::authority = partner)]
-    pub partner_lp_token: Box<Account<'info, TokenAccount>>,
-
+    // ── The bag half (no LP account: credits are a function of time) ────────────
     #[account(mut, address = protocol_state.sola_mint)]
     pub sola_mint: Box<Account<'info, Mint>>,
 
@@ -1105,26 +1169,12 @@ pub struct ClosePartnerAllocation<'info> {
     )]
     pub partner_allocation: Account<'info, PartnerAllocation>,
 
-    /// CHECK: The LP token named in the deal. Only its address is used — to derive the account
-    /// below — so it is never deserialized, which also means a close is not blocked by anything
-    /// about the mint itself.
-    #[account(address = partner_allocation.lp_mint @ SoladromeError::LpMintMismatch)]
-    pub lp_mint: UncheckedAccount<'info>,
-
-    /// CHECK: The partner's associated token account for that mint, read to establish that this
-    /// epoch's retainer can no longer be earned. **Untyped on purpose, and pinned by address.**
-    /// Untyped because a partner who never provided liquidity has no such account, and a typed
-    /// account would fail at the account level — making the partners with no liquidity precisely
-    /// the ones who could not be closed. Pinned because the authority chooses what to pass here:
-    /// without the address constraint they could present any empty account, read a balance of 0
-    /// and close a partner who was still qualifying. `lp_balance_of` returns 0 for an absent
-    /// account, which is the honest reading of "they hold none".
-    #[account(
-        address = anchor_spl::associated_token::get_associated_token_address(
-            &partner_wallet.key(), &lp_mint.key()
-        ),
-    )]
-    pub partner_lp_token: UncheckedAccount<'info>,
+    /// CHECK: The partner's LP escrow, read to refuse a close while it still holds liquidity.
+    /// Untyped because most closes find it absent (never deposited, or already withdrawn —
+    /// `withdraw_partner_lp` closes it), and pinned by seeds so the authority cannot present an
+    /// empty account in its place.
+    #[account(seeds = [PARTNER_LP_SEED, partner_wallet.key().as_ref()], bump)]
+    pub partner_lp_vault: UncheckedAccount<'info>,
 
     /// CHECK: The partner's escrowed bribe schedule, if they ever funded one. Read to refuse a
     /// close while tranches remain: `crank_partner_epoch` needs the allocation, so closing early
@@ -1132,4 +1182,81 @@ pub struct ClosePartnerAllocation<'info> {
     /// Untyped for the same reason as above — most allocations have no stream account.
     #[account(seeds = [BRIBE_STREAM_SEED, partner_wallet.key().as_ref()], bump)]
     pub bribe_stream: UncheckedAccount<'info>,
+}
+
+/// Partner moves LP into the deal's escrow.
+#[derive(Accounts)]
+pub struct DepositPartnerLp<'info> {
+    #[account(mut)]
+    pub partner: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(
+        mut,
+        seeds = [PARTNER_SEED, partner.key().as_ref()],
+        bump = partner_allocation.bump,
+        constraint = partner_allocation.partner == partner.key() @ SoladromeError::Unauthorized,
+    )]
+    pub partner_allocation: Box<Account<'info, PartnerAllocation>>,
+
+    /// The LP mint named in the deal — nothing else can be escrowed against it.
+    #[account(address = partner_allocation.lp_mint @ SoladromeError::LpMintMismatch)]
+    pub lp_mint: Box<Account<'info, Mint>>,
+
+    #[account(mut, token::mint = lp_mint, token::authority = partner)]
+    pub partner_lp_token: Box<Account<'info, TokenAccount>>,
+
+    /// The escrow: owned by `protocol_state`, so only this program moves it, and only
+    /// `withdraw_partner_lp` moves it out — to the partner.
+    #[account(
+        init_if_needed,
+        payer = partner,
+        token::mint = lp_mint,
+        token::authority = protocol_state,
+        seeds = [PARTNER_LP_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub partner_lp_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Protocol LP mints are always classic SPL Token.
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+/// Partner takes their LP back once the deal's term is over.
+#[derive(Accounts)]
+pub struct WithdrawPartnerLp<'info> {
+    #[account(mut)]
+    pub partner: Signer<'info>,
+
+    #[account(seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(
+        mut,
+        seeds = [PARTNER_SEED, partner.key().as_ref()],
+        bump = partner_allocation.bump,
+        constraint = partner_allocation.partner == partner.key() @ SoladromeError::Unauthorized,
+    )]
+    pub partner_allocation: Box<Account<'info, PartnerAllocation>>,
+
+    #[account(address = partner_allocation.lp_mint @ SoladromeError::LpMintMismatch)]
+    pub lp_mint: Box<Account<'info, Mint>>,
+
+    #[account(mut, token::mint = lp_mint, token::authority = partner)]
+    pub partner_lp_token: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        token::mint = lp_mint,
+        token::authority = protocol_state,
+        seeds = [PARTNER_LP_SEED, partner.key().as_ref()],
+        bump,
+    )]
+    pub partner_lp_vault: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
 }

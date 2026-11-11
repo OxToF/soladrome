@@ -27,7 +27,7 @@
  */
 import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 const PROGRAM_ID     = new PublicKey("DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe");
 const PARTNER_SEED   = Buffer.from("partner");
@@ -90,25 +90,21 @@ describe("crank_partner_epoch", () => {
 
     const poolId     = stream.poolId as PublicKey;
     const rewardMint = stream.bribeMint as PublicKey;
-    const lpMint     = alloc.lpMint as PublicKey;
-    const partnerLp  = getAssociatedTokenAddressSync(lpMint, partner);
-
-    // Say out loud what this call will and will not do, before it does it.
-    const lpBal = await provider.connection
-      .getTokenAccountBalance(partnerLp)
-      .then((b) => BigInt(b.value.amount))
-      .catch(() => BigInt(0));
-    const threshold = BigInt(alloc.lpThreshold.toString());
-    const lpOk = lpBal >= threshold;
-    const epochOpen = Number(alloc.lastCreditedEpoch) < epoch;
+    // Since 2026-11-09 the bag half is a function of time: full epochs the LP escrow covered,
+    // capped at the term (mirror of partners.rs::retainer_epochs_earned).
+    const since = Number(alloc.lpQualifiedSinceTs);
+    const withdrawn = Number(alloc.lpWithdrawnEpoch);
+    const firstFull = Math.ceil(since / EPOCH_DURATION);
+    const end = withdrawn !== 0 ? Math.min(withdrawn, epoch) : epoch;
+    const earned = since > 0 ? Math.min(Math.max(end - firstFull, 0), Number(alloc.scheduleEpochs)) : 0;
+    const due = Math.max(earned - Number(alloc.epochsQualified), 0);
     const trancheDue =
       Number(stream.epochsReleased) < Number(stream.epochsTotal) &&
       Number(stream.lastReleaseEpoch) < epoch;
 
     console.log(`\nEpoch ${epoch} — ${partnerStr.slice(0, 8)}…`);
     console.log(`  bribe tranche : ${trancheDue ? "due" : "already released this epoch, or the schedule is spent"}`);
-    console.log(`  liquidity     : ${lpBal} of ${threshold} required → ${lpOk ? "met" : "NOT met"}`);
-    console.log(`  retainer      : ${lpOk && epochOpen ? "will be credited" : epochOpen ? "will NOT be credited — and this epoch is then lost" : "already credited this epoch"}`);
+    console.log(`  bag           : ${earned}/${alloc.scheduleEpochs} epochs earned, ${due} to credit now`);
 
     const tx = await program.methods
       .crankPartnerEpoch(new anchor.BN(epoch))
@@ -129,8 +125,6 @@ describe("crank_partner_epoch", () => {
           [Buffer.from("bribe_tokens"), poolId.toBuffer(), rewardMint.toBuffer(), le8(epoch)],
           PROGRAM_ID
         )[0],
-        lpMint,
-        partnerLpToken:    partnerLp,
         solaMint:          state.solaMint,
         solaVault:         state.solaVault,
         marketVault:       state.marketVault,

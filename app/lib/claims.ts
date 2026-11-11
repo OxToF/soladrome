@@ -49,7 +49,9 @@ export async function computeClaimableFees(
     // hiSOLA is no longer a token, so there is no ATA to read here either.
     const hiSola = BigInt(pos.hiSola.toString());
     const staked = BigInt(pos.stakedAmount.toString());
-    const hiBal  = hiSola < staked ? hiSola : staked;
+    // `+ fee_shares`: the locked-for-life grants (team, contributor, partner) earn fees without
+    // being a balance. Omitting it showed every allocation 0 claimable.
+    const hiBal  = (hiSola < staked ? hiSola : staked) + BigInt(pos.feeShares?.toString() ?? "0");
 
     const acc = jsAdvanceAccumulator(
       BigInt(s.feesPerHiSola.toString()),

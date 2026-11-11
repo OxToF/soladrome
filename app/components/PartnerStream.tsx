@@ -11,6 +11,7 @@ import {
   PROGRAM_ID, sendTx, userAta, userAtaAuto, explainTxError,
   getMintProgram,
 } from "@/lib/program";
+import { partnerLpVaultPda, retainerEpochsEarned } from "./PartnerDealForm";
 
 const EPOCH_DURATION = 604_800; // state.rs
 
@@ -60,7 +61,8 @@ export interface StreamAlloc {
   scheduleEpochs: number;
   baseHiSola: bigint;
   streamStartTs: number;
-  lastCreditedEpoch: number;
+  lpWithdrawnEpoch: number;
+  lpQualifiedSinceTs: number;
   epochsQualified: number;
 }
 
@@ -98,6 +100,8 @@ export function PartnerStream({
   const [escrowLeft, setEscrowLeft] = useState<bigint>(BigInt(0));
   const [walletBal, setWalletBal] = useState<bigint>(BigInt(0));
   const [lpBal, setLpBal] = useState<bigint>(BigInt(0));
+  const [escrowLp, setEscrowLp] = useState<bigint>(BigInt(0));
+  const [paused, setPaused] = useState(false);
   const [lpDec, setLpDec] = useState<number>(6);
   const [nowSecs, setNowSecs] = useState(Math.floor(Date.now() / 1000));
   // Not state the partner controls: the rhythm is a term of the deal.
@@ -145,6 +149,12 @@ export function PartnerStream({
       ).catch(() => null);
       setLpBal(BigInt(lp?.value.amount ?? "0"));
       if (typeof lp?.value.decimals === "number") setLpDec(lp.value.decimals);
+      const esc = await connection.getTokenAccountBalance(
+        partnerLpVaultPda(wallet.publicKey)
+      ).catch(() => null);
+      setEscrowLp(BigInt(esc?.value.amount ?? "0"));
+      const st: any = await (program.account as any).protocolState.fetch(statePda).catch(() => null);
+      setPaused(Boolean(st?.paused));
 
       const slot = await connection.getSlot();
       const bt = await connection.getBlockTime(slot);
@@ -167,10 +177,20 @@ export function PartnerStream({
   const currentEpoch = Math.floor(nowSecs / EPOCH_DURATION);
   const spent = stream !== null && stream.epochsReleased >= stream.epochsTotal;
   const tranceDue = stream !== null && !spent && stream.lastReleaseEpoch < currentEpoch;
-  const lpOk = lpBal >= alloc.lpThreshold;
-  const epochOpen = alloc.lastCreditedEpoch < currentEpoch;
-  const retainerDue = lpOk && epochOpen && alloc.retainerPerEpoch > BigInt(0);
+  const lpOk = escrowLp >= alloc.lpThreshold;
+  const term = alloc.scheduleEpochs;
+  const earned = retainerEpochsEarned(
+    { lpQualifiedSinceTs: alloc.lpQualifiedSinceTs, lpWithdrawnEpoch: alloc.lpWithdrawnEpoch, scheduleEpochs: term },
+    currentEpoch,
+  );
+  const dueEpochs = Math.max(earned - alloc.epochsQualified, 0);
+  const retainerDue = dueEpochs > 0 && alloc.retainerPerEpoch > BigInt(0);
+  const epochOpen = retainerDue;
   const canCrank = stream !== null && (tranceDue || retainerDue);
+  const lpLeft = alloc.lpWithdrawnEpoch !== 0;
+  const termOver = earned >= term;
+  const canWithdraw = escrowLp > BigInt(0) && (alloc.lpQualifiedSinceTs === 0 || termOver || paused);
+  const toDeposit = alloc.lpThreshold > escrowLp ? alloc.lpThreshold - escrowLp : BigInt(0);
 
   // ── What the schedule being typed would actually escrow ─────────────────────
   const nEpochs = /^\d+$/.test(epochs.trim()) ? parseInt(epochs, 10) : NaN;
@@ -233,6 +253,56 @@ export function PartnerStream({
     finally { setBusy(false); }
   }
 
+  async function depositLp() {
+    if (!wallet || toDeposit === BigInt(0)) return;
+    setBusy(true); setStatus("");
+    try {
+      const program = getProgram(new AnchorProvider(connection, wallet, {}));
+      const ix = await program.methods
+        .depositPartnerLp(new BN(toDeposit.toString()))
+        .accounts({
+          partner: wallet.publicKey,
+          protocolState: statePda,
+          partnerAllocation: partnerPda(wallet.publicKey),
+          lpMint: alloc.lpMint,
+          partnerLpToken: userAta(alloc.lpMint, wallet.publicKey),
+          partnerLpVault: partnerLpVaultPda(wallet.publicKey),
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        } as any).instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
+      setStatus(`✅ LP locked in escrow — tx: ${tx.slice(0, 16)}…`);
+      await fetchStream();
+      onChanged();
+    } catch (e: any) { setStatus(`❌ ${explainTxError(e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function withdrawLp() {
+    if (!wallet) return;
+    setBusy(true); setStatus("");
+    try {
+      const program = getProgram(new AnchorProvider(connection, wallet, {}));
+      const ix = await program.methods
+        .withdrawPartnerLp()
+        .accounts({
+          partner: wallet.publicKey,
+          protocolState: statePda,
+          partnerAllocation: partnerPda(wallet.publicKey),
+          lpMint: alloc.lpMint,
+          partnerLpToken: userAta(alloc.lpMint, wallet.publicKey),
+          partnerLpVault: partnerLpVaultPda(wallet.publicKey),
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any).instruction();
+      const tx = await sendTx(connection, wallet, [ix]);
+      setStatus(`✅ LP returned — tx: ${tx.slice(0, 16)}…`);
+      await fetchStream();
+      onChanged();
+    } catch (e: any) { setStatus(`❌ ${explainTxError(e)}`); }
+    finally { setBusy(false); }
+  }
+
   async function crank() {
     if (!wallet || !stream) return;
     setBusy(true); setStatus("");
@@ -253,8 +323,6 @@ export function PartnerStream({
           rewardMint: alloc.bribeMint,
           bribeVault: bribeVaultPda(stream.poolId, alloc.bribeMint, currentEpoch),
           bribeTokenVault: bribeTokensPda(stream.poolId, alloc.bribeMint, currentEpoch),
-          lpMint: alloc.lpMint,
-          partnerLpToken: userAta(alloc.lpMint, wallet.publicKey),
           solaMint: solaM,
           solaVault: solaVaultAddr,
           marketVault,
@@ -291,28 +359,40 @@ export function PartnerStream({
           </div>
         </div>
 
-        {/* ── The liquidity condition, stated as the program sees it ── */}
+        {/* ── The LP escrow: the whole liquidity condition ── */}
         <div className="mt-4 rounded-xl border border-brand-border bg-brand-dark/60 px-3 py-3">
           <div className="flex justify-between items-baseline mb-1">
-            <span className="text-[10px] text-gray-500 uppercase tracking-widest">
-              Liquidity condition
-            </span>
-            <span className={`text-[11px] font-mono ${lpOk ? "text-brand-green" : "text-red-400"}`}>
-              {lpOk ? "met" : "not met"}
+            <span className="text-[10px] text-gray-500 uppercase tracking-widest">LP escrow</span>
+            <span className={`text-[11px] font-mono ${lpOk ? "text-brand-green" : "text-amber-400"}`}>
+              {lpLeft ? "returned" : lpOk ? "locked" : "not yet"}
             </span>
           </div>
           <div className="flex justify-between text-[11px]">
-            <span className="text-gray-500">You hold</span>
-            <span className="text-gray-300 font-mono">{fmt(lpBal, lpDec)} LP</span>
+            <span className="text-gray-500">In escrow / required</span>
+            <span className="text-gray-300 font-mono">{fmt(escrowLp, lpDec)} / {fmt(alloc.lpThreshold, lpDec)} LP</span>
           </div>
           <div className="flex justify-between text-[11px]">
-            <span className="text-gray-500">Your deal requires</span>
-            <span className="text-gray-300 font-mono">{fmt(alloc.lpThreshold, lpDec)} LP</span>
+            <span className="text-gray-500">Epochs earned / term</span>
+            <span className="text-gray-300 font-mono">{earned} / {term}</span>
           </div>
           <p className="text-[10px] text-gray-600 mt-2 leading-relaxed">
-            Read, never held. The protocol takes no custody of your LP — it simply stops paying
-            the epoch your balance drops below the threshold, and resumes the epoch it comes back.
+            Your LP stays in the pool and keeps earning swap fees; the protocol holds the LP
+            token until the term is over. Every full epoch it covers earns {fmt(alloc.retainerPerEpoch)} hiSOLA
+            — late cranks lose nothing. Claim your LP rewards before locking.
           </p>
+          {!lpLeft && toDeposit > BigInt(0) && (
+            <button className="btn-primary w-full mt-3" onClick={depositLp}
+                    disabled={busy || lpBal < toDeposit}>
+              {lpBal < toDeposit
+                ? `You hold ${fmt(lpBal, lpDec)} LP — ${fmt(toDeposit, lpDec)} needed`
+                : `Lock ${fmt(toDeposit, lpDec)} LP for ${term} epochs`}
+            </button>
+          )}
+          {canWithdraw && (
+            <button className="btn-secondary w-full mt-3" onClick={withdrawLp} disabled={busy}>
+              {termOver ? "Term complete — withdraw my LP" : paused ? "Protocol paused — withdraw my LP" : "Withdraw my LP"}
+            </button>
+          )}
         </div>
 
         <div className="flex justify-between items-baseline mt-4 mb-1">
@@ -355,20 +435,10 @@ export function PartnerStream({
           </div>
         </div>
 
-        {/* ☢️ The one thing a partner must not miss. */}
-        {epochOpen && lpOk && (
-          <p className="text-xs text-amber-400/90 leading-relaxed mb-3">
-            ⚠️ Epoch {currentEpoch} has not been run. The retainer cannot be back-dated: the
-            chain keeps no record of what your LP balance was last week, so the crank IS the
-            proof, and an epoch nobody runs is gone rather than owed. The bribe half is
-            different — it slips one epoch and loses nothing.
-          </p>
-        )}
-
         <p className="text-[11px] text-gray-500 leading-relaxed mb-3">
           Running this is <strong className="text-gray-300">permissionless</strong>: anyone may
-          call it, and the epoch&apos;s voters are the ones owed the bribe, so the money side does
-          not depend on you. The retainer side does — check back each week.
+          call it. It releases this epoch&apos;s bribe tranche and credits every epoch your LP
+          has covered since the last run.
         </p>
 
         <button
@@ -379,19 +449,15 @@ export function PartnerStream({
           {busy ? "Processing…"
             : canCrank
               ? tranceDue && retainerDue
-                ? `Run epoch ${currentEpoch} — bribe + ${fmt(alloc.retainerPerEpoch)} hiSOLA`
+                ? `Run epoch ${currentEpoch} — bribe + ${fmt(alloc.retainerPerEpoch * BigInt(dueEpochs))} hiSOLA`
                 : retainerDue
-                  ? `Claim epoch ${currentEpoch} — ${fmt(alloc.retainerPerEpoch)} hiSOLA`
+                  ? `Claim ${dueEpochs} epoch${dueEpochs === 1 ? "" : "s"} — ${fmt(alloc.retainerPerEpoch * BigInt(dueEpochs))} hiSOLA`
                   : "Release this epoch's bribe tranche"
-              : !epochOpen
-                ? "This epoch is already run"
-                : !lpOk
-                  ? "Liquidity below the threshold"
-                  : "Nothing to do this epoch"}
+              : "Nothing to do this epoch"}
         </button>
         <p className="text-[11px] text-gray-500 mt-2">
           {spent
-            ? "Bribe schedule complete — the retainer keeps running as long as the liquidity is there."
+            ? "Bribe schedule complete."
             : `${weeksLeft} tranche${weeksLeft === 1 ? "" : "s"} left`}
           {" · "}epoch {currentEpoch}
         </p>
@@ -399,7 +465,7 @@ export function PartnerStream({
         {spent && (
           <p className="text-xs text-brand-green mt-3">
             ✅ Every funded tranche was released. You can escrow a new term below, or keep
-            bribing manually from the Bribe tab — the retainer is unaffected either way.
+            bribing manually from the Bribe tab.
           </p>
         )}
 

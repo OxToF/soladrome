@@ -81,7 +81,7 @@ pub fn mint_ecosystem_allocation(ctx: Context<MintEcosystemAllocation>) -> Resul
 
     // ── 250 000 → TEAM_WALLET, as hiSOLA locked FOR LIFE (never liquid SOLA) ──
     // Pays the people who worked unpaid until launch. Wallet balance stays 0 → borrow_usdc
-    // is blind to it (the 20% cap is not sidesteppable), never liquid SOLA → sell_sola is
+    // is blind to it (and unfinanced, it never borrows), never liquid SOLA → sell_sola is
     // unreachable → it cannot drain the floor. permanent_amount covers the whole tranche,
     // so unlock_hi_sola can never release it. Unlike the 7M it DOES vote (up to 4×): the
     // vote guard keys on the founder wallet, and this is a distinct one.
@@ -134,7 +134,7 @@ pub fn mint_ecosystem_allocation(ctx: Context<MintEcosystemAllocation>) -> Resul
         lock.lock_end_ts = team_lock_end_ts;
         // Locked for LIFE: the whole tranche is permanent, so the deferred drain
         // (unlock → unstake → sell_sola) is closed for good. Only borrow_against_locked
-        // at 20% remains. Voting stays fully active (wallet ≠ FOUNDER_WALLET).
+        // never lends to it (2026-11-09). Voting stays fully active (wallet ≠ FOUNDER_WALLET).
         lock.permanent_amount = FOUNDER_IMMEDIATE_SOLA;
     }
 
@@ -232,11 +232,11 @@ pub fn claim_founder_hi_sola(ctx: Context<ClaimFounderHiSola>) -> Result<()> {
 
     // ── The hiSOLA goes straight into the lock, never a balance ──────────
     // Identical to claim_partner_allocation. `user_position.hi_sola` stays 0, which is
-    // what makes the reserve inert: borrow_usdc cannot see it (so the 20% cap is not
+    // what makes the reserve inert: borrow_usdc cannot see it (so no borrow cap is
     // bypassable), and unstake → sell_sola is unreachable. Combined with the
     // FOUNDER_WALLET guards on vote_gauge / replay_vote / burn_o_sola_for_votes and on
     // unlock_hi_sola, the 7M cannot vote, cannot earn, cannot be sold. Liquidity comes
-    // solely from borrow_against_locked (20%, any ve-locker).
+    // not from borrow_against_locked either, which lends financed stake only (2026-11-09).
     //
     // Under the token model this was a mint into a vault the wallet did not control.
     // The guarantee is now structural rather than custodial: `amount_locked` is the only
@@ -362,7 +362,7 @@ pub fn claim_founder_vesting(ctx: Context<ClaimFounderVesting>) -> Result<()> {
 ///
 /// The two sides are not the same kind of thing:
 /// - **hiSOLA** goes into a LIFETIME ve lock (`permanent_amount` covers the whole tranche),
-///   so it can never be unlocked or sold. It votes forever, borrows at 20 %, and earns a
+///   so it can never be unlocked or sold. It votes forever, never borrows, and earns a
 ///   real share of protocol fees through `fee_shares` (since 2026-08-25).
 /// - **oSOLA** is an option, not a payment: exercising burns it and pays 1 USDC per unit
 ///   into the floor, so the contributor funds every SOLA they take. It is worth nothing at
@@ -451,7 +451,7 @@ pub fn register_contributor(
 /// Mints SOLA to sola_vault as 1:1 backing and records the hiSOLA as `permanent_amount`,
 /// so `unlock_hi_sola` can never release any of it. `total_hi_sola` is NOT incremented and
 /// never will be, which means this tranche earns no protocol fees at any point — it buys
-/// permanent voting power and a 20 % borrow valve, nothing else.
+/// permanent voting power and a fee share, nothing else — no borrow (2026-11-09).
 pub fn claim_contributor_hi_sola(ctx: Context<ClaimContributorHiSola>) -> Result<()> {
     let clock = Clock::get()?;
     let vesting = &ctx.accounts.contributor_vesting;
@@ -464,9 +464,9 @@ pub fn claim_contributor_hi_sola(ctx: Context<ClaimContributorHiSola>) -> Result
     // Claimed all at once (no cliff, no vesting) — a contributor is a first-class
     // member of the project. The hiSOLA is minted straight into a lifetime ve lock
     // (team/partner-bag pattern): wallet balance stays 0, so it earns no fees, cannot
-    // be sold, and cannot drain the floor; it votes (up to 4×) and borrows 20% via
-    // borrow_against_locked. This is unfinanced supply, so locking it for life keeps
-    // the only exposure at the protocol's 20% ceiling.
+    // be sold, and cannot drain the floor; it votes (up to 4×). This is unfinanced supply,
+    // so locking it for life and refusing it any borrow (2026-11-09) leaves it no channel
+    // to the floor at all.
     let claimable = vesting
         .hi_sola_amount
         .saturating_sub(vesting.hi_sola_claimed);

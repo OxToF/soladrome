@@ -13,7 +13,7 @@ use crate::amm_math::{self, MINIMUM_LIQUIDITY};
 use crate::constants::*;
 use crate::errors::SoladromeError;
 use crate::instructions::amm::{
-    advance_pool_rewards, apply_swap_reserves, continuous_active, quote_swap,
+    advance_pool_rewards, apply_swap_reserves, continuous_active, minted_lp_supply, quote_swap,
     require_floor_respected,
 };
 use crate::instructions::strategy::pool_address;
@@ -597,9 +597,10 @@ pub fn deploy_pol(
             .reserve_b
             .checked_add(actual_b)
             .ok_or(SoladromeError::Overflow)?;
+        // The dead shares count on a first deposit — see `amm::minted_lp_supply`.
         pool.total_lp = pool
             .total_lp
-            .checked_add(lp_out)
+            .checked_add(minted_lp_supply(pool.total_lp, lp_out)?)
             .ok_or(SoladromeError::Overflow)?;
         require_floor_respected(pool, &ctx.accounts.protocol_state)?;
     }

@@ -3307,23 +3307,35 @@
           }
         },
         {
-          "name": "lp_mint",
+          "name": "partner_lp_vault",
           "docs": [
-            "below — so it is never deserialized, which also means a close is not blocked by anything",
-            "about the mint itself."
-          ]
-        },
-        {
-          "name": "partner_lp_token",
-          "docs": [
-            "epoch's retainer can no longer be earned. **Untyped on purpose, and pinned by address.**",
-            "Untyped because a partner who never provided liquidity has no such account, and a typed",
-            "account would fail at the account level — making the partners with no liquidity precisely",
-            "the ones who could not be closed. Pinned because the authority chooses what to pass here:",
-            "without the address constraint they could present any empty account, read a balance of 0",
-            "and close a partner who was still qualifying. `lp_balance_of` returns 0 for an absent",
-            "account, which is the honest reading of \"they hold none\"."
-          ]
+            "Untyped because most closes find it absent (never deposited, or already withdrawn —",
+            "`withdraw_partner_lp` closes it), and pinned by seeds so the authority cannot present an",
+            "empty account in its place."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114,
+                  95,
+                  108,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner_wallet"
+              }
+            ]
+          }
         },
         {
           "name": "bribe_stream",
@@ -4673,20 +4685,6 @@
               }
             ]
           }
-        },
-        {
-          "name": "lp_mint",
-          "docs": [
-            "The LP token named in the deal. Pinned to the allocation so the caller cannot swap in a",
-            "mint the partner happens to hold a lot of."
-          ]
-        },
-        {
-          "name": "partner_lp_token",
-          "docs": [
-            "The partner's own LP account, and the whole of the liquidity condition. Read-only: the",
-            "protocol never takes custody of it, it only looks."
-          ]
         },
         {
           "name": "sola_mint",
@@ -6384,6 +6382,129 @@
       ]
     },
     {
+      "name": "deposit_partner_lp",
+      "discriminator": [
+        64,
+        149,
+        98,
+        247,
+        164,
+        102,
+        203,
+        160
+      ],
+      "accounts": [
+        {
+          "name": "partner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_allocation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint",
+          "docs": [
+            "The LP mint named in the deal — nothing else can be escrowed against it."
+          ]
+        },
+        {
+          "name": "partner_lp_token",
+          "writable": true
+        },
+        {
+          "name": "partner_lp_vault",
+          "docs": [
+            "The escrow: owned by `protocol_state`, so only this program moves it, and only",
+            "`withdraw_partner_lp` moves it out — to the partner."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114,
+                  95,
+                  108,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "docs": [
+            "Protocol LP mints are always classic SPL Token."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "distribute_o_sola",
       "discriminator": [
         175,
@@ -7486,6 +7607,97 @@
           "name": "authority",
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "program",
+          "docs": [
+            "upgradeable deployment from one that is not."
+          ],
+          "address": "DgD37Vjs8ozzBwZnfsNEDQNw1SEsgBTr2TXfBdsrgXpe"
+        },
+        {
+          "name": "program_data",
+          "docs": [
+            "only when `program` is upgradeable — see `require_upgrade_authority`."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  188,
+                  87,
+                  129,
+                  24,
+                  234,
+                  184,
+                  57,
+                  195,
+                  250,
+                  60,
+                  200,
+                  82,
+                  26,
+                  141,
+                  143,
+                  82,
+                  185,
+                  36,
+                  215,
+                  189,
+                  161,
+                  200,
+                  235,
+                  226,
+                  243,
+                  84,
+                  18,
+                  210,
+                  43,
+                  23,
+                  166,
+                  107
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                2,
+                168,
+                246,
+                145,
+                78,
+                136,
+                161,
+                176,
+                226,
+                16,
+                21,
+                62,
+                247,
+                99,
+                174,
+                43,
+                0,
+                194,
+                185,
+                61,
+                22,
+                193,
+                36,
+                210,
+                192,
+                83,
+                122,
+                16,
+                4,
+                128,
+                0,
+                0
+              ]
+            }
+          }
         },
         {
           "name": "protocol_state",
@@ -10909,7 +11121,7 @@
         "The 7M are minted straight into a ve lock by `claim_founder_hi_sola` and must",
         "never return to a wallet. Unlocking would undo all three guarantees at once:",
         "the hiSOLA re-enters `total_hi_sola` (fee accrual resumes), `borrow_usdc`",
-        "regains sight of it (the 20% cap becomes bypassable), and unstake → sell_sola",
+        "regains sight of it (unfinanced hiSOLA would borrow), and unstake → sell_sola",
         "turns the reserve into a floor drain. The guard is on FOUNDER_WALLET only —",
         "TEAM_WALLET and partners release their non-permanent portions normally."
       ],
@@ -11575,6 +11787,106 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "withdraw_partner_lp",
+      "discriminator": [
+        168,
+        153,
+        103,
+        173,
+        54,
+        86,
+        43,
+        167
+      ],
+      "accounts": [
+        {
+          "name": "partner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partner_allocation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint"
+        },
+        {
+          "name": "partner_lp_token",
+          "writable": true
+        },
+        {
+          "name": "partner_lp_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  110,
+                  101,
+                  114,
+                  95,
+                  108,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
@@ -12125,7 +12437,7 @@
     {
       "code": 6046,
       "name": "PartnerAllocationNotSettled",
-      "msg": "Partner allocation is live — a retainer that could still be credited this epoch cannot be closed out from under the partner"
+      "msg": "Partner allocation is live — its bag is unclaimed, its bribe escrow is not spent, or covered epochs are not yet credited"
     },
     {
       "code": 6047,
@@ -12160,7 +12472,7 @@
     {
       "code": 6053,
       "name": "NothingToCrank",
-      "msg": "Nothing to do this epoch — no bribe tranche is due and the retainer is either already credited or unqualified"
+      "msg": "Nothing to do this epoch — no bribe tranche is due and every epoch the LP escrow covered is already credited"
     },
     {
       "code": 6054,
@@ -12251,6 +12563,21 @@
       "code": 6071,
       "name": "PolPriceDeviation",
       "msg": "This deposit would price SOLA too far from the curve: protocol-owned liquidity is never added at a price an arbitrageur could take from"
+    },
+    {
+      "code": 6072,
+      "name": "PartnerLpLocked",
+      "msg": "The partner's LP stays in escrow until the deal's term is over: every epoch of the schedule must have been covered (or the protocol paused)"
+    },
+    {
+      "code": 6073,
+      "name": "PartnerDealOver",
+      "msg": "This partner deal no longer takes liquidity: its LP has already left the escrow"
+    },
+    {
+      "code": 6074,
+      "name": "PartnerLpNotReturned",
+      "msg": "The partner's LP escrow must be empty, and every epoch it covered credited, before the allocation can be closed"
     }
   ],
   "types": [
@@ -12941,28 +13268,27 @@
     {
       "name": "PartnerAllocation",
       "docs": [
-        "A protocol partner's deal (Jito, Marinade, Solayer…): a signature bag, then a retainer.",
+        "A protocol partner's deal (Jito, Marinade, Solayer…): a closed bag, earned against",
+        "liquidity held in escrow (2026-11-09).",
         "",
-        "☢️ **This is not a vesting schedule, and the difference is the whole design.** A vesting",
-        "promises a total on day one and releases it in slices: the amount exists from the start, the",
-        "only condition is that time passes, and the beneficiary is a creditor for the remainder. A",
-        "**retainer** has no total, it has a rate. Each epoch is bought separately, against something",
-        "verified at that moment — the partner's liquidity, still there, right now.",
+        "**The deal.** The partner escrows a bribe schedule of `schedule_epochs` epochs",
+        "(`fund_partner_bribe_stream`), then locks at least `lp_threshold` of `lp_mint` in the",
+        "protocol's LP escrow (`deposit_partner_lp`). For every full epoch the LP covers they are",
+        "credited `retainer_per_epoch` hiSOLA, up to `schedule_epochs` epochs — so the whole deal is",
+        "`base_hi_sola + retainer_per_epoch × schedule_epochs`, known at signature, and then it ends.",
+        "The LP comes back through `withdraw_partner_lp` once every epoch of the term is behind it.",
         "",
-        "Three consequences follow, and they are why the 1:1 bribe match was removed on 2026-08-27:",
-        "- A partner who leaves after ten epochs has not forfeited the rest; **there never was a",
-        "rest**. Nothing is owed, so nothing has to be revoked, so `close_partner_allocation`",
-        "never has to take anything away from anyone.",
-        "- There is no cap. The old deal died at `cap_hi_sola`; a partner who keeps their liquidity",
-        "in place for three years keeps earning for three years.",
-        "- No oracle is needed anywhere. The old `rate_num/rate_den` was a ratio of base units",
-        "**frozen for life** at registration: if the partner's token halved, the protocol went on",
-        "paying the same hiSOLA per unit, permanently and irrevocably.",
+        "☢️ **Why the escrow.** Until 2026-11-09 the condition was the partner's own LP balance,",
+        "read at the instant of the crank, and the retainer had no end. An SPL balance has no",
+        "history, so a partner could add liquidity, crank and remove it in one transaction, and earn",
+        "every epoch for zero seconds of liquidity — forever. Holding the LP in a vault only the",
+        "program moves, with no exit before the term is over, turns \"was the liquidity there?\" from",
+        "an instant into an interval: credits are a function of time and nothing else.",
         "",
-        "What the partner gets: permanent voting power from day one, protocol fees for life on",
-        "everything they accrue (`UserPosition.fee_shares`), a 20 % working-capital valve",
-        "(`borrow_against_locked`), and no custody of their LP at any point — the protocol never",
-        "holds it, it simply stops paying when the balance drops below `lp_threshold`.",
+        "What the partner keeps: the swap fees (they accrue to the pool's reserves, so the escrowed",
+        "LP grows in value), permanent voting power, protocol fees for life on everything credited",
+        "(`UserPosition.fee_shares`). What they give up: the oSOLA LP emissions on the escrowed part",
+        "(the bag replaces them), and borrowing — nothing unfinanced borrows since 2026-11-09.",
         "",
         "PDA: [b\"partner\", partner_wallet]"
       ],
@@ -13007,15 +13333,15 @@
             "type": "u64"
           },
           {
-            "name": "last_credited_epoch",
+            "name": "lp_withdrawn_epoch",
             "docs": [
-              "Last epoch the retainer was credited for. One credit per epoch, and never retroactive.",
+              "The epoch in which the partner's LP left the escrow, or 0 while it is still there (or was",
+              "never deposited). Renamed from `last_credited_epoch` on 2026-11-09, same slot.",
               "",
-              "☢️ Unlike the bribe stream, **this schedule cannot slip**: an epoch nobody cranks is",
-              "lost, not deferred. The chain keeps no history of an SPL balance, so there is no way to",
-              "establish after the fact that the liquidity was present five epochs ago. The crank *is*",
-              "the attestation. That is a real cost of the design and the reason the front-end fires",
-              "it automatically — otherwise a distracted partner loses money through no fault."
+              "Credits are computed from time, not attested by a crank: the LP sits in a vault only",
+              "`withdraw_partner_lp` can empty, so every epoch between `lp_qualified_since_ts` and",
+              "this one is provably covered. Freezing the end here is what lets a crank that arrives",
+              "late still pay the right count — and nothing more — after the LP is gone."
             ],
             "type": "u64"
           },
@@ -13100,6 +13426,17 @@
               "the bag: the schedule would exist and mean nothing."
             ],
             "type": "u64"
+          },
+          {
+            "name": "lp_qualified_since_ts",
+            "docs": [
+              "Unix timestamp at which the escrow first held `lp_threshold`, or 0 if it never has.",
+              "",
+              "The first epoch that counts is the first one to START at or after this instant: an epoch",
+              "is credited only if the liquidity covered all seven days of it. Set once — the escrow",
+              "cannot be drawn down before the term is over, so the condition cannot lapse mid-deal."
+            ],
+            "type": "i64"
           }
         ]
       }

@@ -50,10 +50,10 @@ The price premium above 1.0 USDC/SOLA stays in `market_reserve` and is paid back
 |---|---|---|---|---|---|
 | Governance | 7,000,000 | hiSOLA | 6 months | 24 months linear | `claim_founder_hi_sola` |
 | Options | 5,000,000 | oSOLA | 12 months (25 % at the cliff) | 48 months in all, linear | `claim_founder_vesting` |
-| Liquid operational | 250,000 | SOLA | None | Immediate | `mint_ecosystem_allocation` |
+| Team | 250,000 | hiSOLA (lifetime ve lock) | None | Immediate | `mint_ecosystem_allocation` |
 
 **Governance tranche (7M hiSOLA):**
-Each `claim_founder_hi_sola` call mints SOLA to `sola_vault` AND hiSOLA 1:1 to the founder wallet, which goes straight into a **lifetime ve escrow**. The only liquidity path is `borrow_against_locked` (USDC borrowed against the escrowed position, 0% interest, no liquidation), capped at **20%** (`PARTNER_BORROW_CAP_BPS = 2000`) — the same valve every ve-locker gets, because the tranche is unfinanced supply. Borrowing, not selling, funds operations while the floor vault grows organically.
+Each `claim_founder_hi_sola` call mints SOLA to `sola_vault` AND hiSOLA 1:1 to the founder wallet, which goes straight into a **lifetime ve escrow**. It has **no liquidity path at all**: it cannot be unlocked, sold or borrowed against. Since 2026-11-09 no unfinanced allocation borrows: `borrow_against_locked` lends only financed stake, so the floor backs every holder 1:1.
 
 The dedicated `founder_borrow_usdc` instruction and its `FOUNDER_BORROW_CAP_BPS` constant were **removed on 2026-07-18**: once the 7M are escrowed the founder's wallet balance is zero, so a balance-based cap could never pass anyway. The same applies to `contributor_borrow_usdc`. Any borrow figure derived from those instructions is obsolete.
 
@@ -65,73 +65,58 @@ Each exercise of `exercise_o_sola` adds 1 USDC to `floor_vault` — every option
 **Team tranche (250k):**
 Minted by `mint_ecosystem_allocation` to a **separate team wallet** (`BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA`), distinct from the founder wallet.
 
-⚠️ It is **not liquid SOLA** — that was the largest floor-drain vector in the protocol and it was closed on 2026-07-17. It is hiSOLA written straight into a **lifetime ve lock** (`permanent_amount` covers the whole tranche), so `unlock_hi_sola` can never release it and `sell_sola` can never reach it. Being a distinct wallet from the founder's, it **votes** as an ordinary position (up to 4×), it borrows 20% through `borrow_against_locked` — and since 2026-08-27 it **earns protocol fees** (`fee_shares`), because a bag locked for life had a fee basis of zero that could never become anything else, which made a tranche whose whole purpose is to pay people pay them nothing.
+⚠️ It is **not liquid SOLA** — that was the largest floor-drain vector in the protocol and it was closed on 2026-07-17. It is hiSOLA written straight into a **lifetime ve lock** (`permanent_amount` covers the whole tranche), so `unlock_hi_sola` can never release it and `sell_sola` can never reach it. Being a distinct wallet from the founder's, it **votes** as an ordinary position (up to 4×, kept at 4× by relocking a dust amount, which re-extends the whole lock), it **never borrows** (unfinanced, 2026-11-09) — and since 2026-08-27 it **earns protocol fees** (`fee_shares`), because a bag locked for life had a fee basis of zero that could never become anything else, which made a tranche whose whole purpose is to pay people pay them nothing.
 
 ### 2.2 Protocol Partner Allocations
 
 On-chain instructions: `register_partner` (authority-only) + `fund_partner_bribe_stream` (partner)
-+ `claim_partner_allocation` (partner) + `crank_partner_epoch` (permissionless).
-PDAs: `[b"partner", partner_wallet]`, `[b"bribe_stream", partner_wallet]`
++ `deposit_partner_lp` / `withdraw_partner_lp` (partner) + `crank_partner_epoch` (permissionless)
++ `claim_partner_allocation` (optional signature bag, 0 by default).
+PDAs: `[b"partner", partner_wallet]`, `[b"bribe_stream", partner_wallet]`, `[b"partner_lp", partner_wallet]`
 
-**A signature bag, then a retainer (2026-08-27).** The 1:1 bribe match is gone. It priced hiSOLA
-against a partner's token at a base-unit ratio **frozen for life** at registration, with no oracle
-to correct it and no clock to pace it — `total_bribed_credited` was a lifetime counter, so a year
-of committed bribes could all land in week one. And since `close_partner_allocation` rightly
-cannot revoke once a claim has happened, a bad rate was permanent.
+**A closed deal, earned against liquidity held in escrow (2026-11-09).** In the spirit of
+Beradrome's Real Deal — a fixed amount of voting power against committed bribes — with liquidity
+as the second condition. It replaces the open-ended per-epoch retainer of 2026-08-27 with a total
+known at signature, an end date, and liquidity held in escrow for the whole term.
 
-What replaces it is a different instrument, not a smaller version of the same one:
+**What the partner commits:**
+1. **Bribes, escrowed up front** — `fund_partner_bribe_stream` locks `schedule_epochs ×
+   amount_per_epoch` in one signature. The money is already in escrow, so the bribes cannot stop.
+2. **Liquidity, locked for the whole term** — `deposit_partner_lp` moves at least `lp_threshold` of
+   the agreed pool's LP into a vault only the program moves. The liquidity stays in the pool and
+   keeps earning swap fees; the protocol holds the LP token until the term is over.
 
-- **Signature bag** (`base_hi_sola`) — delivered whole, once, the moment the partner escrows their
-  bribe schedule. It is the only unconditional part of the deal, which is why it is the small one.
-- **Retainer** (`retainer_per_epoch`) — credited one epoch at a time by `crank_partner_epoch`, for
-  every epoch the partner still holds `lp_threshold` of `lp_mint`. **No total, no cap, no end
-  date.**
+**What the partner receives:** a hiSOLA bag known at signature, credited **1/N for every full
+epoch the LP covered** (N = `schedule_epochs`), then nothing more. Credits are a function of time,
+not an attestation: an epoch counts once it has started after the deposit and ended, so a late
+crank pays the backlog, and holding the LP for one transaction earns nothing.
 
-A vesting promises a total on day one and releases it in slices; a retainer has no total, only a
-rate, and each epoch is bought separately against something verified at that moment. A partner who
-leaves after ten epochs has forfeited nothing — there never was a remainder — and one who stays
-three years is paid for three years.
+| Liquidity locked | hiSOLA bag | Ratio | Minimum bribes over the term |
+|---|---|---|---|
+| $100K | 10,000 | 10% | $10K |
+| $250K | 22,000 | 8.8% | $22K |
+| $500K | 40,000 | 8% | $40K |
+| $1M | 70,000 | 7% | $70K |
 
-| Tier | LP committed | Signature bag | Retainer / epoch | At 52 epochs | Ratio |
-|---|---|---|---|---|---|
-| 1 | $1M | 20,000 | 3,450 | 199,400 | 19.9% |
-| 2 | $500K | 7,500 | 1,300 | 75,100 | 15.0% |
-| 3 | $200K | 2,000 | 350 | 20,200 | 10.1% |
+Degressive so that one partner cannot take a disproportionate share of fees and votes; linear
+between points, 7% beyond $1M. The rule of thumb: **one hiSOLA per dollar of bribes committed,
+within the limit of the liquidity tier.** Default term 26 epochs (~6 months); 13 and 52 are offered.
+The dollar tier is converted to LP units at signature (no oracle on-chain).
 
-Amounts in hiSOLA. **The "at 52 epochs" column is an illustration at one year, not a promised
-total.** The previous scale (10 / 24 / 25% of committed LP) was replaced because its gradient was
-flat between tiers 1 and 2 — a partner had no reason to double their liquidity.
-
-**Mechanism:**
-- `fund_partner_bribe_stream` — the partner escrows `schedule_epochs × amount_per_epoch` of their
-  committed `bribe_mint` in one signature. Length and minimum size are terms of the deal, fixed at
-  registration (`ScheduleLengthMismatch`, `ScheduleUnderfunded`). **This is the gate:** until it
-  runs, `stream_start_ts` is 0 and neither the bag nor a single epoch of retainer accrues.
-- `claim_partner_allocation` — delivers the bag, once, into the ve lock as `permanent_amount`.
-- `crank_partner_epoch` — permissionless, one call per epoch, and it does both halves:
-  - the escrowed **bribe tranche** goes to that epoch's gauge voters, **whether or not** the
-    liquidity condition holds — it is money that already belongs to them;
-  - the **retainer** is credited only if `partner_lp_token.amount >= lp_threshold`.
+**Rules:**
+- **The LP leaves only when the term is covered** (`withdraw_partner_lp`), or if the escrow never
+  reached the threshold, or while the protocol is **paused** — the one exit that does not wait, so an
+  incident never traps a partner. Leaving early keeps the epochs already covered and forfeits the rest.
+- **Everything credited is permanent** (`permanent_amount`): it votes (up to 4×, maintained by
+  relocking), earns protocol fees for life (`fee_shares`), and can never be unlocked, sold or
+  borrowed against — nobody financed it through the curve.
 - **Fee dilution: yes, and deliberately.** `total_hi_sola` grows by every credit, matched by
-  `fee_shares` on the partner's position. The share is real rather than printed: existing holders
-  are diluted by exactly what the partner receives.
-- **Liquidity without selling**: wallet hiSOLA stays 0, so `borrow_against_locked` draws up to
-  **20%** (`PARTNER_BORROW_CAP_BPS = 2000`) of the locked position from `floor_vault` (2% fee, 75%
-  floor buffer, repayable, no liquidation).
-- **Nothing is ever releasable.** Bag and retainer are both `permanent_amount`, so `unlock_hi_sola`
-  releases nothing at any date and unfinanced supply can never be sold at a floor it never funded.
-
-☢️ **A missed epoch is lost, not deferred.** The bribe side slips — the schedule simply runs one
-epoch longer — but the retainer cannot: the chain keeps no history of an SPL balance, so it is
-impossible to establish afterwards that the LP was present five epochs ago. The crank *is* the
-attestation, which is why the front-end fires it.
-
-⚠️ **What the attestation proves, and what it does not.** It proves the balance existed at the
-instant of the crank. A partner cranking their own epoch can hold the LP for exactly that
-transaction — add liquidity, crank, remove liquidity — and the program cannot tell. Closing that
-would require custody of the LP, which is the one thing this deal promises not to take. What
-remains is a counterparty the authority registered by hand, a manoeuvre legible on-chain to anyone
-reading the pool, and a renewal the authority can decline. **Reputational, not cryptographic.**
+  `fee_shares` on the partner's position: existing holders are diluted by exactly what the partner
+  receives.
+- **What the partner gives up:** the oSOLA LP emissions on the escrowed LP (the bag replaces them).
+- **A partner voting for their own pool recovers part of their own bribes** — the rules of the game.
+- **hiSOLA a partner buys on their own** is an ordinary position: borrowable at 100%, unstakeable,
+  voting and earning like anyone's.
 
 **Voting power growth via rewards flywheel:**
 Partners earn oSOLA through LP emissions on their pools (JitoSOL/SOLA, mSOL/SOLA, etc.). They can burn oSOLA during `vote_gauge` calls to earn uncapped `o_sola_bonus` voting power on top of their ve-locked allocation. Each oSOLA burned also strengthens the floor vault — an aligned incentive structure.
@@ -159,8 +144,9 @@ oSOLA. `ECOSYSTEM_TOTAL` is unchanged at 1.75M — the alternative (200K + 750K 
 have needed the constant raised by 700K, a redeploy, and a full republication of the tokenomics.
 
 There is **no separate operations fund** (a 175K "Operations & Management Fund" was considered
-2026-07-14 and dropped 2026-07-18): operational costs ride the team tranche's 20% borrow line and
-oSOLA-denominated payments from the envelopes above.
+2026-07-14 and dropped 2026-07-18): operational costs are paid from
+oSOLA-denominated payments from the envelopes above and the team tranche's fee income (the team
+tranche no longer borrows).
 
 ### 2.4 Contributor / Service Provider Allocation
 
@@ -174,7 +160,7 @@ the last trace of the name.
 
 | Tranche | Delivery | Regime |
 |---|---|---|
-| hiSOLA | All at once | Lifetime ve lock — votes up to 4×, **earns protocol fees**, borrows 20% |
+| hiSOLA | All at once | Lifetime ve lock — votes up to 4×, **earns protocol fees**, never borrows |
 | oSOLA | All at once | An option: 1 USDC per unit into the floor to exercise |
 
 **Two `require!`s, both added 2026-08-27:**
@@ -200,27 +186,27 @@ Used sparingly — a handful of individuals, small amounts. KOLs and contest win
 | Category | hiSOLA | oSOLA | Lock | Vote | Fees | Borrow | Financed |
 |---|---|---|---|---|---|---|---|
 | User purchases (curve) | Unlimited | — | none | yes | yes | 100% | yes |
-| Founder governance | 7,000,000 | — | for life | **no** | **no** | 20% | no |
+| Founder governance | 7,000,000 | — | for life | **no** | **no** | **no** | no |
 | Founder options | — | 5,000,000 | 12m cliff / 48m vest | n/a | n/a | n/a | at exercise |
-| Team | 250,000 | — | for life | yes, 4× | yes | 20% | no |
-| Contributors | ≤ 100,000 | ≤ 100,000 | for life / immediate | yes, 4× | yes | 20% | half |
-| Protocol partners | per tier, ~410,000 at a year | — | for life | yes, 4× | yes | 20% | no |
+| Team | 250,000 | — | for life | yes, 4× | yes | **no** | no |
+| Contributors | ≤ 100,000 | ≤ 100,000 | for life / immediate | yes, 4× | yes | **no** | half |
+| Protocol partners | fixed per deal (e.g. 180,000 for six deals) | — | for life | yes, 4× | yes | **no** | no |
 | Ecosystem | — | 1,750,000 | none | n/a | n/a | n/a | at exercise |
 | LP emissions | — | Ongoing | none | n/a | n/a | n/a | at exercise |
 
-**Nothing unfinanced is ever liquid SOLA.** Every allocation above that was not paid for through
-the curve is locked for life, so the drain via `sell_sola` is **zero** and the only valve is
-`borrow_against_locked` at 20%. Aggregate borrow exposure is 20% × Σ(unfinanced) ≈ 1.55M in theory,
-but `FLOOR_RESERVE_MIN_BPS` bounds all borrowing to 25% of SOLA actually purchased through the
-curve — so it does not bind until ~6.2M has been bought. **Publish that number, not the caps.**
+**Nothing unfinanced is ever liquid SOLA, and nothing unfinanced borrows.** Every allocation
+above that was not paid for through the curve is locked for life, so the drain via `sell_sola` is
+**zero**, and since 2026-11-09 the drain via borrowing is zero too: `borrow_usdc` and
+`borrow_against_locked` lend only financed stake (`staked_amount`), which is the borrower's own
+USDC. A borrower's SOLA stays behind their debt, so **every other holder is redeemable 1:1.**
 
-**Fee dilution is the real cost, and it decreases.** After a year of maintained liquidity the
-unfinanced allocations that earn fees total ~760,000 of basis (410K partner retainers, 250K team,
-100K contributors — the founder's 7M earns nothing). Against a growing organic base that is 72% of
-the fee stream at price ×2, 53% at ×10, 28% at 2M purchased, 13% at 5M. The amounts are fixed and
-the share falls: a large share of a small pie becoming a small share of a large one. Stated
-plainly, an allocation is a call option on the protocol succeeding, paid in dilution rather than in
-cash the protocol does not have.
+**Fee dilution is the real cost, and it decreases.** With, say, one $1M, two $500K and three $100K
+partner deals (180,000 hiSOLA), the unfinanced allocations that earn fees total ~530,000 of basis
+(180K partners, 250K team, 100K contributors — the founder's 7M earns nothing). Against a growing
+organic base that is 64% of the fee stream at price ×2, 44% at ×10, 21% at 2M purchased, 10% at
+5M. The amounts are fixed and the share falls: a large share of a small pie becoming a small share
+of a large one. Stated plainly, an allocation is a call option on the protocol succeeding, paid in
+dilution rather than in cash the protocol does not have.
 
 ---
 

@@ -54,6 +54,22 @@ fn program_id() -> Pubkey {
     soladrome::program_id()
 }
 
+/// Make `authority` the program's upgrade authority, as it is on a real cluster.
+///
+/// Since 2026-10-29 `initialize` accepts only the upgrade authority as signer. TridentSVM deploys
+/// the program upgradeable with the authority from `Trident.toml`, but the payer that signs here is
+/// a fresh keypair per run, so the ProgramData header is rewritten to name it. Layout (bincode
+/// `UpgradeableLoaderState::ProgramData`): u32 tag, u64 slot, then `Option<Pubkey>` at byte 12.
+fn hand_upgrade_authority_to(trident: &mut Trident, authority: Pubkey) {
+    use solana_sdk::account::WritableAccount;
+    let program_data = trident.get_program_data_address_v3(&soladrome::program_id());
+    let mut account = trident.get_account(&program_data);
+    let data = account.data_as_mut_slice();
+    data[12] = 1;
+    data[13..45].copy_from_slice(authority.as_ref());
+    trident.set_account_custom(&program_data, &account);
+}
+
 fn derive(seeds: &[&[u8]]) -> Pubkey {
     Pubkey::find_program_address(seeds, &program_id()).0
 }
@@ -123,6 +139,7 @@ impl FuzzTest {
 
         // A founder key that is not an actor, as in the bankrun suites.
         let founder = self.trident.random_keypair().pubkey();
+        hand_upgrade_authority_to(&mut self.trident, authority);
         let init_ix = InitializeInstruction::data(InitializeInstructionData::new(founder))
             .accounts(InitializeInstructionAccounts::new(
                 authority,

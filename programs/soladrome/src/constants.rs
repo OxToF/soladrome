@@ -111,7 +111,7 @@ pub const ECOSYSTEM_TOTAL: u64 = 1_750_000_000_000; //  1 750 000 SOLA — marke
 /// Team tranche, delivered at ecosystem-allocation time as hiSOLA locked FOR LIFE into a ve
 /// position (`permanent_amount` = full tranche — never liquid SOLA, see
 /// mint_ecosystem_allocation). Pays the people who worked unpaid until launch. Votes as an
-/// ordinary user; borrows 20% via borrow_against_locked.
+/// ordinary user; earns fees; never borrows (unfinanced, 2026-11-09).
 pub const FOUNDER_IMMEDIATE_SOLA: u64 = 250_000_000_000; //    250 000 → hiSOLA, lifetime ve lock
 /// One-time origination fee on each borrow (like Beradrome). Sent to market_vault → hiSOLA stakers.
 pub const BORROW_FEE_BPS: u64 = 200; //  2 % of borrowed amount
@@ -134,7 +134,7 @@ pub const DEFAULT_EXERCISE_FEE_BPS: u16 = 1_000; // 10 % of the gain
 /// LP incentive, which would be an economic self-inflicted wound, not an exploit.
 pub const MAX_EXERCISE_FEE_BPS: u16 = 5_000; // 50 % of the gain
                                              // (FOUNDER_BORROW_CAP_BPS removed 2026-07-18 with founder_borrow_usdc — the 7M are ve-escrowed,
-                                             //  so the founder's only borrow path is borrow_against_locked at PARTNER_BORROW_CAP_BPS, 20%.)
+                                             //  and since 2026-11-09 no unfinanced allocation borrows at all — see borrow_against_locked.)
 
 pub const FOUNDER_HI_VESTING_SEED: &[u8] = b"founder_hi_vesting";
 
@@ -184,7 +184,7 @@ pub const TEAM_WALLET: &str = "BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA";
 pub const CONTRIBUTOR_SEED: &[u8] = b"contributor";
 pub const CONTRIBUTOR_REGISTRY_SEED: &[u8] = b"contributor_registry";
 // (CONTRIBUTOR_BORROW_CAP_BPS removed 2026-07-18 with contributor_borrow_usdc — the
-//  contributor bag is ve-escrowed, so its only borrow path is borrow_against_locked, 20%.)
+//  contributor bag is ve-escrowed and, since 2026-11-09, unfinanced hiSOLA never borrows.)
 
 /// Ceiling on contributor hiSOLA, summed over every contributor ever registered.
 ///
@@ -205,12 +205,12 @@ pub const CONTRIBUTOR_O_SOLA_CAP: u64 = 100_000_000_000; // 100 000 oSOLA (6 dec
 pub const PARTNER_SEED: &[u8] = b"partner";
 pub const BRIBE_STREAM_SEED: &[u8] = b"bribe_stream";
 pub const STREAM_TOKENS_SEED: &[u8] = b"stream_tokens";
-/// Partner borrow cap: max 20 % of their vote-locked hiSOLA position.
-/// A partner's bag is locked, so `UserPosition.hi_sola` is 0 for them and the ordinary
-/// `borrow_usdc` path sees nothing to lend against. They borrow against
-/// `VeLockPosition.amount_locked` via `borrow_against_locked` instead. The 75 % floor buffer
-/// still applies.
-pub const PARTNER_BORROW_CAP_BPS: u64 = 2_000; // 20 %
+/// The partner's LP escrow: `[PARTNER_LP_SEED, partner]`, a token account of the deal's LP mint
+/// owned by `protocol_state`. Only `withdraw_partner_lp` moves it out, to the partner, once the
+/// deal's term is over (or while the protocol is paused).
+pub const PARTNER_LP_SEED: &[u8] = b"partner_lp";
+// (PARTNER_BORROW_CAP_BPS — 20 % against unfinanced locked hiSOLA — removed 2026-11-09.
+//  Unfinanced allocations no longer borrow; `borrow_against_locked` lends financed stake only.)
 
 // ── Vote carry-over ───────────────────────────────────────────────────────────
 pub const VOTE_CONFIG_SEED: &[u8] = b"vote_config";
@@ -264,7 +264,7 @@ pub const FOUNDER_O_SOLA_VESTING_SECS: u64 = 4 * 365 * 24 * 3_600;
 // (BASE_BAG_VEST_SECS removed 2026-08-27 with the streamed welcome bag. The bag is now
 //  delivered whole the moment the partner escrows their bribe schedule — it is the signature
 //  signal, not the compensation, and it is small for that reason. What used to be the rest of
-//  the promised total is now a retainer that is bought one epoch at a time; see
+//  the promised total is now credited one covered epoch at a time (2026-11-09); see
 //  `PartnerAllocation`.)
 
 // (Contributor vesting schedule removed 2026-07-18 — contributors now claim their whole

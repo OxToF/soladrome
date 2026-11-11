@@ -67,28 +67,27 @@ impl FounderVesting {
     pub const LEN: usize = 8 + 8 + 8 + 1 + 7; // = 32 bytes with padding
 }
 
-/// A protocol partner's deal (Jito, Marinade, Solayer…): a signature bag, then a retainer.
+/// A protocol partner's deal (Jito, Marinade, Solayer…): a closed bag, earned against
+/// liquidity held in escrow (2026-11-09).
 ///
-/// ☢️ **This is not a vesting schedule, and the difference is the whole design.** A vesting
-/// promises a total on day one and releases it in slices: the amount exists from the start, the
-/// only condition is that time passes, and the beneficiary is a creditor for the remainder. A
-/// **retainer** has no total, it has a rate. Each epoch is bought separately, against something
-/// verified at that moment — the partner's liquidity, still there, right now.
+/// **The deal.** The partner escrows a bribe schedule of `schedule_epochs` epochs
+/// (`fund_partner_bribe_stream`), then locks at least `lp_threshold` of `lp_mint` in the
+/// protocol's LP escrow (`deposit_partner_lp`). For every full epoch the LP covers they are
+/// credited `retainer_per_epoch` hiSOLA, up to `schedule_epochs` epochs — so the whole deal is
+/// `base_hi_sola + retainer_per_epoch × schedule_epochs`, known at signature, and then it ends.
+/// The LP comes back through `withdraw_partner_lp` once every epoch of the term is behind it.
 ///
-/// Three consequences follow, and they are why the 1:1 bribe match was removed on 2026-08-27:
-/// - A partner who leaves after ten epochs has not forfeited the rest; **there never was a
-///   rest**. Nothing is owed, so nothing has to be revoked, so `close_partner_allocation`
-///   never has to take anything away from anyone.
-/// - There is no cap. The old deal died at `cap_hi_sola`; a partner who keeps their liquidity
-///   in place for three years keeps earning for three years.
-/// - No oracle is needed anywhere. The old `rate_num/rate_den` was a ratio of base units
-///   **frozen for life** at registration: if the partner's token halved, the protocol went on
-///   paying the same hiSOLA per unit, permanently and irrevocably.
+/// ☢️ **Why the escrow.** Until 2026-11-09 the condition was the partner's own LP balance,
+/// read at the instant of the crank, and the retainer had no end. An SPL balance has no
+/// history, so a partner could add liquidity, crank and remove it in one transaction, and earn
+/// every epoch for zero seconds of liquidity — forever. Holding the LP in a vault only the
+/// program moves, with no exit before the term is over, turns "was the liquidity there?" from
+/// an instant into an interval: credits are a function of time and nothing else.
 ///
-/// What the partner gets: permanent voting power from day one, protocol fees for life on
-/// everything they accrue (`UserPosition.fee_shares`), a 20 % working-capital valve
-/// (`borrow_against_locked`), and no custody of their LP at any point — the protocol never
-/// holds it, it simply stops paying when the balance drops below `lp_threshold`.
+/// What the partner keeps: the swap fees (they accrue to the pool's reserves, so the escrowed
+/// LP grows in value), permanent voting power, protocol fees for life on everything credited
+/// (`UserPosition.fee_shares`). What they give up: the oSOLA LP emissions on the escrowed part
+/// (the bag replaces them), and borrowing — nothing unfinanced borrows since 2026-11-09.
 ///
 /// PDA: [b"partner", partner_wallet]
 #[account]
@@ -110,14 +109,14 @@ pub struct PartnerAllocation {
     pub lp_threshold: u64,
     /// hiSOLA credited per qualified epoch — the rate, and the only figure that sets the pace.
     pub retainer_per_epoch: u64,
-    /// Last epoch the retainer was credited for. One credit per epoch, and never retroactive.
+    /// The epoch in which the partner's LP left the escrow, or 0 while it is still there (or was
+    /// never deposited). Renamed from `last_credited_epoch` on 2026-11-09, same slot.
     ///
-    /// ☢️ Unlike the bribe stream, **this schedule cannot slip**: an epoch nobody cranks is
-    /// lost, not deferred. The chain keeps no history of an SPL balance, so there is no way to
-    /// establish after the fact that the liquidity was present five epochs ago. The crank *is*
-    /// the attestation. That is a real cost of the design and the reason the front-end fires
-    /// it automatically — otherwise a distracted partner loses money through no fault.
-    pub last_credited_epoch: u64,
+    /// Credits are computed from time, not attested by a crank: the LP sits in a vault only
+    /// `withdraw_partner_lp` can empty, so every epoch between `lp_qualified_since_ts` and
+    /// this one is provably covered. Freezing the end here is what lets a crank that arrives
+    /// late still pay the right count — and nothing more — after the LP is gone.
+    pub lp_withdrawn_epoch: u64,
     /// How many epochs actually paid. Read by `close_partner_allocation` and by the UI; it is
     /// the only record that a retainer ever ran, since no total is ever written down.
     pub epochs_qualified: u32,
@@ -158,9 +157,16 @@ pub struct PartnerAllocation {
     /// partner could escrow 52 epochs of one lamport, satisfy every length check, and unlock
     /// the bag: the schedule would exist and mean nothing.
     pub min_bribe_per_epoch: u64,
+    /// Unix timestamp at which the escrow first held `lp_threshold`, or 0 if it never has.
+    ///
+    /// The first epoch that counts is the first one to START at or after this instant: an epoch
+    /// is credited only if the liquidity covered all seven days of it. Set once — the escrow
+    /// cannot be drawn down before the term is over, so the condition cannot lapse mid-deal.
+    pub lp_qualified_since_ts: i64,
 }
 impl PartnerAllocation {
-    // 32*3 + 8*2 + 8 + 4 + 8*3 + 1 + 8*4 + 1 = 182 bytes used; 10 spare.
+    // 32*3 + 8*2 + 8 + 4 + 8*3 + 1 + 8*4 + 1 + 8 = 190 bytes used; 2 spare.
+    // (2026-11-09: `lp_qualified_since_ts` carved from the spare — no resize, no migration.)
     //
     // ⚠️ 160 → 192 (2026-08-27). Dropping the 1:1 machinery freed 32 bytes (`rate_num`,
     // `rate_den`, `cap_hi_sola`, `total_bribed_credited`) and the retainer needs 36 of them,

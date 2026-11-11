@@ -129,7 +129,7 @@ pub enum SoladromeError {
     BurnBuysNoVotes,
     #[msg("This swap would push the SOLA/USDC pool below the 1 USDC floor — sell through sell_sola instead, it pays 1.00 exactly")]
     AmmBelowFloor,
-    #[msg("Partner allocation is live — a retainer that could still be credited this epoch cannot be closed out from under the partner")]
+    #[msg("Partner allocation is live — its bag is unclaimed, its bribe escrow is not spent, or covered epochs are not yet credited")]
     PartnerAllocationNotSettled,
     #[msg("This bribe stream has paid out every tranche it was funded for")]
     BribeStreamExhausted,
@@ -145,7 +145,7 @@ pub enum SoladromeError {
     ScheduleUnderfunded,
     #[msg("This partner has never escrowed a bribe schedule — nothing accrues, and the bag is the consideration for that schedule")]
     PartnerStreamNotFunded,
-    #[msg("Nothing to do this epoch — no bribe tranche is due and the retainer is either already credited or unqualified")]
+    #[msg("Nothing to do this epoch — no bribe tranche is due and every epoch the LP escrow covered is already credited")]
     NothingToCrank,
     #[msg("This is not the LP token the partner's deal names")]
     LpMintMismatch,
@@ -185,4 +185,10 @@ pub enum SoladromeError {
     PolInvalidRoute,
     #[msg("This deposit would price SOLA too far from the curve: protocol-owned liquidity is never added at a price an arbitrageur could take from")]
     PolPriceDeviation,
+    #[msg("The partner's LP stays in escrow until the deal's term is over: every epoch of the schedule must have been covered (or the protocol paused)")]
+    PartnerLpLocked,
+    #[msg("This partner deal no longer takes liquidity: its LP has already left the escrow")]
+    PartnerDealOver,
+    #[msg("The partner's LP escrow must be empty, and every epoch it covered credited, before the allocation can be closed")]
+    PartnerLpNotReturned,
 }

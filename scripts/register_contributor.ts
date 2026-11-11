@@ -28,7 +28,7 @@
  *
  * The two tranches are not the same instrument:
  *   HI    — hiSOLA into a LIFETIME ve lock. Never unlockable, never sellable. It votes (up to
- *           4×), borrows 20% via borrow_against_locked, and earns a real share of protocol
+ *           4×), never borrows (unfinanced), and earns a real share of protocol
  *           fees for life — that yield is the actual compensation, since the bag itself can
  *           never be sold.
  *   OSOLA — an option, not a payment. Exercising burns it and pays 1 USDC per unit into the
@@ -103,7 +103,7 @@ describe("register_contributor (one-shot)", () => {
 
     console.log(`✅ Contributor registered!`);
     console.log(`   Wallet:        ${contributorStr}`);
-    console.log(`   hiSOLA:        ${hiSolaUi.toLocaleString()} — lifetime ve lock: votes, earns protocol fees, borrows 20%`);
+    console.log(`   hiSOLA:        ${hiSolaUi.toLocaleString()} — lifetime ve lock: votes, earns protocol fees, never borrows`);
     console.log(`   oSOLA:         ${oSolaUi.toLocaleString()} — an option, exercised at 1 USDC each into the floor`);
     console.log(`   Vesting PDA:   ${contributorVesting.toBase58()}`);
     console.log(`   TX:            ${tx}`);
