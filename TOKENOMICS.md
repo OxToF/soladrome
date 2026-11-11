@@ -49,7 +49,7 @@ The price premium above 1.0 USDC/SOLA stays in `market_reserve` and is paid back
 | Tranche | Amount | Token | Cliff | Vesting | Mechanism |
 |---|---|---|---|---|---|
 | Governance | 7,000,000 | hiSOLA | 6 months | 24 months linear | `claim_founder_hi_sola` |
-| Options | 5,000,000 | oSOLA | 12 months (25 % at the cliff) | 48 months in all, linear | `claim_founder_vesting` |
+| Options | 5,000,000 | oSOLA | 12 months (25 % at the cliff) | 48 months in all, linear, and never more in total than 20 % of the SOLA buyers hold off the curve | `claim_founder_vesting` |
 | Team | 250,000 | hiSOLA (lifetime ve lock) | None | Immediate | `mint_ecosystem_allocation` |
 
 **Governance tranche (7M hiSOLA):**
@@ -61,6 +61,8 @@ The founder wallet is also **non-voting by default** (`founder_voting_enabled = 
 
 **Options tranche (5M oSOLA):**
 Each exercise of `exercise_o_sola` adds 1 USDC to `floor_vault` — every option conversion structurally strengthens the floor for all users. Since 2026-10-07 the tranche vests on its own, slower schedule (12-month cliff, 48 months in all, `FOUNDER_O_SOLA_*`): a sale now pays the curve's price, so an oSOLA is a claim on the premium curve buyers left in the market reserve, and the 2-year schedule shared with the hiSOLA tranche would have released 2.5M a year against it. It releases 1.25M.
+
+Since 2026-11-11 the calendar is not the only bound. The total the founder has ever claimed may not exceed **20 % of the SOLA buyers hold off the curve** (`FOUNDER_O_SOLA_MARKET_CAP_BPS`, read as `sqrt(k) − virtual_sola`). The curve never holds more than 1M SOLA, so this caps the tranche at **about 200,000 oSOLA in practice**, released only as buyers come in, and lowered when they sell. The calendar alone would not have protected buyers: a small fraction of the 1.25M released at the cliff, exercised and sold, is enough to take the curve back to the floor. Indexed on what the market bought, the founder sells into demand instead of against it. The cap reads the curve as it stood before the current slot's trades, so a buy in the same transaction cannot lift it. Simulation: `scripts/emissions/founder_vest_sim.py`.
 
 **Team tranche (250k):**
 Minted by `mint_ecosystem_allocation` to a **separate team wallet** (`BVaJbgw3NF7Ng28sHorBnzJrHgvu7S3L5wpdB6923LjA`), distinct from the founder wallet.

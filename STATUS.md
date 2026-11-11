@@ -23,7 +23,7 @@ the curve, 1 % fee each way to stakers. It changes `buy_sola` / `sell_sola` (new
 price every exercise at the curve as it stood before the slot's trades, so a sale cannot be used
 to cheapen an exercise in the same transaction. **The audit scope changes on `curve.rs`.**
 ✅ Deployed to devnet 2026-10-08 (slot `508610037`, dump = build) and merged (PR #55). Founder oSOLA
-vesting: 12-month cliff, 48 months. Launch pools (MAINNET_RUNBOOK §4a): oSOLA/USDC + SOLA/SOL (SOLA/LST if an LST
+vesting: 12-month cliff, 48 months, and since 2026-11-11 total claims capped at 20 % of the SOLA bought off the curve (`FOUNDER_O_SOLA_MARKET_CAP_BPS`). Launch pools (MAINNET_RUNBOOK §4a): oSOLA/USDC + SOLA/SOL (SOLA/LST if an LST
 partnership is signed), emissions on from the first epoch. `deploy_pol` retargeted on branch
 `feat/pol-sol-lst` (2026-10-08): any SOLA pool paired with USDC, SOL or an approved LST
 (SOLA/SOL, SOLA/mSOL, SOLA/jitoSOL), a new `pol_swap` to buy the counter-asset, a price check

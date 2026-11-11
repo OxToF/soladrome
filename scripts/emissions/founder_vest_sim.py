@@ -75,7 +75,7 @@ def run(B, total_months, months=96, founder=True, cap=None):
         if m == 13:
             p13 = p
     return dict(gain=gain, premium_in=premium_in, reserve=reserve, bank=bank,
-                p12=prices[11], p13=p13, p24=prices[23], p48=prices[47], p96=prices[95])
+                p12=prices[11], p13=p13, p24=prices[23], p48=prices[47], p96=prices[-1])
 
 
 print(f"{'achats/mois':>12} {'durée':>6} | {'prix m12':>8} {'m13':>6} {'m24':>6} {'m48':>6} {'m96':>6} | {'gain founder':>12} {'% prime prise':>13} | {'banque fin':>10}")

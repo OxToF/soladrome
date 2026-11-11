@@ -671,43 +671,131 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     );
   });
 
-  it("[founder] the 5M oSOLA vest on their own schedule: 12-month cliff, 48 months in all", async () => {
-    // Since 2026-10-07 a sale pays the curve's price, so every oSOLA is a claim on the premium
-    // buyers left in the market reserve. The oSOLA no longer share the hiSOLA tranche's 6-month
-    // cliff and 24-month schedule. The clock here is already past that old cliff (~212 days).
+  let curveBuyer: { buyer: Keypair; userSola: PublicKey };
+
+  /// Buy SOLA on the curve from a fresh wallet. Only the founder's market cap reads this.
+  async function buyOnCurve(usdc: bigint): Promise<{ buyer: Keypair; userSola: PublicKey }> {
+    const buyer = await fundedWallet();
+    const userUsdc = await fundUsdc(buyer.publicKey, new BN(usdc.toString()));
+    const userSola = getAssociatedTokenAddressSync(solaM, buyer.publicKey);
+    await program.methods
+      .buySola(new BN(usdc.toString()), new BN(0))
+      .accounts({
+        user: buyer.publicKey,
+        protocolState: statePda,
+        solaMint: solaM,
+        userUsdc,
+        userSola,
+        floorVault: floorV,
+        marketVault: marketV,
+        marketReserve: pda([Buffer.from("market_reserve")]),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([buyer])
+      .rpc();
+    return { buyer, userSola };
+  }
+
+  async function sellOnCurve(seller: Keypair, userSola: PublicKey, sola: bigint) {
+    await program.methods
+      .sellSola(new BN(sola.toString()), new BN(0))
+      .accounts({
+        user: seller.publicKey,
+        protocolState: statePda,
+        solaMint: solaM,
+        userSola,
+        userUsdc: getAssociatedTokenAddressSync(usdcMint, seller.publicKey),
+        floorVault: floorV,
+        marketVault: marketV,
+        marketReserve: pda([Buffer.from("market_reserve")]),
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .signers([seller])
+      .rpc();
+  }
+
+  /// 20 % of the SOLA held off the curve, as `claim_founder_vesting` reads it outside a traded slot.
+  async function founderMarketCap(): Promise<bigint> {
+    const st: any = await program.account.protocolState.fetch(statePda);
+    const start = BigInt(1_000_000_000_000); // isqrt(k): vu = vs = 1M SOLA at initialize
+    const vs = BigInt(st.virtualSola.toString());
+    return ((start - vs) * BigInt(2_000)) / BigInt(10_000);
+  }
+
+  function claimFounderOSola() {
+    return program.methods
+      .claimFounderVesting()
+      .accounts({
+        protocolState: statePda,
+        founder: founder.publicKey,
+        oSolaMint: oSolaM,
+        founderVesting: founderVestingPda(),
+        founderOSola: getAssociatedTokenAddressSync(oSolaM, founder.publicKey),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([founder])
+      .rpc();
+  }
+
+  it("[founder] the 5M oSOLA: 12-month cliff, then nothing until the market has bought", async () => {
+    // The calendar (12-month cliff, 48 months) still holds, but since 2026-11-11 it is not
+    // enough: the total ever claimed is also capped at 20 % of the SOLA buyers hold off the curve.
     const vesting: any = await program.account.founderVesting.fetch(founderVestingPda());
     const start = Number(vesting.startTs);
-    const total = BigInt(vesting.totalAmount.toString());
-    const founderOSola = getAssociatedTokenAddressSync(oSolaM, founder.publicKey);
-    const claim = () =>
-      program.methods
-        .claimFounderVesting()
-        .accounts({
-          protocolState: statePda,
-          founder: founder.publicKey,
-          oSolaMint: oSolaM,
-          founderVesting: founderVestingPda(),
-          founderOSola,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        } as any)
-        .signers([founder])
-        .rpc();
-
     const YEAR = 365 * DAY;
     assert.isAbove((await nowSeconds()) - start, VESTING_CLIFF_SECS, "past the OLD cliff");
     await forwardSeconds(start + YEAR - DAY - (await nowSeconds()));
-    await expectFailure(claim, "VestingCliffNotReached");
+    await expectFailure(claimFounderOSola, "VestingCliffNotReached");
 
+    // Past the cliff: 1.25M vested, but nobody has bought — the curve is where it started.
     await forwardSeconds(2 * DAY);
-    await claim();
-    const elapsed = BigInt((await nowSeconds()) - start);
-    const expected = (total * elapsed) / BigInt(4 * YEAR);
-    const got = await tokenBalance(founderOSola);
-    // `nowSeconds` reads the clock after the claim landed; the claim saw the same second.
-    assert.equal(got.toString(), expected.toString(), "a quarter, not the half the old schedule paid");
-    assert.isBelow(Number(got), Number(total / BigInt(4)) * 1.01);
+    assert.equal((await founderMarketCap()).toString(), "0");
+    await expectFailure(claimFounderOSola, "FounderClaimAboveMarket");
+  });
+
+  it("☢️ [founder] a buy in the claim's own slot does not lift the cap", async () => {
+    // The cap reads the curve as it stood before the slot's trades, like the exercise fee: a
+    // buy-claim-sell bundle in one transaction must unlock nothing.
+    await freshSlot();
+    await program.methods
+      .setPhaseFlags(null, null, null, null, true, null) // the curve opens at launch
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+    curveBuyer = await buyOnCurve(BigInt(100_000_000_000)); // 100 000 USDC
+    assert.isAbove(Number(await founderMarketCap()), 0, "the buy did move the curve");
+    await expectFailure(claimFounderOSola, "FounderClaimAboveMarket");
+  });
+
+  it("[founder] a slot later the cap opens — 20 % of what was bought, not the calendar", async () => {
+    await freshSlot();
+    const cap = await founderMarketCap();
+    const vesting: any = await program.account.founderVesting.fetch(founderVestingPda());
+    const elapsed = BigInt((await nowSeconds()) - Number(vesting.startTs));
+    const vested = (BigInt(vesting.totalAmount.toString()) * elapsed) / BigInt(4 * 365 * DAY);
+    assert.isBelow(Number(cap), Number(vested), "the market binds, not the calendar");
+
+    await claimFounderOSola();
+    const got = await tokenBalance(getAssociatedTokenAddressSync(oSolaM, founder.publicKey));
+    assert.equal(got.toString(), cap.toString());
+  });
+
+  it("[founder] a sale lowers the cap; what was claimed stays, nothing more comes", async () => {
+    // The buyer sells half back: the curve gives back, the cap falls below what the founder
+    // already holds. Nothing is clawed back, and nothing more is claimable until buyers return.
+    const { buyer, userSola } = curveBuyer;
+    const before = await founderMarketCap();
+    await sellOnCurve(buyer, userSola, (await tokenBalance(userSola)) / BigInt(2));
+    await freshSlot();
+    const after = await founderMarketCap();
+    assert.isBelow(Number(after), Number(before));
+
+    const claimed: any = await program.account.founderVesting.fetch(founderVestingPda());
+    assert.isBelow(Number(after), Number(claimed.claimed.toString()));
+    await expectFailure(claimFounderOSola, "FounderClaimAboveMarket");
   });
 
   it("[founder] unlock_hi_sola refuses the founder, expired or not", async () => {

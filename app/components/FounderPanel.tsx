@@ -103,6 +103,12 @@ function fromBaseUnits(v: bigint, decimals: number): string {
 // now unconditional, so these are too.
 const VESTING_CLIFF_SECS    = 180 * 24 * 3_600; // 6 months
 const VESTING_DURATION_SECS = 720 * 24 * 3_600; // 24 months, linear after the cliff
+// The 5M oSOLA have their own schedule (constants.rs FOUNDER_O_SOLA_*): 12-month cliff, 48 months
+// in all. Until 2026-11-11 this panel showed them on the hiSOLA 6/24 schedule above.
+const O_SOLA_CLIFF_SECS    = 365 * 24 * 3_600;
+const O_SOLA_DURATION_SECS = 4 * 365 * 24 * 3_600;
+// FOUNDER_O_SOLA_MARKET_CAP_BPS: the total claimed never exceeds 20 % of the SOLA held off the curve.
+const O_SOLA_MARKET_CAP_BPS = 2_000;
 
 // ── PDAs ─────────────────────────────────────────────────────────────────────
 const founderHiVestingPda = PublicKey.findProgramAddressSync(
@@ -154,6 +160,7 @@ function VestingCard({
   tokenSymbol,
   onClaim,
   loading,
+  marketCapRaw,
 }: {
   title: string;
   totalRaw: number;
@@ -165,13 +172,17 @@ function VestingCard({
   tokenSymbol: string;
   onClaim: () => void;
   loading: boolean;
+  /// Total the program lets be claimed given the market; undefined = no market cap.
+  marketCapRaw?: number;
 }) {
   const elapsed      = Math.max(0, nowSecs - startTs);
   const afterCliff   = elapsed >= cliffSecs;
   const vestedRaw    = afterCliff
     ? Math.floor((totalRaw * Math.min(elapsed, durationSecs)) / durationSecs)
     : 0;
-  const claimableRaw = Math.max(0, vestedRaw - claimedRaw);
+  const allowedRaw   = marketCapRaw === undefined ? vestedRaw : Math.min(vestedRaw, marketCapRaw);
+  const claimableRaw = Math.max(0, allowedRaw - claimedRaw);
+  const capBinds     = marketCapRaw !== undefined && afterCliff && marketCapRaw < vestedRaw;
   const vestPct      = (vestedRaw / totalRaw) * 100;
   const claimPct     = (claimedRaw / totalRaw) * 100;
 
@@ -219,6 +230,14 @@ function VestingCard({
           </button>
         </div>
       )}
+      {capBinds && (
+        <p className="text-[11px] text-gray-500 mt-2">
+          Market cap: at most{" "}
+          <span className="text-gray-300 font-mono">{fmtSola(marketCapRaw!)} {tokenSymbol}</span>{" "}
+          claimed in total — 20 % of the SOLA buyers hold off the curve. The rest unlocks as the
+          market buys, and a sale lowers it.
+        </p>
+      )}
     </div>
   );
 }
@@ -233,6 +252,15 @@ export function FounderPanel() {
   // On-chain, not hardcoded — see the note in app/app/page.tsx. The address differs per
   // cluster now that one binary serves all of them.
   const founderWallet = protocolState?.founderWallet?.toBase58() ?? null;
+  // The curve started at vu = vs = sqrt(k); what it has given out is sqrt(k) − virtual_sola.
+  // The program reads the curve as it stood before the current slot's trades — a hair stricter.
+  const oSolaMarketCapRaw = (() => {
+    const ps: any = protocolState;
+    if (!ps?.k || !ps?.virtualSola) return undefined;
+    const start = Math.round(Math.sqrt(Number(ps.k.toString())));
+    const sold  = Math.max(0, start - Number(ps.virtualSola.toString()));
+    return Math.floor((sold * O_SOLA_MARKET_CAP_BPS) / 10_000);
+  })();
   const isFounder = !!wallet && !!founderWallet &&
     wallet.publicKey.toBase58() === founderWallet;
 
@@ -763,9 +791,10 @@ export function FounderPanel() {
                 totalRaw={oVesting.totalAmount}
                 claimedRaw={oVesting.claimed}
                 startTs={oVesting.startTs}
-                cliffSecs={VESTING_CLIFF_SECS}
-                durationSecs={VESTING_DURATION_SECS}
+                cliffSecs={O_SOLA_CLIFF_SECS}
+                durationSecs={O_SOLA_DURATION_SECS}
                 nowSecs={nowSecs}
+                marketCapRaw={oSolaMarketCapRaw}
                 tokenSymbol="oSOLA"
                 onClaim={claimOSola}
                 loading={loadingO}

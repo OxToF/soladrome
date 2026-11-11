@@ -354,7 +354,7 @@ a holder sees their balance.
 | Tranche | Amount | Constant | Regime |
 |---|---|---|---|
 | hiSOLA governance | 7,000,000 | `FOUNDER_STAKE` | ve escrow, **locked for life**, no vote, no fees |
-| oSOLA vesting | 5,000,000 | `FOUNDER_LIQUID` | vesting vault: **12-month cliff, 48 months in all** (`FOUNDER_O_SOLA_CLIFF_SECS` / `FOUNDER_O_SOLA_VESTING_SECS`, 2026-10-07 — was the hiSOLA 6/24: since a sale pays the curve, oSOLA are a claim on the market reserve) |
+| oSOLA vesting | 5,000,000 | `FOUNDER_LIQUID` | vesting vault: **12-month cliff, 48 months in all** (`FOUNDER_O_SOLA_CLIFF_SECS` / `FOUNDER_O_SOLA_VESTING_SECS`, 2026-10-07 — was the hiSOLA 6/24: since a sale pays the curve, oSOLA are a claim on the market reserve). **Plus a market cap (2026-11-11): total claimed ≤ 20 % of `isqrt(k) − virtual_sola`** (`FOUNDER_O_SOLA_MARKET_CAP_BPS`), read at the pre-slot curve. ☢️ The curve never holds more than N = 1M SOLA, so this caps the tranche at ~200K oSOLA in practice; never index it on `total_purchased_sola` (exercise raises it) |
 | team tranche | 250,000 | `FOUNDER_IMMEDIATE_SOLA` | → `TEAM_WALLET`, hiSOLA in a **lifetime** ve lock (`permanent_amount` covers the full tranche — decision 2026-07-17, upgraded from 4 years). **Votes** (up to 4×) — a distinct wallet from FOUNDER_WALLET by design, since the vote guard keys on the latter. **Earns fees for life** (`fee_shares`), vote kept at 4× by relocking a dust amount. **Never borrows** (unfinanced, 2026-11-09). Pays contributors who worked unpaid pre-launch. |
 
 The **1.75M ecosystem budget is no longer minted as SOLA** (changed 2026-07-17). It is issued as
