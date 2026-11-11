@@ -219,8 +219,14 @@ User buys SOLA
   └─► floor_amount USDC → floor_vault (floor backing)
   └─► (usdc_in - floor_amount) USDC → market_vault (fee premium)
 
-AMM swap
+AMM swap (USDC input)
   └─► swap_fee × protocol_fee_share → market_vault
+
+AMM swap (any other input: SOL, LST, SOLA, oSOLA)
+  └─► swap_fee × protocol_fee_share → pool ledger (protocol_fees_a/b)
+        └─► collect_pool_fees (permissionless crank)
+              └─► company share (0 % today, ≤ 25 %) → operating company wallet
+              └─► remainder → that pool's bribe pot, current epoch → its voters
 
 borrow_usdc / borrow_against_locked
   └─► 2% origination fee → market_vault

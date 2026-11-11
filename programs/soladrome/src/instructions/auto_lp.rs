@@ -30,8 +30,8 @@ use crate::amm_math;
 use crate::constants::*;
 use crate::errors::SoladromeError;
 use crate::instructions::amm::{
-    advance_pool_rewards, apply_swap_reserves, continuous_active, credit_lp_deposit, quote_swap,
-    require_floor_respected,
+    advance_pool_rewards, apply_swap_reserves, book_protocol_fee, continuous_active,
+    credit_lp_deposit, quote_swap, require_floor_respected,
 };
 use crate::instructions::curve::{exercise_fee, exercise_gain};
 use crate::state::*;
@@ -315,8 +315,8 @@ pub fn route_into_lp<'a, 'info>(
         &[sell_bump],
     ];
 
-    // The oSOLA enters the pool. The whole input enters the reserve: the fee is on oSOLA, not
-    // USDC, so like `swap` it stays with the LPs.
+    // The oSOLA enters the pool. Like `swap` on a non-USDC input, the protocol share of the
+    // fee is booked for the pool's voters and the rest enters the reserve.
     match input {
         SaleInput::FromOwner {
             from,
@@ -348,7 +348,15 @@ pub fn route_into_lp<'a, 'info>(
         )?,
     }
     advance_pool_rewards(r.sell_pool, now, cont_rate, cont_active);
-    apply_swap_reserves(r.sell_pool, o_sola_is_a, amount, q1.amount_out)?;
+    book_protocol_fee(r.sell_pool, o_sola_is_a, q1.fee_protocol)?;
+    apply_swap_reserves(
+        r.sell_pool,
+        o_sola_is_a,
+        amount
+            .checked_sub(q1.fee_protocol)
+            .ok_or(SoladromeError::Overflow)?,
+        q1.amount_out,
+    )?;
 
     // USDC: straight to the next vault on the route. It never passes through a wallet.
     let usdc_dest = if needs_hop {

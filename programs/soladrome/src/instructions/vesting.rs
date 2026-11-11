@@ -330,15 +330,17 @@ pub fn claim_founder_vesting(ctx: Context<ClaimFounderVesting>) -> Result<()> {
     let (_, ref_vs) = state.exercise_reserves(clock.slot);
     let vs = ref_vs.max(state.virtual_sola);
     let sold_on_curve = crate::amm_math::isqrt(state.k).saturating_sub(vs);
-    let market_cap = ((sold_on_curve as u128) * (FOUNDER_O_SOLA_MARKET_CAP_BPS as u128) / 10_000)
-        as u64;
+    let market_cap =
+        ((sold_on_curve as u128) * (FOUNDER_O_SOLA_MARKET_CAP_BPS as u128) / 10_000) as u64;
 
     // Saturating: a vesting started under the old, faster schedule may already have claimed more
     // than the new one has vested, and a sale down the curve may have taken the cap below what was
     // claimed. Both are "nothing yet", not an arithmetic fault.
     let vested_claimable = vested_amount.saturating_sub(vesting.claimed);
     require!(vested_claimable > 0, SoladromeError::NothingToClaim);
-    let claimable = vested_amount.min(market_cap).saturating_sub(vesting.claimed);
+    let claimable = vested_amount
+        .min(market_cap)
+        .saturating_sub(vesting.claimed);
     require!(claimable > 0, SoladromeError::FounderClaimAboveMarket);
     msg!(
         "Founder oSOLA: vested {} · market cap {} · claimed {} · now {}",

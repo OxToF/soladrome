@@ -411,13 +411,14 @@ describe("soladrome — bankrun (standing LP orders)", () => {
   /// withdrawals, and it would not show in any single balance.
   async function assertReservesMatchVaults(pool: Pool, label: string) {
     const p: any = await program.account.ammPool.fetch(pool.key);
+    // Since 2026-11-11 the vault also holds the protocol fees owed to the pool's voters.
     assert.equal(
-      p.reserveA.toString(),
+      (BigInt(p.reserveA.toString()) + BigInt(p.protocolFeesA.toString())).toString(),
       (await tokenBalance(pool.vaultA)).toString(),
       `${label}: reserve A drifted from its vault`
     );
     assert.equal(
-      p.reserveB.toString(),
+      (BigInt(p.reserveB.toString()) + BigInt(p.protocolFeesB.toString())).toString(),
       (await tokenBalance(pool.vaultB)).toString(),
       `${label}: reserve B drifted from its vault`
     );

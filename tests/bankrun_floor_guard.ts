@@ -186,10 +186,14 @@ describe("soladrome — bankrun (AMM floor guard)", () => {
   /// Post-trade reserves for `amm_swap` selling `amt` SOLA into the pool.
   /// The protocol fee is NOT routed out here — routing only happens when the INPUT mint is
   /// USDC — so the reserve grows by the full `amt`, LP fee included.
+  /// A SOLA input is not USDC, so since 2026-11-11 the protocol's share of the fee is booked in
+  /// the pool ledger, not left in the reserve: the SOLA side grows by `amt − fee_protocol`.
   function afterSell(rs: bigint, ru: bigint, amt: bigint) {
-    const net = amt - (amt * BigInt(FEE_RATE)) / BigInt(10_000);
+    const feeTotal = (amt * BigInt(FEE_RATE)) / BigInt(10_000);
+    const feeProtocol = (feeTotal * BigInt(PROTO_BPS)) / BigInt(10_000);
+    const net = amt - feeTotal;
     const out = swapOut(rs, ru, net);
-    return { sola: rs + amt, usdc: ru - out, out };
+    return { sola: rs + amt - feeProtocol, usdc: ru - out, out };
   }
 
   /// Post-trade reserves for `flash_arbitrage` burning `amt` oSOLA.

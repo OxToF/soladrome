@@ -450,7 +450,7 @@ pool_pda = PDA([b"amm_pool", mint_a, mint_b])  // mints sorted lex
 
 Pool parameters set at creation:
 - `swap_fee_bps` (max 1000 = 10%)
-- `protocol_fee_share_bps` (max 5000 = 50% of swap fee → `market_vault`)
+- `protocol_fee_share_bps` (max 5000 = 50% of swap fee). A USDC input pays it to `market_vault`; any other input books it in the pool ledger, and `collect_pool_fees` pays it as a bribe to that pool's voters, less the operating company's share (0 % until the company exists, capped at 25 % in the binary)
 
 ### 10.2 Liquidity (xy=k)
 
@@ -564,7 +564,7 @@ There is no protocol-controlled inflation. oSOLA is the primary incentive token;
 
 Protocol revenue flows to `market_vault`:
 - **Bonding curve fee** — 1 % of every buy and every sale (`CURVE_FEE_BPS`). Until 2026-10-07 this line was the whole premium above the floor; that premium now stays in `market_reserve`, owed to sellers
-- **AMM protocol fees** — `protocol_fee_share_bps` of each swap
+- **AMM protocol fees** — `protocol_fee_share_bps` of each swap with a USDC input. The share on every other input (SOL, LSTs, SOLA) goes to the pool's voters as a bribe, not here
 - **Borrow origination fees** — 2% of each `borrow_usdc` / `borrow_against_locked`
 - **Flash arbitrage** — 90% of arb profit
 

@@ -429,12 +429,12 @@ describe("soladrome — bankrun (the AMM speaks Token-2022)", () => {
     p = await program.account.ammPool.fetch(pool);
     assert.equal(
       (await balanceOf(vaultA)).toString(),
-      BigInt(p.reserveA.toString()).toString(),
+      (BigInt(p.reserveA.toString()) + BigInt(p.protocolFeesA.toString())).toString(),
       "vault A and reserve A must still agree after the swap"
     );
     assert.equal(
       (await balanceOf(vaultB)).toString(),
-      BigInt(p.reserveB.toString()).toString(),
+      (BigInt(p.reserveB.toString()) + BigInt(p.protocolFeesB.toString())).toString(),
       "vault B and reserve B must still agree after the swap"
     );
 
@@ -469,7 +469,7 @@ describe("soladrome — bankrun (the AMM speaks Token-2022)", () => {
     p = await program.account.ammPool.fetch(pool);
     assert.equal(
       (await balanceOf(vaultB)).toString(),
-      BigInt(p.reserveB.toString()).toString(),
+      (BigInt(p.reserveB.toString()) + BigInt(p.protocolFeesB.toString())).toString(),
       "vault B and reserve B must still agree after the withdrawal"
     );
   });

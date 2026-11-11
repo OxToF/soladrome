@@ -11,6 +11,7 @@
 pub mod amm;
 pub mod auto;
 pub mod bribes;
+pub mod company;
 pub mod emissions;
 pub mod gauges;
 pub mod pol;
@@ -23,6 +24,7 @@ pub mod vesting;
 pub use amm::*;
 pub use auto::*;
 pub use bribes::*;
+pub use company::*;
 pub use emissions::*;
 pub use gauges::*;
 pub use pol::*;

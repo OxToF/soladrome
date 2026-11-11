@@ -22,6 +22,7 @@ pub mod borrow;
 pub mod bribes;
 pub mod curve;
 pub mod emissions;
+pub mod fees;
 pub mod gauges;
 pub mod partners;
 pub mod pol;
@@ -39,6 +40,7 @@ pub use borrow::*;
 pub use bribes::*;
 pub use curve::*;
 pub use emissions::*;
+pub use fees::*;
 pub use gauges::*;
 pub use partners::*;
 #[allow(ambiguous_glob_reexports)]

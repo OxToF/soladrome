@@ -193,4 +193,10 @@ pub enum SoladromeError {
     PartnerLpNotReturned,
     #[msg("The founder's oSOLA claims are capped at 20 % of the SOLA buyers hold off the curve: the rest unlocks as the market buys")]
     FounderClaimAboveMarket,
+    #[msg(
+        "The company's share of collected pool fees is capped at 25 %, and needs a company wallet"
+    )]
+    CompanyFeeInvalid,
+    #[msg("The company's share is due: pass the company wallet's token account for this mint")]
+    CompanyAccountRequired,
 }

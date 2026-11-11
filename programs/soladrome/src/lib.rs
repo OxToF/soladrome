@@ -336,6 +336,25 @@ pub mod soladrome {
         pol::initialize_pol(ctx, pol_split_bps)
     }
 
+    /// Pay one side of a pool's owed protocol fees to its voters' bribe pot for `epoch` (the
+    /// current one), less the operating company's share. Permissionless crank.
+    pub fn collect_pool_fees(
+        ctx: Context<CollectPoolFees>,
+        epoch: u64,
+        side_a: bool,
+    ) -> Result<()> {
+        instructions::fees::collect_pool_fees(ctx, epoch, side_a)
+    }
+
+    /// Set the operating company's wallet and share of collected pool fees. Authority-only.
+    pub fn set_company_fee(
+        ctx: Context<SetCompanyFee>,
+        fee_bps: u16,
+        wallet: Pubkey,
+    ) -> Result<()> {
+        instructions::fees::set_company_fee(ctx, fee_bps, wallet)
+    }
+
     /// Redirect a portion of market_vault fees to pol_usdc_vault. Authority-only.
     pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
         pol::collect_to_pol(ctx, amount)

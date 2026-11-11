@@ -27,6 +27,24 @@ pub struct AmmPool {
     /// (any pool is created permissionlessly). Carved from the trailing padding,
     /// so existing accounts read 0 = false until the authority enables them.
     pub rewards_enabled: bool,
+    /// The protocol's share of swap fees taken on side A / side B that did NOT leave the pool
+    /// at swap time, owed and waiting for `collect_pool_fees`.
+    ///
+    /// Until 2026-11-11 only a USDC-denominated input paid the protocol: `swap` moved its share
+    /// to `market_vault`, and every other input (SOL, an LST, SOLA, oSOLA) left the share in the
+    /// reserves as LP revenue. On a SOLA/SOL or SOL/LST pool that is EVERY swap, so the pools the
+    /// protocol launches with paid it nothing. The share is now booked here instead, and paid
+    /// out by the crank as a bribe to that pool's own voters (the Aerodrome model): no swap, no
+    /// price to protect, and the votes that direct emissions are paid by the flow they attract.
+    ///
+    /// ☢️ INVARIANT: the vault holds `reserve + protocol_fees` on each side. Everything that
+    /// prices or withdraws reads `reserve_a/b` only, so owed fees are never sold or withdrawn
+    /// by LPs; the crank is the only thing that moves them out, and it zeroes the figure in the
+    /// same instruction.
+    ///
+    /// Carved from the trailing padding: an existing pool reads 0 = nothing owed.
+    pub protocol_fees_a: u64,
+    pub protocol_fees_b: u64,
 }
 
 impl AmmPool {
@@ -45,7 +63,9 @@ impl AmmPool {
         + 16   // osola_reward_per_lp
         + 8    // last_reward_ts
         + 1    // rewards_enabled
-        + 39; // remaining padding
+        + 8    // protocol_fees_a
+        + 8    // protocol_fees_b
+        + 23; // remaining padding
 }
 
 /// Sort two mints to guarantee a unique PDA per pair regardless of input order.

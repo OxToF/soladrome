@@ -217,6 +217,13 @@ CommonJS. Node 24 resolves it the other way, so identical code is green on 24 an
 
 ## Recently landed
 
+**Every swap pays the protocol (2026-11-11).** Until now only a USDC input did: the protocol's
+share of a SOL, LST or SOLA input stayed in the reserves as LP revenue, so SOLA/SOL and the SOL/LST
+pools paid the protocol nothing. That share is now booked in the pool (`protocol_fees_a/b`) and
+paid by the permissionless crank `collect_pool_fees` as a bribe to that pool's voters (Aerodrome
+model). USDC fees still go to stakers at swap time. The operating company's share
+(`CompanyConfig`, ≤ 25 %) is wired and at 0 %. `bankrun_pool_fees.ts` covers it.
+
 **Token-2022 support (2026-09-01).** Third-party mints are accepted across the three surfaces
 that take one: `amm.rs`, `bribes.rs` and `partners.rs`. A pool carries two token programs, since
 its sides may be served by different ones. Admission policy lives in one file, `token_ext.rs`.

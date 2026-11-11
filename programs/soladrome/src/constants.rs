@@ -342,3 +342,10 @@ pub const VAULT_A_SEED: &[u8] = b"vault_a";
 pub const VAULT_B_SEED: &[u8] = b"vault_b";
 pub const MAX_FEE_RATE: u16 = 1_000; // 10% max swap fee
 pub const MAX_PROTOCOL_FEE: u16 = 5_000; // 50% of fee max to protocol
+
+/// PDA seed of `CompanyConfig`, the operating company's share of collected pool fees.
+pub const COMPANY_CONFIG_SEED: &[u8] = b"company_config";
+/// Ceiling on the company's share of each collected pool fee: 25 %, the rest always reaches the
+/// pool's voters. A bound in the binary, not in the config, so no authority key can vote the
+/// voters' bribes to zero.
+pub const MAX_COMPANY_FEE_BPS: u16 = 2_500;
