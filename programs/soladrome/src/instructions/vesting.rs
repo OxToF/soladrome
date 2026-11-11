@@ -291,7 +291,9 @@ pub fn claim_founder_hi_sola(ctx: Context<ClaimFounderHiSola>) -> Result<()> {
     Ok(())
 }
 
-// Claim linearly-vested oSOLA (5M tranche): 12-month cliff, 48 months in all (2026-10-07).
+// Claim linearly-vested oSOLA (5M tranche): 12-month cliff, 48 months in all (2026-10-07),
+// and never more in total than `FOUNDER_O_SOLA_MARKET_CAP_BPS` of what buyers took off the curve
+// (2026-11-11).
 // Mints oSOLA directly to founder — no floor impact.
 // To realise USDC: exercise_o_sola (pay 1 USDC → floor_vault) → sell SOLA back down the curve.
 // Each exercise is net positive for the floor vault.
@@ -321,10 +323,30 @@ pub fn claim_founder_vesting(ctx: Context<ClaimFounderVesting>) -> Result<()> {
             .ok_or(SoladromeError::Overflow)? as u64
     };
 
+    // The market cap. `vs` is the larger of the curve now and the curve before this slot's trades,
+    // so a buy in the same transaction (or slot) cannot lift it. `isqrt(k)` is where the curve
+    // started: vu = vs = N at `initialize`, k = N².
+    let state = &ctx.accounts.protocol_state;
+    let (_, ref_vs) = state.exercise_reserves(clock.slot);
+    let vs = ref_vs.max(state.virtual_sola);
+    let sold_on_curve = crate::amm_math::isqrt(state.k).saturating_sub(vs);
+    let market_cap = ((sold_on_curve as u128) * (FOUNDER_O_SOLA_MARKET_CAP_BPS as u128) / 10_000)
+        as u64;
+
     // Saturating: a vesting started under the old, faster schedule may already have claimed more
-    // than the new one has vested. That is "nothing yet", not an arithmetic fault.
-    let claimable = vested_amount.saturating_sub(vesting.claimed);
-    require!(claimable > 0, SoladromeError::NothingToClaim);
+    // than the new one has vested, and a sale down the curve may have taken the cap below what was
+    // claimed. Both are "nothing yet", not an arithmetic fault.
+    let vested_claimable = vested_amount.saturating_sub(vesting.claimed);
+    require!(vested_claimable > 0, SoladromeError::NothingToClaim);
+    let claimable = vested_amount.min(market_cap).saturating_sub(vesting.claimed);
+    require!(claimable > 0, SoladromeError::FounderClaimAboveMarket);
+    msg!(
+        "Founder oSOLA: vested {} · market cap {} · claimed {} · now {}",
+        vested_amount,
+        market_cap,
+        vesting.claimed,
+        claimable
+    );
 
     // Mint oSOLA to founder — floor-neutral until exercised
     let bump = ctx.accounts.protocol_state.bump;

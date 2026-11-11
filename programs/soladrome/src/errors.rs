@@ -191,4 +191,6 @@ pub enum SoladromeError {
     PartnerDealOver,
     #[msg("The partner's LP escrow must be empty, and every epoch it covered credited, before the allocation can be closed")]
     PartnerLpNotReturned,
+    #[msg("The founder's oSOLA claims are capped at 20 % of the SOLA buyers hold off the curve: the rest unlocks as the market buys")]
+    FounderClaimAboveMarket,
 }
