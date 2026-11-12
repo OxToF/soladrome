@@ -1,7 +1,9 @@
 # Keeper on a VPS
 
-The keeper (`app/scripts/keeper.mts`) fires the permissionless cranks: standing orders and
-per-position strategies. It holds no authority on chain, so all it needs is to **keep
+The keeper (`app/scripts/keeper.mts`) fires the permissionless cranks: standing orders,
+per-position strategies, and `collect_pool_fees` (pool protocol fees → that pool's voters, in the
+epoch's last 6 hours, once per pool side, only into pools someone voted for). That last one spends
+rent (~0.004 SOL per new pot, never refunded), so keep the fee payer funded. It holds no authority on chain, so all it needs is to **keep
 running**. This directory turns it into one bundled file (`yarn build:keeper`, 2.5 MB, no
 `node_modules`) run by a systemd unit that restarts it forever. See `MAINNET_RUNBOOK.md` §7 for
 why this matters.

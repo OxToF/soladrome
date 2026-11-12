@@ -19,17 +19,20 @@
 //   ... scripts/keeper.mts --dry-run  # look, decide, send nothing
 //   KEEPER_ONLY=<owner> ...            # serve one owner's order only (a rehearsal on devnet)
 //   KEEPER_HEARTBEAT_URL=<url> ...     # ping after every pass, so a silence can alert
+//   KEEPER_FEES_WINDOW_S=604800 ...    # collect pool fees at any time, not only the epoch's last 6 h
 //
 // On a server: `deploy/keeper/` — one bundled file (`yarn build:keeper`), a systemd unit.
 //
 // The keypair pays fees and signs nothing that moves a user's tokens. A funded throwaway is the
 // right thing to give it; the deployer key is not.
 import { readFileSync } from "node:fs";
-import { AnchorProvider } from "@coral-xyz/anchor";
+import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import {
   Connection, Keypair, PublicKey, Transaction,
 } from "@solana/web3.js";
-import { statePda, getProgram } from "../lib/program.ts";
+import { statePda, getProgram, getMintProgram, PROGRAM_ID } from "../lib/program.ts";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { SystemProgram } from "@solana/web3.js";
 import {
   buildClaimInstruction, buildCrankInstruction, buildLpCrankInstruction, listCrankableOrders,
 } from "../lib/autocompound.ts";
@@ -285,6 +288,116 @@ async function strategyPass(): Promise<void> {
   }
 }
 
+// ── Pool protocol fees → the pool's voters ──────────────────────────────────
+//
+// Since 2026-11-11 a swap whose input is not USDC books the protocol's share in the pool
+// (`protocol_fees_a/b`) instead of leaving it to the LPs, and `collect_pool_fees` pays it into the
+// pool's bribe pot for the CURRENT epoch. Anyone may call it; this keeper does so that the fees
+// reach voters without anyone having to remember.
+//
+// ☢️ WHEN, not just whether. A pot belongs to the epoch it is paid into, so fees collected after
+// the epoch rolls over pay the NEXT epoch's voters. Collecting in the last hours of the epoch
+// pays the voters whose votes attracted that flow. And only once per side per epoch: every first
+// deposit into a (pool, mint, epoch) pot costs this fee payer the rent of two accounts (~0.004
+// SOL), which nobody refunds — the pots are never closed.
+//
+// ☢️ And never into a pool nobody voted for this epoch: the pot could not be claimed, only rolled
+// over, and the rent would be spent for nothing. The fees stay owed in the pool; they are not
+// lost, they are collected the first epoch someone votes for it.
+// `KEEPER_FEES_WINDOW_S` widens it for a rehearsal (e.g. 604800 = any time in the epoch).
+const FEES_WINDOW_S = Number(process.env.KEEPER_FEES_WINDOW_S?.trim() || 6 * 3600);
+const EPOCH_S = 604_800;
+const collected = new Set<string>(); // `${pool}:${side}:${epoch}` — in memory; a restart may re-collect, harmlessly
+const epochLE = (e: number) => {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(BigInt(e));
+  return b;
+};
+const pdaOf = (seeds: Buffer[]) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
+
+async function feesPass(): Promise<void> {
+  const program = getProgram(new AnchorProvider(connection, wallet as any, {}));
+  const state: any = await (program.account as any).protocolState.fetch(statePda);
+  if (state.paused || !state.bribesEnabled) return;
+
+  // The chain's clock, not this machine's: the program checks `epoch == current_epoch(clock)`.
+  const slot = await connection.getSlot();
+  const now = (await connection.getBlockTime(slot)) ?? Math.floor(Date.now() / 1000);
+  const epoch = Math.floor(now / EPOCH_S);
+  const left = (epoch + 1) * EPOCH_S - now;
+  if (left > FEES_WINDOW_S) return;
+
+  const companyConfig = pdaOf([Buffer.from("company_config")]);
+  const company: any = await (program.account as any).companyConfig.fetchNullable(companyConfig);
+  const pools: any[] = await (program.account as any).ammPool.all();
+
+  for (const { publicKey: pool, account: p } of pools) {
+    for (const sideA of [true, false]) {
+      const owed = BigInt((sideA ? p.protocolFeesA : p.protocolFeesB).toString());
+      const key = `${pool.toBase58()}:${sideA ? "a" : "b"}:${epoch}`;
+      if (owed === 0n || collected.has(key)) continue;
+      const mint: PublicKey = sideA ? p.tokenAMint : p.tokenBMint;
+      const tag = `${pool.toBase58().slice(0, 6)}…/${mint.toBase58().slice(0, 4)}…`;
+      try {
+        const gauge: any = await (program.account as any).gaugeState.fetchNullable(
+          pdaOf([Buffer.from("gauge"), pool.toBuffer(), epochLE(epoch)]),
+        );
+        if (!gauge || BigInt(gauge.totalVotes.toString()) === 0n) {
+          collected.add(key); // asked once this epoch; the answer will not change in the window
+          console.log(`${stamp()}  fees ${tag}  ${owed} owed, but nobody voted for the pool this epoch — left owed`);
+          continue;
+        }
+        const tokenProgram = await getMintProgram(connection, mint);
+        // The company's share is due only while one is set; its account is then mandatory.
+        const companyToken =
+          company && company.feeBps > 0
+            ? getAssociatedTokenAddressSync(mint, company.wallet, true, tokenProgram)
+            : null;
+        const ix = await (program.methods as any)
+          .collectPoolFees(new BN(epoch), sideA)
+          .accounts({
+            payer: keeper.publicKey,
+            protocolState: statePda,
+            pool,
+            mint,
+            poolVault: sideA ? p.tokenAVault : p.tokenBVault,
+            bribeVault: pdaOf([Buffer.from("bribe_vault"), pool.toBuffer(), mint.toBuffer(), epochLE(epoch)]),
+            bribeTokenVault: pdaOf([Buffer.from("bribe_tokens"), pool.toBuffer(), mint.toBuffer(), epochLE(epoch)]),
+            companyConfig,
+            companyToken,
+            tokenProgram,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction();
+
+        const tx = new Transaction().add(...computeBudget(CU_SIM_LIMIT), ix);
+        tx.feePayer = keeper.publicKey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+        const sim = await connection.simulateTransaction(tx);
+        if (sim.value.err) {
+          console.log(`${stamp()}  fees ${tag}  refused in simulation: ${JSON.stringify(sim.value.err)}`);
+          continue;
+        }
+        if (DRY_RUN) {
+          console.log(`${stamp()}  fees ${tag}  would collect ${owed} to epoch ${epoch}'s voters, ${sim.value.unitsConsumed} CU`);
+          continue;
+        }
+        const units = cuLimitFor(sim.value.unitsConsumed);
+        const sized = new Transaction().add(...computeBudget(units), ix);
+        sized.feePayer = keeper.publicKey;
+        sized.recentBlockhash = tx.recentBlockhash;
+        sized.sign(keeper);
+        const sig = await connection.sendRawTransaction(sized.serialize(), { skipPreflight: true });
+        await connection.confirmTransaction(sig, "confirmed");
+        collected.add(key);
+        console.log(`${stamp()}  fees ${tag}  collected ${owed} to epoch ${epoch}'s voters — ${sig}`);
+      } catch (e: any) {
+        console.log(`${stamp()}  fees ${tag}  ${String(e?.message ?? e).split("\n")[0].slice(0, 140)}`);
+      }
+    }
+  }
+}
+
 if (DRY_RUN) console.log(`dry run: nothing will be sent (fee payer ${keeper.publicKey.toBase58().slice(0, 8)}…, used only to simulate)`);
 else console.log(`keeper ${keeper.publicKey.toBase58()} — pays fees, holds no authority`);
 
@@ -318,6 +431,10 @@ async function fullPass(): Promise<void> {
   await strategyPass().catch((e) => {
     ok = false;
     console.log(`${stamp()}  strategy pass failed: ${String(e?.message ?? e).slice(0, 140)}`);
+  });
+  await feesPass().catch((e) => {
+    ok = false;
+    console.log(`${stamp()}  fees pass failed: ${String(e?.message ?? e).slice(0, 140)}`);
   });
   await heartbeat(ok);
 }
