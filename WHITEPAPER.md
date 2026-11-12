@@ -238,7 +238,7 @@ One-time instruction creating two progressive vesting schedules:
   2. **No fee capture** — escrowed hiSOLA is excluded from `total_hi_sola`, the fee-accumulator denominator. The reserve earns nothing; 100% of protocol fees go to real stakers.
   3. **No voting, on any path** — `vote_gauge`, `replay_vote` **and** `burn_o_sola_for_votes` all reject the founder wallet (`founder_voting_enabled = false` by default): the 7M is a dormant anti-capture reserve, not governance power. Authority may flip it via `set_founder_voting` only as a break-glass measure against a detected takeover.
   4. **No borrowing** — the tranche was never financed through the curve, so `borrow_against_locked` (financed stake only, since 2026-11-09) lends nothing against it.
-- **5M oSOLA:** via `claim_founder_vesting`, on a slower schedule than the hiSOLA tranche since 2026-10-07: 12-month cliff (25 % at the cliff), 48 months in all. A sale now pays the curve's price, so every oSOLA is a claim on the premium curve buyers left in `market_reserve`; the slower release bounds how fast the founder can draw on it. Each exercise adds 1 USDC to `floor_vault`.
+- **5M oSOLA:** via `claim_founder_vesting`, on a slower schedule than the hiSOLA tranche since 2026-10-07: 12-month cliff (25 % at the cliff), 48 months in all. A sale now pays the curve's price, so every oSOLA is a claim on the premium curve buyers left in `market_reserve`; the slower release bounds how fast the founder can draw on it. Since 2026-11-11 the claims are also capped by the market: never more in total than 20 % of the SOLA buyers hold off the curve (`sqrt(k) − virtual_sola`), about 200,000 oSOLA at most since the curve never holds more than 1M SOLA. A buy in the claim's own slot does not count, and a sale lowers the cap. Each exercise adds 1 USDC to `floor_vault`.
 - **250k hiSOLA (team tranche):** delivered at launch to the team wallet as hiSOLA minted **directly into a lifetime ve-lock** (`permanent_amount` covers the full tranche — `unlock_hi_sola` can never release it) — never liquid SOLA. Compensates contributors who worked unpaid pre-launch. Votes as an ordinary user (distinct wallet from the founder reserve, by design), never borrows (unfinanced), and **earns protocol fees** (`fee_shares`, since 2026-08-27 — locked for life meant a fee basis of zero that could never become anything else, so the tranche paid nobody). Does not affect `total_purchased_sola`.
 
 ### 7.2 Protocol Partner Allocations (`register_partner` / `fund_partner_bribe_stream` / `deposit_partner_lp` / `crank_partner_epoch` / `withdraw_partner_lp`)
@@ -450,7 +450,7 @@ pool_pda = PDA([b"amm_pool", mint_a, mint_b])  // mints sorted lex
 
 Pool parameters set at creation:
 - `swap_fee_bps` (max 1000 = 10%)
-- `protocol_fee_share_bps` (max 5000 = 50% of swap fee → `market_vault`)
+- `protocol_fee_share_bps` (max 5000 = 50% of swap fee). A USDC input pays it to `market_vault`; any other input books it in the pool ledger, and `collect_pool_fees` pays it as a bribe to that pool's voters, less the operating company's share (0 % until the company exists, capped at 25 % in the binary)
 
 ### 10.2 Liquidity (xy=k)
 
@@ -543,7 +543,7 @@ Because step 1 is an oSOLA exercise, `flash_arbitrage` honors the same `exercise
 |---|---|---|---|
 | User purchases | Unlimited (curve-bound) | `buy_sola` | ✅ 1:1 |
 | Founder hiSOLA | 7,000,000 | 6-month cliff, 24-month linear vest · **lifetime ve escrow** — no exit, no vote, no fee share | ❌ locked for life |
-| Founder oSOLA | 5,000,000 | 12-month cliff, 48-month linear vest | ✅ on exercise |
+| Founder oSOLA | 5,000,000 | 12-month cliff, 48-month linear vest, claims capped at 20 % of the SOLA bought off the curve | ✅ on exercise |
 | Team hiSOLA | 250,000 | Lifetime ve-lock at launch — votes, earns fees, never borrows, never liquid SOLA | ❌ locked for life |
 | Protocol partners | bags 250K / 175K / 100K by tier + per-deal bribe caps | Welcome bag **locked for life** · bribe-earned streamed vs bribes, 4-year lock | ❌ locked |
 | Contributors | small, per-wallet | hiSOLA lifetime ve-lock + oSOLA, claimed at launch | ❌ hiSOLA locked for life |
@@ -564,7 +564,7 @@ There is no protocol-controlled inflation. oSOLA is the primary incentive token;
 
 Protocol revenue flows to `market_vault`:
 - **Bonding curve fee** — 1 % of every buy and every sale (`CURVE_FEE_BPS`). Until 2026-10-07 this line was the whole premium above the floor; that premium now stays in `market_reserve`, owed to sellers
-- **AMM protocol fees** — `protocol_fee_share_bps` of each swap
+- **AMM protocol fees** — `protocol_fee_share_bps` of each swap with a USDC input. The share on every other input (SOL, LSTs, SOLA) goes to the pool's voters as a bribe, not here
 - **Borrow origination fees** — 2% of each `borrow_usdc` / `borrow_against_locked`
 - **Flash arbitrage** — 90% of arb profit
 
@@ -771,7 +771,7 @@ Soladrome's novel contribution is the combination of a **guaranteed floor-price 
 | Beneficiary | Token | Amount | Cliff | Vesting / Lock | Borrow rights | On-chain mechanism |
 |---|---|---|---|---|---|---|
 | Founder | hiSOLA | 7,000,000 | 6 months | Lifetime ve escrow (no exit, no vote, no fees) | None | `claim_founder_hi_sola` |
-| Founder | oSOLA | 5,000,000 | 12 months | 48 months linear | None | `claim_founder_vesting` |
+| Founder | oSOLA | 5,000,000 | 12 months | 48 months linear, capped at 20 % of the SOLA bought off the curve | None | `claim_founder_vesting` |
 | Team | hiSOLA | 250,000 | None | Lifetime ve-lock (votes as ordinary user, earns fees) | None | `mint_ecosystem_allocation` |
 | Protocol partners | hiSOLA | fixed per deal ($100K → 10,000 … $1M → 70,000) | None | Credited per epoch of LP locked in escrow, then locked for life | None | `crank_partner_epoch` |
 | Contributors | hiSOLA + oSOLA | small, per-wallet (≤ 100,000 each, cumulative) | None | hiSOLA lifetime ve-lock + oSOLA, claimed at launch | None | `claim_contributor_hi_sola` |

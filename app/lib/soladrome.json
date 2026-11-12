@@ -3425,6 +3425,218 @@
       "args": []
     },
     {
+      "name": "collect_pool_fees",
+      "docs": [
+        "Pay one side of a pool's owed protocol fees to its voters' bribe pot for `epoch` (the",
+        "current one), less the operating company's share. Permissionless crank."
+      ],
+      "discriminator": [
+        145,
+        113,
+        45,
+        27,
+        77,
+        181,
+        241,
+        69
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Pays rent for the epoch's bribe pot if this is its first deposit."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  109,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_a_mint",
+                "account": "AmmPool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.token_b_mint",
+                "account": "AmmPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "The side being collected; checked against the pool in the handler."
+          ]
+        },
+        {
+          "name": "pool_vault",
+          "docs": [
+            "That side's pool vault; checked against the pool in the handler."
+          ],
+          "writable": true
+        },
+        {
+          "name": "bribe_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bribe_token_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  98,
+                  101,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              },
+              {
+                "kind": "arg",
+                "path": "epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "company_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  97,
+                  110,
+                  121,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "company_token",
+          "docs": [
+            "The company wallet's token account for `mint`. Required only while a share is due."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "epoch",
+          "type": "u64"
+        },
+        {
+          "name": "side_a",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "collect_to_pol",
       "docs": [
         "Redirect a portion of market_vault fees to pol_usdc_vault. Authority-only."
@@ -10173,6 +10385,87 @@
       ]
     },
     {
+      "name": "set_company_fee",
+      "docs": [
+        "Set the operating company's wallet and share of collected pool fees. Authority-only."
+      ],
+      "discriminator": [
+        121,
+        241,
+        229,
+        29,
+        146,
+        165,
+        113,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "company_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  97,
+                  110,
+                  121,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "wallet",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "set_exercise_fee",
       "discriminator": [
         126,
@@ -11930,6 +12223,19 @@
       ]
     },
     {
+      "name": "CompanyConfig",
+      "discriminator": [
+        242,
+        116,
+        177,
+        228,
+        213,
+        253,
+        5,
+        63
+      ]
+    },
+    {
       "name": "ContributorRegistry",
       "discriminator": [
         38,
@@ -12578,6 +12884,21 @@
       "code": 6074,
       "name": "PartnerLpNotReturned",
       "msg": "The partner's LP escrow must be empty, and every epoch it covered credited, before the allocation can be closed"
+    },
+    {
+      "code": 6075,
+      "name": "FounderClaimAboveMarket",
+      "msg": "The founder's oSOLA claims are capped at 20 % of the SOLA buyers hold off the curve: the rest unlocks as the market buys"
+    },
+    {
+      "code": 6076,
+      "name": "CompanyFeeInvalid",
+      "msg": "The company's share of collected pool fees is capped at 25 %, and needs a company wallet"
+    },
+    {
+      "code": 6077,
+      "name": "CompanyAccountRequired",
+      "msg": "The company's share is due: pass the company wallet's token account for this mint"
     }
   ],
   "types": [
@@ -12648,6 +12969,32 @@
               "so existing accounts read 0 = false until the authority enables them."
             ],
             "type": "bool"
+          },
+          {
+            "name": "protocol_fees_a",
+            "docs": [
+              "The protocol's share of swap fees taken on side A / side B that did NOT leave the pool",
+              "at swap time, owed and waiting for `collect_pool_fees`.",
+              "",
+              "Until 2026-11-11 only a USDC-denominated input paid the protocol: `swap` moved its share",
+              "to `market_vault`, and every other input (SOL, an LST, SOLA, oSOLA) left the share in the",
+              "reserves as LP revenue. On a SOLA/SOL or SOL/LST pool that is EVERY swap, so the pools the",
+              "protocol launches with paid it nothing. The share is now booked here instead, and paid",
+              "out by the crank as a bribe to that pool's own voters (the Aerodrome model): no swap, no",
+              "price to protect, and the votes that direct emissions are paid by the flow they attract.",
+              "",
+              "☢️ INVARIANT: the vault holds `reserve + protocol_fees` on each side. Everything that",
+              "prices or withdraws reads `reserve_a/b` only, so owed fees are never sold or withdrawn",
+              "by LPs; the crank is the only thing that moves them out, and it zeroes the figure in the",
+              "same instruction.",
+              "",
+              "Carved from the trailing padding: an existing pool reads 0 = nothing owed."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fees_b",
+            "type": "u64"
           }
         ]
       }
@@ -12844,6 +13191,53 @@
           {
             "name": "total_bribed",
             "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CompanyConfig",
+      "docs": [
+        "Who runs the protocol, and what share of the collected pool fees pays for it.",
+        "",
+        "Decided 2026-11-11: the protocol should be able to pay a legal entity that operates it",
+        "(engineers, infrastructure, audits) out of its fees, but that entity does not exist yet. So",
+        "the mechanism ships now and pays nobody: until the authority calls `set_company_fee`, this",
+        "PDA does not exist and `collect_pool_fees` sends everything to the pool's voters.",
+        "",
+        "☢️ It is a separate PDA, not two fields of `ProtocolState`, because the singleton has one",
+        "spare byte and no resize path (the July 3003 brick). And `collect_pool_fees` reads it at its",
+        "canonical address whether or not the caller wants it to: a permissionless crank that took",
+        "the config as an OPTIONAL account would let any caller omit it and send the company's share",
+        "to the voters.",
+        "",
+        "The share applies to fees booked in the pool ledger (`AmmPool::protocol_fees_a/b`) only.",
+        "USDC fees still go straight to `market_vault` at swap time and stay 100 % with stakers:",
+        "carving a company share out of them would touch the stakers' fee accumulator, which every",
+        "claim depends on, for a percentage that is 0 today.",
+        "",
+        "PDA: [b\"company_config\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "docs": [
+              "Owner of the token accounts the company's share is paid into, one per mint."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_bps",
+            "docs": [
+              "Share of every collected pool fee paid to `wallet`, in bps, ≤ `MAX_COMPANY_FEE_BPS`."
+            ],
+            "type": "u16"
           },
           {
             "name": "bump",

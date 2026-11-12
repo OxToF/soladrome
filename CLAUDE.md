@@ -237,7 +237,8 @@ account structs under `state/`.
 
 **System 2 — Permissionless AMM multi-pool**
 - Each pool is an `AmmPool` PDA; mints are sorted lexicographically before seeding so (A,B) and (B,A) map to the same pool
-- Protocol fee from swaps routes to the global `market_vault` → feeds hiSOLA stakers
+- Protocol fee from swaps: a **USDC input** pays it to the global `market_vault` at swap time → hiSOLA stakers. **Any other input** (SOL, LST, SOLA, oSOLA) books it in the pool ledger `protocol_fees_a/b`; the permissionless crank `collect_pool_fees(epoch, side_a)` pays it into that pool's bribe pot for the current epoch → **the pool's voters** (2026-11-11; before that it stayed in the reserves, so SOLA/SOL and SOL/LST paid the protocol nothing). ☢️ Invariant: vault = reserve + owed fees. Every swap path books (`swap`, `pol_swap`, the oSOLA sale in `auto_lp`); `flash_arbitrage` burns its fee instead
+- Operating company share: `CompanyConfig` PDA (`set_company_fee`, authority-only, ≤ `MAX_COMPANY_FEE_BPS` = 25 %), taken by `collect_pool_fees` from the booked fees only. **0 % until the legal entity exists** (the PDA does not exist). USDC fees stay 100 % to stakers
 - First LP deposit locks `MINIMUM_LIQUIDITY = 1_000` to `LP_DEAD_PUBKEY` (System Program)
 - `lp_for_deposit()` auto-rebalances to the limiting token side on subsequent deposits
 
@@ -289,7 +290,7 @@ the split ratio.
 - **Who gets paid what** (code-verified 2026-07-17, a recurring point of confusion):
   **bribes → voters** (`claim_bribe`: `total_bribed × user_votes / total_votes`, basis =
   `UserVoteReceipt` — LP balance appears nowhere) · **oSOLA emissions → LPs** (vote-directed) ·
-  **protocol fees → all hiSOLA stakers** (`claim_fees`, no voting required) · **LP-side swap
+  **USDC protocol fees → all hiSOLA stakers** (`claim_fees`, no voting required) · **non-USDC protocol fees → the pool's voters** (`collect_pool_fees` → bribe pot) · **LP-side swap
   fees → LPs** (stay in the pool). Same axis as Beradrome (bribes buy votes), so a partner
   dominating their own pool's LP recaptures none of their own bribe.
 - Bribes deposited during epoch N; claims only open after epoch N ends
@@ -354,7 +355,7 @@ a holder sees their balance.
 | Tranche | Amount | Constant | Regime |
 |---|---|---|---|
 | hiSOLA governance | 7,000,000 | `FOUNDER_STAKE` | ve escrow, **locked for life**, no vote, no fees |
-| oSOLA vesting | 5,000,000 | `FOUNDER_LIQUID` | vesting vault: **12-month cliff, 48 months in all** (`FOUNDER_O_SOLA_CLIFF_SECS` / `FOUNDER_O_SOLA_VESTING_SECS`, 2026-10-07 — was the hiSOLA 6/24: since a sale pays the curve, oSOLA are a claim on the market reserve) |
+| oSOLA vesting | 5,000,000 | `FOUNDER_LIQUID` | vesting vault: **12-month cliff, 48 months in all** (`FOUNDER_O_SOLA_CLIFF_SECS` / `FOUNDER_O_SOLA_VESTING_SECS`, 2026-10-07 — was the hiSOLA 6/24: since a sale pays the curve, oSOLA are a claim on the market reserve). **Plus a market cap (2026-11-11): total claimed ≤ 20 % of `isqrt(k) − virtual_sola`** (`FOUNDER_O_SOLA_MARKET_CAP_BPS`), read at the pre-slot curve. ☢️ The curve never holds more than N = 1M SOLA, so this caps the tranche at ~200K oSOLA in practice; never index it on `total_purchased_sola` (exercise raises it) |
 | team tranche | 250,000 | `FOUNDER_IMMEDIATE_SOLA` | → `TEAM_WALLET`, hiSOLA in a **lifetime** ve lock (`permanent_amount` covers the full tranche — decision 2026-07-17, upgraded from 4 years). **Votes** (up to 4×) — a distinct wallet from FOUNDER_WALLET by design, since the vote guard keys on the latter. **Earns fees for life** (`fee_shares`), vote kept at 4× by relocking a dust amount. **Never borrows** (unfinanced, 2026-11-09). Pays contributors who worked unpaid pre-launch. |
 
 The **1.75M ecosystem budget is no longer minted as SOLA** (changed 2026-07-17). It is issued as

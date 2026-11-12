@@ -293,8 +293,8 @@ pub fn require_floor_respected(pool: &AmmPool, state: &ProtocolState) -> Result<
 pub struct SwapQuote {
     /// Total swap fee, `amount_in × fee_rate / 10 000`.
     pub fee_total: u64,
-    /// The protocol's share of `fee_total`. Whether it is actually routed to `market_vault` is
-    /// the caller's decision — see `swap`, which routes it only for USDC-denominated input.
+    /// The protocol's share of `fee_total`. A USDC input sends it to `market_vault` at swap time
+    /// (see `swap`); any other input books it in the pool ledger with `book_protocol_fee`.
     pub fee_protocol: u64,
     /// `amount_in − fee_total`: the only part the curve prices.
     pub amount_net: u64,
@@ -369,6 +369,27 @@ pub fn apply_swap_reserves(
         pool.reserve_b = new_in;
         pool.reserve_a = new_out;
     }
+    Ok(())
+}
+
+/// Owe the protocol `fee` on the input side of a swap, to be paid out by `collect_pool_fees`.
+///
+/// The fee is already in the input vault (the swapper paid the full `amount_in`); this only
+/// records that it is not reserve. Every caller must therefore credit the reserve with
+/// `amount_in − fee`, which keeps `vault = reserve + protocol_fees` exact — see the invariant on
+/// `AmmPool::protocol_fees_a`.
+///
+/// ☢️ Every swap path that takes a fee from a wallet calls this, not only `swap`: `pol_swap` and
+/// the oSOLA sale in `auto_lp` used to leave the protocol share in the reserves, which is the
+/// same leak by another door. `flash_arbitrage` is the one exception and stays one: it burns its
+/// fee rather than putting it in the pool.
+pub fn book_protocol_fee(pool: &mut AmmPool, in_is_a: bool, fee: u64) -> Result<()> {
+    let owed = if in_is_a {
+        &mut pool.protocol_fees_a
+    } else {
+        &mut pool.protocol_fees_b
+    };
+    *owed = owed.checked_add(fee).ok_or(SoladromeError::Overflow)?;
     Ok(())
 }
 
@@ -797,7 +818,8 @@ pub fn claim_lp_rewards(ctx: Context<ClaimLpRewards>) -> Result<()> {
 /// Swap token_in for token_out via the pool's xy=k curve.
 /// a_to_b: true  → sell token_a, receive token_b
 ///         false → sell token_b, receive token_a
-/// Fee split: LP portion stays in reserves, protocol portion → market_vault.
+/// Fee split: LP portion stays in reserves; protocol portion → market_vault for a USDC input,
+/// else booked in the pool ledger for `collect_pool_fees`.
 pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> Result<()> {
     require!(
         !ctx.accounts.protocol_state.paused,
@@ -874,9 +896,12 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
         dec_out,
     )?;
 
-    // Only route protocol fee to market_vault if the input token matches the market_vault mint (USDC).
-    // For non-USDC pools (e.g. oSOLA/SOLA), the protocol fee stays in reserves as LP revenue.
+    // A USDC input pays the protocol share straight to `market_vault` (stakers). Any other input
+    // books it in the pool ledger, paid to the pool's voters by `collect_pool_fees`. Until
+    // 2026-11-11 the non-USDC share stayed in the reserves as LP revenue, so SOLA/SOL and the
+    // SOL/LST pools paid the protocol nothing at all.
     let mut fee_routed: u64 = 0;
+    let mut fee_booked: u64 = 0;
     if fee_protocol > 0 {
         let input_vault_mint = if a_to_b {
             ctx.accounts.token_a_vault.mint
@@ -907,19 +932,22 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
                 .accumulated_fees
                 .saturating_add(fee_proto_u64);
             fee_routed = fee_proto_u64;
+        } else {
+            fee_booked = fee_protocol;
         }
-        // else: fee stays in vault — LP earns 100% of the swap fee for non-USDC pools
     }
 
-    // The vault received the FULL `amount_in`; only the protocol's share (when it was actually
-    // routed out) has left again. Everything still sitting there is reserve, which is how the
-    // LP half of the fee becomes LP revenue.
+    // The vault received the FULL `amount_in`. The protocol's share is either gone
+    // (`fee_routed`) or owed (`fee_booked`), never both; what is left is reserve, which is how
+    // the LP part of the fee becomes LP revenue.
     let pool = &mut ctx.accounts.pool;
+    book_protocol_fee(pool, a_to_b, fee_booked)?;
     apply_swap_reserves(
         pool,
         a_to_b,
         amount_in
             .checked_sub(fee_routed)
+            .and_then(|v| v.checked_sub(fee_booked))
             .ok_or(SoladromeError::Overflow)?,
         amount_out,
     )?;

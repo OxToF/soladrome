@@ -261,6 +261,25 @@ pub const VESTING_DURATION_SECS: u64 = 720 * 24 * 3_600;
 pub const FOUNDER_O_SOLA_CLIFF_SECS: u64 = 365 * 24 * 3_600;
 pub const FOUNDER_O_SOLA_VESTING_SECS: u64 = 4 * 365 * 24 * 3_600;
 
+/// The founder's oSOLA claims are capped by the market as well as by the calendar: the total ever
+/// claimed may not exceed 20 % of the SOLA buyers hold off the curve (`isqrt(k) − virtual_sola`,
+/// read at the slot's reference price). Decided 2026-11-11.
+///
+/// ☢️ Why the calendar alone is not enough: 5M vesting over 48 months releases 1.25M at the cliff,
+/// and a small fraction of that, exercised and sold, takes the curve back to 1 at $10-75K of buys
+/// a month. Doubling the term changed nothing in simulation (625K at the cliff still exceeds the
+/// curve's depth). Indexed on what buyers took, the founder can only ever sell a fraction of it:
+/// in simulation the price follows the curve and the founder takes ~18 % of the premium.
+///
+/// ☢️ Never index this on `total_purchased_sola`: an exercise adds to it, so the founder's own
+/// exercises would raise their own cap. `virtual_sola` moves only with curve trades, and a sale
+/// pushes it back up — the founder selling lowers their cap.
+///
+/// Disclosed, not closed: buying, waiting a slot, claiming, then selling back lifts the cap for
+/// that claim. It costs both curve fees (~2 % of the volume) and market risk, and is still bounded
+/// by the calendar.
+pub const FOUNDER_O_SOLA_MARKET_CAP_BPS: u64 = 2_000;
+
 // (BASE_BAG_VEST_SECS removed 2026-08-27 with the streamed welcome bag. The bag is now
 //  delivered whole the moment the partner escrows their bribe schedule — it is the signature
 //  signal, not the compensation, and it is small for that reason. What used to be the rest of
@@ -323,3 +342,10 @@ pub const VAULT_A_SEED: &[u8] = b"vault_a";
 pub const VAULT_B_SEED: &[u8] = b"vault_b";
 pub const MAX_FEE_RATE: u16 = 1_000; // 10% max swap fee
 pub const MAX_PROTOCOL_FEE: u16 = 5_000; // 50% of fee max to protocol
+
+/// PDA seed of `CompanyConfig`, the operating company's share of collected pool fees.
+pub const COMPANY_CONFIG_SEED: &[u8] = b"company_config";
+/// Ceiling on the company's share of each collected pool fee: 25 %, the rest always reaches the
+/// pool's voters. A bound in the binary, not in the config, so no authority key can vote the
+/// voters' bribes to zero.
+pub const MAX_COMPANY_FEE_BPS: u16 = 2_500;

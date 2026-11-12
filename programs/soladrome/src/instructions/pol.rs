@@ -13,8 +13,8 @@ use crate::amm_math::{self, MINIMUM_LIQUIDITY};
 use crate::constants::*;
 use crate::errors::SoladromeError;
 use crate::instructions::amm::{
-    advance_pool_rewards, apply_swap_reserves, continuous_active, minted_lp_supply, quote_swap,
-    require_floor_respected,
+    advance_pool_rewards, apply_swap_reserves, book_protocol_fee, continuous_active,
+    minted_lp_supply, quote_swap, require_floor_respected,
 };
 use crate::instructions::strategy::pool_address;
 use crate::math;
@@ -233,7 +233,18 @@ pub fn pol_swap(ctx: Context<PolSwap>, amount_in: u64, min_out: u64) -> Result<(
         quote.amount_out,
     )?;
 
-    apply_swap_reserves(&mut ctx.accounts.pool, in_is_a, amount_in, quote.amount_out)?;
+    // Same rule as the public `swap`: the protocol share is owed, not reserve. POL trading with
+    // the pool still pays the pool's voters — it is a swap like any other.
+    let pool = &mut ctx.accounts.pool;
+    book_protocol_fee(pool, in_is_a, quote.fee_protocol)?;
+    apply_swap_reserves(
+        pool,
+        in_is_a,
+        amount_in
+            .checked_sub(quote.fee_protocol)
+            .ok_or(SoladromeError::Overflow)?,
+        quote.amount_out,
+    )?;
     Ok(())
 }
 
