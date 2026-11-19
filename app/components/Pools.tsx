@@ -462,6 +462,10 @@ export function Pools() {
       const ma = tokens[newMintA]?.mint;
       const mb = tokens[newMintB]?.mint;
       if (!ma || !mb || ma === mb) throw new Error("Invalid token pair");
+      // The program refuses anything below these floors (2026-11-20): the share is fixed for the
+      // pool's life, so a 0 % pool would pay stakers, voters and the company nothing, for good.
+      if (!(+newFee >= 5 && +newFee <= 1_000)) throw new Error("Swap fee must be between 5 and 1000 bps (0.05 % to 10 %)");
+      if (!(+newProto >= 2_000 && +newProto <= 5_000)) throw new Error("Protocol share must be between 2000 and 5000 bps (20 % to 50 %)");
       const [mintAPk, mintBPk] = sortMints(new PublicKey(ma), new PublicKey(mb));
       const poolAddr = poolPda(mintAPk, mintBPk);
       const lpMint   = lpMintPda(poolAddr);
@@ -1203,7 +1207,7 @@ export function Pools() {
                 <label className="text-xs text-gray-400 mb-1 block">Protocol share (bps)</label>
                 <input className="input w-full" type="text" inputMode="decimal"
                   value={newProto} onChange={e => numInput(e.target.value, setNewProto)} />
-                <span className="text-xs text-gray-600 mt-0.5 block">{(+newProto / 100).toFixed(0)}% of fees → stakers</span>
+                <span className="text-xs text-gray-600 mt-0.5 block">{(+newProto / 100).toFixed(0)}% of fees → stakers or voters (min 20 %)</span>
               </div>
             </div>
           </div>

@@ -6051,6 +6051,162 @@
       ]
     },
     {
+      "name": "credit_founder_fee_tranche",
+      "docs": [
+        "One-shot, authority-only: 500K of the founder's 7M move out of the vesting schedule into",
+        "a lifetime lock that earns fees (no vote, no borrow), to fund the operating company."
+      ],
+      "discriminator": [
+        39,
+        130,
+        152,
+        212,
+        244,
+        65,
+        118,
+        23
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "founder"
+        },
+        {
+          "name": "sola_mint",
+          "writable": true
+        },
+        {
+          "name": "sola_vault",
+          "docs": [
+            "Receives the SOLA backing the tranche's locked hiSOLA."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Read-only — accumulator snapshot before the hiSOLA supply changes."
+          ]
+        },
+        {
+          "name": "lock_position",
+          "docs": [
+            "The founder's lifetime ve lock — the same account `claim_founder_hi_sola` fills."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "founder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "founder_position",
+          "docs": [
+            "The founder's fee-share position."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "founder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "founder_hi_vesting",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  111,
+                  117,
+                  110,
+                  100,
+                  101,
+                  114,
+                  95,
+                  104,
+                  105,
+                  95,
+                  118,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "deploy_pol",
       "docs": [
         "Buy SOLA via bonding curve and/or add it to a SOLA pool paired with USDC, SOL or a token",

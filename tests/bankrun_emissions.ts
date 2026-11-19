@@ -417,7 +417,7 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
     userLp = getAssociatedTokenAddressSync(lpMint, payer.publicKey);
 
     await program.methods
-      .createPool(30, 1_000)
+      .createPool(30, 2_000)
       .accounts({
         creator: payer.publicKey,
         protocolState: statePda,

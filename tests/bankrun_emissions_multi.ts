@@ -255,7 +255,7 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
       vaultB: pda([Buffer.from("vault_b"), key.toBuffer()]),
     };
     await program.methods
-      .createPool(30, 1_000)
+      .createPool(30, 2_000)
       .accounts({
         creator: payer.publicKey,
         protocolState: statePda,

@@ -69,7 +69,7 @@ import { assert } from "chai";
 import * as fs from "fs";
 
 const FEE_RATE = 30; // 0.30% — bps of amount_in, matches the live devnet pools
-const PROTO_BPS = 1_000; // 10% of the fee to the protocol
+const PROTO_BPS = 2_000; // 20% of the fee to the protocol (MIN_PROTOCOL_FEE)
 
 describe("soladrome — bankrun (AMM floor guard)", () => {
   let context: ProgramTestContext;

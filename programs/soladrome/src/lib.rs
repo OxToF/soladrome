@@ -122,6 +122,12 @@ pub mod soladrome {
         instructions::vesting::claim_founder_hi_sola(ctx)
     }
 
+    /// One-shot, authority-only: 500K of the founder's 7M move out of the vesting schedule into
+    /// a lifetime lock that earns fees (no vote, no borrow), to fund the operating company.
+    pub fn credit_founder_fee_tranche(ctx: Context<CreditFounderFeeTranche>) -> Result<()> {
+        instructions::vesting::credit_founder_fee_tranche(ctx)
+    }
+
     pub fn claim_founder_vesting(ctx: Context<ClaimFounderVesting>) -> Result<()> {
         instructions::vesting::claim_founder_vesting(ctx)
     }
