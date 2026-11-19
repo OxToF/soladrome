@@ -16,6 +16,7 @@ import { currentEpoch } from "@/lib/epoch";
 import { PublicKey } from "@solana/web3.js";
 import { unpackAccount } from "@solana/spl-token";
 import { jsAdvanceAccumulator, jsPendingFees, computeClaimableBribesSummary, type ClaimableBribesSummary } from "@/lib/claims";
+import { StrategyEarnings } from "./StrategyEarnings";
 
 interface PortfolioData {
   solaBalance:   number;
@@ -331,6 +332,9 @@ export function Portfolio() {
           </p>
         </div>
       </div>
+
+      {/* Strategies: what each position's strategy earned, and the USDC alert for voting ones */}
+      <StrategyEarnings solaPrice={solaPrice} oSolaPrice={oSolaPrice} />
 
       {/* CTAs — data-driven where possible so users don't need to know the
           ve(3,3) cycle by heart to find what's actionable. */}
