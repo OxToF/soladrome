@@ -105,6 +105,11 @@ pub const ROLLOVER_DELAY_EPOCHS: u64 = 2;
 // holding that sum: it was never used as a cap, and a total that no `require!` reads is a
 // number an auditor has to chase to discover it enforces nothing.
 pub const FOUNDER_STAKE: u64 = 7_000_000_000_000; //  7 000 000 SOLA → hiSOLA (governance vesting)
+/// Part of the 7M that earns protocol fees for the operating company (decided 2026-11-20).
+/// Taken out of the vesting schedule by `credit_founder_fee_tranche` and credited at once as
+/// `fee_shares`, like the team tranche: locked for life, never votes (the founder-wallet
+/// guard), never borrows (`staked_amount` stays 0). The other 6.5M stay inert.
+pub const FOUNDER_FEE_TRANCHE: u64 = 500_000_000_000; //  500 000 SOLA → hiSOLA earning fees
 /// 5 000 000 oSOLA — held in vesting vault, released linearly after cliff.
 pub const FOUNDER_LIQUID: u64 = 5_000_000_000_000; //  5 000 000 oSOLA vesting tranche
 pub const ECOSYSTEM_TOTAL: u64 = 1_750_000_000_000; //  1 750 000 SOLA — marketing + airdrop
@@ -342,6 +347,13 @@ pub const VAULT_A_SEED: &[u8] = b"vault_a";
 pub const VAULT_B_SEED: &[u8] = b"vault_b";
 pub const MAX_FEE_RATE: u16 = 1_000; // 10% max swap fee
 pub const MAX_PROTOCOL_FEE: u16 = 5_000; // 50% of fee max to protocol
+/// Floor on a pool's protocol share, fixed at `create_pool` (2026-11-20). Pool creation is
+/// permissionless and the share can never be changed afterwards, so without a floor the first
+/// creator of a pair could set 0 % and the pool would pay stakers, voters and the company
+/// nothing, for good: its seeds are unique per pair.
+pub const MIN_PROTOCOL_FEE: u16 = 2_000; // 20 % of the swap fee
+/// Floor on a pool's swap fee, for the same reason: a 0 % fee makes any protocol share 0.
+pub const MIN_FEE_RATE: u16 = 5; // 0.05 % per swap
 
 /// PDA seed of `CompanyConfig`, the operating company's share of collected pool fees.
 pub const COMPANY_CONFIG_SEED: &[u8] = b"company_config";

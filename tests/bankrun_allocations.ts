@@ -798,6 +798,134 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     await expectFailure(claimFounderOSola, "FounderClaimAboveMarket");
   });
 
+  // ── Founder fee tranche (2026-11-20): 500K of the 7M earn fees for the operating company ──
+  //
+  // Like the team tranche: locked for life, earning `fee_shares`, never voting (founder-wallet
+  // guard), never borrowing (`staked_amount` 0). Taken out of what the schedule has not
+  // released yet, once, by the authority.
+
+  const FEE_TRANCHE = BigInt(500_000_000_000);
+
+  function creditFeeTranche(authority: Keypair) {
+    return program.methods
+      .creditFounderFeeTranche()
+      .accounts({
+        authority: authority.publicKey,
+        protocolState: statePda,
+        founder: founder.publicKey,
+        solaMint: solaM,
+        solaVault,
+        marketVault: marketV,
+        lockPosition: velockPda(founder.publicKey),
+        founderPosition: positionPda(founder.publicKey),
+        founderHiVesting: founderHiVestingPda(),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers(authority === payer ? [] : [authority])
+      .rpc();
+  }
+
+  function claimFounderHi() {
+    return program.methods
+      .claimFounderHiSola()
+      .accounts({
+        protocolState: statePda,
+        founder: founder.publicKey,
+        solaMint: solaM,
+        solaVault,
+        marketVault: marketV,
+        lockPosition: velockPda(founder.publicKey),
+        founderPosition: positionPda(founder.publicKey),
+        founderHiVesting: founderHiVestingPda(),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([founder])
+      .rpc();
+  }
+
+  it("[founder-fee] only the authority may credit the tranche", async () => {
+    await expectFailure(() => creditFeeTranche(founder), "Unauthorized");
+  });
+
+  it("[founder-fee] 500K leave the schedule and earn fees, locked for life, unfinanced", async () => {
+    const st0: any = await program.account.protocolState.fetch(statePda);
+    const lock0: any = await program.account.veLockPosition.fetch(velockPda(founder.publicKey));
+    const sv0 = await tokenBalance(solaVault);
+
+    await creditFeeTranche(payer);
+
+    const st: any = await program.account.protocolState.fetch(statePda);
+    const lock: any = await program.account.veLockPosition.fetch(velockPda(founder.publicKey));
+    const pos: any = await program.account.userPosition.fetch(positionPda(founder.publicKey));
+    const v: any = await program.account.founderHiSolaVesting.fetch(founderHiVestingPda());
+
+    assert.equal(pos.feeShares.toString(), FEE_TRANCHE.toString(), "the tranche earns fees");
+    assert.equal(pos.hiSola.toString(), "0", "never a spendable balance");
+    assert.equal(pos.stakedAmount.toString(), "0", "unfinanced: borrows nothing");
+    assert.equal(
+      (BigInt(st.totalHiSola.toString()) - BigInt(st0.totalHiSola.toString())).toString(),
+      FEE_TRANCHE.toString(),
+      "the fee denominator grows by exactly the share credited"
+    );
+    assert.equal(
+      (BigInt(lock.permanentAmount.toString()) - BigInt(lock0.permanentAmount.toString())).toString(),
+      FEE_TRANCHE.toString(),
+      "locked for life"
+    );
+    assert.equal(
+      (BigInt(lock.amountLocked.toString()) - BigInt(lock0.amountLocked.toString())).toString(),
+      FEE_TRANCHE.toString()
+    );
+    assert.equal(
+      ((await tokenBalance(solaVault)) - sv0).toString(),
+      FEE_TRANCHE.toString(),
+      "backed by SOLA in the vault, as every hiSOLA"
+    );
+    assert.equal(v.totalAmount.toString(), "6500000000000", "the schedule keeps 6.5M");
+  });
+
+  it("[founder-fee] once only", async () => {
+    await freshSlot();
+    await expectFailure(() => creditFeeTranche(payer), "AlreadyAllocated");
+  });
+
+  it("☢️ [founder-fee] a later 7M claim keeps the fees the tranche has earned", async () => {
+    // Fees accrue: a buy pays 1 % to market_vault.
+    await freshSlot();
+    await buyOnCurve(BigInt(50_000_000_000)); // 50 000 USDC → 500 USDC of fees
+    const debt0 = (await program.account.userPosition.fetch(positionPda(founder.publicKey)) as any)
+      .feesDebt.toString();
+
+    // Until 2026-11-20 this claim re-stamped `fees_debt` to the accumulator, which would have
+    // forfeited every fee the tranche had earned, on each claim.
+    await forwardSeconds(30 * DAY);
+    await claimFounderHi();
+    const pos: any = await program.account.userPosition.fetch(positionPda(founder.publicKey));
+    assert.equal(pos.feesDebt.toString(), debt0, "the claim must not touch the fee debt");
+
+    const founderUsdc = await fundUsdc(founder.publicKey, new BN(0));
+    const usdc0 = await tokenBalance(founderUsdc);
+    await program.methods
+      .claimFees()
+      .accounts({
+        user: founder.publicKey,
+        protocolState: statePda,
+        marketVault: marketV,
+        userUsdc: founderUsdc,
+        userPosition: positionPda(founder.publicKey),
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .signers([founder])
+      .rpc();
+    assert.isTrue(
+      (await tokenBalance(founderUsdc)) > usdc0,
+      "the tranche's fees reach the founder wallet"
+    );
+  });
+
   it("[founder] unlock_hi_sola refuses the founder, expired or not", async () => {
     // Well past any lock end. The refusal is identity-based, not time-based: this is the
     // single `require!` that keeps the 7M out of `hi_sola` forever, and the reason the

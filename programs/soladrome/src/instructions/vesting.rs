@@ -199,9 +199,10 @@ pub fn claim_founder_hi_sola(ctx: Context<ClaimFounderHiSola>) -> Result<()> {
             .ok_or(SoladromeError::Overflow)? as u64
     };
 
-    let claimable = vested_amount
-        .checked_sub(vesting.claimed)
-        .ok_or(SoladromeError::Overflow)?;
+    // Saturating, not checked: `credit_founder_fee_tranche` lowers `total_amount` by 500K, so
+    // a schedule already claimed on the 7M curve can sit above the 6.5M one for a while. That
+    // is "nothing to claim yet", not an overflow.
+    let claimable = vested_amount.saturating_sub(vesting.claimed);
     require!(claimable > 0, SoladromeError::NothingToClaim);
 
     // Advance accumulator before adding hiSOLA (same pattern as stake_sola).
@@ -268,7 +269,13 @@ pub fn claim_founder_hi_sola(ctx: Context<ClaimFounderHiSola>) -> Result<()> {
         pos.owner = ctx.accounts.founder.key();
         pos.bump = ctx.bumps.founder_position;
     }
-    pos.fees_debt = acc;
+    // ☢️ Stamp the debt only while the position earns nothing. Since 2026-11-20 the founder
+    // position may carry `fee_shares` (the 500K fee tranche), and this claim does not change
+    // its basis: re-stamping to `acc` would forfeit every fee the tranche had accrued, on each
+    // claim. With a basis of 0 the stamp is harmless and kept as before.
+    if math::fee_basis(pos.staked_amount, pos.hi_sola, pos.fee_shares) == 0 {
+        pos.fees_debt = acc;
+    }
 
     // total_hi_sola: UNCHANGED — locked hiSOLA is excluded from the fee accumulator
     // denominator, matching claim_partner_allocation and lock_hi_sola. This is what
@@ -288,6 +295,116 @@ pub fn claim_founder_hi_sola(ctx: Context<ClaimFounderHiSola>) -> Result<()> {
         .checked_add(claimable)
         .ok_or(SoladromeError::Overflow)?;
 
+    Ok(())
+}
+
+// One-shot, authority-only: take FOUNDER_FEE_TRANCHE out of the founder's 7M vesting schedule
+// and credit it at once as hiSOLA locked for life that EARNS FEES, like the team tranche
+// (decided 2026-11-20, to fund the operating company). The other 6.5M stay inert.
+//
+// What the 500K can and cannot do:
+//   · fees: yes — `fee_shares`, matched by the same increase of `total_hi_sola`;
+//   · vote: no — `vote_gauge` / `replay_vote` / `burn_o_sola_for_votes` refuse the founder
+//     wallet unless `founder_voting_enabled` (the break-glass) is set;
+//   · borrow: no — `staked_amount` stays 0 and both borrow caps read it;
+//   · sell: no — it is `permanent_amount`, and `unlock_hi_sola` refuses the founder anyway.
+//
+// A separate instruction rather than a change to `mint_founder_allocation`, so devnet (whose
+// allocation was minted long ago) and mainnet run the same path. Replay is impossible without
+// a flag: the schedule's `total_amount` equal to FOUNDER_STAKE is the "not yet done" state,
+// and this instruction is the only writer that moves it.
+pub fn credit_founder_fee_tranche(ctx: Context<CreditFounderFeeTranche>) -> Result<()> {
+    require!(
+        !ctx.accounts.protocol_state.paused,
+        SoladromeError::ProtocolPaused
+    );
+    {
+        let v = &ctx.accounts.founder_hi_vesting;
+        require!(
+            v.total_amount == FOUNDER_STAKE,
+            SoladromeError::AlreadyAllocated
+        );
+        // The tranche comes out of what the schedule has not released yet, never out of hiSOLA
+        // already claimed into the inert lock.
+        require!(
+            v.total_amount.saturating_sub(v.claimed) >= FOUNDER_FEE_TRANCHE,
+            SoladromeError::InvalidAmount
+        );
+    }
+
+    let now_ts = Clock::get()?.unix_timestamp;
+    let lock_end_ts = (now_ts as u64)
+        .checked_add(MAX_LOCK_DURATION)
+        .ok_or(SoladromeError::Overflow)? as i64;
+
+    // Snapshot the accumulator before any hiSOLA supply change (stake_sola invariant).
+    let market_balance = ctx.accounts.market_vault.amount;
+    let acc = math::advance_accumulator(
+        ctx.accounts.protocol_state.fees_per_hi_sola,
+        market_balance,
+        ctx.accounts.protocol_state.last_market_vault_balance,
+        ctx.accounts.protocol_state.total_hi_sola,
+    );
+
+    let bump = ctx.accounts.protocol_state.bump;
+    let seeds: &[&[u8]] = &[STATE_SEED, &[bump]];
+    // SOLA backing for the hiSOLA, locked in sola_vault — as claim_founder_hi_sola does.
+    token::mint_to(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            MintTo {
+                mint: ctx.accounts.sola_mint.to_account_info(),
+                to: ctx.accounts.sola_vault.to_account_info(),
+                authority: ctx.accounts.protocol_state.to_account_info(),
+            },
+            &[seeds],
+        ),
+        FOUNDER_FEE_TRANCHE,
+    )?;
+
+    {
+        let lock = &mut ctx.accounts.lock_position;
+        if lock.owner == Pubkey::default() {
+            lock.owner = ctx.accounts.founder.key();
+            lock.bump = ctx.bumps.lock_position;
+        }
+        lock.amount_locked = lock
+            .amount_locked
+            .checked_add(FOUNDER_FEE_TRANCHE)
+            .ok_or(SoladromeError::Overflow)?;
+        lock.permanent_amount = lock
+            .permanent_amount
+            .checked_add(FOUNDER_FEE_TRANCHE)
+            .ok_or(SoladromeError::Overflow)?;
+        lock.lock_end_ts = lock_end_ts;
+    }
+
+    {
+        let pos = &mut ctx.accounts.founder_position;
+        if pos.owner == Pubkey::default() {
+            pos.owner = ctx.accounts.founder.key();
+            pos.bump = ctx.bumps.founder_position;
+        }
+        pos.credit_fee_shares(acc, FOUNDER_FEE_TRANCHE)?;
+    }
+
+    ctx.accounts.founder_hi_vesting.total_amount = FOUNDER_STAKE
+        .checked_sub(FOUNDER_FEE_TRANCHE)
+        .ok_or(SoladromeError::Overflow)?;
+
+    let s = &mut ctx.accounts.protocol_state;
+    s.fees_per_hi_sola = acc;
+    s.last_market_vault_balance = market_balance;
+    // The counterpart of the credit: a real share of the fee stream, taken from the existing
+    // holders in exactly the amount the tranche receives.
+    s.total_hi_sola = s
+        .total_hi_sola
+        .checked_add(FOUNDER_FEE_TRANCHE)
+        .ok_or(SoladromeError::Overflow)?;
+    s.total_sola = s
+        .total_sola
+        .checked_add(FOUNDER_FEE_TRANCHE)
+        .ok_or(SoladromeError::Overflow)?;
     Ok(())
 }
 
@@ -777,6 +894,60 @@ pub struct MintEcosystemAllocation<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct CreditFounderFeeTranche<'info> {
+    #[account(mut, address = protocol_state.authority @ SoladromeError::Unauthorized)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [STATE_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    /// CHECK: the founder wallet recorded at `initialize`; only its address is used, as seed.
+    #[account(address = protocol_state.founder_wallet @ SoladromeError::Unauthorized)]
+    pub founder: UncheckedAccount<'info>,
+
+    #[account(mut, address = protocol_state.sola_mint)]
+    pub sola_mint: Box<Account<'info, Mint>>,
+
+    /// Receives the SOLA backing the tranche's locked hiSOLA.
+    #[account(mut, address = protocol_state.sola_vault)]
+    pub sola_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Read-only — accumulator snapshot before the hiSOLA supply changes.
+    #[account(address = protocol_state.market_vault)]
+    pub market_vault: Box<Account<'info, TokenAccount>>,
+
+    /// The founder's lifetime ve lock — the same account `claim_founder_hi_sola` fills.
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + VeLockPosition::LEN,
+        seeds = [VELOCK_SEED, founder.key().as_ref()],
+        bump,
+    )]
+    pub lock_position: Box<Account<'info, VeLockPosition>>,
+
+    /// The founder's fee-share position.
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + UserPosition::LEN,
+        seeds = [POSITION_SEED, founder.key().as_ref()],
+        bump,
+    )]
+    pub founder_position: Box<Account<'info, UserPosition>>,
+
+    #[account(
+        mut,
+        seeds = [FOUNDER_HI_VESTING_SEED],
+        bump = founder_hi_vesting.bump,
+    )]
+    pub founder_hi_vesting: Box<Account<'info, FounderHiSolaVesting>>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

@@ -440,6 +440,42 @@ describe("soladrome — bankrun (pool protocol fees to voters)", () => {
     (((amt * BigInt(FEE_RATE)) / BigInt(10_000)) * BigInt(PROTO_BPS)) / BigInt(10_000);
 
   // ── P-1 ────────────────────────────────────────────────────────────────────
+  it("☢️ [create] a pool below the fee floors is refused — its share is fixed for life", async () => {
+    // Pool creation is permissionless and the protocol share can never be changed afterwards,
+    // so without a floor the first creator of a pair could set 0 % and the pool would pay
+    // stakers, voters and the company nothing, for good (2026-11-20).
+    const a = await createMint();
+    const b = await createMint();
+    const [m0, m1] = Buffer.compare(a.toBuffer(), b.toBuffer()) <= 0 ? [a, b] : [b, a];
+    const pool = pda([Buffer.from("amm_pool"), m0.toBuffer(), m1.toBuffer()]);
+    const create = (feeRate: number, protoBps: number) =>
+      program.methods
+        .createPool(feeRate, protoBps)
+        .accounts({
+          creator: payer.publicKey,
+          protocolState: statePda,
+          tokenAMint: m0,
+          tokenBMint: m1,
+          pool,
+          lpMint: pda([Buffer.from("lp_mint"), pool.toBuffer()]),
+          tokenAVault: pda([Buffer.from("vault_a"), pool.toBuffer()]),
+          tokenBVault: pda([Buffer.from("vault_b"), pool.toBuffer()]),
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+          tokenAProgram: TOKEN_PROGRAM_ID,
+          tokenBProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .rpc();
+    await expectFailure(() => create(30, 0), "InvalidAmount");
+    await expectFailure(() => create(30, 1_999), "InvalidAmount");
+    await expectFailure(() => create(0, 2_000), "InvalidAmount");
+    await expectFailure(() => create(4, 2_000), "InvalidAmount");
+    await create(5, 2_000); // both floors exactly: accepted
+    const p: any = await program.account.ammPool.fetch(pool);
+    assert.equal(p.protocolFeeBps, 2_000);
+  });
+
   it("☢️ [fees] a non-USDC input books the protocol share instead of leaving it to LPs", async () => {
     const marketBefore = await tokenBalance(marketV);
     await swap(IN, true);

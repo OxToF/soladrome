@@ -407,9 +407,13 @@ pub fn create_pool(ctx: Context<CreatePool>, fee_rate: u16, protocol_fee_bps: u1
         ctx.accounts.protocol_state.lp_enabled,
         SoladromeError::FeatureDisabled
     );
-    require!(fee_rate <= MAX_FEE_RATE, SoladromeError::InvalidAmount);
     require!(
-        protocol_fee_bps <= MAX_PROTOCOL_FEE,
+        (MIN_FEE_RATE..=MAX_FEE_RATE).contains(&fee_rate),
+        SoladromeError::InvalidAmount
+    );
+    // A floor as well as a ceiling (2026-11-20): the share is fixed here for the pool's life.
+    require!(
+        (MIN_PROTOCOL_FEE..=MAX_PROTOCOL_FEE).contains(&protocol_fee_bps),
         SoladromeError::InvalidAmount
     );
 
