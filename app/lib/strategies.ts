@@ -265,7 +265,7 @@ export async function pendingForPositions(
   pools: PublicKey[],
   protocolState: any,
   nowSec: number = Math.floor(Date.now() / 1000),
-): Promise<Map<string, { pending: number; fullBasis: boolean; hasPosition: boolean }>> {
+): Promise<Map<string, { pending: number; perDay: number; fullBasis: boolean; hasPosition: boolean }>> {
   const program = getProgram(new AnchorProvider(connection, wallet, {}));
   const cfg = emissionCfgOf(protocolState);
   const poolAccs: any[] = await (program.account as any).ammPool.fetchMultiple(pools);
@@ -274,13 +274,13 @@ export async function pendingForPositions(
   const lpAccs = await connection.getMultipleAccountsInfo(
     poolAccs.map((p) => (p ? userAta(p.lpMint, owner) : PublicKey.default)),
   );
-  const out = new Map<string, { pending: number; fullBasis: boolean; hasPosition: boolean }>();
+  const out = new Map<string, { pending: number; perDay: number; fullBasis: boolean; hasPosition: boolean }>();
   pools.forEach((key, i) => {
     const p = poolAccs[i], info = infos[i];
-    if (!p || !info) return out.set(key.toBase58(), { pending: 0, fullBasis: true, hasPosition: false });
+    if (!p || !info) return out.set(key.toBase58(), { pending: 0, perDay: 0, fullBasis: true, hasPosition: false });
     const wallet = decodeTokenAmount(lpAccs[i]?.data);
     const recorded = BigInt(info.lpAmount.toString());
-    const pending = computePendingOsola(
+    const at = (t: number) => computePendingOsola(
       {
         totalLp: Number(p.totalLp) / UNIT,
         osolaRewardPerLp: BigInt(p.osolaRewardPerLp.toString()),
@@ -289,10 +289,14 @@ export async function pendingForPositions(
       },
       BigInt(info.rewardDebt.toString()),
       rewardBasis(recorded, wallet),
-      nowSec,
+      t,
       cfg,
     );
-    out.set(key.toBase58(), { pending, fullBasis: wallet >= recorded, hasPosition: recorded > BigInt(0) });
+    const pending = at(nowSec);
+    // The same accrual a day from now, at today's pool size: the rate the position earns while
+    // nothing else changes. An estimate — another LP's deposit dilutes it — but the program's own.
+    const perDay = Math.max(0, at(nowSec + 86_400) - pending);
+    out.set(key.toBase58(), { pending, perDay, fullBasis: wallet >= recorded, hasPosition: recorded > BigInt(0) });
   });
   return out;
 }
