@@ -65,6 +65,12 @@ pub fn collect_to_pol(ctx: Context<CollectToPol>, amount: u64) -> Result<()> {
         !ctx.accounts.protocol_state.paused,
         SoladromeError::ProtocolPaused
     );
+    // Phase gate (2026-11-20): POL belongs to the emissions phase (audit mission 2). Until
+    // `emissions_enabled` is flipped, no market_vault USDC can be skimmed, swapped or deployed.
+    require!(
+        ctx.accounts.protocol_state.emissions_enabled,
+        SoladromeError::FeatureDisabled
+    );
     require!(amount > 0, SoladromeError::InvalidAmount);
 
     let market_balance = ctx.accounts.market_vault.amount;
@@ -157,6 +163,12 @@ pub fn pol_swap(ctx: Context<PolSwap>, amount_in: u64, min_out: u64) -> Result<(
     require!(
         !ctx.accounts.protocol_state.paused,
         SoladromeError::ProtocolPaused
+    );
+    // Phase gate (2026-11-20): POL belongs to the emissions phase (audit mission 2). Until
+    // `emissions_enabled` is flipped, no market_vault USDC can be skimmed, swapped or deployed.
+    require!(
+        ctx.accounts.protocol_state.emissions_enabled,
+        SoladromeError::FeatureDisabled
     );
     require!(amount_in > 0, SoladromeError::InvalidAmount);
 
@@ -288,6 +300,12 @@ pub fn deploy_pol(
     require!(
         !ctx.accounts.protocol_state.paused,
         SoladromeError::ProtocolPaused
+    );
+    // Phase gate (2026-11-20): POL belongs to the emissions phase (audit mission 2). Until
+    // `emissions_enabled` is flipped, no market_vault USDC can be skimmed, swapped or deployed.
+    require!(
+        ctx.accounts.protocol_state.emissions_enabled,
+        SoladromeError::FeatureDisabled
     );
     require!(
         max_price_dev_bps <= POL_MAX_PRICE_DEV_BPS,

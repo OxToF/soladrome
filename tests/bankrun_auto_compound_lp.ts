@@ -908,4 +908,34 @@ describe("soladrome — bankrun (standing LP orders)", () => {
     );
     await assertReservesMatchVaults(tknPool, "TKN/USDC");
   });
+
+  // ── Phase gate ─────────────────────────────────────────────────────────────
+
+  it("☢️ with emissions off, an LP order can be neither set nor cranked, and can still be cleared", async () => {
+    const setEmissions = (on: boolean) =>
+      program.methods
+        .setPhaseFlags(null, null, null, null, null, on)
+        .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+        .rpc();
+    const user = await makeUser(1_000 * UNIT, 500 * UNIT, lstPool);
+    await setEmissions(false);
+    try {
+      await expectError(crankLp(user, lstPool), "FeatureDisabled");
+      await expectError(send([await setLpIx(user, tknPool, 7_000)], [user.kp]), "FeatureDisabled");
+      // The exit stays open: an owner can always point the order back at staking.
+      await send(
+        [
+          await program.methods
+            .clearAutoCompoundLp()
+            .accounts({ user: user.kp.publicKey, auto: autoOf(user.kp.publicKey) } as any)
+            .instruction(),
+        ],
+        [user.kp]
+      );
+      const auto: any = await program.account.autoCompound.fetch(autoOf(user.kp.publicKey));
+      assert.equal(auto.lpTarget.toBase58(), PublicKey.default.toBase58());
+    } finally {
+      await setEmissions(true);
+    }
+  });
 });
