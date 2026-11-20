@@ -402,6 +402,17 @@ describe("soladrome — bankrun (protocol-owned liquidity)", () => {
     context.warpToSlot((await context.banksClient.getSlot()) + BigInt(1));
   });
 
+  it("P-0 ☢️ POL is shut until emissions_enabled: no swap, no deploy", async () => {
+    // Setup flips lp + curve only, the shape of the launch phase. POL belongs to the
+    // emissions phase (audit mission 2), so every path that moves POL funds is refused.
+    await expectError(polSwap(hopPool, polUsdc, usdcMint, NATIVE_MINT, BigInt(30_000 * UNIT)), "FeatureDisabled");
+    await expectError(deployPol(solaUsdc, usdcMint, { usdcForSola: BigInt(1_000 * UNIT) }), "FeatureDisabled");
+    await program.methods
+      .setPhaseFlags(null, null, null, null, null, true) // emissions on, for the cases below
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+  });
+
   it("P-1 USDC → SOL on THE SOL/USDC pool; SOL → LST only once its pool is approved", async () => {
     await polSwap(hopPool, polUsdc, usdcMint, NATIVE_MINT, BigInt(30_000 * UNIT));
     const sol = await bal(polToken(NATIVE_MINT));

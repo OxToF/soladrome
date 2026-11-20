@@ -102,6 +102,12 @@ pub fn set_auto_compound_lp(ctx: Context<SetAutoCompoundLp>, min_intrinsic_bps: 
         min_intrinsic_bps > 0 && min_intrinsic_bps <= 10_000,
         SoladromeError::InvalidAmount
     );
+    // Phase gate (2026-11-20): oSOLA-to-LP orders belong to the emissions phase (audit
+    // mission 2). `clear_auto_compound_lp` stays open so an owner can always point back.
+    require!(
+        ctx.accounts.protocol_state.emissions_enabled,
+        SoladromeError::FeatureDisabled
+    );
     lp_deposit_side(&ctx.accounts.target_pool, &ctx.accounts.protocol_state)?;
 
     let auto = &mut ctx.accounts.auto;
@@ -249,6 +255,12 @@ pub fn route_into_lp<'a, 'info>(
     now: i64,
     input: SaleInput<'a, 'info>,
 ) -> Result<RouteOutcome> {
+    // Phase gate (2026-11-20), checked here once so it covers both callers:
+    // `crank_auto_compound_lp` and `strategy::crank_pool_strategy_lp`.
+    require!(
+        r.protocol_state.emissions_enabled,
+        SoladromeError::FeatureDisabled
+    );
     let usdc = r.protocol_state.usdc_mint;
     let o_sola = r.protocol_state.o_sola_mint;
     let (deposit_mint, needs_hop) = lp_deposit_side(r.target_pool, r.protocol_state)?;
