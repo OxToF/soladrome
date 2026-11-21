@@ -3279,8 +3279,10 @@
         {
           "name": "partner_wallet",
           "docs": [
-            "and re-asserted against the stored `partner` field. Never signs, never receives."
-          ]
+            "and re-asserted against the stored `partner` field. Never signs; receives back the rent",
+            "of the stream escrow it paid for, when that escrow is closed below."
+          ],
+          "writable": true
         },
         {
           "name": "partner_allocation",
@@ -3369,6 +3371,46 @@
               }
             ]
           }
+        },
+        {
+          "name": "stream_vault",
+          "docs": [
+            "may use another bribe token. Pinned by seeds; absent for a partner who never funded."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partner_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stream_token_program",
+          "docs": [
+            "The token program that owns `stream_vault` (SPL Token or Token-2022). When the escrow is",
+            "absent, any token program will do — nothing is called."
+          ]
         }
       ],
       "args": []
@@ -13055,6 +13097,16 @@
       "code": 6077,
       "name": "CompanyAccountRequired",
       "msg": "The company's share is due: pass the company wallet's token account for this mint"
+    },
+    {
+      "code": 6078,
+      "name": "PoolNotApproved",
+      "msg": "This pool is not approved for oSOLA emissions: the authority must enable its rewards first"
+    },
+    {
+      "code": 6079,
+      "name": "BribeAlreadyRolledOver",
+      "msg": "This bribe pot has already been rolled over to a later epoch: nothing is left to claim"
     }
   ],
   "types": [
@@ -13744,6 +13796,22 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "prev_epoch",
+            "docs": [
+              "The epoch before `last_epoch`, kept when a checkpoint opens a new epoch (review",
+              "2026-11-21). An epoch's pot can only be finalized after it ends, so the natural order",
+              "is \"checkpoint E+1, then claim E\" — which wiped E when this was a single slot."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "prev_weighted_balance",
+            "docs": [
+              "`weighted_balance` for `prev_epoch`, zeroed once claimed."
+            ],
+            "type": "u128"
           }
         ]
       }

@@ -100,6 +100,11 @@ pub fn claim_bribe(ctx: Context<ClaimBribe>, epoch: u64) -> Result<()> {
         .checked_div(total_votes as u128)
         .ok_or(SoladromeError::Overflow)? as u64;
     require!(claimable > 0, SoladromeError::NothingToClaim);
+    // A rolled-over pot is empty: say so, rather than fail inside the token program.
+    require!(
+        ctx.accounts.bribe_token_vault.amount >= claimable,
+        SoladromeError::BribeAlreadyRolledOver
+    );
 
     // Sign with bribe_vault PDA
     let pool_key = ctx.accounts.pool_id.key();
@@ -139,8 +144,8 @@ pub fn claim_bribe(ctx: Context<ClaimBribe>, epoch: u64) -> Result<()> {
 /// Two cases:
 ///   • Zero-vote pool (gauge absent or total_votes == 0): rollover allowed immediately
 ///     after the epoch ends — nobody can ever claim, so recycling is safe.
-///   • Pool with votes: a ROLLOVER_DELAY_EPOCHS grace period is enforced so that
-///     slow voters are not robbed before they get a chance to claim.
+///   • Pool with votes: a BRIBE_ROLLOVER_DELAY_EPOCHS grace period is enforced so that
+///     slow voters are not robbed before they get a chance to claim (4 weeks of claims).
 ///
 /// Permissionless — anyone can call this for any (pool, token, old_epoch) triple.
 pub fn rollover_bribe(ctx: Context<RolloverBribe>, old_epoch: u64, new_epoch: u64) -> Result<()> {
@@ -181,7 +186,7 @@ pub fn rollover_bribe(ctx: Context<RolloverBribe>, old_epoch: u64, new_epoch: u6
 
     if has_votes {
         require!(
-            curr_epoch >= old_epoch.saturating_add(ROLLOVER_DELAY_EPOCHS),
+            curr_epoch >= old_epoch.saturating_add(BRIBE_ROLLOVER_DELAY_EPOCHS),
             SoladromeError::RolloverTooEarly
         );
     }

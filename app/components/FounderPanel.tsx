@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   getProgram, statePda, solaM, oSolaM, readPosition,
   solaVaultAddr, marketVault, floorVault,
@@ -407,6 +408,9 @@ export function FounderPanel() {
     setLoadingClose(true); setStatusClose("");
     try {
       const partnerKey = new PublicKey(closeWallet.trim());
+      const streamVault = PublicKey.findProgramAddressSync(
+        [Buffer.from("stream_tokens"), partnerKey.toBuffer()], PROGRAM_ID
+      )[0];
       const provider = new AnchorProvider(connection, wallet, {});
       const program  = getProgram(provider);
       const ix = await program.methods
@@ -420,6 +424,12 @@ export function FounderPanel() {
           bribeStream: PublicKey.findProgramAddressSync(
             [Buffer.from("bribe_stream"), partnerKey.toBuffer()], PROGRAM_ID
           )[0],
+          // The stream escrow is closed with the allocation (rent back to the partner), so a
+          // renewal can use another bribe token. Its token program is whichever owns it; when
+          // the partner never funded a stream it does not exist and any token program will do.
+          streamVault,
+          streamTokenProgram:
+            (await connection.getAccountInfo(streamVault))?.owner ?? TOKEN_PROGRAM_ID,
         } as any)
         .instruction();
       const tx = await sendTx(connection, wallet, [ix]);

@@ -358,6 +358,16 @@ pub fn set_vote_config(
     );
     let total_bps: u32 = bps[..n_pools as usize].iter().map(|&b| b as u32).sum();
     require!(total_bps == 10_000, SoladromeError::InvalidVoteConfig);
+    // Each active pool once, and a real key (review 2026-11-21): `replay_vote` finds a pool by
+    // its first index and a receipt is one per pool per epoch, so a second entry for the same
+    // pool could never be cast — its share of the power was silently lost every epoch.
+    let active = &pools[..n_pools as usize];
+    for (i, p) in active.iter().enumerate() {
+        require!(
+            *p != Pubkey::default() && !active[..i].contains(p),
+            SoladromeError::InvalidVoteConfig
+        );
+    }
 
     let cfg = &mut ctx.accounts.vote_config;
     if cfg.bump == 0 {

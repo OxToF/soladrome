@@ -308,7 +308,7 @@ export function Gauge() {
     } catch (e: any) {
       const msg = e?.message ?? String(e);
       if (msg.includes("RolloverTooEarly") || msg.includes("6029")) {
-        setRolloverStatus("❌ Grace period not passed yet — wait ROLLOVER_DELAY_EPOCHS.");
+        setRolloverStatus("❌ Voters still have time to claim — a voted pot rolls over 5 epochs after its own (4 weeks of claims).");
       } else if (msg.includes("NothingToClaim") || msg.includes("6007")) {
         setRolloverStatus("❌ No tokens remaining in that vault.");
       } else {
@@ -577,7 +577,7 @@ export function Gauge() {
         <p className="text-xs text-gray-500 mb-1 uppercase tracking-widest">Rollover unclaimed bribes</p>
         <p className="text-xs text-gray-600 mb-3">
           Move remaining tokens from a past epoch into the current one.
-          Pools with zero votes can be rolled immediately; pools with votes require a 2-epoch grace period.
+          Pools with zero votes can be rolled immediately; pools with votes stay claimable for 4 weeks after the epoch ends, then roll over.
         </p>
         <div className="flex flex-col gap-2 mb-3">
           <input className="input" placeholder="Old epoch number (e.g. 494541)"

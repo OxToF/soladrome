@@ -435,6 +435,12 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
       } as any)
       .rpc();
 
+    // Epoch emissions go to approved pools only (review 2026-11-21).
+    await program.methods
+      .setPoolRewards(true)
+      .accounts({ authority: payer.publicKey, protocolState: statePda, pool: poolPda } as any)
+      .rpc();
+
     await program.methods
       .addLiquidity(new BN(500_000_000), new BN(500_000_000), new BN(1))
       .accounts({
@@ -746,5 +752,48 @@ describe("soladrome — bankrun (LP emission cycle)", () => {
         "nothing may be allocated while emissions are off"
       );
     }
+  });
+  it("☢️ [emissions] switching emissions back on restarts the decay clock", async () => {
+    // Review 2026-11-21: the schedule was anchored at `initialize`, so an emissions phase
+    // opened weeks after the TGE started already decayed.
+    const now = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    const before: any = await program.account.protocolState.fetch(statePda);
+    assert.isBelow(Number(before.osolaEmissionStartEpoch), now, "the clock has run since init");
+
+    await program.methods
+      .setPhaseFlags(null, null, null, null, null, true)
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+    const on: any = await program.account.protocolState.fetch(statePda);
+    assert.equal(Number(on.osolaEmissionStartEpoch), now, "OFF → ON restarts at the current epoch");
+
+    // Re-asserting a flag that is already on must not move it.
+    await forwardSeconds(EPOCH_DURATION);
+    await program.methods
+      .setPhaseFlags(true, null, null, null, null, true)
+      .accounts({ authority: payer.publicKey, protocolState: statePda } as any)
+      .rpc();
+    const again: any = await program.account.protocolState.fetch(statePda);
+    assert.equal(Number(again.osolaEmissionStartEpoch), now, "ON → ON leaves the clock alone");
+  });
+
+  it("☢️ [emissions] a pool the authority has not approved gets no epoch emissions", async () => {
+    // Review 2026-11-21: votes alone used to size a pot, so a pool of two worthless tokens
+    // could be voted into real oSOLA. The epoch left unsized by the previous test has votes.
+    const epoch = Math.floor((await nowSeconds()) / EPOCH_DURATION) - 2;
+    const setApproved = (on: boolean) =>
+      program.methods
+        .setPoolRewards(on)
+        .accounts({ authority: payer.publicKey, protocolState: statePda, pool: poolPda } as any)
+        .rpc();
+
+    await setApproved(false);
+    await expectFailure(() => emit(epoch, 12), "PoolNotApproved");
+    await setApproved(true);
+    await emit(epoch, 13);
+    const accum: any = await program.account.lpPoolEpochAccum.fetch(
+      pda([Buffer.from("lp_pool_epoch"), poolPda.toBuffer(), epochLE(epoch)])
+    );
+    assert.isTrue(accum.finalized, "approved again, the same epoch is sized");
   });
 });

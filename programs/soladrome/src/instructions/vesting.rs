@@ -125,17 +125,26 @@ pub fn mint_ecosystem_allocation(ctx: Context<MintEcosystemAllocation>) -> Resul
 
     {
         let lock = &mut ctx.accounts.team_lock_position;
-        lock.owner = ctx.accounts.team_wallet.key();
-        lock.bump = ctx.bumps.team_lock_position;
+        if lock.owner == Pubkey::default() {
+            lock.owner = ctx.accounts.team_wallet.key();
+            lock.bump = ctx.bumps.team_lock_position;
+        }
         lock.amount_locked = lock
             .amount_locked
             .checked_add(FOUNDER_IMMEDIATE_SOLA)
             .ok_or(SoladromeError::Overflow)?;
-        lock.lock_end_ts = team_lock_end_ts;
+        // Never shorten, never overwrite (review 2026-11-21): the account is `init_if_needed`,
+        // so it may already carry a lock — and a permanent portion — of its own.
+        if team_lock_end_ts > lock.lock_end_ts {
+            lock.lock_end_ts = team_lock_end_ts;
+        }
         // Locked for LIFE: the whole tranche is permanent, so the deferred drain
         // (unlock → unstake → sell_sola) is closed for good. Only borrow_against_locked
         // never lends to it (2026-11-09). Voting stays fully active (wallet ≠ FOUNDER_WALLET).
-        lock.permanent_amount = FOUNDER_IMMEDIATE_SOLA;
+        lock.permanent_amount = lock
+            .permanent_amount
+            .checked_add(FOUNDER_IMMEDIATE_SOLA)
+            .ok_or(SoladromeError::Overflow)?;
     }
 
     // The tranche's fee share, with the accrual carried across — see

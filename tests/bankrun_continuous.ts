@@ -870,4 +870,64 @@ describe("soladrome — bankrun (continuous emission stream)", () => {
       "the recorded deposit floors at zero"
     );
   });
+  it("☢️ [stream] withdrawing LP that was never deposited leaves the deposit's basis intact", async () => {
+    // Review 2026-11-21: `remove_liquidity` used to debit `lp_amount` by the whole burn, so
+    // burning LP received by transfer first cancelled the basis of LP the wallet DID deposit.
+    const holder = await freshWallet();
+    const holderLp = await giveLp(holder.publicKey, (await tokenBalance(userLp)) / BigInt(4));
+    const untracked = await tokenBalance(holderLp);
+    const holderA = getAssociatedTokenAddressSync(mintA, holder.publicKey);
+    const holderB = getAssociatedTokenAddressSync(mintB, holder.publicKey);
+    await send([
+      createAssociatedTokenAccountInstruction(payer.publicKey, holderA, holder.publicKey, mintA),
+      createAssociatedTokenAccountInstruction(payer.publicKey, holderB, holder.publicKey, mintB),
+      createMintToInstruction(mintA, holderA, payer.publicKey, 100_000_000),
+      createMintToInstruction(mintB, holderB, payer.publicKey, 100_000_000),
+    ]);
+    const addIx = await program.methods
+      .addLiquidity(new BN(100_000_000), new BN(100_000_000), new BN(1))
+      .accounts({
+        user: holder.publicKey,
+        pool: poolPda,
+        lpMint,
+        tokenAMint: mintA,
+        tokenBMint: mintB,
+        tokenAVault: vaultA,
+        tokenBVault: vaultB,
+        userTokenA: holderA,
+        userTokenB: holderB,
+        userLp: holderLp,
+        lpDeadAta: getAssociatedTokenAddressSync(lpMint, SystemProgram.programId, true),
+        lpDead: SystemProgram.programId,
+        lpUserInfo: lpUserInfoOf(holder.publicKey),
+        protocolState: statePda,
+        oSolaMint: oSolaM,
+        userOSola: getAssociatedTokenAddressSync(oSolaM, holder.publicKey),
+        rent: SYSVAR_RENT_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .instruction();
+    await send([addIx], [holder]);
+    const deposited = BigInt(
+      (await program.account.lpUserInfo.fetch(lpUserInfoOf(holder.publicKey))).lpAmount.toString()
+    );
+    assert.isTrue(deposited > BigInt(0) && untracked > BigInt(0));
+
+    // The transferred LP goes first: the recorded deposit must not move.
+    await removeLiquidity(holder, untracked);
+    const afterUntracked = (await program.account.lpUserInfo.fetch(lpUserInfoOf(holder.publicKey)))
+      .lpAmount.toString();
+    assert.equal(afterUntracked, deposited.toString(), "burning untracked LP keeps the basis");
+
+    // Then deposited LP: now the deposit falls by exactly what left.
+    const half = deposited / BigInt(2);
+    await removeLiquidity(holder, half);
+    const afterDeposited = (await program.account.lpUserInfo.fetch(lpUserInfoOf(holder.publicKey)))
+      .lpAmount.toString();
+    assert.equal(afterDeposited, (deposited - half).toString());
+  });
 });
