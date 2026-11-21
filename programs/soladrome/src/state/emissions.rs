@@ -17,10 +17,22 @@ pub struct LpUserCheckpoint {
     pub last_update_ts: i64,
     pub last_epoch: u64,
     pub bump: u8,
+    /// The epoch before `last_epoch`, kept when a checkpoint opens a new epoch (review
+    /// 2026-11-21). An epoch's pot can only be finalized after it ends, so the natural order
+    /// is "checkpoint E+1, then claim E" — which wiped E when this was a single slot.
+    pub prev_epoch: u64,
+    /// `weighted_balance` for `prev_epoch`, zeroed once claimed.
+    pub prev_weighted_balance: u128,
 }
 impl LpUserCheckpoint {
-    pub const LEN: usize = 32 + 32 + 16 + 8 + 8 + 1 + 7;
+    // 32 + 32 + 16 + 8 + 8 + 1 + 8 + 16 = 121, rounded to 128. Grew from 104: no checkpoint
+    // existed on devnet when the epoch channel was last inspected (17/09), and mainnet is fresh.
+    pub const LEN: usize = 128;
 }
+const _: () = assert!(
+    LpUserCheckpoint::LEN >= 32 + 32 + 16 + 8 + 8 + 1 + 8 + 16,
+    "LpUserCheckpoint::LEN is too small"
+);
 
 /// Time-weighted total LP supply for one pool in one epoch.
 /// Finalized by emit_pool_rewards after epoch ends; records oSOLA allocation.

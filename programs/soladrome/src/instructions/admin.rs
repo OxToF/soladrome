@@ -181,6 +181,16 @@ pub fn set_phase_flags(
         state.curve_enabled = v;
     }
     if let Some(v) = emissions_enabled {
+        // ☢️ Switching emissions ON restarts the decay clock (review 2026-11-21). The schedule
+        // was anchored at `initialize`, so a phase opened weeks after the TGE would have started
+        // already decayed — 20 000 × 0.99^n instead of the announced 20 000 for the first epoch.
+        if v && !state.emissions_enabled {
+            state.osola_emission_start_epoch = current_epoch(Clock::get()?.unix_timestamp);
+            msg!(
+                "Emission decay restarts at epoch {}",
+                state.osola_emission_start_epoch
+            );
+        }
         state.emissions_enabled = v;
     }
     msg!(

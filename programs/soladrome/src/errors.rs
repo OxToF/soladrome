@@ -199,4 +199,10 @@ pub enum SoladromeError {
     CompanyFeeInvalid,
     #[msg("The company's share is due: pass the company wallet's token account for this mint")]
     CompanyAccountRequired,
+    #[msg("This pool is not approved for oSOLA emissions: the authority must enable its rewards first")]
+    PoolNotApproved,
+    #[msg(
+        "This bribe pot has already been rolled over to a later epoch: nothing is left to claim"
+    )]
+    BribeAlreadyRolledOver,
 }

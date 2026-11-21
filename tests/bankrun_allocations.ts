@@ -227,6 +227,8 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
         partnerAllocation: partnerPda(wallet),
         partnerLpVault: lpVaultPda(wallet),
         bribeStream: streamPda(wallet),
+        streamVault: streamVaultPda(wallet),
+        streamTokenProgram: TOKEN_PROGRAM_ID,
       } as any);
   }
 
@@ -1314,7 +1316,24 @@ describe("soladrome — bankrun (allocations on the mainnet clock)", () => {
     const partner = await bribeOnlyPartner();
     await claimPartner(partner).rpc();
     await drainEscrow(partner);
+    const vaultBefore = await context.banksClient.getAccount(streamVaultPda(partner.publicKey));
+    assert.isNotNull(vaultBefore, "the spent stream left its escrow behind");
+    const lamportsBefore = (await context.banksClient.getAccount(partner.publicKey))!.lamports;
     await closePartner(partner.publicKey, payer.publicKey).rpc();
+
+    // Review 2026-11-21: the empty escrow is closed with the allocation, its rent back to the
+    // partner. Left open, `fund_partner_bribe_stream` would re-open it pinned to the old mint
+    // and refuse a renewal in any other bribe token.
+    assert.isNull(
+      await context.banksClient.getAccount(streamVaultPda(partner.publicKey)),
+      "the stream escrow is closed"
+    );
+    const lamportsAfter = (await context.banksClient.getAccount(partner.publicKey))!.lamports;
+    assert.equal(
+      (BigInt(lamportsAfter) - BigInt(lamportsBefore)).toString(),
+      BigInt(vaultBefore!.lamports).toString(),
+      "its rent went back to the partner"
+    );
 
     await registerPartnerFor(partner.publicKey, ONE, RETAINER.muln(2));
     const pa: any = await program.account.partnerAllocation.fetch(partnerPda(partner.publicKey));

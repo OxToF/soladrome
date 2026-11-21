@@ -14,9 +14,7 @@ use anchor_spl::{
 use crate::amm_math::{self, MINIMUM_LIQUIDITY};
 use crate::constants::*;
 use crate::errors::SoladromeError;
-use crate::state::{
-    sort_mints, AmmPool, LpPoolEpochAccum, LpUserCheckpoint, LpUserInfo, ProtocolState,
-};
+use crate::state::{sort_mints, AmmPool, LpUserInfo, ProtocolState};
 use crate::token_ext::require_supported_mint;
 
 // ── Token programs: which mint is served by which ─────────────────────────────
@@ -664,10 +662,15 @@ pub fn remove_liquidity(
     if lp_user_info.bump == 0 {
         lp_user_info.bump = ctx.bumps.lp_user_info;
     }
-    // Withdrawal shrinks the recorded deposit. saturating_sub, not checked_sub: a legacy
-    // position created before this field existed reads lp_amount = 0 and must still be
-    // able to withdraw — it simply earns nothing until its next add_liquidity.
-    lp_user_info.lp_amount = lp_user_info.lp_amount.saturating_sub(lp_amount);
+    // Withdrawal shrinks the recorded deposit — but only by the part of the burn that was
+    // recorded (review 2026-11-21). LP the account held beyond `lp_amount` (bought, or
+    // received by transfer) never entered the deposit, so burning it first must not cancel
+    // the basis of LP that did. saturating_sub throughout: a legacy position created before
+    // this field existed reads lp_amount = 0 and must still be able to withdraw.
+    let untracked = user_lp_pre.saturating_sub(lp_user_info.lp_amount);
+    lp_user_info.lp_amount = lp_user_info
+        .lp_amount
+        .saturating_sub(lp_amount.saturating_sub(untracked));
     // Restart the epoch-weight accrual window (see LpUserInfo::last_change_ts).
     lp_user_info.last_change_ts = now.max(0) as u32;
 
@@ -959,73 +962,6 @@ pub fn swap(ctx: Context<Swap>, amount_in: u64, min_out: u64, a_to_b: bool) -> R
     // ☢️ The SOLA/USDC pool may never print below the floor. See
     // `require_floor_respected` — the reasoning lives there, with the other call site.
     require_floor_respected(pool, &ctx.accounts.protocol_state)?;
-
-    Ok(())
-}
-
-// ── LP emission auto-checkpoint helper (kept for standalone checkpoint_lp) ────
-/// Called automatically on every add/remove liquidity (legacy, kept for compatibility).
-#[allow(clippy::too_many_arguments)]
-pub fn lp_auto_checkpoint(
-    ckpt: &mut LpUserCheckpoint,
-    pa: &mut LpPoolEpochAccum,
-    pool_key: Pubkey,
-    user_key: Pubkey,
-    user_lp_pre: u64,
-    lp_supply_pre: u64,
-    now: i64,
-    epoch: u64,
-    ckpt_bump: u8,
-    pa_bump: u8,
-) -> Result<()> {
-    let epoch_start = (epoch * EPOCH_DURATION) as i64;
-
-    if pa.epoch == 0 {
-        pa.pool = pool_key;
-        pa.epoch = epoch;
-        pa.last_update_ts = epoch_start;
-        pa.last_lp_supply = lp_supply_pre;
-        pa.bump = pa_bump;
-    }
-
-    if !pa.finalized {
-        let pa_elapsed = (now - pa.last_update_ts).max(0) as u128;
-        pa.total_weighted_supply = pa
-            .total_weighted_supply
-            .checked_add(
-                (pa.last_lp_supply as u128)
-                    .checked_mul(pa_elapsed)
-                    .ok_or(SoladromeError::Overflow)?,
-            )
-            .ok_or(SoladromeError::Overflow)?;
-        pa.last_update_ts = now;
-        pa.last_lp_supply = lp_supply_pre;
-    }
-
-    if ckpt.pool == Pubkey::default() {
-        ckpt.user = user_key;
-        ckpt.pool = pool_key;
-        ckpt.last_epoch = epoch;
-        ckpt.last_update_ts = epoch_start;
-        ckpt.bump = ckpt_bump;
-    }
-
-    if ckpt.last_epoch < epoch {
-        ckpt.weighted_balance = 0;
-        ckpt.last_update_ts = epoch_start;
-        ckpt.last_epoch = epoch;
-    }
-
-    let ckpt_elapsed = (now - ckpt.last_update_ts).max(0) as u128;
-    ckpt.weighted_balance = ckpt
-        .weighted_balance
-        .checked_add(
-            (user_lp_pre as u128)
-                .checked_mul(ckpt_elapsed)
-                .ok_or(SoladromeError::Overflow)?,
-        )
-        .ok_or(SoladromeError::Overflow)?;
-    ckpt.last_update_ts = now;
 
     Ok(())
 }

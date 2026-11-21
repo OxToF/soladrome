@@ -94,11 +94,20 @@ pub const VOTE_WEIGHT_CAP_BPS: u64 = 3_000;
 /// Precision factor for the oSOLA-per-LP accumulator.
 pub const LP_REWARD_PRECISION: u128 = 1_000_000_000_000; // 1e12
 
-/// Grace period before unfinished bribe tokens can be rolled to the next epoch.
-/// Protects voters who haven't claimed yet from having funds recycled under them.
-/// Pools with zero votes are exempt — their tokens are immediately rollable.
-/// devnet: 2 epochs = 2 h · mainnet: 2 epochs = 14 days
+/// Grace period before an unclaimed LP emission residue can be recycled (`recycle_lp_emissions`).
+///
+/// Counted from the START of the epoch, while claims only open once it has ENDED: 2 epochs is
+/// one full epoch (7 days) to claim. That matches `LpUserCheckpoint`, which keeps exactly one
+/// previous epoch — an LP has the epoch after E to claim E.
 pub const ROLLOVER_DELAY_EPOCHS: u64 = 2;
+
+/// Grace period before a voted bribe pot can be rolled to the current epoch (`rollover_bribe`).
+///
+/// ☢️ Same counting: claims for epoch E open at E + 1 and a rollover is allowed from E + this,
+/// so voters get `BRIBE_ROLLOVER_DELAY_EPOCHS − 1` full epochs to claim — 4 weeks. Until
+/// 2026-11-21 bribes shared the LP delay of 2, i.e. ONE week, while this comment promised 14
+/// days. Pools with zero votes are exempt — nobody can claim, so they roll immediately.
+pub const BRIBE_ROLLOVER_DELAY_EPOCHS: u64 = 5;
 
 // Founder allocation — 12% of reference 100 M-token supply, 7% auto-staked.
 // The three tranches below sum to 12.25M. There is deliberately no FOUNDER_TOTAL constant

@@ -272,6 +272,11 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
         tokenBProgram: TOKEN_PROGRAM_ID,
       } as any)
       .rpc();
+    // Epoch emissions go to approved pools only (review 2026-11-21).
+    await program.methods
+      .setPoolRewards(true)
+      .accounts({ authority: payer.publicKey, protocolState: statePda, pool: pool.key } as any)
+      .rpc();
     return pool;
   }
 
@@ -801,31 +806,57 @@ describe("soladrome — bankrun (emission cycle, several gauges and several LPs)
     );
   });
 
-  it("[emissions/multi] weight earned later cannot be claimed against an earlier pot", async () => {
-    // poolY's epoch pot was sized but never claimed. Checkpointing in the CURRENT epoch
-    // resets the LP's weight and restamps it, so the old pot can no longer be drawn on:
-    // the claim's `lp_user_checkpoint.last_epoch == epoch` constraint is what refuses it.
-    // Without that constraint, a large late position could be pointed at any older
-    // finalised pot it never earned weight in.
+  it("☢️ [emissions/multi] checkpointing the next epoch keeps the finished one claimable", async () => {
+    // poolY's epoch pot was sized but never claimed. Starting to accrue the next epoch used to
+    // wipe the LP's weight for the finished one, so the natural order (checkpoint E+1, then
+    // claim E once its pot is finalized) lost E outright. Review 2026-11-21: the finished
+    // epoch moves to the checkpoint's `prev_*` slot and stays claimable, for exactly the weight
+    // it earned — no more.
     const laterEpoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
-    assert.isAbove(
-      laterEpoch,
-      emissionEpoch,
-      "we must have left the emission epoch"
-    );
+    assert.isAbove(laterEpoch, emissionEpoch, "we must have left the emission epoch");
+
+    const earned = BigInt((await ckptOf(poolY, payer)).weightedBalance.toString());
+    assert.isTrue(earned > 0n, "the LP earned weight in the emission epoch");
 
     await checkpoint(poolY, payer, laterEpoch);
-    await expectFailure(
-      () => claim(poolY, payer, emissionEpoch),
-      "NothingToClaim"
-    );
+    const ckpt: any = await ckptOf(poolY, payer);
+    assert.equal(ckpt.prevEpoch.toNumber(), emissionEpoch);
+    assert.equal(ckpt.prevWeightedBalance.toString(), earned.toString(), "the old weight moved intact");
 
     const accum: any = await accumOf(poolY, emissionEpoch);
+    const expected =
+      (BigInt(accum.osolaAllocated.toString()) * earned) /
+      BigInt(accum.totalWeightedSupply.toString());
+    await claim(poolY, payer, emissionEpoch);
+    const after: any = await accumOf(poolY, emissionEpoch);
+    assert.equal(after.osolaClaimed.toString(), expected.toString(), "paid on the weight it earned");
     assert.equal(
-      accum.osolaClaimed.toString(),
+      (await ckptOf(poolY, payer)).prevWeightedBalance.toString(),
       "0",
-      "nothing may be drawn from the abandoned pot"
+      "the previous slot is spent"
     );
+  });
+
+  it("[emissions/multi] weight earned later cannot be claimed against an earlier pot", async () => {
+    // Two checkpoints later the emission epoch has left both slots: a large late position
+    // cannot be pointed at an older finalised pot it never earned weight in.
+    const laterEpoch = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    await checkpoint(poolX, payer, laterEpoch);
+    await forwardSeconds(EPOCH_DURATION);
+    await checkpoint(poolX, payer, laterEpoch + 1);
+    const ckpt: any = await ckptOf(poolX, payer);
+    assert.equal(ckpt.prevEpoch.toNumber(), laterEpoch, "only the epoch just before is kept");
+    // Neither slot names the emission epoch any more, which is what the claim's constraint
+    // checks. (This payer already claimed it, so the claim also meets its spent receipt —
+    // Anchor creates `init` accounts before it checks the other constraints.)
+    assert.notEqual(ckpt.lastEpoch.toNumber(), emissionEpoch);
+    let refused = false;
+    try {
+      await claim(poolX, payer, emissionEpoch);
+    } catch {
+      refused = true;
+    }
+    assert.isTrue(refused, "an earlier pot cannot be drawn on with later weight");
   });
 
   it("[emissions/multi] the epoch mints no more oSOLA than the schedule allowed", async () => {

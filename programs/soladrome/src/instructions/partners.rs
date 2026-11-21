@@ -702,7 +702,47 @@ pub fn close_partner_allocation(ctx: Context<ClosePartnerAllocation>) -> Result<
             "settled"
         },
     );
+
+    // ── Free the stream escrow for the next deal (review 2026-11-21) ─────────
+    // `[stream_tokens, partner]` was never closed, and `fund_partner_bribe_stream` re-opens it
+    // with `token::mint = bribe_mint`: a renewal in any other token failed on the mint
+    // constraint, for good. It is empty here whenever it exists — a stream is spent before its
+    // allocation can close, and a new one can only be funded once the old one is spent — and an
+    // empty escrow is closed, its rent going back to the partner who paid it.
+    let vault = ctx.accounts.stream_vault.to_account_info();
+    let token_program = ctx.accounts.stream_token_program.to_account_info();
+    if vault.owner == token_program.key && token_account_amount(&vault)? == Some(0) {
+        let partner_key = ctx.accounts.partner_wallet.key();
+        let stream_seeds: &[&[u8]] = &[
+            BRIBE_STREAM_SEED,
+            partner_key.as_ref(),
+            &[ctx.bumps.bribe_stream],
+        ];
+        token_interface::close_account(CpiContext::new_with_signer(
+            token_program,
+            token_interface::CloseAccount {
+                account: vault,
+                destination: ctx.accounts.partner_wallet.to_account_info(),
+                authority: ctx.accounts.bribe_stream.to_account_info(),
+            },
+            &[stream_seeds],
+        ))?;
+    }
     Ok(())
+}
+
+/// The `amount` of an SPL Token or Token-2022 account (both keep it at offset 64), or `None`
+/// for anything shorter than a token account.
+fn token_account_amount(info: &AccountInfo) -> Result<Option<u64>> {
+    let data = info.try_borrow_data()?;
+    if data.len() < 165 {
+        return Ok(None);
+    }
+    Ok(Some(u64::from_le_bytes(
+        data[64..72]
+            .try_into()
+            .map_err(|_| error!(SoladromeError::Overflow))?,
+    )))
 }
 
 /// How many epochs of the deal the LP escrow has paid for so far, capped at the term.
@@ -1157,7 +1197,9 @@ pub struct ClosePartnerAllocation<'info> {
     pub protocol_state: Account<'info, ProtocolState>,
 
     /// CHECK: The partner's beneficiary wallet — identity enforced by the PDA seeds below
-    /// and re-asserted against the stored `partner` field. Never signs, never receives.
+    /// and re-asserted against the stored `partner` field. Never signs; receives back the rent
+    /// of the stream escrow it paid for, when that escrow is closed below.
+    #[account(mut)]
     pub partner_wallet: UncheckedAccount<'info>,
 
     #[account(
@@ -1182,6 +1224,15 @@ pub struct ClosePartnerAllocation<'info> {
     /// Untyped for the same reason as above — most allocations have no stream account.
     #[account(seeds = [BRIBE_STREAM_SEED, partner_wallet.key().as_ref()], bump)]
     pub bribe_stream: UncheckedAccount<'info>,
+
+    /// CHECK: The stream's token escrow, closed here when it exists and is empty so a renewal
+    /// may use another bribe token. Pinned by seeds; absent for a partner who never funded.
+    #[account(mut, seeds = [STREAM_TOKENS_SEED, partner_wallet.key().as_ref()], bump)]
+    pub stream_vault: UncheckedAccount<'info>,
+
+    /// The token program that owns `stream_vault` (SPL Token or Token-2022). When the escrow is
+    /// absent, any token program will do — nothing is called.
+    pub stream_token_program: Interface<'info, TokenInterface>,
 }
 
 /// Partner moves LP into the deal's escrow.

@@ -93,8 +93,12 @@ pub fn checkpoint_lp(ctx: Context<CheckpointLp>, epoch: u64) -> Result<()> {
         ckpt.last_update_ts = now;
         ckpt.bump = ctx.bumps.lp_user_checkpoint;
     }
-    // Reset for a new epoch
+    // New epoch: the finished one moves to the `prev_*` slot instead of being wiped
+    // (review 2026-11-21). Its pot can only be finalized after it ends, so an LP who starts
+    // accruing the new epoch before claiming the old one used to lose it outright.
     if ckpt.last_epoch < epoch {
+        ckpt.prev_epoch = ckpt.last_epoch;
+        ckpt.prev_weighted_balance = ckpt.weighted_balance;
         ckpt.weighted_balance = 0;
         ckpt.last_update_ts = now;
         ckpt.last_epoch = epoch;
@@ -133,6 +137,15 @@ pub fn emit_pool_rewards(ctx: Context<EmitPoolRewards>, epoch: u64) -> Result<()
     require!(
         ctx.accounts.protocol_state.emissions_enabled,
         SoladromeError::FeatureDisabled
+    );
+    // ☢️ Approved pools only (review 2026-11-21). `create_pool` is permissionless and a vote
+    // can name any pool, so without this a holder could open a pool of two worthless tokens,
+    // vote for it and collect real oSOLA for liquidity worth nothing. The continuous channel
+    // already required `rewards_enabled`; the epoch channel now requires the same approval,
+    // which is the role Velodrome's gauge whitelist plays.
+    require!(
+        ctx.accounts.pool.rewards_enabled,
+        SoladromeError::PoolNotApproved
     );
     let clock = Clock::get()?;
     let epoch_end = ((epoch + 1) * EPOCH_DURATION) as i64;
@@ -219,8 +232,9 @@ pub fn emit_pool_rewards(ctx: Context<EmitPoolRewards>, epoch: u64) -> Result<()
 /// finalize an epoch before it has ended. Crediting a finalized epoch would hand the whole carry
 /// to whoever claimed last, purely for claiming late.
 ///
-/// **The grace period is the same `ROLLOVER_DELAY_EPOCHS` a bribe rollover waits**, and for the
-/// same reason: a slow LP must not be robbed of a claim that is still legitimately open.
+/// **The grace period is `ROLLOVER_DELAY_EPOCHS`** (one full epoch of claims): a slow LP must not
+/// be robbed of a claim that is still legitimately open. It is shorter than the bribe rollover's
+/// (`BRIBE_ROLLOVER_DELAY_EPOCHS`) because `LpUserCheckpoint` keeps one previous epoch only.
 ///
 /// **Draining is marked by settling, not by a flag.** Setting `osola_claimed = osola_allocated`
 /// on the source leaves `remaining` at zero, so the residue can be recycled exactly once and a
@@ -286,7 +300,7 @@ pub fn recycle_lp_emissions(
 
 /// Mint a user's pro-rata oSOLA share from LP emissions for a given pool+epoch.
 /// Requires: epoch finalized, user checkpointed during epoch, not yet claimed.
-pub fn claim_lp_emissions(ctx: Context<ClaimLpEmissions>, _epoch: u64) -> Result<()> {
+pub fn claim_lp_emissions(ctx: Context<ClaimLpEmissions>, epoch: u64) -> Result<()> {
     require!(
         !ctx.accounts.protocol_state.paused,
         SoladromeError::ProtocolPaused
@@ -294,11 +308,20 @@ pub fn claim_lp_emissions(ctx: Context<ClaimLpEmissions>, _epoch: u64) -> Result
     let pa = &ctx.accounts.pool_epoch_accum;
     let ckpt = &ctx.accounts.lp_user_checkpoint;
 
+    // The epoch being claimed is either the one still on the checkpoint, or the one before it
+    // that a newer checkpoint moved into the `prev_*` slot (the context checks it is one of them).
+    let from_prev = ckpt.last_epoch != epoch;
+    let weight = if from_prev {
+        ckpt.prev_weighted_balance
+    } else {
+        ckpt.weighted_balance
+    };
+
     require!(pa.total_weighted_supply > 0, SoladromeError::NothingToClaim);
-    require!(ckpt.weighted_balance > 0, SoladromeError::NothingToClaim);
+    require!(weight > 0, SoladromeError::NothingToClaim);
 
     let share = (pa.osola_allocated as u128)
-        .checked_mul(ckpt.weighted_balance)
+        .checked_mul(weight)
         .ok_or(SoladromeError::Overflow)?
         .checked_div(pa.total_weighted_supply)
         .ok_or(SoladromeError::Overflow)? as u64;
@@ -336,7 +359,11 @@ pub fn claim_lp_emissions(ctx: Context<ClaimLpEmissions>, _epoch: u64) -> Result
     // M-01 FIX: reset weighted_balance after a successful claim so that
     // checkpoint_lp for the next epoch does not overwrite unclaimed data.
     // Double-claim is still blocked by the LpEpochClaim PDA (init = fails if exists).
-    ctx.accounts.lp_user_checkpoint.weighted_balance = 0;
+    if from_prev {
+        ctx.accounts.lp_user_checkpoint.prev_weighted_balance = 0;
+    } else {
+        ctx.accounts.lp_user_checkpoint.weighted_balance = 0;
+    }
 
     ctx.accounts.lp_epoch_claim.bump = ctx.bumps.lp_epoch_claim;
     Ok(())
@@ -609,7 +636,8 @@ pub struct ClaimLpEmissions<'info> {
         mut,
         seeds = [b"lp_ckpt", pool.key().as_ref(), user.key().as_ref()],
         bump = lp_user_checkpoint.bump,
-        constraint = lp_user_checkpoint.last_epoch == epoch @ SoladromeError::NothingToClaim,
+        constraint = (lp_user_checkpoint.last_epoch == epoch
+            || lp_user_checkpoint.prev_epoch == epoch) @ SoladromeError::NothingToClaim,
     )]
     pub lp_user_checkpoint: Box<Account<'info, LpUserCheckpoint>>,
 

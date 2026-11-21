@@ -638,4 +638,143 @@ describe("soladrome — bankrun (pool protocol fees to voters)", () => {
     // Sole voter on the pool ⇒ the whole pot.
     assert.equal(((await tokenBalance(userTkn)) - before).toString(), pot.toString());
   });
+  // ── Review 2026-11-21: the bribe claim window ─────────────────────────────
+  it("☢️ [bribes] a voted pot stays claimable for four weeks, then rolls over — and says so", async () => {
+    const e = Math.floor((await nowSeconds()) / EPOCH_DURATION);
+    const voteIx = async (ep: number) => {
+      const pos = await program.account.userPosition.fetch(userPosition);
+      const weight = (BigInt(pos.hiSola.toString()) * BigInt(3000)) / BigInt(10000);
+      return program.methods
+        .voteGauge(new BN(ep), new BN(weight.toString()))
+        .accounts({
+          user: payer.publicKey,
+          poolId: poolPda,
+          protocolState: statePda,
+          marketVault: marketV,
+          userPosition,
+          lockPosition: SystemProgram.programId,
+          gaugeState: pda([Buffer.from("gauge"), poolPda.toBuffer(), epochLE(ep)]),
+          userVoteReceipt: pda([
+            Buffer.from("vote"),
+            payer.publicKey.toBuffer(),
+            poolPda.toBuffer(),
+            epochLE(ep),
+          ]),
+          userEpochVotes: pda([Buffer.from("uev"), payer.publicKey.toBuffer(), epochLE(ep)]),
+          globalEpochVotes: pda([Buffer.from("epoch_votes"), epochLE(ep)]),
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        } as any)
+        .rpc();
+    };
+    await voteIx(e);
+    const BRIBE = BigInt(1_000_000);
+    await program.methods
+      .depositBribe(new BN(e), new BN(BRIBE.toString()))
+      .accounts({
+        depositor: payer.publicKey,
+        protocolState: statePda,
+        poolId: poolPda,
+        rewardMint: tknMint,
+        depositorToken: userTkn,
+        bribeVault: bribeVault(tknMint, e),
+        bribeTokenVault: bribeTokens(tknMint, e),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    const rollover = (to: number) =>
+      program.methods
+        .rolloverBribe(new BN(e), new BN(to))
+        .accounts({
+          payer: payer.publicKey,
+          poolId: poolPda,
+          rewardMint: tknMint,
+          oldBribeVault: bribeVault(tknMint, e),
+          oldBribeTokenVault: bribeTokens(tknMint, e),
+          oldGaugeState: pda([Buffer.from("gauge"), poolPda.toBuffer(), epochLE(e)]),
+          newBribeVault: bribeVault(tknMint, to),
+          newBribeTokenVault: bribeTokens(tknMint, to),
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        } as any)
+        .rpc();
+
+    // Claims open at e + 1. Under the old delay of 2 the pot could be swept from e + 2, one
+    // week later; now every epoch up to e + 4 is still a claim window.
+    for (let k = 1; k <= 4; k++) {
+      await forwardSeconds(EPOCH_DURATION);
+      await expectFailure(() => rollover(e + k), "RolloverTooEarly");
+    }
+    await forwardSeconds(EPOCH_DURATION);
+    await rollover(e + 5);
+    assert.equal((await tokenBalance(bribeTokens(tknMint, e))).toString(), "0");
+
+    // A voter who comes back after the window is told what happened, not handed a raw
+    // token-program failure.
+    await expectFailure(
+      () =>
+        program.methods
+          .claimBribe(new BN(e))
+          .accounts({
+            user: payer.publicKey,
+            poolId: poolPda,
+            rewardMint: tknMint,
+            bribeVault: bribeVault(tknMint, e),
+            bribeTokenVault: bribeTokens(tknMint, e),
+            userRewardAta: userTkn,
+            gaugeState: pda([Buffer.from("gauge"), poolPda.toBuffer(), epochLE(e)]),
+            userVoteReceipt: pda([
+              Buffer.from("vote"),
+              payer.publicKey.toBuffer(),
+              poolPda.toBuffer(),
+              epochLE(e),
+            ]),
+            userBribeClaim: pda([
+              Buffer.from("bribe_claim"),
+              payer.publicKey.toBuffer(),
+              poolPda.toBuffer(),
+              tknMint.toBuffer(),
+              epochLE(e),
+            ]),
+            tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            rent: SYSVAR_RENT_PUBKEY,
+          } as any)
+          .rpc(),
+      "BribeAlreadyRolledOver"
+    );
+  });
+  it("[votes] a saved vote config names each pool once, and only real keys", async () => {
+    // Review 2026-11-21: `replay_vote` finds a pool by its first index and a receipt is one per
+    // pool per epoch, so a second entry for the same pool could never be cast.
+    const other = Keypair.generate().publicKey;
+    const pad = PublicKey.default;
+    const save = (pools: PublicKey[], bps: number[], n: number) =>
+      program.methods
+        .setVoteConfig(pools as any, bps as any, n, true)
+        .accounts({
+          user: payer.publicKey,
+          protocolState: statePda,
+          voteConfig: pda([Buffer.from("vote_config"), payer.publicKey.toBuffer()]),
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        } as any)
+        .rpc();
+
+    await expectFailure(
+      () => save([poolPda, poolPda, pad, pad, pad], [5_000, 5_000, 0, 0, 0], 2),
+      "InvalidVoteConfig"
+    );
+    await expectFailure(
+      () => save([poolPda, pad, pad, pad, pad], [5_000, 5_000, 0, 0, 0], 2),
+      "InvalidVoteConfig"
+    );
+    await save([poolPda, other, pad, pad, pad], [5_000, 5_000, 0, 0, 0], 2);
+  });
 });
