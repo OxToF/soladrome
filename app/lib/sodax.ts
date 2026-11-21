@@ -63,7 +63,10 @@ let instance: Promise<Sodax> | null = null;
 /** One initialized SDK per page load. `initialize()` fetches the live config from SODAX's API. */
 export function getSodax(): Promise<Sodax> {
   instance ??= (async () => {
-    const sodax = new Sodax({ chains: { solana: { rpcUrl: solanaMainnetRpc() } } });
+    // SODAX partner key, sent as `x-api-key` on every gateway request. It ships to the browser
+    // like the Helius browser key: the SDK runs client-side, so it is public by construction.
+    const apiKey = process.env.NEXT_PUBLIC_SODAX_API_KEY?.trim() || undefined;
+    const sodax = new Sodax({ apiKey, chains: { solana: { rpcUrl: solanaMainnetRpc() } } });
     const init = await sodax.initialize();
     if (!init.ok) {
       instance = null;
